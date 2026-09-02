@@ -22,7 +22,8 @@ const MONAD_TESTNET = {
     default: { http: [MONAD_TESTNET_RPC] },
   },
 };
-const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "http://localhost:8787";
+// 기본값 = 같은 origin 의 서버리스(`/api/grant`). 로컬 relayer 로 붙일 때만 VITE_RELAYER_URL 로 덮는다.
+const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "/api";
 const SEND_AMOUNT = parseEther("0.001");
 
 const app = document.querySelector("#app");
