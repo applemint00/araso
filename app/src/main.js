@@ -251,10 +251,16 @@ async function requestGrant(address) {
   } catch {
     body = null;
   }
+  // 403 already funded = 실패가 아니라 "줄 필요가 없다". 서버리스 grant 는 원장 대신
+  // 수취 주소 잔고로 판정하므로(api/grant.js), 한 번 받은 Piggy 는 그 뒤 매번 403 을 받는다.
+  // 이걸 에러로 처리하면 두 번째 Send 부터 영원히 막힌다(2026-09-03 A-004 실측).
+  if (res.status === 403 && body?.error === "already funded") {
+    return { granted: false, txHash: "" };
+  }
   if (!res.ok || !body?.ok) {
     throw new Error(body?.error || "relayer unreachable");
   }
-  return body.txHash;
+  return { granted: true, txHash: body.txHash };
 }
 
 // broadcast 전에 잔액/가스를 확인한다. 부족하면 여기서 throw — 추측 진행 금지.
@@ -306,15 +312,17 @@ async function sendPiggy() {
 
   setScene("sendstay", "Piggy is asking to go out.", "Checking with home base.");
 
-  let grantTxHash;
+  let grant;
   try {
-    grantTxHash = await requestGrant(state.address);
+    grant = await requestGrant(state.address);
   } catch (error) {
-    // fail-closed — relayer 가 안 떠 있거나 거절하면 여기서 멈춘다. 추측 진행 금지.
+    // fail-closed — relayer 가 안 떠 있거나 그 밖의 이유로 거절하면 여기서 멈춘다. 추측 진행 금지.
+    // 통과하는 거절은 위의 "already funded" 하나뿐이다.
     setScene("sendstay", "relayer unreachable", error instanceof Error ? error.message : String(error));
     return;
   }
-  state.grantTxHash = grantTxHash;
+  // 이미 가스가 있으면 grant tx 자체가 없다. 그대로 simulate 로 넘어간다.
+  state.grantTxHash = grant.txHash;
 
   const account = activeAccount;
   let plan;
