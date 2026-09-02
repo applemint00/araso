@@ -1,0 +1,329 @@
+:root {
+  color-scheme: dark;
+  /* 손글씨 자리 — 에셋 미도착. 시스템 폰트로 대체하되 변수는 비워둔 채 유지한다.
+     새 폰트 파일 추가 금지. */
+  --font-hand: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  --ink: #ede8dc;
+  --paper: #161616;
+  --gold: #e0b100;
+
+  color: var(--ink);
+  background: var(--paper);
+  font-family:
+    ui-rounded, "SF Pro Rounded", "SF Pro Display", system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--paper);
+}
+
+button {
+  font: inherit;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.stage {
+  position: relative;
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  overflow: hidden;
+  padding: 32px;
+}
+
+.note {
+  width: min(520px, 100%);
+  border: 1px solid rgba(237, 232, 220, 0.16);
+  border-radius: 6px;
+  background: rgba(237, 232, 220, 0.06);
+  padding: 32px;
+}
+
+.note--quiet {
+  background: transparent;
+  border-color: transparent;
+  text-align: center;
+}
+
+.note--quiet .line {
+  margin: 0;
+  color: rgba(237, 232, 220, 0.72);
+  font-size: 24px;
+}
+
+.eyebrow {
+  margin: 0 0 16px;
+  color: var(--gold);
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  color: #fffaf0;
+  font-size: clamp(32px, 8vw, 56px);
+  line-height: 1;
+}
+
+.terms {
+  margin: 24px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+}
+
+.terms li {
+  color: var(--ink);
+  font-size: 18px;
+}
+
+.terms li:first-child {
+  border-bottom: 2px solid var(--gold);
+  display: inline-block;
+  padding-bottom: 4px;
+}
+
+.detail {
+  margin: 16px 0 0;
+  color: rgba(237, 232, 220, 0.78);
+  font-size: 16px;
+  line-height: 1.45;
+}
+
+.address {
+  margin: 16px 0 0;
+  overflow-wrap: anywhere;
+  border-top: 1px solid rgba(237, 232, 220, 0.15);
+  padding-top: 16px;
+  color: rgba(237, 232, 220, 0.72);
+  font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.primary,
+.secondary {
+  min-height: 48px;
+  border-radius: 8px;
+  padding: 0 16px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.primary {
+  border: 1px solid var(--ink);
+}
+
+.secondary {
+  border: 1px solid rgba(237, 232, 220, 0.22);
+}
+
+/* --- placeholder character shapes: CSS only, no image assets --- */
+.corner {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  opacity: 0.92;
+}
+
+.chog {
+  border: 3px solid #ffffff;
+  background: #000000;
+  border-radius: 50% 50% 44% 44%;
+  clip-path: polygon(50% 0, 78% 28%, 74% 100%, 26% 100%, 22% 28%);
+}
+
+.chog--small {
+  width: 32px;
+  height: 44px;
+}
+
+.piggy {
+  border: 3px solid #ffffff;
+  background: #000000;
+  border-radius: 48% 48% 44% 44%;
+  position: relative;
+}
+
+.piggy::before,
+.piggy::after {
+  position: absolute;
+  border-radius: 50%;
+  background: #ffffff;
+  content: "";
+}
+
+.piggy--small {
+  width: 56px;
+  height: 64px;
+}
+
+.piggy--small::before,
+.piggy--small::after {
+  top: 22px;
+  width: 6px;
+  height: 6px;
+}
+
+.piggy--small::before {
+  left: 18px;
+}
+
+.piggy--small::after {
+  right: 18px;
+}
+
+.piggy--big {
+  position: relative;
+  width: 144px;
+  height: 160px;
+  margin-bottom: 32px;
+}
+
+.piggy--big::before,
+.piggy--big::after {
+  top: 56px;
+  width: 12px;
+  height: 12px;
+}
+
+.piggy--big::before {
+  left: 44px;
+}
+
+.piggy--big::after {
+  right: 44px;
+}
+
+/* --- File Box: black notepaper, cream folders, one tape, one tag --- */
+.filebox {
+  position: relative;
+  width: min(480px, 100%);
+  height: 320px;
+  background: var(--paper);
+  border: 1px solid rgba(237, 232, 220, 0.16);
+  border-radius: 6px;
+}
+
+.folder {
+  position: absolute;
+  background: #f2ead9;
+  border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.folder--1 {
+  width: 260px;
+  height: 168px;
+  left: 48px;
+  top: 96px;
+  transform: rotate(-3deg);
+}
+
+.folder--2 {
+  width: 260px;
+  height: 168px;
+  left: 64px;
+  top: 88px;
+  transform: rotate(1deg);
+}
+
+.folder--3 {
+  width: 260px;
+  height: 168px;
+  left: 80px;
+  top: 80px;
+  transform: rotate(-1deg);
+}
+
+.tape {
+  position: absolute;
+  width: 96px;
+  height: 24px;
+  left: 152px;
+  top: 64px;
+  background: rgba(224, 177, 0, 0.85);
+  transform: rotate(-4deg);
+}
+
+.tag {
+  position: absolute;
+  width: 24px;
+  height: 24px;
+  right: 64px;
+  top: 96px;
+  background: #b33a2e;
+  border-radius: 2px;
+}
+
+.receipt {
+  position: absolute;
+  left: 96px;
+  top: 144px;
+  margin: 0;
+  color: #161616;
+  font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+.tiny {
+  position: fixed;
+  left: 24px;
+  bottom: 24px;
+  border: 0;
+  background: transparent;
+  color: rgba(237, 232, 220, 0.45);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.tiny.check {
+  left: auto;
+  right: 24px;
+  bottom: 96px;
+}
+
+@media (max-width: 620px) {
+  .stage {
+    align-items: start;
+    padding: 24px 16px 144px;
+  }
+
+  .note {
+    margin-top: 64px;
+  }
+
+  .actions {
+    grid-template-columns: 1fr;
+  }
+
+  .tiny.check {
+    right: 24px;
+    bottom: 96px;
+  }
+}

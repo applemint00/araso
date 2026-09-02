@@ -1,0 +1,21 @@
+{
+  "source_manifest": "chog_walk_v3_manifest.json",
+  "fps": 8,
+  "frame_ms": 125,
+  "order": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "frames": [
+    { "frame": 1, "file": "chog_walk_v3_F01_2048x2240.png" },
+    { "frame": 2, "file": "chog_walk_v3_F02_2048x2240.png" },
+    { "frame": 3, "file": "chog_walk_v3_F03_2048x2240.png" },
+    { "frame": 4, "file": "chog_walk_v3_F04_2048x2240.png" },
+    { "frame": 5, "file": "chog_walk_v3_F05_2048x2240.png" },
+    { "frame": 6, "file": "chog_walk_v3_F06_2048x2240.png" },
+    { "frame": 7, "file": "chog_walk_v3_F07_2048x2240.png" },
+    { "frame": 8, "file": "chog_walk_v3_F08_2048x2240.png" },
+    { "frame": 9, "file": "chog_walk_v3_F09_2048x2240.png" },
+    { "frame": 10, "file": "chog_walk_v3_F10_2048x2240.png" }
+  ],
+  "travel_step_px": 90,
+  "ground_y_canvas": 2090,
+  "note_canvas_size_source_2048x2240": "resized copies in this dir are 256px wide; canvas/travel/ground values above are from source chog_walk_v3_manifest.json at original 2048x2240 scale, not rescaled for the 256px copies"
+}
