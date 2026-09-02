@@ -140,84 +140,120 @@ h1 {
   border: 1px solid rgba(237, 232, 220, 0.22);
 }
 
-/* --- placeholder character shapes: CSS only, no image assets --- */
+/* --- character art: file images (img), no CSS-drawn shapes --- */
+.egg-big {
+  display: block;
+  width: 144px;
+  height: auto;
+  margin: 0 auto 32px;
+}
+
 .corner {
   position: fixed;
   right: 24px;
   bottom: 24px;
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: 10px;
   opacity: 0.92;
+  pointer-events: none;
 }
 
-.chog {
-  border: 3px solid #ffffff;
-  background: #000000;
-  border-radius: 50% 50% 44% 44%;
-  clip-path: polygon(50% 0, 78% 28%, 74% 100%, 26% 100%, 22% 28%);
+.chog-idle {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
 }
 
-.chog--small {
-  width: 32px;
+.piggy-corner {
+  width: 34px;
+  height: auto;
+  object-fit: contain;
+}
+
+/* Away 전용 걸음 순환 — 4프레임을 겹쳐 두고 opacity 로 한 번에 하나만 보이게 전환한다.
+   WALK_META.json 의 이동량(travel_step_px)은 쓰지 않음 — 제자리 애니메이션만. */
+.chog-walk {
+  position: relative;
+  width: 40px;
   height: 44px;
 }
 
-.piggy {
-  border: 3px solid #ffffff;
-  background: #000000;
-  border-radius: 48% 48% 44% 44%;
-  position: relative;
-}
-
-.piggy::before,
-.piggy::after {
+.chog-walk__frame {
   position: absolute;
-  border-radius: 50%;
-  background: #ffffff;
-  content: "";
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0;
+  animation-duration: 800ms;
+  animation-timing-function: steps(1, jump-none);
+  animation-iteration-count: infinite;
 }
 
-.piggy--small {
-  width: 56px;
-  height: 64px;
+.chog-walk__frame--1 {
+  animation-name: chogWalkFrame1;
 }
 
-.piggy--small::before,
-.piggy--small::after {
-  top: 22px;
-  width: 6px;
-  height: 6px;
+.chog-walk__frame--2 {
+  animation-name: chogWalkFrame2;
 }
 
-.piggy--small::before {
-  left: 18px;
+.chog-walk__frame--3 {
+  animation-name: chogWalkFrame3;
 }
 
-.piggy--small::after {
-  right: 18px;
+.chog-walk__frame--4 {
+  animation-name: chogWalkFrame4;
 }
 
-.piggy--big {
-  position: relative;
-  width: 144px;
-  height: 160px;
-  margin-bottom: 32px;
+@keyframes chogWalkFrame1 {
+  0%,
+  24.9% {
+    opacity: 1;
+  }
+  25%,
+  100% {
+    opacity: 0;
+  }
 }
 
-.piggy--big::before,
-.piggy--big::after {
-  top: 56px;
-  width: 12px;
-  height: 12px;
+@keyframes chogWalkFrame2 {
+  0%,
+  24.9%,
+  50%,
+  100% {
+    opacity: 0;
+  }
+  25%,
+  49.9% {
+    opacity: 1;
+  }
 }
 
-.piggy--big::before {
-  left: 44px;
+@keyframes chogWalkFrame3 {
+  0%,
+  49.9%,
+  75%,
+  100% {
+    opacity: 0;
+  }
+  50%,
+  74.9% {
+    opacity: 1;
+  }
 }
 
-.piggy--big::after {
-  right: 44px;
+@keyframes chogWalkFrame4 {
+  0%,
+  74.9%,
+  100% {
+    opacity: 0;
+  }
+  75%,
+  99.9% {
+    opacity: 1;
+  }
 }
 
 /* --- File Box: black notepaper, cream folders, one tape, one tag --- */

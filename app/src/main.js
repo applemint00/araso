@@ -404,13 +404,40 @@ function receiptRows(receipt) {
   ];
 }
 
-// --- placeholder shapes -----------------------------------------------
-// Piggy/Chog 는 아직 에셋이 없다. 자리만 잡는 CSS 도형이며 이미지 파일이 아니다.
-function corner() {
+// --- character art: file images only (no CSS shapes) -------------------
+// 경로 = app/public/**, 원본 = <private>**.
+const EGG_BIG_SRC = "/egg/egg_idle.png";
+// Piggy 본체 파일 없음 (gift-piggy PIGGY_DESIGN_ASSET_SPEC.md §6 완료 인벤토리에 Piggy 자산 부재,
+// §8 미정에도 "Egg 정확한 형태 생성물 있으나 lock 아님"만 있음) → 새로 그리지 않고
+// Egg 6종 중 부화 후 프레임(egg_crack)으로 대체. UNKNOWN: 스펙대로 된 Piggy 파일.
+const PIGGY_STANDIN_SRC = "/egg/egg_crack.png";
+const CHOG_IDLE_SRC = "/chog/CHOG_IDLE.svg";
+// Away 전용 걸음 루프 — WALK_META.json 의 이동량은 무시, 제자리 순환만. 10프레임 중 4장만 사용.
+const CHOG_WALK_FRAMES = [
+  "/chog/chog_walk_v3_F01_2048x2240.png",
+  "/chog/chog_walk_v3_F04_2048x2240.png",
+  "/chog/chog_walk_v3_F07_2048x2240.png",
+  "/chog/chog_walk_v3_F10_2048x2240.png",
+];
+
+function chogWalkCycle() {
+  return `
+    <div class="chog-walk" aria-hidden="true">
+      ${CHOG_WALK_FRAMES.map(
+        (src, i) => `<img class="chog-walk__frame chog-walk__frame--${i + 1}" src="${src}" alt="" />`,
+      ).join("")}
+    </div>
+  `;
+}
+
+// scene 별 구석 캐릭터. 모든 화면 = Chog idle 작게(away 만 walk 순환으로 대체).
+// 탄생 이후(sendstay/filebox) = Piggy 대역(Egg 부화 후 프레임)도 곁에 둔다.
+function corner(scene) {
+  const showPiggyStandin = scene === "sendstay" || scene === "filebox";
   return `
     <div class="corner" aria-hidden="true">
-      <div class="chog chog--small"></div>
-      <div class="piggy piggy--small"></div>
+      ${scene === "away" ? chogWalkCycle() : `<img class="chog-idle" src="${CHOG_IDLE_SRC}" alt="" />`}
+      ${showPiggyStandin ? `<img class="piggy-corner" src="${PIGGY_STANDIN_SRC}" alt="" />` : ""}
     </div>
   `;
 }
@@ -420,8 +447,8 @@ function corner() {
 function renderReceived() {
   return `
     <section class="stage" data-scene="received">
-      <div class="piggy piggy--big" aria-hidden="true"></div>
-      ${corner()}
+      <img class="egg-big" src="${EGG_BIG_SRC}" alt="" aria-hidden="true" />
+      ${corner("received")}
       <article class="note">
         <p class="eyebrow">Araso</p>
         <h1>Something arrived for you.</h1>
@@ -440,8 +467,8 @@ function renderBirth() {
   const detail = blocked ? `Open Piggy only at ${PRODUCTION_RP_ID}.` : state.detail;
   return `
     <section class="stage" data-scene="birth">
-      <div class="piggy piggy--big" aria-hidden="true"></div>
-      ${corner()}
+      <img class="egg-big" src="${EGG_BIG_SRC}" alt="" aria-hidden="true" />
+      ${corner("birth")}
       <article class="note">
         <p class="eyebrow">Araso</p>
         <h1>${title}</h1>
@@ -467,7 +494,7 @@ function renderSendStay() {
   const blocked = !isProductionRpId();
   return `
     <section class="stage" data-scene="sendstay">
-      ${corner()}
+      ${corner("sendstay")}
       <article class="note">
         <p class="eyebrow">Araso</p>
         <h1>${blocked ? "Not this door." : "Piggy is home."}</h1>
@@ -492,7 +519,7 @@ function renderSendStay() {
 function renderAway() {
   return `
     <section class="stage" data-scene="away">
-      ${corner()}
+      ${corner("away")}
       <article class="note note--quiet">
         <p class="line">${state.awayLine}</p>
       </article>
@@ -513,7 +540,7 @@ function renderFileBox() {
     : `<p class="receipt-row"><span class="label">Trip</span><span class="value">${shortHash(state.txHash)}</span></p>`;
   return `
     <section class="stage" data-scene="filebox">
-      ${corner()}
+      ${corner("filebox")}
       <article class="filebox">
         <div class="folder folder--1"></div>
         <div class="folder folder--2"></div>
