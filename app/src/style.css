@@ -50,61 +50,7 @@ button:disabled {
   min-height: 100vh;
   place-items: center;
   overflow: hidden;
-  padding: 96px 32px 32px;
-}
-
-/* 화면 맨 위 진행 안내 — 5칸 중 지금 칸, 그 아래 지금 할 일 한 줄. 모든 장면에서 같은 자리에
-   고정한다. 안내는 읽는 것이지 누르는 것이 아니라 pointer-events 를 끈다 — 아래 카드의
-   버튼을 가리지 않기 위해서다. */
-.progress {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 2;
-  padding: 12px 16px 14px;
-  background: linear-gradient(rgba(22, 22, 22, 0.94), rgba(22, 22, 22, 0.74));
-  pointer-events: none;
-}
-
-.progress__steps {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.progress__step {
-  color: rgba(237, 232, 220, 0.34);
-  font-size: 12px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.progress__step + .progress__step::before {
-  content: "·";
-  margin-right: 8px;
-  color: rgba(237, 232, 220, 0.28);
-}
-
-.progress__step--done {
-  color: rgba(237, 232, 220, 0.52);
-}
-
-.progress__step--now {
-  color: var(--gold);
-}
-
-.progress__hint {
-  margin: 6px 0 0;
-  text-align: center;
-  color: rgba(237, 232, 220, 0.66);
-  font-size: 13px;
-  line-height: 1.4;
+  padding: 32px;
 }
 
 .note {
@@ -440,11 +386,11 @@ h1 {
 @media (max-width: 620px) {
   .stage {
     align-items: start;
-    padding: 96px 16px 144px;
+    padding: 24px 16px 144px;
   }
 
   .note {
-    margin-top: 16px;
+    margin-top: 64px;
   }
 
   .actions {

@@ -458,41 +458,6 @@ function formatMoney(wei) {
   return `$${value.toFixed(decimals)}`;
 }
 
-// --- 화면 맨 위: 어디까지 왔나 + 지금 할 일 한 줄 ------------------------
-// 5장 전부 같은 자리에 둔다. Owner 실측(2026-09-03): 카드가 뜨기 전까지 사용자가 단서를
-// 하나도 못 얻었다 — 무엇을 기다리는지, 다음에 뭘 누르는지가 화면에 없었다.
-const STEPS = [
-  { scene: "received", label: "Arrived" },
-  { scene: "birth", label: "Open" },
-  { scene: "sendstay", label: "Home" },
-  { scene: "away", label: "Out" },
-  { scene: "filebox", label: "Back" },
-];
-
-const HINTS = {
-  received: "Tap Face ID to open it.",
-  birth: "Open it once with your face, or check if this device already has one.",
-  sendstay: "Send lets Piggy go out once. Stay keeps it home.",
-  away: "Piggy is out. Wait here — it comes back on its own.",
-  filebox: "This is what the trip cost.",
-};
-
-const PRIVATE_TAB_HINT = "A private tab can't find Piggy. Open this page in a normal tab.";
-
-function progressBar(scene) {
-  const now = STEPS.findIndex((step) => step.scene === scene);
-  const steps = STEPS.map((step, i) => {
-    const mark = i === now ? " progress__step--now" : i < now ? " progress__step--done" : "";
-    return `<li class="progress__step${mark}">${step.label}</li>`;
-  }).join("");
-  return `
-    <header class="progress">
-      <ol class="progress__steps">${steps}</ol>
-      <p class="progress__hint">${HINTS[scene] || ""}</p>
-    </header>
-  `;
-}
-
 // File Box 3칸: settle() receipt 위에서만 그린다. 화면은 숫자를 따로 계산하지 않는다.
 function receiptRows(receipt) {
   if (!receipt) return [];
@@ -875,8 +840,7 @@ function render() {
   // 장면이 바뀌면 Invite 의 예약된 단계 전환은 전부 버린다 — 화면이 없는데 타이머만 남으면
   // 엉뚱한 시점에 Birth 로 넘어간다.
   if (state.scene !== "received") clearInviteTimers();
-  // Invite 는 캔버스 정본이 화면 전체를 정한다 — 우리가 만든 진행 줄을 그 위에 얹지 않는다.
-  app.innerHTML = (state.scene === "received" ? "" : progressBar(state.scene)) + markup;
+  app.innerHTML = markup;
 
   document.querySelector("#inviteFaceButton")?.addEventListener("click", openInvite);
   if (state.scene === "received") fitInvite();
