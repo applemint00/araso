@@ -608,9 +608,14 @@ function fitInvite() {
     render();
     return;
   }
-  const w = board.dataset.kind === "wide" ? 1280 : 420;
-  const h = board.dataset.kind === "wide" ? 800 : 840;
-  const scale = Math.min(window.innerWidth / w, window.innerHeight / h);
+  const wide = board.dataset.kind === "wide";
+  const w = wide ? 1280 : 420;
+  // 아래로 재는 기준은 판 전체(800/840)가 아니라 **노트지 밑변**(와이드 17+691, 모바일 22+796)이다.
+  // 판 밑에는 디자인이 남겨둔 검은 여백이 있고, 그것까지 넣으려고 판을 줄이면 창이 넓을 때
+  // 좌우로 검은색이 크게 남는다(Owner 실측 2026-09-03: "검은색이 그렇게 많이 보이지 않았어").
+  // 그래서 폭을 채우되 노트지가 잘리지 않는 선까지만 키우고, 남는 아래 여백은 잘린다.
+  const paperBottom = wide ? 708 : 818;
+  const scale = Math.min(window.innerWidth / w, window.innerHeight / paperBottom);
   board.style.transform = `scale(${scale})`;
 }
 

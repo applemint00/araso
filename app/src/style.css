@@ -433,7 +433,7 @@ h1 {
   overflow: hidden;
   background: #050505;
   color: #ede8dc;
-  transform-origin: center center;
+  transform-origin: top center;
 }
 
 .invite__paper {
