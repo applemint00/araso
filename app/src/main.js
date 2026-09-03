@@ -60,8 +60,6 @@ const state = {
   // 복구 연속 실패 횟수. 2회면 이 기기엔 되찾을 Piggy 가 없다고 본다.
   recoverFailures: 0,
   noPiggy: false,
-  // 패스키를 못 찾은 뒤에만 켜지는 안내 한 줄. 비공개 탭인지 자체는 알 수 없다(아래 주석).
-  privateTabHint: false,
 };
 state.scene = computeInitialScene(!!state.credential, !!state.txHash, !!state.address);
 
@@ -219,7 +217,6 @@ async function recoverPiggy() {
 function noteRecoverSuccess() {
   state.recoverFailures = 0;
   state.noPiggy = false;
-  state.privateTabHint = false;
 }
 
 // 연속 2회 실패 = 이 기기엔 되찾을 Piggy 가 없다고 본다. Birth 화면의 안내문을
@@ -227,10 +224,6 @@ function noteRecoverSuccess() {
 function noteRecoverFailure() {
   state.recoverFailures += 1;
   if (state.recoverFailures >= 2) state.noPiggy = true;
-  // 비공개 탭인지 페이지가 직접 아는 방법은 없다 — Safari 는 비공개에서도 localStorage 를
-  // 정상으로 답한다. 그래서 판정하지 않고, 패스키를 못 찾았을 때 후보 원인 하나를 안내만 한다
-  // (Owner 실측 2026-09-03: 비공개 탭에서 카드 미표시 + Send 불가 2회 재현, 원인 UNKNOWN).
-  state.privateTabHint = true;
 }
 
 async function openPiggy() {
@@ -466,17 +459,6 @@ function receiptRows(receipt) {
     { label: "Cost", value: formatMoney(receipt.gas) },
     { label: "Left", value: formatMoney(receipt.after) },
   ];
-}
-
-// 숫자 대조 한 줄 — 화면이 그린 숫자가 실제로 남은 것과 맞는지 사용자가 직접 본다.
-// expected = 나가기 전 − 보낸 것 − 든 비용. 이것과 실제 잔고가 다르면 그 자체가 알림이다.
-function receiptCheck(receipt) {
-  if (!receipt) return "";
-  const expected = receipt.before - receipt.sent - receipt.gas;
-  const off = receipt.after - expected;
-  // 실제로 남은 값은 위 Left 칸에 이미 있다 — 여기서는 기대값과, 그것과 어긋난 만큼만 말한다.
-  const tail = off === 0n ? "same as Left" : `off by ${formatMoney(off < 0n ? -off : off)}`;
-  return `<p class="receipt-check">Expected ${formatMoney(expected)} · ${tail}</p>`;
 }
 
 // --- character art: file images only (no CSS shapes) -------------------
@@ -815,7 +797,6 @@ function renderBirth() {
         <p class="eyebrow">Araso</p>
         <h1>${title}</h1>
         ${detail ? `<p class="detail">${detail}</p>` : ""}
-        ${state.privateTabHint ? `<p class="notice">${PRIVATE_TAB_HINT}</p>` : ""}
         ${state.address ? `<p class="address">${state.address}</p>` : ""}
         <div class="actions">
           ${
@@ -847,7 +828,6 @@ function renderSendStay() {
           <li>call home anytime</li>
         </ul>
         ${state.detail ? `<p class="detail">${state.detail}</p>` : ""}
-        ${state.privateTabHint ? `<p class="notice">${PRIVATE_TAB_HINT}</p>` : ""}
         ${state.address ? `<p class="address">${state.address}</p>` : ""}
         <div class="actions">
           <button class="primary" id="sendButton" ${blocked ? "disabled" : ""}>Send</button>
@@ -895,7 +875,7 @@ function renderFileBox() {
         <div class="folder folder--3"></div>
         <div class="tape" aria-hidden="true"></div>
         <div class="tag" aria-hidden="true"></div>
-        <div class="receipt">${rowsMarkup}${receiptCheck(receipt)}</div>
+        <div class="receipt">${rowsMarkup}</div>
       </article>
       ${
         hasPrevious
