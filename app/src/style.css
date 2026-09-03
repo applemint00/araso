@@ -456,3 +456,556 @@ h1 {
     bottom: 96px;
   }
 }
+
+/* --- 장면 1/5 Invite — Claude Design 캔버스(아티팩트 "Piggy Invite")의 모바일 아트보드
+   Main.dc.html(420×840) 좌표 그대로. 봉투 뜯기는 단계는 같은 캔버스의 와이드 아트보드에서 왔다.
+   그림을 다시 짜지 않고 판을 통째로 축소한다(scale 은 JS 의 fitInvite 가 넣는다) — 좌표·간격
+   비율이 캔버스와 어긋나지 않게 하려는 것이다. --- */
+.stage--invite {
+  padding: 0;
+  align-content: center;
+  overflow: hidden;
+}
+
+.invite__faceIcon {
+  width: 22px;
+  height: 22px;
+}
+
+.invite {
+  position: relative;
+  width: 420px;
+  height: 840px;
+  overflow: hidden;
+  background: #050505;
+  color: #ede8dc;
+  transform-origin: center center;
+}
+
+.invite__paper {
+  position: absolute;
+  left: 14px;
+  top: 22px;
+  width: 392px;
+  height: 796px;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #161616;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 31px,
+    rgba(255, 255, 255, 0.04) 31px,
+    rgba(255, 255, 255, 0.04) 32px
+  );
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+}
+
+.invite__tape {
+  position: absolute;
+  left: 104px;
+  top: -31px;
+  width: 184px;
+  height: 100px;
+  object-fit: contain;
+  opacity: 0.9;
+  transform: rotate(-2deg);
+}
+
+.invite__holes {
+  position: absolute;
+  left: 16px;
+  top: 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 34px;
+}
+
+.invite__hole {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  background: #0d0d0d;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+/* 봉투 hero — 와이드(480×365)를 균일 축소해 얹은 것이라 안쪽 좌표는 와이드 그대로다(k=0.55833). */
+.invite__hero {
+  position: absolute;
+  left: 62px;
+  top: 158px;
+  width: 268px;
+  height: 204px;
+  transform: rotate(-2deg);
+}
+
+.invite__heroScale {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 480px;
+  height: 365px;
+  transform: scale(0.55833);
+  transform-origin: top left;
+}
+
+.invite__env {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 100%;
+}
+
+.invite__envImg {
+  position: absolute;
+  display: none;
+}
+
+.invite__envImg--closed {
+  left: -30px;
+  top: -36px;
+  width: 522px;
+  height: 407px;
+}
+
+.invite__envImg--tear {
+  left: -31px;
+  top: -45px;
+  width: 525px;
+  height: 416px;
+  animation: tear-shake 0.4s ease-in-out;
+}
+
+.invite__envImg--open {
+  left: -61px;
+  top: -61px;
+  width: 586px;
+  height: 452px;
+}
+
+.invite[data-phase="closed"] .invite__envImg--closed,
+.invite[data-phase="checking"] .invite__envImg--closed,
+.invite[data-phase="success"] .invite__envImg--closed,
+.invite[data-phase="peek1"] .invite__envImg--closed,
+.invite[data-phase="peek2"] .invite__envImg--closed,
+.invite[data-phase="tear"] .invite__envImg--tear,
+.invite[data-phase="teared"] .invite__envImg--open,
+.invite[data-phase="exit"] .invite__envImg--open,
+.invite[data-phase="settle"] .invite__envImg--open,
+.invite[data-phase="idle"] .invite__envImg--open {
+  display: block;
+}
+
+/* 알은 봉투가 찢어지는 순간부터 나온다. 캔버스의 인라인 SVG 대신 우리가 이미 쓰는 래스터를
+   그대로 쓴다 — 벡터 도면은 배포에 싣지 않는다(§C-2). */
+.invite__egg {
+  position: absolute;
+  left: 156px;
+  top: 10px;
+  width: 150px;
+  height: 124px;
+  object-fit: contain;
+  display: none;
+}
+
+.invite[data-phase="tear"] .invite__egg,
+.invite[data-phase="teared"] .invite__egg,
+.invite[data-phase="exit"] .invite__egg,
+.invite[data-phase="settle"] .invite__egg,
+.invite[data-phase="idle"] .invite__egg {
+  display: block;
+}
+
+/* 소인은 봉투가 닫혀 있는 동안만. 뜯긴 뒤에는 같이 사라진다. */
+.invite__ov {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity 0.35s;
+}
+
+.invite[data-phase="closed"] .invite__ov,
+.invite[data-phase="checking"] .invite__ov,
+.invite[data-phase="success"] .invite__ov,
+.invite[data-phase="peek1"] .invite__ov,
+.invite[data-phase="peek2"] .invite__ov {
+  opacity: 1;
+}
+
+.invite__postmark {
+  position: absolute;
+  left: 153px;
+  top: 59px;
+  width: 116px;
+  height: 116px;
+  object-fit: contain;
+  opacity: 0.85;
+  transform: rotate(-9deg);
+}
+
+.invite__waves {
+  position: absolute;
+  left: 273px;
+  top: 104px;
+  width: 120px;
+  height: 52px;
+  object-fit: contain;
+  opacity: 0.75;
+}
+
+.invite__stamp {
+  position: absolute;
+  right: 28px;
+  top: 22px;
+  width: 80px;
+  height: 67px;
+  object-fit: contain;
+  transform: rotate(4deg);
+}
+
+.invite__underline {
+  position: absolute;
+  left: 122px;
+  top: 314px;
+  width: 150px;
+  height: auto;
+  object-fit: contain;
+}
+
+/* 손글씨 두 줄 = 낱말을 그림으로 렌더한 것(폰트 파일은 배포하지 않는다, §C-2). */
+.invite__hand {
+  position: absolute;
+  left: -2px;
+  top: 227.5px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.invite__line1 {
+  width: 221px;
+  height: auto;
+}
+
+.invite__line2 {
+  width: 180px;
+  height: auto;
+}
+
+.invite__burst {
+  position: absolute;
+  left: 317px;
+  top: 112px;
+  width: 30px;
+  height: 26px;
+  object-fit: contain;
+}
+
+/* Face ID = 이 화면의 유일한 입력. */
+.invite__face {
+  position: absolute;
+  left: 196px;
+  top: 455px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 54px;
+  padding: 0 28px;
+  border: 2px solid rgba(237, 232, 220, 0.8);
+  border-radius: 27px;
+  background: #1e1e1e;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.5);
+  color: #ede8dc;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 600;
+  transform: translateX(-50%);
+  transition: opacity 0.35s;
+}
+
+.invite[data-phase="checking"] .invite__face {
+  animation: check-pulse 1s ease-in-out infinite;
+}
+
+.invite:not([data-phase="closed"]):not([data-phase="checking"]) .invite__face {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.invite__chog {
+  position: absolute;
+  left: 30px;
+  top: 620px;
+  width: 140px;
+  height: 84px;
+}
+
+.invite__trail {
+  position: absolute;
+  left: 7px;
+  top: 54px;
+  width: 35px;
+  height: 8px;
+  object-fit: contain;
+  opacity: 0.55;
+}
+
+.invite__chogIdle {
+  position: absolute;
+  left: 47px;
+  top: -3px;
+  width: 62px;
+  height: 76px;
+  object-fit: contain;
+  transform-origin: 50% 90%;
+  animation: chog-idle 2.6s ease-in-out infinite;
+}
+
+.invite__copy {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 742px;
+  margin: 0;
+  text-align: center;
+  font-size: 13px;
+  line-height: 20px;
+  opacity: 0.55;
+}
+
+.invite__corner {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border-left: 34px solid transparent;
+  border-bottom: 34px solid var(--gold);
+  opacity: 0.85;
+}
+
+.invite__cornerBack {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 0;
+  height: 0;
+  border-right: 34px solid transparent;
+  border-top: 34px solid #0e0e0e;
+  opacity: 0.9;
+}
+
+/* 캔버스의 keyframes 그대로 — 이름·구간·값을 바꾸지 않는다. */
+@keyframes chog-idle {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-1.5deg);
+  }
+  50% {
+    transform: translateY(-4px) rotate(1.5deg);
+  }
+}
+
+@keyframes egg-burst {
+  0% { transform: translate(0, 255px) scale(0.45); }
+  10% { transform: translate(-2px, 210px) scale(0.75); }
+  20% { transform: translate(2px, 165px) scale(1.05); }
+  30% { transform: translate(-2px, 120px) scale(1.4); }
+  40% { transform: translate(3px, 80px) scale(1.9); }
+  50% { transform: translate(-3px, 45px) scale(2.4); }
+  60% { transform: translate(3px, 15px) scale(2.8); }
+  70% { transform: translate(-4px, -10px) scale(3.1); }
+  78% { transform: translate(4px, -14px) scale(3.1); }
+  86% { transform: translate(-4px, -8px) scale(3.1); }
+  93% { transform: translate(4px, -13px) scale(3.1); }
+  100% { transform: translate(-3px, -10px) scale(3.1); }
+}
+
+@keyframes egg-land {
+  0% { transform: translate(-3px, -10px) rotate(0deg) scale(3.1); }
+  7% { transform: translate(4px, -14px) rotate(0deg) scale(3.1); }
+  14% { transform: translate(-3px, -7px) rotate(0deg) scale(3.09); }
+  24% { transform: translate(2px, -12px) rotate(0deg) scale(3.06); }
+  38% { transform: translate(-1px, -9px) rotate(0.5deg) scale(3); }
+  100% { transform: translate(0, 172px) rotate(2deg) scale(2.6); }
+}
+
+@keyframes egg-idle2 {
+  0%,
+  100% { transform: translateY(172px) rotate(2deg) scale(2.6); }
+  50% { transform: translateY(167px) rotate(2deg) scale(2.6); }
+}
+
+@keyframes env-success {
+  0%,
+  100% { transform: scale(1); }
+  40% { transform: scale(1.015); }
+}
+
+@keyframes env-peek1 {
+  0%,
+  100% { transform: translateY(0) scale(1, 1); }
+  50% { transform: translateY(-3px) scale(1.01, 1.035); }
+}
+
+@keyframes env-peek2 {
+  0%,
+  100% { transform: translateY(0) scale(1, 1); }
+  30% { transform: translateY(-5px) scale(1.015, 1.06); }
+  60% { transform: translateY(-2px) scale(1.008, 1.03); }
+  85% { transform: translateY(-6px) scale(1.02, 1.07); }
+}
+
+@keyframes env-exit {
+  0% { transform: translateY(0) rotate(0deg) scale(1); opacity: 1; }
+  8% { transform: translateY(-12px) rotate(-5deg) scale(1.04); opacity: 1; }
+  16% { transform: translateY(8px) rotate(5deg) scale(1.02); opacity: 1; }
+  26% { transform: translateY(30px) rotate(-6deg) scale(1); opacity: 0.95; }
+  38% { transform: translateY(70px) rotate(5deg) scale(0.98); opacity: 0.8; }
+  55% { transform: translateY(125px) rotate(-4deg) scale(0.95); opacity: 0.5; }
+  100% { transform: translateY(215px) rotate(8deg) scale(0.92); opacity: 0; }
+}
+
+@keyframes env-float {
+  0%,
+  100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@keyframes env-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.07); }
+  75% { transform: scale(0.99); }
+  100% { transform: scale(1); }
+}
+
+@keyframes tear-shake {
+  0%,
+  100% { transform: rotate(0deg); }
+  25% { transform: rotate(-2.5deg); }
+  60% { transform: rotate(2.5deg); }
+}
+
+@keyframes check-pulse {
+  0%,
+  100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* --- 웹 아트보드(InviteWide.dc.html 1280×800) — 모바일과 다른 값만 덮어쓴다 --- */
+.invite--wide {
+  width: 1280px;
+  height: 800px;
+}
+
+.invite--wide .invite__paper {
+  left: 48px;
+  top: 17px;
+  width: 1180px;
+  height: 691px;
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent 39px,
+    rgba(255, 255, 255, 0.04) 39px,
+    rgba(255, 255, 255, 0.04) 40px
+  );
+}
+
+.invite--wide .invite__holes {
+  left: 34px;
+  top: 17px;
+  gap: 44px;
+}
+
+.invite--wide .invite__hole {
+  width: 16px;
+  height: 16px;
+  box-shadow:
+    inset 0 2px 3px rgba(0, 0, 0, 0.9),
+    0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.invite--wide .invite__tape {
+  left: 414px;
+  top: -38px;
+  width: 512px;
+  height: 111px;
+}
+
+/* 와이드는 hero 를 줄이지 않는다(k=1). */
+.invite--wide .invite__hero {
+  left: 396px;
+  top: 126px;
+  width: 480px;
+  height: 365px;
+}
+
+.invite--wide .invite__heroScale {
+  transform: none;
+}
+
+.invite--wide .invite__underline {
+  width: 220px;
+}
+
+.invite--wide .invite__burst {
+  left: 852px;
+  top: 44px;
+  width: 54px;
+  height: 47px;
+}
+
+.invite--wide .invite__face {
+  left: 540px;
+  top: 567px;
+  gap: 12px;
+  height: 51px;
+  padding: 0 34px;
+  border-radius: 29px;
+  font-size: 17px;
+  transform: none;
+  box-sizing: content-box;
+  width: 97px;
+}
+
+.invite--wide .invite__faceIcon {
+  width: 24px;
+  height: 24px;
+}
+
+.invite--wide .invite__chog {
+  left: 235px;
+  top: 519px;
+  width: 210px;
+  height: 113px;
+}
+
+.invite--wide .invite__trail {
+  left: 27px;
+  top: 82px;
+  width: 55px;
+  height: 12px;
+  opacity: 0.25;
+}
+
+.invite--wide .invite__chogIdle {
+  left: 325px;
+  top: 512px;
+  width: 96px;
+  height: 119px;
+}
+
+@keyframes spark-out {
+  0% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(20px); }
+}
+
+@keyframes spark-pop {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.4); }
+  100% { transform: scale(1); }
+}

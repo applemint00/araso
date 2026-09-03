@@ -34,7 +34,10 @@ const app = document.querySelector("#app");
 // scene 은 credential/txHash 로부터 최초 1회 파생하고, 그 뒤로는 사용자 행동에 따라
 // 명시적으로 전환한다(완전 파생이 아님 — away/filebox 전환은 진행 중인 네트워크 상태를 담아야 해서
 // 이벤트 사실만으로는 부족하다).
-function computeInitialScene(hasCredential, hasTxHash) {
+function computeInitialScene(hasCredential, hasTxHash, hasAddress) {
+  // 아무것도 없는 첫 방문 = Invite(Received). 그 전까지는 이 화면이 한 번도 뜨지 않았다 —
+  // credential 이 없으면 곧장 Birth 로 보냈기 때문이다(2026-09-03 A-018 에서 발견).
+  if (!hasCredential && !hasAddress) return "received";
   if (!hasCredential) return "birth";
   if (hasTxHash) return "filebox";
   return "sendstay";
@@ -60,7 +63,7 @@ const state = {
   // 패스키를 못 찾은 뒤에만 켜지는 안내 한 줄. 비공개 탭인지 자체는 알 수 없다(아래 주석).
   privateTabHint: false,
 };
-state.scene = computeInitialScene(!!state.credential, !!state.txHash);
+state.scene = computeInitialScene(!!state.credential, !!state.txHash, !!state.address);
 
 const publicClient = createPublicClient({
   chain: MONAD_TESTNET,
@@ -467,7 +470,7 @@ const STEPS = [
 ];
 
 const HINTS = {
-  received: "Look inside to see what came.",
+  received: "Tap Face ID to open it.",
   birth: "Open it once with your face, or check if this device already has one.",
   sendstay: "Send lets Piggy go out once. Stay keeps it home.",
   away: "Piggy is out. Wait here — it comes back on its own.",
@@ -554,19 +557,202 @@ function corner(scene) {
 
 // 장면 1/5 — Received. 아직 아무것도 열지 않은 상태. 입력은 버튼 하나뿐.
 // (봉투 연출은 이번 범위 밖 — Owner "envelope는 아침에")
-function renderReceived() {
+// --- 장면 1/5 — Invite. Claude Design 캔버스(아티팩트 "Piggy Invite") 정본 이식.
+// 아트보드 두 장을 그대로 옮긴다: InviteWide.dc.html(1280×800) · Main.dc.html(420×840).
+// 좌표·크기·색·keyframes 는 캔버스 값이다. 여기에 우리가 만든 것을 얹지 않는다.
+// 봉투를 뜯는 단계 전환은 와이드 아트보드의 tapFace() 타임라인 그대로다.
+// 원본(폰트 otf·풀사이즈 PNG)은 `<private>**` 에만 둔다. 손글씨 두 줄은
+// 폰트 파일을 배포하지 않으려고 낱말만 그림으로 렌더한 것이다(OPERATING_RULES §C-2).
+const INVITE_WIDE_MIN = 900;
+
+// 캔버스 tapFace() 의 타임라인 그대로(ms).
+const INVITE_TIMELINE = [
+  [1000, "success"],
+  [1300, "peek1"],
+  [1850, "peek2"],
+  [2450, "tear"],
+  [2740, "teared"],
+  [3150, "exit"],
+  [3690, "settle"],
+  [5200, "idle"],
+];
+
+const INVITE_ENV_ANIM = {
+  success: "env-success 0.3s ease-out both",
+  peek1: "env-peek1 0.55s ease-in-out both",
+  peek2: "env-peek2 0.6s ease-in-out both",
+  tear: "env-pop 0.18s ease-out both",
+  teared: "env-float 1s ease-in-out infinite",
+  exit: "env-exit 0.55s cubic-bezier(0.2, 0.7, 0.3, 1) both",
+  settle: "env-exit 0.55s cubic-bezier(0.2, 0.7, 0.3, 1) both",
+  idle: "env-exit 0.55s cubic-bezier(0.2, 0.7, 0.3, 1) both",
+};
+
+const INVITE_EGG_ANIM = {
+  tear: "egg-burst 1.24s cubic-bezier(0.22, 0.9, 0.24, 1) both",
+  teared: "egg-burst 1.24s cubic-bezier(0.22, 0.9, 0.24, 1) both",
+  exit: "egg-burst 1.24s cubic-bezier(0.22, 0.9, 0.24, 1) both",
+  settle: "egg-land 1.5s ease-in-out both",
+  idle: "egg-idle2 3.2s ease-in-out infinite",
+};
+
+const INVITE_SPARK_ANIM = {
+  tear: "spark-pop 0.3s ease-out both",
+  teared: "env-float 1s ease-in-out infinite",
+  exit: "spark-out 0.42s ease-in both",
+  settle: "spark-out 0.42s ease-in both",
+  idle: "spark-out 0.42s ease-in both",
+};
+
+// 캔버스의 알 — 인라인 SVG 그대로(검정 몸 + 흰 3px 외곽).
+const INVITE_EGG_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 225 186">
+<path d="M106,25 L121,25 L133,28 L141,34 L155,43 L163,50 L170,64 L173,82 L179,95 L181,102 L181,114 L177,127 L170,138 L162,145 L152,150 L144,152 L115,153 L83,153 L71,150 L63,146 L55,139 L47,127 L44,120 L43,115 L43,103 L47,93 L51,83 L53,67 L57,57 L64,48 L71,42 L86,36 L99,27 Z " fill="black" stroke="white" stroke-width="3" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+<path d="M99,76 L104,76 L106,80 L105,87 L103,89 L99,88 L97,86 L97,79 Z " fill="white"></path> <path d="M119,76 L124,76 L127,81 L125,87 L120,88 L118,86 L117,81 Z " fill="white"></path> <path d="M100,96 L126,96 L127,100 L126,101 L103,103 L98,102 L97,98 Z " fill="white"></path>
+</svg>`;
+
+let inviteTimers = [];
+let inviteKind = "";
+
+function clearInviteTimers() {
+  inviteTimers.forEach(clearTimeout);
+  inviteTimers = [];
+}
+
+function wantedInviteKind() {
+  return window.innerWidth >= INVITE_WIDE_MIN ? "wide" : "mobile";
+}
+
+// 아트보드는 고정 크기다(1280×800 · 420×840). 화면이 그보다 작으면 그림을 다시 짜지 않고
+// 판을 통째로 축소해 넣는다 — 좌표·간격 비율이 캔버스와 어긋나지 않게 하려는 것이다.
+function fitInvite() {
+  const board = document.querySelector(".invite");
+  if (!board) return;
+  if (wantedInviteKind() !== inviteKind) {
+    render();
+    return;
+  }
+  const w = board.dataset.kind === "wide" ? 1280 : 420;
+  const h = board.dataset.kind === "wide" ? 800 : 840;
+  const scale = Math.min(window.innerWidth / w, window.innerHeight / h);
+  board.style.transform = `scale(${scale})`;
+}
+
+function setInvitePhase(phase) {
+  const board = document.querySelector(".invite");
+  if (!board) return;
+  board.dataset.phase = phase;
+  const env = board.querySelector(".invite__env");
+  const egg = board.querySelector(".invite__egg");
+  const spark = board.querySelector(".invite__burst");
+  if (env) env.style.animation = INVITE_ENV_ANIM[phase] || "none";
+  if (egg) egg.style.animation = INVITE_EGG_ANIM[phase] || "none";
+  if (spark && board.dataset.kind === "wide") spark.style.animation = INVITE_SPARK_ANIM[phase] || "none";
+  const label = board.querySelector(".invite__faceLabel");
+  if (label) label.textContent = phase === "checking" ? "checking..." : "Face ID";
+}
+
+// 봉투 열기 = 이 화면의 유일한 입력. 뜯기는 순서가 끝나면 Birth 로 넘어간다.
+function openInvite() {
+  const board = document.querySelector(".invite");
+  if (!board || (board.dataset.phase || "closed") !== "closed") return;
+  clearInviteTimers();
+  setInvitePhase("checking");
+  INVITE_TIMELINE.forEach(([at, phase]) => {
+    inviteTimers.push(setTimeout(() => setInvitePhase(phase), at));
+  });
+  inviteTimers.push(
+    setTimeout(() => setScene("birth", "You received a Piggy.", "Open it with your face. Once."), 5900),
+  );
+}
+
+// 봉투 hero — 두 아트보드가 같은 480×365 안쪽 좌표를 쓴다. 모바일은 그 덩어리를 0.55833 로 줄인다.
+function inviteHero(dir) {
   return `
-    <section class="stage" data-scene="received">
-      <img class="egg-big" src="${EGG_BIG_SRC}" alt="" aria-hidden="true" />
-      ${corner("received")}
-      <article class="note">
-        <p class="eyebrow">Araso</p>
-        <h1>Something arrived for you.</h1>
-        <p class="detail">One tag.</p>
-        <div class="actions">
-          <button class="primary" id="beginButton">Look inside</button>
+    <div class="invite__heroScale">
+      <div class="invite__egg">${INVITE_EGG_SVG}</div>
+      <div class="invite__env">
+        <img class="invite__envImg invite__envImg--closed" src="${dir}/envelope@2x.png" alt="" />
+        <img class="invite__envImg invite__envImg--tear" src="${dir}/envelope_tear@2x.png" alt="" />
+        <img class="invite__envImg invite__envImg--open" src="${dir}/envelope_open@2x.png" alt="" />
+        <div class="invite__ov">
+          <img class="invite__postmark" src="${dir}/postmark@2x.png" alt="" />
         </div>
-      </article>
+        <img class="invite__waves" src="${dir}/waves@2x.png" alt="" />
+        <img class="invite__stamp" src="${dir}/stamp@2x.png" alt="" />
+        <img class="invite__underline" src="${dir}/underline@2x.png" alt="" />
+        <div class="invite__hand">
+          <img class="invite__line1" src="/invite/line1@2x.png" alt="something small" />
+          <img class="invite__line2" src="/invite/line2@2x.png" alt="just for you" />
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function inviteFace() {
+  return `
+    <button class="invite__face" id="inviteFaceButton">
+      <svg class="invite__faceIcon" viewBox="0 0 22 22" fill="none" stroke="#E0B100" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+        <path d="M2 7 V5 Q2 2 5 2 H7 M15 2 H17 Q20 2 20 5 V7 M20 15 V17 Q20 20 17 20 H15 M7 20 H5 Q2 20 2 17 V15"></path>
+        <circle cx="7.5" cy="9" r="0.9" fill="#E0B100" stroke="none"></circle>
+        <circle cx="14.5" cy="9" r="0.9" fill="#E0B100" stroke="none"></circle>
+        <path d="M8 14.5 Q11 16.5 14 14.5"></path>
+      </svg>
+      <span class="invite__faceLabel">Face ID</span>
+    </button>
+  `;
+}
+
+function inviteHoles(count) {
+  return `<div class="invite__holes" aria-hidden="true">${Array.from({ length: count }, () => `<i class="invite__hole"></i>`).join("")}</div>`;
+}
+
+// 모바일 아트보드 — Main.dc.html 420×840
+function inviteMobile() {
+  return `
+    <div class="invite invite--mobile" data-kind="mobile" data-phase="closed">
+      <div class="invite__paper">
+        <img class="invite__tape" src="/invite/tape@2x.png" alt="" aria-hidden="true" />
+        ${inviteHoles(13)}
+        <div class="invite__hero" aria-hidden="true">${inviteHero("/invite")}</div>
+        <img class="invite__burst" src="/invite/burst@2x.png" alt="" aria-hidden="true" />
+        ${inviteFace()}
+        <div class="invite__chog" aria-hidden="true">
+          <img class="invite__trail" src="/invite/trail@2x.png" alt="" />
+          <img class="invite__chogIdle" src="/invite/chog_invite@2x.png" alt="" />
+        </div>
+        <p class="invite__copy">it's safe. only you can open it.</p>
+        <div class="invite__corner" aria-hidden="true"></div>
+        <div class="invite__cornerBack" aria-hidden="true"></div>
+      </div>
+    </div>
+  `;
+}
+
+// 웹 아트보드 — InviteWide.dc.html 1280×800
+function inviteWide() {
+  return `
+    <div class="invite invite--wide" data-kind="wide" data-phase="closed">
+      <div class="invite__paper">
+        ${inviteHoles(12)}
+        <div class="invite__hero" aria-hidden="true">${inviteHero("/invite/wide")}</div>
+        <img class="invite__burst" src="/invite/wide/burst@2x.png" alt="" aria-hidden="true" />
+        ${inviteFace()}
+        <div class="invite__chog" aria-hidden="true">
+          <img class="invite__trail" src="/invite/wide/trail@2x.png" alt="" />
+        </div>
+        <img class="invite__chogIdle" src="/invite/wide/chog_invite@2x.png" alt="" aria-hidden="true" />
+        <img class="invite__tape" src="/invite/wide/tape@2x.png" alt="" aria-hidden="true" />
+      </div>
+    </div>
+  `;
+}
+
+function renderReceived() {
+  inviteKind = wantedInviteKind();
+  return `
+    <section class="stage stage--invite" data-scene="received">
+      ${inviteKind === "wide" ? inviteWide() : inviteMobile()}
     </section>
   `;
 }
@@ -686,11 +872,14 @@ function render() {
         : state.scene === "filebox"
           ? renderFileBox()
           : renderBirth();
-  app.innerHTML = progressBar(state.scene) + markup;
+  // 장면이 바뀌면 Invite 의 예약된 단계 전환은 전부 버린다 — 화면이 없는데 타이머만 남으면
+  // 엉뚱한 시점에 Birth 로 넘어간다.
+  if (state.scene !== "received") clearInviteTimers();
+  // Invite 는 캔버스 정본이 화면 전체를 정한다 — 우리가 만든 진행 줄을 그 위에 얹지 않는다.
+  app.innerHTML = (state.scene === "received" ? "" : progressBar(state.scene)) + markup;
 
-  document.querySelector("#beginButton")?.addEventListener("click", () =>
-    setScene("birth", "You received a Piggy.", "Open it with your face. Once.")
-  );
+  document.querySelector("#inviteFaceButton")?.addEventListener("click", openInvite);
+  if (state.scene === "received") fitInvite();
   document.querySelector("#openButton")?.addEventListener("click", openPiggy);
   document.querySelector("#checkButton")?.addEventListener("click", checkPiggy);
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);
@@ -710,4 +899,5 @@ if (readCredential() || state.address) {
 
 render();
 
+window.addEventListener("resize", fitInvite);
 window.addEventListener("beforeunload", endActiveSession);
