@@ -561,6 +561,18 @@ const INVITE_EGG_ANIM = {
   idle: "egg-idle2 3.2s ease-in-out infinite",
 };
 
+// Chog 는 part-filled 8종 중 Invite 가 쓰는 5종이다(2026-08-31 승격, `PROVENANCE.md`
+// "8/8 fill PASS → behavior preview PASS → InviteWide 실배치 PASS"). 값·간격은
+// `02_REVIEW/behavior_invite_v1/InviteWide_behavior_preview.html` 의 behavior 스크립트 그대로다.
+const CHOG_STATES = ["idle", "blink", "twitch", "wave", "click"];
+const CHOG_LOOPS = [
+  ["blink", 3000, 7000, 140],
+  ["twitch", 8000, 15000, 110],
+  ["wave", 20000, 40000, 450],
+];
+const CHOG_CLICK_MS = 220;
+const CHOG_CLICK_COOLDOWN = 1500;
+
 const INVITE_SPARK_ANIM = {
   tear: "spark-pop 0.3s ease-out both",
   teared: "env-float 1s ease-in-out infinite",
@@ -654,6 +666,72 @@ function inviteHero(dir) {
   `;
 }
 
+// Chog 자리 — 상태 5장을 겹쳐 두고 하나만 보이게 한다(캔버스 preview 와 같은 방식).
+function inviteChog(dir) {
+  const frames = CHOG_STATES.map(
+    (k) => `<img class="invite__chogState" data-chog="${k}" src="${dir}/${k}@2x.png" alt="" />`,
+  ).join("");
+  return `<div class="invite__chogIdle" id="inviteChog" aria-hidden="true">${frames}</div>`;
+}
+
+let chogTimers = [];
+let chogBusy = 0;
+
+function clearChogTimers() {
+  chogTimers.forEach(clearTimeout);
+  chogTimers = [];
+  chogBusy = 0;
+}
+
+function showChog(state) {
+  const box = document.querySelector("#inviteChog");
+  if (!box) return;
+  box.querySelectorAll(".invite__chogState").forEach((img) => {
+    img.style.display = img.dataset.chog === state ? "block" : "none";
+  });
+}
+
+// 우선순위: 클릭(2) 이 랜덤 micro(1) 를 끊는다. 어떤 상태든 끝나면 idle 로 돌아온다.
+function playChog(state, priority, ms, squash) {
+  if (chogBusy && priority <= chogBusy) return;
+  chogBusy = priority;
+  showChog(state);
+  const box = document.querySelector("#inviteChog");
+  if (squash && box) {
+    box.style.transform = `scaleY(${squash})`;
+    chogTimers.push(setTimeout(() => (box.style.transform = ""), 120));
+  }
+  chogTimers.push(
+    setTimeout(() => {
+      showChog("idle");
+      chogBusy = 0;
+    }, ms),
+  );
+}
+
+function startChog() {
+  clearChogTimers();
+  showChog("idle");
+  const rnd = (a, b) => a + Math.random() * (b - a);
+  CHOG_LOOPS.forEach(([state, min, max, ms]) => {
+    const again = () => {
+      chogTimers.push(
+        setTimeout(() => {
+          playChog(state, 1, ms);
+          again();
+        }, rnd(min, max)),
+      );
+    };
+    again();
+  });
+  let clickUntil = 0;
+  document.querySelector("#inviteChog")?.addEventListener("click", () => {
+    if (Date.now() < clickUntil) return;
+    clickUntil = Date.now() + CHOG_CLICK_COOLDOWN;
+    playChog("click", 2, CHOG_CLICK_MS, 0.99);
+  });
+}
+
 function inviteFace() {
   return `
     <button class="invite__face" id="inviteFaceButton">
@@ -678,14 +756,14 @@ function inviteMobile() {
     <div class="invite invite--mobile" data-kind="mobile" data-phase="closed">
       <div class="invite__paper">
         <img class="invite__tape" src="/invite/tape@2x.png" alt="" aria-hidden="true" />
-        ${inviteHoles(13)}
+        ${inviteHoles(16)}
         <div class="invite__hero" aria-hidden="true">${inviteHero("/invite")}</div>
         <img class="invite__burst" src="/invite/burst@2x.png" alt="" aria-hidden="true" />
         ${inviteFace()}
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/trail@2x.png" alt="" />
-          <img class="invite__chogIdle" src="/invite/chog_invite@2x.png" alt="" />
         </div>
+        ${inviteChog("/invite/chog")}
         <p class="invite__copy">it's safe. only you can open it.</p>
         <div class="invite__corner" aria-hidden="true"></div>
         <div class="invite__cornerBack" aria-hidden="true"></div>
@@ -706,7 +784,7 @@ function inviteWide() {
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/wide/trail@2x.png" alt="" />
         </div>
-        <img class="invite__chogIdle" src="/invite/wide/chog_invite@2x.png" alt="" aria-hidden="true" />
+        ${inviteChog("/invite/wide/chog")}
         <img class="invite__tape" src="/invite/wide/tape@2x.png" alt="" aria-hidden="true" />
       </div>
     </div>
@@ -839,11 +917,17 @@ function render() {
           : renderBirth();
   // 장면이 바뀌면 Invite 의 예약된 단계 전환은 전부 버린다 — 화면이 없는데 타이머만 남으면
   // 엉뚱한 시점에 Birth 로 넘어간다.
-  if (state.scene !== "received") clearInviteTimers();
+  if (state.scene !== "received") {
+    clearInviteTimers();
+    clearChogTimers();
+  }
   app.innerHTML = markup;
 
   document.querySelector("#inviteFaceButton")?.addEventListener("click", openInvite);
-  if (state.scene === "received") fitInvite();
+  if (state.scene === "received") {
+    fitInvite();
+    startChog();
+  }
   document.querySelector("#openButton")?.addEventListener("click", openPiggy);
   document.querySelector("#checkButton")?.addEventListener("click", checkPiggy);
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);
