@@ -25,6 +25,9 @@ const MONAD_TESTNET = {
 // 기본값 = 같은 origin 의 서버리스(`/api/grant`). 로컬 relayer 로 붙일 때만 VITE_RELAYER_URL 로 덮는다.
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "/api";
 const SEND_AMOUNT = parseEther("0.001");
+const RECEIPTS_KEY = "araso.testMera.receipts";
+// 보관은 최근 2건까지 — 이번 바퀴와 그 앞의 바퀴 하나. 그 이상은 아직 화면에 열 자리가 없다.
+const RECEIPT_KEEP = 2;
 
 const app = document.querySelector("#app");
 
@@ -45,13 +48,17 @@ const state = {
   mark: localStorage.getItem("araso.testMera.mark") || "",
   txHash: localStorage.getItem("araso.testMera.txHash") || "",
   grantTxHash: "",
-  // settle() 이 만든 receipt 객체. 세션 메모리만 — 새로고침 후 filebox 로 직행하면 비어 있을 수 있다.
-  settleReceipt: null,
+  // settle() 이 만든 receipt 를 최근 것부터 2건. 세션 메모리가 아니라 저장소에 남는다 —
+  // 2회차에서는 새 영수증을 받은 뒤에도 직전 바퀴를 다시 열어봐야 한다(A-015).
+  receipts: readReceipts(),
+  receiptIndex: 0,
   credential: readCredential(),
   awayLine: "I'll check it.",
   // 복구 연속 실패 횟수. 2회면 이 기기엔 되찾을 Piggy 가 없다고 본다.
   recoverFailures: 0,
   noPiggy: false,
+  // 패스키를 못 찾은 뒤에만 켜지는 안내 한 줄. 비공개 탭인지 자체는 알 수 없다(아래 주석).
+  privateTabHint: false,
 };
 state.scene = computeInitialScene(!!state.credential, !!state.txHash);
 
@@ -70,6 +77,44 @@ function readCredential() {
   } catch {
     return null;
   }
+}
+
+// receipt 의 금액은 BigInt 라 JSON 이 그대로 담지 못한다. 넣을 때 문자열로 눕히고 읽을 때 되세운다.
+// 한 건이라도 모양이 어긋나면 통째로 버린다 — 반쯤 읽힌 영수증으로 숫자를 그리지 않는다.
+function readReceipts() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(RECEIPTS_KEY) || "[]");
+    if (!Array.isArray(stored)) return [];
+    return stored.slice(0, RECEIPT_KEEP).map((row) => ({
+      before: BigInt(row.before),
+      after: BigInt(row.after),
+      gas: BigInt(row.gas),
+      sent: BigInt(row.sent),
+      txHash: row.txHash || "",
+      at: row.at || 0,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function rememberReceipt(receipt) {
+  const kept = [receipt, ...state.receipts].slice(0, RECEIPT_KEEP);
+  state.receipts = kept;
+  state.receiptIndex = 0;
+  localStorage.setItem(
+    RECEIPTS_KEY,
+    JSON.stringify(
+      kept.map((row) => ({
+        before: String(row.before),
+        after: String(row.after),
+        gas: String(row.gas),
+        sent: String(row.sent),
+        txHash: row.txHash,
+        at: row.at,
+      })),
+    ),
+  );
 }
 
 function writeCredential(credential) {
@@ -171,6 +216,7 @@ async function recoverPiggy() {
 function noteRecoverSuccess() {
   state.recoverFailures = 0;
   state.noPiggy = false;
+  state.privateTabHint = false;
 }
 
 // 연속 2회 실패 = 이 기기엔 되찾을 Piggy 가 없다고 본다. Birth 화면의 안내문을
@@ -178,6 +224,10 @@ function noteRecoverSuccess() {
 function noteRecoverFailure() {
   state.recoverFailures += 1;
   if (state.recoverFailures >= 2) state.noPiggy = true;
+  // 비공개 탭인지 페이지가 직접 아는 방법은 없다 — Safari 는 비공개에서도 localStorage 를
+  // 정상으로 답한다. 그래서 판정하지 않고, 패스키를 못 찾았을 때 후보 원인 하나를 안내만 한다
+  // (Owner 실측 2026-09-03: 비공개 탭에서 카드 미표시 + Send 불가 2회 재현, 원인 UNKNOWN).
+  state.privateTabHint = true;
 }
 
 async function openPiggy() {
@@ -361,7 +411,7 @@ async function sendPiggy() {
 
     settleSend({ before: plan.before, address: account.address, txHash })
       .then((receipt) => {
-        state.settleReceipt = receipt;
+        rememberReceipt(receipt);
         state.awayLine = "It's back.";
         setScene("away", "Piggy is home.", "One tag.");
         setTimeout(() => setScene("filebox"), 1200);
@@ -382,12 +432,15 @@ function resetLocalTest() {
   localStorage.removeItem("araso.testMera.prfSalt");
   localStorage.removeItem("araso.testMera.mark");
   localStorage.removeItem("araso.testMera.txHash");
+  localStorage.removeItem(RECEIPTS_KEY);
   endActiveSession();
   state.credential = null;
   state.address = "";
   state.mark = "";
   state.txHash = "";
   state.grantTxHash = "";
+  state.receipts = [];
+  state.receiptIndex = 0;
   noteRecoverSuccess(); // 실패 카운터도 초기화 — 리셋 후엔 복구를 다시 처음부터 시도한다
   setScene("birth", "You received a Piggy.", "Local test memory cleared.");
 }
@@ -402,6 +455,41 @@ function formatMoney(wei) {
   return `$${value.toFixed(decimals)}`;
 }
 
+// --- 화면 맨 위: 어디까지 왔나 + 지금 할 일 한 줄 ------------------------
+// 5장 전부 같은 자리에 둔다. Owner 실측(2026-09-03): 카드가 뜨기 전까지 사용자가 단서를
+// 하나도 못 얻었다 — 무엇을 기다리는지, 다음에 뭘 누르는지가 화면에 없었다.
+const STEPS = [
+  { scene: "received", label: "Arrived" },
+  { scene: "birth", label: "Open" },
+  { scene: "sendstay", label: "Home" },
+  { scene: "away", label: "Out" },
+  { scene: "filebox", label: "Back" },
+];
+
+const HINTS = {
+  received: "Look inside to see what came.",
+  birth: "Open it once with your face, or check if this device already has one.",
+  sendstay: "Send lets Piggy go out once. Stay keeps it home.",
+  away: "Piggy is out. Wait here — it comes back on its own.",
+  filebox: "This is what the trip cost.",
+};
+
+const PRIVATE_TAB_HINT = "A private tab can't find Piggy. Open this page in a normal tab.";
+
+function progressBar(scene) {
+  const now = STEPS.findIndex((step) => step.scene === scene);
+  const steps = STEPS.map((step, i) => {
+    const mark = i === now ? " progress__step--now" : i < now ? " progress__step--done" : "";
+    return `<li class="progress__step${mark}">${step.label}</li>`;
+  }).join("");
+  return `
+    <header class="progress">
+      <ol class="progress__steps">${steps}</ol>
+      <p class="progress__hint">${HINTS[scene] || ""}</p>
+    </header>
+  `;
+}
+
 // File Box 3칸: settle() receipt 위에서만 그린다. 화면은 숫자를 따로 계산하지 않는다.
 function receiptRows(receipt) {
   if (!receipt) return [];
@@ -410,6 +498,17 @@ function receiptRows(receipt) {
     { label: "Cost", value: formatMoney(receipt.gas) },
     { label: "Left", value: formatMoney(receipt.after) },
   ];
+}
+
+// 숫자 대조 한 줄 — 화면이 그린 숫자가 실제로 남은 것과 맞는지 사용자가 직접 본다.
+// expected = 나가기 전 − 보낸 것 − 든 비용. 이것과 실제 잔고가 다르면 그 자체가 알림이다.
+function receiptCheck(receipt) {
+  if (!receipt) return "";
+  const expected = receipt.before - receipt.sent - receipt.gas;
+  const off = receipt.after - expected;
+  // 실제로 남은 값은 위 Left 칸에 이미 있다 — 여기서는 기대값과, 그것과 어긋난 만큼만 말한다.
+  const tail = off === 0n ? "same as Left" : `off by ${formatMoney(off < 0n ? -off : off)}`;
+  return `<p class="receipt-check">Expected ${formatMoney(expected)} · ${tail}</p>`;
 }
 
 // --- character art: file images only (no CSS shapes) -------------------
@@ -484,6 +583,7 @@ function renderBirth() {
         <p class="eyebrow">Araso</p>
         <h1>${title}</h1>
         ${detail ? `<p class="detail">${detail}</p>` : ""}
+        ${state.privateTabHint ? `<p class="notice">${PRIVATE_TAB_HINT}</p>` : ""}
         ${state.address ? `<p class="address">${state.address}</p>` : ""}
         <div class="actions">
           ${
@@ -515,6 +615,7 @@ function renderSendStay() {
           <li>call home anytime</li>
         </ul>
         ${state.detail ? `<p class="detail">${state.detail}</p>` : ""}
+        ${state.privateTabHint ? `<p class="notice">${PRIVATE_TAB_HINT}</p>` : ""}
         ${state.address ? `<p class="address">${state.address}</p>` : ""}
         <div class="actions">
           <button class="primary" id="sendButton" ${blocked ? "disabled" : ""}>Send</button>
@@ -540,7 +641,11 @@ function renderAway() {
 }
 
 function renderFileBox() {
-  const rows = receiptRows(state.settleReceipt);
+  // 최신이 0번. 두 건이 있으면 직전 바퀴로 넘겨볼 수 있다 — 2회차에서 앞 영수증이 사라지면
+  // 무엇이 달라졌는지 대조할 것이 없다.
+  const receipt = state.receipts[state.receiptIndex] || null;
+  const hasPrevious = state.receipts.length > 1;
+  const rows = receiptRows(receipt);
   const rowsMarkup = rows.length
     ? rows
         .map(
@@ -558,8 +663,13 @@ function renderFileBox() {
         <div class="folder folder--3"></div>
         <div class="tape" aria-hidden="true"></div>
         <div class="tag" aria-hidden="true"></div>
-        <div class="receipt">${rowsMarkup}</div>
+        <div class="receipt">${rowsMarkup}${receiptCheck(receipt)}</div>
       </article>
+      ${
+        hasPrevious
+          ? `<button class="tiny trips" id="tripsButton">${state.receiptIndex === 0 ? "last trip" : "this trip"}</button>`
+          : ""
+      }
       <button class="tiny" id="resetButton">reset local test</button>
     </section>
   `;
@@ -576,7 +686,7 @@ function render() {
         : state.scene === "filebox"
           ? renderFileBox()
           : renderBirth();
-  app.innerHTML = markup;
+  app.innerHTML = progressBar(state.scene) + markup;
 
   document.querySelector("#beginButton")?.addEventListener("click", () =>
     setScene("birth", "You received a Piggy.", "Open it with your face. Once.")
@@ -585,6 +695,10 @@ function render() {
   document.querySelector("#checkButton")?.addEventListener("click", checkPiggy);
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);
   document.querySelector("#stayButton")?.addEventListener("click", stayHome);
+  document.querySelector("#tripsButton")?.addEventListener("click", () => {
+    state.receiptIndex = state.receiptIndex === 0 ? 1 : 0;
+    render();
+  });
   document.querySelector("#resetButton")?.addEventListener("click", resetLocalTest);
 }
 
