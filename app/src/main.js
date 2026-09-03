@@ -633,7 +633,8 @@ function setInvitePhase(phase) {
   if (label) label.textContent = phase === "checking" ? "checking..." : "Face ID";
 }
 
-// 봉투 열기 = 이 화면의 유일한 입력. 뜯기는 순서가 끝나면 Birth 로 넘어간다.
+// 봉투 열기 = 이 화면의 유일한 입력. 캔버스는 알이 내려앉은 idle 에서 끝나고,
+// **그다음 화면은 아직 정해지지 않았다**(Owner 2026-09-03). 여기서 멈춘다 — 임의로 잇지 않는다.
 function openInvite() {
   const board = document.querySelector(".invite");
   if (!board || (board.dataset.phase || "closed") !== "closed") return;
@@ -642,9 +643,6 @@ function openInvite() {
   INVITE_TIMELINE.forEach(([at, phase]) => {
     inviteTimers.push(setTimeout(() => setInvitePhase(phase), at));
   });
-  inviteTimers.push(
-    setTimeout(() => setScene("birth", "You received a Piggy.", "Open it with your face. Once."), 5900),
-  );
 }
 
 // 봉투 hero — 두 아트보드가 같은 480×365 안쪽 좌표를 쓴다. 모바일은 그 덩어리를 0.55833 로 줄인다.
