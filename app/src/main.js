@@ -413,19 +413,22 @@ function receiptRows(receipt) {
 }
 
 // --- character art: file images only (no CSS shapes) -------------------
-// 경로 = app/public/**, 원본 = <private>**.
+// 배포에 나가는 것은 **화면 크기 래스터 사본만**(최대 2x). 벡터 원본(SVG)·폰트 파일은
+// app/public/ 에 두지 않는다 — 배포된 파일은 URL 만 알면 누구나 받아갈 수 있고,
+// SVG 는 그림이 아니라 편집 가능한 도면이기 때문이다(Owner 판정 2026-09-03).
+// 원본 = <private>** (커밋 대상 아님).
 const EGG_BIG_SRC = "/egg/egg_idle.png";
 // Piggy 본체 파일 없음 (gift-piggy PIGGY_DESIGN_ASSET_SPEC.md §6 완료 인벤토리에 Piggy 자산 부재,
 // §8 미정에도 "Egg 정확한 형태 생성물 있으나 lock 아님"만 있음) → 새로 그리지 않고
 // Egg 6종 중 부화 후 프레임(egg_crack)으로 대체. UNKNOWN: 스펙대로 된 Piggy 파일.
 const PIGGY_STANDIN_SRC = "/egg/egg_crack.png";
-const CHOG_IDLE_SRC = "/chog/CHOG_IDLE.svg";
+const CHOG_IDLE_SRC = "/chog/chog_idle@2x.png";
 // Away 전용 걸음 루프 — WALK_META.json 의 이동량은 무시, 제자리 순환만. 10프레임 중 4장만 사용.
 const CHOG_WALK_FRAMES = [
-  "/chog/chog_walk_v3_F01_2048x2240.png",
-  "/chog/chog_walk_v3_F04_2048x2240.png",
-  "/chog/chog_walk_v3_F07_2048x2240.png",
-  "/chog/chog_walk_v3_F10_2048x2240.png",
+  "/chog/chog_walk_v3_F01@2x.png",
+  "/chog/chog_walk_v3_F04@2x.png",
+  "/chog/chog_walk_v3_F07@2x.png",
+  "/chog/chog_walk_v3_F10@2x.png",
 ];
 
 function chogWalkCycle() {

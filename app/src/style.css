@@ -1,7 +1,9 @@
+/* 손글씨 자리 — 폰트 파일(Cherry Juice)은 `<private>` 에만 둔다.
+   웹폰트는 파일을 브라우저에 넘겨야 쓸 수 있어서, **웹 임베드 라이선스 확인 전에는 배선하지 않는다**
+   (Owner 판정 2026-09-03). 확인되기 전까지 시스템 폰트로 간다. 그 서체가 꼭 필요하면
+   해당 낱말을 이미지로 렌더해 넣는다 — 폰트 파일을 주지 않고 글씨만 쓰는 방법. */
 :root {
   color-scheme: dark;
-  /* 손글씨 자리 — 에셋 미도착. 시스템 폰트로 대체하되 변수는 비워둔 채 유지한다.
-     새 폰트 파일 추가 금지. */
   --font-hand: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
   --ink: #ede8dc;
   --paper: #161616;
@@ -21,7 +23,16 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: var(--paper);
+  /* 노트지는 "한 장"이다 — 타일이 아니다. repeat 하면 스프링 구멍과 테이프가 격자로 늘어서서
+     무대가 아니라 배경 무늬가 된다. 화면을 한 장으로 덮고, 어둡게 눌러 카드 글자를 살린다. */
+  background:
+    linear-gradient(rgba(22, 22, 22, 0.86), rgba(22, 22, 22, 0.86)),
+    url("/bg_notebook_dark.png");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  background-attachment: fixed;
+  background-color: var(--paper);
 }
 
 button {
