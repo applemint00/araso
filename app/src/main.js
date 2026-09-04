@@ -62,6 +62,12 @@ const state = {
   noPiggy: false,
 };
 state.scene = computeInitialScene(!!state.credential, !!state.txHash, !!state.address);
+// dev 빌드 전용: ?scene=<5장 중 1장> 으로 화면만 골라 연다. 인증·키·돈은 건드리지 않는다(A-022).
+// import.meta.env.DEV 는 build 에서 false 로 치환되어 이 블록째 사라진다.
+if (import.meta.env.DEV) {
+  const want = new URLSearchParams(window.location.search).get("scene");
+  if (["received", "birth", "sendstay", "away", "filebox"].includes(want)) state.scene = want;
+}
 
 const publicClient = createPublicClient({
   chain: MONAD_TESTNET,
