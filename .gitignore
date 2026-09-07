@@ -12,3 +12,5 @@ AGENTS.md
 CLAUDE.md
 .claude/
 .agents/
+.codex/
+Claude outputs/
