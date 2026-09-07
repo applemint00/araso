@@ -60,14 +60,10 @@ const state = {
   // 복구 연속 실패 횟수. 2회면 이 기기엔 되찾을 Piggy 가 없다고 본다.
   recoverFailures: 0,
   noPiggy: false,
+  // 패스키를 못 찾은 뒤에만 켜지는 안내 한 줄. 비공개 탭인지 자체는 알 수 없다(아래 주석).
+  privateTabHint: false,
 };
 state.scene = computeInitialScene(!!state.credential, !!state.txHash, !!state.address);
-// dev 빌드 전용: ?scene=<5장 중 1장> 으로 화면만 골라 연다. 인증·키·돈은 건드리지 않는다(A-022).
-// import.meta.env.DEV 는 build 에서 false 로 치환되어 이 블록째 사라진다.
-if (import.meta.env.DEV) {
-  const want = new URLSearchParams(window.location.search).get("scene");
-  if (["received", "birth", "sendstay", "away", "filebox"].includes(want)) state.scene = want;
-}
 
 const publicClient = createPublicClient({
   chain: MONAD_TESTNET,
@@ -223,6 +219,7 @@ async function recoverPiggy() {
 function noteRecoverSuccess() {
   state.recoverFailures = 0;
   state.noPiggy = false;
+  state.privateTabHint = false;
 }
 
 // 연속 2회 실패 = 이 기기엔 되찾을 Piggy 가 없다고 본다. Birth 화면의 안내문을
@@ -230,6 +227,10 @@ function noteRecoverSuccess() {
 function noteRecoverFailure() {
   state.recoverFailures += 1;
   if (state.recoverFailures >= 2) state.noPiggy = true;
+  // 비공개 탭인지 페이지가 직접 아는 방법은 없다 — Safari 는 비공개에서도 localStorage 를
+  // 정상으로 답한다. 그래서 판정하지 않고, 패스키를 못 찾았을 때 후보 원인 하나를 안내만 한다
+  // (Owner 실측 2026-09-03: 비공개 탭에서 카드 미표시 + Send 불가 2회 재현, 원인 UNKNOWN).
+  state.privateTabHint = true;
 }
 
 async function openPiggy() {
@@ -467,6 +468,17 @@ function receiptRows(receipt) {
   ];
 }
 
+// 숫자 대조 한 줄 — 화면이 그린 숫자가 실제로 남은 것과 맞는지 사용자가 직접 본다.
+// expected = 나가기 전 − 보낸 것 − 든 비용. 이것과 실제 잔고가 다르면 그 자체가 알림이다.
+function receiptCheck(receipt) {
+  if (!receipt) return "";
+  const expected = receipt.before - receipt.sent - receipt.gas;
+  const off = receipt.after - expected;
+  // 실제로 남은 값은 위 Left 칸에 이미 있다 — 여기서는 기대값과, 그것과 어긋난 만큼만 말한다.
+  const tail = off === 0n ? "same as Left" : `off by ${formatMoney(off < 0n ? -off : off)}`;
+  return `<p class="receipt-check">Expected ${formatMoney(expected)} · ${tail}</p>`;
+}
+
 // --- character art: file images only (no CSS shapes) -------------------
 // 배포에 나가는 것은 **화면 크기 래스터 사본만**(최대 2x). 벡터 원본(SVG)·폰트 파일은
 // app/public/ 에 두지 않는다 — 배포된 파일은 URL 만 알면 누구나 받아갈 수 있고,
@@ -549,18 +561,6 @@ const INVITE_EGG_ANIM = {
   idle: "egg-idle2 3.2s ease-in-out infinite",
 };
 
-// Chog 는 part-filled 8종 중 Invite 가 쓰는 5종이다(2026-08-31 승격, `PROVENANCE.md`
-// "8/8 fill PASS → behavior preview PASS → InviteWide 실배치 PASS"). 값·간격은
-// `02_REVIEW/behavior_invite_v1/InviteWide_behavior_preview.html` 의 behavior 스크립트 그대로다.
-const CHOG_STATES = ["idle", "blink", "twitch", "wave", "click"];
-const CHOG_LOOPS = [
-  ["blink", 3000, 7000, 140],
-  ["twitch", 8000, 15000, 110],
-  ["wave", 20000, 40000, 450],
-];
-const CHOG_CLICK_MS = 220;
-const CHOG_CLICK_COOLDOWN = 1500;
-
 const INVITE_SPARK_ANIM = {
   tear: "spark-pop 0.3s ease-out both",
   teared: "env-float 1s ease-in-out infinite",
@@ -596,14 +596,9 @@ function fitInvite() {
     render();
     return;
   }
-  const wide = board.dataset.kind === "wide";
-  const w = wide ? 1280 : 420;
-  // 아래로 재는 기준은 판 전체(800/840)가 아니라 **노트지 밑변**(와이드 17+691, 모바일 22+796)이다.
-  // 판 밑에는 디자인이 남겨둔 검은 여백이 있고, 그것까지 넣으려고 판을 줄이면 창이 넓을 때
-  // 좌우로 검은색이 크게 남는다(Owner 실측 2026-09-03: "검은색이 그렇게 많이 보이지 않았어").
-  // 그래서 폭을 채우되 노트지가 잘리지 않는 선까지만 키우고, 남는 아래 여백은 잘린다.
-  const paperBottom = wide ? 708 : 818;
-  const scale = Math.min(window.innerWidth / w, window.innerHeight / paperBottom);
+  const w = board.dataset.kind === "wide" ? 1280 : 420;
+  const h = board.dataset.kind === "wide" ? 800 : 840;
+  const scale = Math.min(window.innerWidth / w, window.innerHeight / h);
   board.style.transform = `scale(${scale})`;
 }
 
@@ -621,8 +616,7 @@ function setInvitePhase(phase) {
   if (label) label.textContent = phase === "checking" ? "checking..." : "Face ID";
 }
 
-// 봉투 열기 = 이 화면의 유일한 입력. 캔버스는 알이 내려앉은 idle 에서 끝나고,
-// **그다음 화면은 아직 정해지지 않았다**(Owner 2026-09-03). 여기서 멈춘다 — 임의로 잇지 않는다.
+// 봉투 열기 = 이 화면의 유일한 입력. 뜯기는 순서가 끝나면 Birth 로 넘어간다.
 function openInvite() {
   const board = document.querySelector(".invite");
   if (!board || (board.dataset.phase || "closed") !== "closed") return;
@@ -631,6 +625,9 @@ function openInvite() {
   INVITE_TIMELINE.forEach(([at, phase]) => {
     inviteTimers.push(setTimeout(() => setInvitePhase(phase), at));
   });
+  inviteTimers.push(
+    setTimeout(() => setScene("birth", "You received a Piggy.", "Open it with your face. Once."), 5900),
+  );
 }
 
 // 봉투 hero — 두 아트보드가 같은 480×365 안쪽 좌표를 쓴다. 모바일은 그 덩어리를 0.55833 로 줄인다.
@@ -657,72 +654,6 @@ function inviteHero(dir) {
   `;
 }
 
-// Chog 자리 — 상태 5장을 겹쳐 두고 하나만 보이게 한다(캔버스 preview 와 같은 방식).
-function inviteChog(dir) {
-  const frames = CHOG_STATES.map(
-    (k) => `<img class="invite__chogState" data-chog="${k}" src="${dir}/${k}@2x.png" alt="" />`,
-  ).join("");
-  return `<div class="invite__chogIdle" id="inviteChog" aria-hidden="true">${frames}</div>`;
-}
-
-let chogTimers = [];
-let chogBusy = 0;
-
-function clearChogTimers() {
-  chogTimers.forEach(clearTimeout);
-  chogTimers = [];
-  chogBusy = 0;
-}
-
-function showChog(state) {
-  const box = document.querySelector("#inviteChog");
-  if (!box) return;
-  box.querySelectorAll(".invite__chogState").forEach((img) => {
-    img.style.display = img.dataset.chog === state ? "block" : "none";
-  });
-}
-
-// 우선순위: 클릭(2) 이 랜덤 micro(1) 를 끊는다. 어떤 상태든 끝나면 idle 로 돌아온다.
-function playChog(state, priority, ms, squash) {
-  if (chogBusy && priority <= chogBusy) return;
-  chogBusy = priority;
-  showChog(state);
-  const box = document.querySelector("#inviteChog");
-  if (squash && box) {
-    box.style.transform = `scaleY(${squash})`;
-    chogTimers.push(setTimeout(() => (box.style.transform = ""), 120));
-  }
-  chogTimers.push(
-    setTimeout(() => {
-      showChog("idle");
-      chogBusy = 0;
-    }, ms),
-  );
-}
-
-function startChog() {
-  clearChogTimers();
-  showChog("idle");
-  const rnd = (a, b) => a + Math.random() * (b - a);
-  CHOG_LOOPS.forEach(([state, min, max, ms]) => {
-    const again = () => {
-      chogTimers.push(
-        setTimeout(() => {
-          playChog(state, 1, ms);
-          again();
-        }, rnd(min, max)),
-      );
-    };
-    again();
-  });
-  let clickUntil = 0;
-  document.querySelector("#inviteChog")?.addEventListener("click", () => {
-    if (Date.now() < clickUntil) return;
-    clickUntil = Date.now() + CHOG_CLICK_COOLDOWN;
-    playChog("click", 2, CHOG_CLICK_MS, 0.99);
-  });
-}
-
 function inviteFace() {
   return `
     <button class="invite__face" id="inviteFaceButton">
@@ -747,14 +678,14 @@ function inviteMobile() {
     <div class="invite invite--mobile" data-kind="mobile" data-phase="closed">
       <div class="invite__paper">
         <img class="invite__tape" src="/invite/tape@2x.png" alt="" aria-hidden="true" />
-        ${inviteHoles(16)}
+        ${inviteHoles(13)}
         <div class="invite__hero" aria-hidden="true">${inviteHero("/invite")}</div>
         <img class="invite__burst" src="/invite/burst@2x.png" alt="" aria-hidden="true" />
         ${inviteFace()}
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/trail@2x.png" alt="" />
+          <img class="invite__chogIdle" src="/invite/chog_invite@2x.png" alt="" />
         </div>
-        ${inviteChog("/invite/chog")}
         <p class="invite__copy">it's safe. only you can open it.</p>
         <div class="invite__corner" aria-hidden="true"></div>
         <div class="invite__cornerBack" aria-hidden="true"></div>
@@ -775,7 +706,7 @@ function inviteWide() {
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/wide/trail@2x.png" alt="" />
         </div>
-        ${inviteChog("/invite/wide/chog")}
+        <img class="invite__chogIdle" src="/invite/wide/chog_invite@2x.png" alt="" aria-hidden="true" />
         <img class="invite__tape" src="/invite/wide/tape@2x.png" alt="" aria-hidden="true" />
       </div>
     </div>
@@ -803,6 +734,7 @@ function renderBirth() {
         <p class="eyebrow">Araso</p>
         <h1>${title}</h1>
         ${detail ? `<p class="detail">${detail}</p>` : ""}
+        ${state.privateTabHint ? `<p class="notice">${PRIVATE_TAB_HINT}</p>` : ""}
         ${state.address ? `<p class="address">${state.address}</p>` : ""}
         <div class="actions">
           ${
@@ -834,6 +766,7 @@ function renderSendStay() {
           <li>call home anytime</li>
         </ul>
         ${state.detail ? `<p class="detail">${state.detail}</p>` : ""}
+        ${state.privateTabHint ? `<p class="notice">${PRIVATE_TAB_HINT}</p>` : ""}
         ${state.address ? `<p class="address">${state.address}</p>` : ""}
         <div class="actions">
           <button class="primary" id="sendButton" ${blocked ? "disabled" : ""}>Send</button>
@@ -881,7 +814,7 @@ function renderFileBox() {
         <div class="folder folder--3"></div>
         <div class="tape" aria-hidden="true"></div>
         <div class="tag" aria-hidden="true"></div>
-        <div class="receipt">${rowsMarkup}</div>
+        <div class="receipt">${rowsMarkup}${receiptCheck(receipt)}</div>
       </article>
       ${
         hasPrevious
@@ -906,17 +839,11 @@ function render() {
           : renderBirth();
   // 장면이 바뀌면 Invite 의 예약된 단계 전환은 전부 버린다 — 화면이 없는데 타이머만 남으면
   // 엉뚱한 시점에 Birth 로 넘어간다.
-  if (state.scene !== "received") {
-    clearInviteTimers();
-    clearChogTimers();
-  }
+  if (state.scene !== "received") clearInviteTimers();
   app.innerHTML = markup;
 
   document.querySelector("#inviteFaceButton")?.addEventListener("click", openInvite);
-  if (state.scene === "received") {
-    fitInvite();
-    startChog();
-  }
+  if (state.scene === "received") fitInvite();
   document.querySelector("#openButton")?.addEventListener("click", openPiggy);
   document.querySelector("#checkButton")?.addEventListener("click", checkPiggy);
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);

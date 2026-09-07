@@ -114,6 +114,14 @@ h1 {
   line-height: 1.45;
 }
 
+/* 패스키를 못 찾았을 때만 뜨는 안내 한 줄. 원인을 단정하지 않고 후보 하나를 말한다. */
+.notice {
+  margin: 12px 0 0;
+  color: var(--gold);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
 .address {
   margin: 16px 0 0;
   overflow-wrap: anywhere;
@@ -328,10 +336,11 @@ h1 {
   border-radius: 2px;
 }
 
+/* 대조 한 줄이 늘면서 네 줄이 됐다 — 종이(folder--3, 80..248) 안에 들어오도록 시작점을 올린다. */
 .receipt {
   position: absolute;
   left: 96px;
-  top: 144px;
+  top: 116px;
   margin: 0;
   color: #161616;
   font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
@@ -342,6 +351,12 @@ h1 {
 .receipt-row .label {
   display: inline-block;
   min-width: 48px;
+}
+
+.receipt-check {
+  margin: 6px 0 0;
+  color: rgba(22, 22, 22, 0.6);
+  font-size: 10px;
 }
 
 .tiny {
@@ -394,16 +409,8 @@ h1 {
    비율이 캔버스와 어긋나지 않게 하려는 것이다. --- */
 .stage--invite {
   padding: 0;
-  /* 아트보드는 판보다 넓을 수 있다(420 판 · 375 화면). 격자 칸을 화면 폭에 묶지 않으면
-     칸이 판 크기(420)로 벌어져 판이 왼쪽 끝에 붙고, 축소한 뒤에도 오른쪽이 잘린다
-     (실측 2026-09-03: 375px 에서 left 23px · 오른쪽 22.5px 잘림). */
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr);
   align-content: center;
   overflow: hidden;
-  /* 판이 화면보다 낮으면 위아래로 여백이 남는다. 그 여백에 앱의 노트지 배경이 비치면
-     테이프 조각이 판 밖에 떠 있는 것처럼 보인다 — 캔버스 body 색(#050505)으로 덮는다. */
-  background: #050505;
 }
 
 .invite__faceIcon {
@@ -418,7 +425,7 @@ h1 {
   overflow: hidden;
   background: #050505;
   color: #ede8dc;
-  transform-origin: top center;
+  transform-origin: center center;
 }
 
 .invite__paper {
@@ -692,28 +699,15 @@ h1 {
   opacity: 0.55;
 }
 
-/* Chog 슬롯 — 와이드는 Owner FIX 실배치값 [321.7, 496.9, 107.6, 139.9](VERIFY_BEHAVIOR_INVITE.md),
-   모바일은 그 판정이 없어 예전 Chog 의 발 위치·크기 비율로 옮긴 값이다(유도값, 정본 아님).
-   흔들림(chog-idle 2.6s)은 캔버스 CSS 그대로 두고, 상태 전환만 5장으로 한다. */
 .invite__chogIdle {
   position: absolute;
-  left: 73.7px;
-  top: 604px;
-  width: 68.7px;
-  height: 89.4px;
+  left: 47px;
+  top: -3px;
+  width: 62px;
+  height: 76px;
+  object-fit: contain;
   transform-origin: 50% 90%;
   animation: chog-idle 2.6s ease-in-out infinite;
-  pointer-events: auto;
-  cursor: pointer;
-}
-
-.invite__chogState {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: none;
 }
 
 .invite__copy {
@@ -945,10 +939,10 @@ h1 {
 }
 
 .invite--wide .invite__chogIdle {
-  left: 321.7px;
-  top: 496.9px;
-  width: 107.6px;
-  height: 139.9px;
+  left: 325px;
+  top: 512px;
+  width: 96px;
+  height: 119px;
 }
 
 @keyframes spark-out {
