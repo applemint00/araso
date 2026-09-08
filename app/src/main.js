@@ -80,8 +80,6 @@ const state = {
   // 복구 연속 실패 횟수. 2회면 이 기기엔 되찾을 Piggy 가 없다고 본다.
   recoverFailures: 0,
   noPiggy: false,
-  // 패스키를 못 찾은 뒤에만 켜지는 안내 한 줄. 비공개 탭인지 자체는 알 수 없다(아래 주석).
-  privateTabHint: false,
 };
 state.scene = computeInitialScene(!!state.credential, !!state.txHash, !!state.address);
 
@@ -239,7 +237,6 @@ async function recoverPiggy() {
 function noteRecoverSuccess() {
   state.recoverFailures = 0;
   state.noPiggy = false;
-  state.privateTabHint = false;
 }
 
 // 연속 2회 실패 = 이 기기엔 되찾을 Piggy 가 없다고 본다. Birth 화면의 안내문을
@@ -247,10 +244,6 @@ function noteRecoverSuccess() {
 function noteRecoverFailure() {
   state.recoverFailures += 1;
   if (state.recoverFailures >= 2) state.noPiggy = true;
-  // 비공개 탭인지 페이지가 직접 아는 방법은 없다 — Safari 는 비공개에서도 localStorage 를
-  // 정상으로 답한다. 그래서 판정하지 않고, 패스키를 못 찾았을 때 후보 원인 하나를 안내만 한다
-  // (Owner 실측 2026-09-03: 비공개 탭에서 카드 미표시 + Send 불가 2회 재현, 원인 UNKNOWN).
-  state.privateTabHint = true;
 }
 
 async function openPiggy() {
@@ -449,6 +442,7 @@ async function sendPiggy() {
   }
 }
 
+// @DEV_ONLY
 function resetLocalTest() {
   localStorage.removeItem(PASSKEY_STORAGE_KEY);
   localStorage.removeItem("araso.address");
@@ -754,7 +748,6 @@ function renderBirth() {
         <p class="eyebrow">Araso</p>
         <h1>${title}</h1>
         ${detail ? `<p class="detail">${detail}</p>` : ""}
-        ${state.privateTabHint ? `<p class="notice">${PRIVATE_TAB_HINT}</p>` : ""}
         ${state.address ? `<p class="address">${state.address}</p>` : ""}
         <div class="actions">
           ${
@@ -767,7 +760,7 @@ function renderBirth() {
           <button class="secondary" id="checkButton" ${blocked ? "disabled" : ""}>Check Piggy</button>
         </div>
       </article>
-      <button class="tiny" id="resetButton">reset local test</button>
+      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -786,7 +779,6 @@ function renderSendStay() {
           <li>call home anytime</li>
         </ul>
         ${state.detail ? `<p class="detail">${state.detail}</p>` : ""}
-        ${state.privateTabHint ? `<p class="notice">${PRIVATE_TAB_HINT}</p>` : ""}
         ${state.address ? `<p class="address">${state.address}</p>` : ""}
         <div class="actions">
           <button class="primary" id="sendButton" ${blocked ? "disabled" : ""}>Send</button>
@@ -794,7 +786,7 @@ function renderSendStay() {
         </div>
       </article>
       <button class="tiny check" id="checkButton" ${blocked ? "disabled" : ""}>check same Piggy</button>
-      <button class="tiny" id="resetButton">reset local test</button>
+      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -806,7 +798,7 @@ function renderAway() {
       <article class="note note--quiet">
         <p class="line">${state.awayLine}</p>
       </article>
-      <button class="tiny" id="resetButton">reset local test</button>
+      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -841,7 +833,7 @@ function renderFileBox() {
           ? `<button class="tiny trips" id="tripsButton">${state.receiptIndex === 0 ? "last trip" : "this trip"}</button>`
           : ""
       }
-      <button class="tiny" id="resetButton">reset local test</button>
+      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -872,7 +864,9 @@ function render() {
     state.receiptIndex = state.receiptIndex === 0 ? 1 : 0;
     render();
   });
-  document.querySelector("#resetButton")?.addEventListener("click", resetLocalTest);
+  if (import.meta.env.DEV) {
+    document.querySelector("#resetButton")?.addEventListener("click", resetLocalTest);
+  }
 }
 
 // 돌아온 사용자는 Received 에 갇히지 않는다 — 이미 credential 이나 주소가 있으면 Birth 로 연다.
