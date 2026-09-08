@@ -9,7 +9,7 @@ import { toViemAccount } from "@category-labs/mera/viem";
 import { createPublicClient, createWalletClient, formatEther, http, parseEther } from "viem";
 import "./style.css";
 
-const PASSKEY_STORAGE_KEY = "araso.testMera.passkey";
+const PASSKEY_STORAGE_KEY = "araso.passkey";
 // rpId 이력: arasoapp.vercel.app (9/2 낮, 폐기) → arasoo.vercel.app (9/2 밤 재생성, 현재).
 // 이후 변경 금지 — 바뀌면 기존에 등록된 패스키가 전부 못 찾는 상태가 된다.
 const PRODUCTION_RP_ID = "arasoo.vercel.app";
@@ -25,7 +25,7 @@ const MONAD_TESTNET = {
 // 기본값 = 같은 origin 의 서버리스(`/api/grant`). 로컬 relayer 로 붙일 때만 VITE_RELAYER_URL 로 덮는다.
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "/api";
 const SEND_AMOUNT = parseEther("0.001");
-const RECEIPTS_KEY = "araso.testMera.receipts";
+const RECEIPTS_KEY = "araso.receipts";
 // 보관은 최근 2건까지 — 이번 바퀴와 그 앞의 바퀴 하나. 그 이상은 아직 화면에 열 자리가 없다.
 const RECEIPT_KEEP = 2;
 
@@ -43,13 +43,33 @@ function computeInitialScene(hasCredential, hasTxHash, hasAddress) {
   return "sendstay";
 }
 
+function migrateTestMeraKeys() {
+  const RENAMES = {
+    "araso.testMera.passkey": "araso.passkey",
+    "araso.testMera.receipts": "araso.receipts",
+    "araso.testMera.address": "araso.address",
+    "araso.testMera.mark": "araso.mark",
+    "araso.testMera.txHash": "araso.txHash",
+    "araso.testMera.prfSalt": "araso.prfSalt",
+  };
+  for (const [oldKey, newKey] of Object.entries(RENAMES)) {
+    const value = localStorage.getItem(oldKey);
+    if (value === null) continue;
+    if (localStorage.getItem(newKey) === null) {
+      localStorage.setItem(newKey, value);
+    }
+    localStorage.removeItem(oldKey);
+  }
+}
+migrateTestMeraKeys();
+
 const state = {
   scene: "received", // 5장 중 1장 — 첫 진입
   message: "",
   detail: "",
-  address: localStorage.getItem("araso.testMera.address") || "",
-  mark: localStorage.getItem("araso.testMera.mark") || "",
-  txHash: localStorage.getItem("araso.testMera.txHash") || "",
+  address: localStorage.getItem("araso.address") || "",
+  mark: localStorage.getItem("araso.mark") || "",
+  txHash: localStorage.getItem("araso.txHash") || "",
   grantTxHash: "",
   // settle() 이 만든 receipt 를 최근 것부터 2건. 세션 메모리가 아니라 저장소에 남는다 —
   // 2회차에서는 새 영수증을 받은 뒤에도 직전 바퀴를 다시 열어봐야 한다(A-015).
@@ -160,7 +180,7 @@ function activateSigningSession(prfOutput) {
   activeSession = createSecp256k1SigningSession({ privateKey: prfOutput });
   activeAccount = toViemAccount(activeSession);
   const address = getEvmAddress(activeSession.publicKey);
-  localStorage.setItem("araso.testMera.address", address);
+  localStorage.setItem("araso.address", address);
   state.address = address;
   touchSession();
   return { account: activeAccount, address };
@@ -255,7 +275,7 @@ async function openPiggy() {
     const { address } = activateSigningSession(result.prfOutput);
 
     writeCredential(credential);
-    localStorage.setItem("araso.testMera.prfSalt", toHex(result.prfSalt));
+    localStorage.setItem("araso.prfSalt", toHex(result.prfSalt));
     noteRecoverSuccess();
 
     setScene("sendstay", "Piggy is home.", `There's a little money inside. $${5}.`);
@@ -407,8 +427,8 @@ async function sendPiggy() {
       to: plan.relayerAddress,
       value: SEND_AMOUNT,
     });
-    localStorage.setItem("araso.testMera.mark", mark);
-    localStorage.setItem("araso.testMera.txHash", txHash);
+    localStorage.setItem("araso.mark", mark);
+    localStorage.setItem("araso.txHash", txHash);
     state.mark = mark;
     state.txHash = txHash;
 
@@ -431,10 +451,10 @@ async function sendPiggy() {
 
 function resetLocalTest() {
   localStorage.removeItem(PASSKEY_STORAGE_KEY);
-  localStorage.removeItem("araso.testMera.address");
-  localStorage.removeItem("araso.testMera.prfSalt");
-  localStorage.removeItem("araso.testMera.mark");
-  localStorage.removeItem("araso.testMera.txHash");
+  localStorage.removeItem("araso.address");
+  localStorage.removeItem("araso.prfSalt");
+  localStorage.removeItem("araso.mark");
+  localStorage.removeItem("araso.txHash");
   localStorage.removeItem(RECEIPTS_KEY);
   endActiveSession();
   state.credential = null;
