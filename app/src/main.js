@@ -26,6 +26,7 @@ const MONAD_TESTNET = {
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "/api";
 const SEND_AMOUNT = parseEther("0.001");
 const RECEIPTS_KEY = "araso.receipts";
+const TRIP_CLOSED_KEY = "araso.tripClosed";
 // 보관은 최근 2건까지 — 이번 바퀴와 그 앞의 바퀴 하나. 그 이상은 아직 화면에 열 자리가 없다.
 const RECEIPT_KEEP = 2;
 
@@ -34,12 +35,14 @@ const app = document.querySelector("#app");
 // scene 은 credential/txHash 로부터 최초 1회 파생하고, 그 뒤로는 사용자 행동에 따라
 // 명시적으로 전환한다(완전 파생이 아님 — away/filebox 전환은 진행 중인 네트워크 상태를 담아야 해서
 // 이벤트 사실만으로는 부족하다).
-function computeInitialScene(hasCredential, hasTxHash, hasAddress) {
+function computeInitialScene(hasCredential, hasClosedTrip, hasAddress) {
   // 아무것도 없는 첫 방문 = Invite(Received). 그 전까지는 이 화면이 한 번도 뜨지 않았다 —
   // credential 이 없으면 곧장 Birth 로 보냈기 때문이다(2026-09-03 A-018 에서 발견).
   if (!hasCredential && !hasAddress) return "received";
   if (!hasCredential) return "birth";
-  if (hasTxHash) return "filebox";
+  // 「보냈다」가 아니라 「바퀴가 닫혔다」로 판정한다. txHash 하나로 잠그면
+  // 실패한 바퀴도 filebox 에 갇힌다(2026-09-08 A-056 실측).
+  if (hasClosedTrip) return "filebox";
   return "sendstay";
 }
 
@@ -80,8 +83,15 @@ const state = {
   // 복구 연속 실패 횟수. 2회면 이 기기엔 되찾을 Piggy 가 없다고 본다.
   recoverFailures: 0,
   noPiggy: false,
+  // 바퀴의 결말. "" = 아직 안 났다 · "done" · "failed". 사유는 tripReason 에 남긴다.
+  tripOutcome: "",
+  tripReason: "",
+  // 「보냈다」(txHash)와 분리된 「이번 바퀴가 닫혔다」. 성공한 바퀴에서만 선다.
+  // 옛 저장값에는 이 키가 없으므로 txHash 가 있으면 닫힌 것으로 본다(A-048 이관과 같은 다리).
+  tripClosed:
+    localStorage.getItem(TRIP_CLOSED_KEY) === "1" || !!localStorage.getItem("araso.txHash"),
 };
-state.scene = computeInitialScene(!!state.credential, !!state.txHash, !!state.address);
+state.scene = computeInitialScene(!!state.credential, state.tripClosed, !!state.address);
 
 const publicClient = createPublicClient({
   chain: MONAD_TESTNET,
@@ -112,6 +122,8 @@ function readReceipts() {
       gas: BigInt(row.gas),
       sent: BigInt(row.sent),
       txHash: row.txHash || "",
+      // 옛 영수증에는 status 가 없다. 없으면 빈 값으로 두고 성공이라 넘겨짚지 않는다.
+      status: row.status || "",
       at: row.at || 0,
     }));
   } catch {
@@ -132,6 +144,7 @@ function rememberReceipt(receipt) {
         gas: String(row.gas),
         sent: String(row.sent),
         txHash: row.txHash,
+        status: row.status || "",
         at: row.at,
       })),
     ),
@@ -349,12 +362,53 @@ async function simulateSend(account) {
   return { relayerAddress, before };
 }
 
-// receipt 확정 후 before/after/cost 를 하나의 receipt 객체로 만든다. 화면은 이 객체 위에서만 그린다.
+// 바퀴의 결말은 둘이고(조건 불충족 nah. 은 아직 없다), 그 둘을 가르는 내부 사유는 넷이다.
+// 넷을 둘로 접는 자리가 여기다 — 화면이 사유를 다시 해석하지 않게 한다.
+//   unconfirmed / reverted → 실행 실패  (tx 가 성공하지 않았다)
+//   balance-unavailable    → 완료       (tx 는 성공했고 숫자만 못 읽었다)
+//   ok                     → 완료       (영수증까지 있다)
 async function settleSend({ before, address, txHash }) {
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
-  const after = await publicClient.getBalance({ address });
+  let receipt;
+  try {
+    receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+  } catch {
+    // 확정을 못 봤다. 보낸 것과 끝난 것은 다르므로 여기서 성공이라고 말하지 않는다.
+    return { outcome: "failed", reason: "unconfirmed", receipt: null };
+  }
+  // 채굴됐다 ≠ 성공했다. status 는 지금까지 버려지던 값이다.
+  if (receipt.status !== "success") {
+    return { outcome: "failed", reason: "reverted", receipt: null };
+  }
   const gas = receipt.gasUsed * receipt.effectiveGasPrice;
-  return { before, after, gas, sent: SEND_AMOUNT, txHash, at: Date.now() };
+  let after;
+  try {
+    after = await publicClient.getBalance({ address });
+  } catch {
+    // tx 는 성공했다. 잔고 조회만 깨진 것이라 바퀴는 닫힌 것으로 본다 — 숫자가 없을 뿐이다.
+    return { outcome: "done", reason: "balance-unavailable", receipt: null };
+  }
+  return {
+    outcome: "done",
+    reason: "ok",
+    receipt: { before, after, gas, sent: SEND_AMOUNT, txHash, status: receipt.status, at: Date.now() },
+  };
+}
+
+// 결말 하나가 화면과 저장을 같이 정한다. 성공했을 때만 바퀴가 닫힌다.
+function finishTrip(trip) {
+  state.tripOutcome = trip.outcome;
+  state.tripReason = trip.reason;
+  if (trip.receipt) rememberReceipt(trip.receipt);
+  if (trip.outcome !== "done") {
+    // 돌아왔다고 말하지 않는다 — awayLine 을 성공 쪽으로 넘기지 않는다.
+    setScene("sendstay", "couldn't finish this one.");
+    return;
+  }
+  state.tripClosed = true;
+  localStorage.setItem(TRIP_CLOSED_KEY, "1");
+  state.awayLine = "It's back.";
+  setScene("away", "Piggy is home.", trip.receipt ? "One tag." : "Confirmation is still catching up.");
+  setTimeout(() => setScene("filebox"), 1200);
 }
 
 async function sendPiggy() {
@@ -426,17 +480,9 @@ async function sendPiggy() {
     state.txHash = txHash;
 
     settleSend({ before: plan.before, address: account.address, txHash })
-      .then((receipt) => {
-        rememberReceipt(receipt);
-        state.awayLine = "It's back.";
-        setScene("away", "Piggy is home.", "One tag.");
-        setTimeout(() => setScene("filebox"), 1200);
-      })
-      .catch(() => {
-        state.awayLine = "It's back.";
-        setScene("away", "Piggy is home.", "Confirmation is still catching up.");
-        setTimeout(() => setScene("filebox"), 1200);
-      });
+      .then(finishTrip)
+      // settleSend 는 결말을 반환한다 — 여기로 오는 건 그 밖의 예외뿐이라 미확인으로 접는다.
+      .catch(() => finishTrip({ outcome: "failed", reason: "unconfirmed", receipt: null }));
   } catch (error) {
     setScene("sendstay", "Piggy could not get ready.", formatError(error));
   }
@@ -449,6 +495,7 @@ function resetLocalTest() {
   localStorage.removeItem("araso.prfSalt");
   localStorage.removeItem("araso.mark");
   localStorage.removeItem("araso.txHash");
+  localStorage.removeItem(TRIP_CLOSED_KEY);
   localStorage.removeItem(RECEIPTS_KEY);
   endActiveSession();
   state.credential = null;
@@ -456,6 +503,9 @@ function resetLocalTest() {
   state.mark = "";
   state.txHash = "";
   state.grantTxHash = "";
+  state.tripClosed = false;
+  state.tripOutcome = "";
+  state.tripReason = "";
   state.receipts = [];
   state.receiptIndex = 0;
   noteRecoverSuccess(); // 실패 카운터도 초기화 — 리셋 후엔 복구를 다시 처음부터 시도한다
