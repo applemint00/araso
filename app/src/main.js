@@ -6,7 +6,7 @@ import {
   isMeraError,
 } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
-import { createPublicClient, createWalletClient, formatEther, http, parseEther } from "viem";
+import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, parseEther } from "viem";
 import "./style.css";
 
 const PASSKEY_STORAGE_KEY = "araso.passkey";
@@ -25,6 +25,37 @@ const MONAD_TESTNET = {
 // 기본값 = 같은 origin 의 서버리스(`/api/grant`). 로컬 relayer 로 붙일 때만 VITE_RELAYER_URL 로 덮는다.
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "/api";
 const SEND_AMOUNT = parseEther("0.001");
+const SHMON_ADDRESS = "0x282BdDFF5e58793AcAb65438b257Dbd15A8745C9";
+const SHMON_ABI = [
+  {
+    type: "function",
+    name: "deposit",
+    stateMutability: "payable",
+    inputs: [
+      { name: "assets", type: "uint256" },
+      { name: "receiver", type: "address" },
+    ],
+    outputs: [{ name: "shares", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "redeem",
+    stateMutability: "nonpayable",
+    inputs: [
+      { name: "shares", type: "uint256" },
+      { name: "receiver", type: "address" },
+      { name: "owner", type: "address" },
+    ],
+    outputs: [{ name: "assets", type: "uint256" }],
+  },
+  {
+    type: "function",
+    name: "balanceOf",
+    stateMutability: "view",
+    inputs: [{ name: "account", type: "address" }],
+    outputs: [{ name: "balance", type: "uint256" }],
+  },
+];
 const RECEIPTS_KEY = "araso.receipts";
 const TRIP_CLOSED_KEY = "araso.tripClosed";
 // 보관은 최근 2건까지 — 이번 바퀴와 그 앞의 바퀴 하나. 그 이상은 아직 화면에 열 자리가 없다.
@@ -122,6 +153,10 @@ function readReceipts() {
       gas: BigInt(row.gas),
       sent: BigInt(row.sent),
       txHash: row.txHash || "",
+      depositTxHash: row.depositTxHash || "",
+      redeemTxHash: row.redeemTxHash || "",
+      shmonReceived: row.shmonReceived ? BigInt(row.shmonReceived) : 0n,
+      shmonAfterRedeem: row.shmonAfterRedeem ? BigInt(row.shmonAfterRedeem) : 0n,
       // 옛 영수증에는 status 가 없다. 없으면 빈 값으로 두고 성공이라 넘겨짚지 않는다.
       status: row.status || "",
       at: row.at || 0,
@@ -144,6 +179,10 @@ function rememberReceipt(receipt) {
         gas: String(row.gas),
         sent: String(row.sent),
         txHash: row.txHash,
+        depositTxHash: row.depositTxHash || "",
+        redeemTxHash: row.redeemTxHash || "",
+        shmonReceived: String(row.shmonReceived || 0n),
+        shmonAfterRedeem: String(row.shmonAfterRedeem || 0n),
         status: row.status || "",
         at: row.at,
       })),
@@ -342,24 +381,54 @@ async function requestGrant(address) {
   return { granted: true, txHash: body.txHash };
 }
 
-// broadcast 전에 잔액/가스를 확인한다. 부족하면 여기서 throw — 추측 진행 금지.
+function makeDepositTx(receiver) {
+  return {
+    to: SHMON_ADDRESS,
+    value: SEND_AMOUNT,
+    data: encodeFunctionData({
+      abi: SHMON_ABI,
+      functionName: "deposit",
+      args: [SEND_AMOUNT, receiver],
+    }),
+  };
+}
+
+function makeRedeemTx(shares, receiver, owner) {
+  if (shares <= 0n) throw new Error("no shMON received");
+  return {
+    to: SHMON_ADDRESS,
+    data: encodeFunctionData({
+      abi: SHMON_ABI,
+      functionName: "redeem",
+      args: [shares, receiver, owner],
+    }),
+  };
+}
+
+async function readShmonBalance(address) {
+  return publicClient.readContract({
+    address: SHMON_ADDRESS,
+    abi: SHMON_ABI,
+    functionName: "balanceOf",
+    args: [address],
+  });
+}
+
+// broadcast 전에 잔액/가스와 deposit calldata 를 확인한다. 부족하거나 읽을 수 없으면 여기서 throw — 추측 진행 금지.
 async function simulateSend(account) {
-  const relayerAddress = import.meta.env.VITE_RELAYER_ADDRESS;
-  if (!relayerAddress) {
-    throw new Error("VITE_RELAYER_ADDRESS is not set");
-  }
   const before = await publicClient.getBalance({ address: account.address });
+  const beforeShares = await readShmonBalance(account.address);
+  const depositTx = makeDepositTx(account.address);
   const gasEstimate = await publicClient.estimateGas({
     account: account.address,
-    to: relayerAddress,
-    value: SEND_AMOUNT,
+    ...depositTx,
   });
   const gasPrice = await publicClient.getGasPrice();
   const required = SEND_AMOUNT + gasEstimate * gasPrice;
   if (before < required) {
     throw new Error(`not enough to send: have ${formatEther(before)}, need ${formatEther(required)}`);
   }
-  return { relayerAddress, before };
+  return { before, beforeShares, depositTx };
 }
 
 // 바퀴의 결말은 둘이고(조건 불충족 nah. 은 아직 없다), 그 둘을 가르는 내부 사유는 넷이다.
@@ -367,22 +436,31 @@ async function simulateSend(account) {
 //   unconfirmed / reverted → 실행 실패  (tx 가 성공하지 않았다)
 //   balance-unavailable    → 완료       (tx 는 성공했고 숫자만 못 읽었다)
 //   ok                     → 완료       (영수증까지 있다)
-async function settleSend({ before, address, txHash }) {
+async function waitForSuccess(hash) {
   let receipt;
   try {
-    receipt = await publicClient.waitForTransactionReceipt({ hash: txHash });
+    receipt = await publicClient.waitForTransactionReceipt({ hash });
   } catch {
     // 확정을 못 봤다. 보낸 것과 끝난 것은 다르므로 여기서 성공이라고 말하지 않는다.
-    return { outcome: "failed", reason: "unconfirmed", receipt: null };
+    return null;
   }
   // 채굴됐다 ≠ 성공했다. status 는 지금까지 버려지던 값이다.
-  if (receipt.status !== "success") {
-    return { outcome: "failed", reason: "reverted", receipt: null };
+  return receipt.status === "success" ? receipt : null;
+}
+
+async function settleSend({ before, address, depositTxHash, depositReceipt, redeemTxHash, shmonReceived }) {
+  const redeemReceipt = await waitForSuccess(redeemTxHash);
+  if (!redeemReceipt) {
+    return { outcome: "failed", reason: "redeem-unconfirmed-or-reverted", receipt: null };
   }
-  const gas = receipt.gasUsed * receipt.effectiveGasPrice;
+  const gas =
+    depositReceipt.gasUsed * depositReceipt.effectiveGasPrice +
+    redeemReceipt.gasUsed * redeemReceipt.effectiveGasPrice;
   let after;
+  let shmonAfterRedeem;
   try {
     after = await publicClient.getBalance({ address });
+    shmonAfterRedeem = await readShmonBalance(address);
   } catch {
     // tx 는 성공했다. 잔고 조회만 깨진 것이라 바퀴는 닫힌 것으로 본다 — 숫자가 없을 뿐이다.
     return { outcome: "done", reason: "balance-unavailable", receipt: null };
@@ -390,7 +468,19 @@ async function settleSend({ before, address, txHash }) {
   return {
     outcome: "done",
     reason: "ok",
-    receipt: { before, after, gas, sent: SEND_AMOUNT, txHash, status: receipt.status, at: Date.now() },
+    receipt: {
+      before,
+      after,
+      gas,
+      sent: SEND_AMOUNT,
+      txHash: redeemTxHash,
+      depositTxHash,
+      redeemTxHash,
+      shmonReceived,
+      shmonAfterRedeem,
+      status: redeemReceipt.status,
+      at: Date.now(),
+    },
   };
 }
 
@@ -468,18 +558,38 @@ async function sendPiggy() {
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
     const signature = await activeSession.signDigest(digest);
     const mark = `${toHex(signature.compact)}:${signature.recovery}`;
-    const txHash = await walletClient.sendTransaction({
+    const depositTxHash = await walletClient.sendTransaction({
       account,
       chain: MONAD_TESTNET,
-      to: plan.relayerAddress,
-      value: SEND_AMOUNT,
+      ...plan.depositTx,
+    });
+    const depositReceipt = await waitForSuccess(depositTxHash);
+    if (!depositReceipt) throw new Error("deposit unconfirmed or reverted");
+    const afterDepositShares = await readShmonBalance(account.address);
+    const shmonReceived = afterDepositShares - plan.beforeShares;
+    const redeemTx = makeRedeemTx(shmonReceived, account.address, account.address);
+    await publicClient.estimateGas({
+      account: account.address,
+      ...redeemTx,
+    });
+    const redeemTxHash = await walletClient.sendTransaction({
+      account,
+      chain: MONAD_TESTNET,
+      ...redeemTx,
     });
     localStorage.setItem("araso.mark", mark);
-    localStorage.setItem("araso.txHash", txHash);
+    localStorage.setItem("araso.txHash", redeemTxHash);
     state.mark = mark;
-    state.txHash = txHash;
+    state.txHash = redeemTxHash;
 
-    settleSend({ before: plan.before, address: account.address, txHash })
+    settleSend({
+      before: plan.before,
+      address: account.address,
+      depositTxHash,
+      depositReceipt,
+      redeemTxHash,
+      shmonReceived,
+    })
       .then(finishTrip)
       // settleSend 는 결말을 반환한다 — 여기로 오는 건 그 밖의 예외뿐이라 미확인으로 접는다.
       .catch(() => finishTrip({ outcome: "failed", reason: "unconfirmed", receipt: null }));
