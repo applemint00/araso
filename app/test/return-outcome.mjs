@@ -15,6 +15,7 @@ function cut(startMarker, endMarker) {
   return SRC.slice(start, end);
 }
 
+const waitForSuccessSrc = cut("async function waitForSuccess(", "\nasync function settleSend(");
 const settleSendSrc = cut("async function settleSend(", "// 결말 하나가 화면과 저장을 같이 정한다");
 const finishTripSrc = cut("function finishTrip(trip)", "\nasync function sendPiggy(");
 
@@ -44,37 +45,56 @@ function makeSettle({ receipt, receiptThrows, balanceThrows }) {
       return 90n;
     },
   };
-  return eval(`(${settleSendSrc.replace(/^async function settleSend/, "async function settleSend")})`);
+  const readShmonBalance = async () => {
+    if (balanceThrows) throw new Error("rpc down");
+    return 0n;
+  };
+  return eval(`(() => { ${waitForSuccessSrc}
+${settleSendSrc}
+return settleSend; })()`);
 }
 
-const okReceipt = { status: "success", gasUsed: 21000n, effectiveGasPrice: 2n };
+const okReceipt = { status: "success", gasUsed: 21000n, effectiveGasPrice: 2n, blockNumber: 22n };
+const depositReceipt = { status: "success", gasUsed: 21000n, effectiveGasPrice: 2n, blockNumber: 21n };
+const settleInput = {
+  before: 100n,
+  address: "0xa",
+  grantTxHash: "0xgrant",
+  depositTxHash: "0xdeposit",
+  depositReceipt,
+  redeemTxHash: "0xredeem",
+  shmonReceived: 7n,
+};
 
 {
   const settleSend = makeSettle({ receipt: { ...okReceipt, status: "reverted" } });
-  const t = await settleSend({ before: 100n, address: "0xa", txHash: "0xh" });
-  check("reverted -> 실행 실패", t.outcome, "failed");
-  check("reverted -> 사유 reverted", t.reason, "reverted");
-  check("reverted -> 영수증 없음", t.receipt, null);
+  const t = await settleSend(settleInput);
+  check("redeem reverted -> 실행 실패", t.outcome, "failed");
+  check("redeem reverted -> 사유", t.reason, "redeem-unconfirmed-or-reverted");
+  check("redeem reverted -> 영수증 없음", t.receipt, null);
 }
 {
   const settleSend = makeSettle({ receiptThrows: true });
-  const t = await settleSend({ before: 100n, address: "0xa", txHash: "0xh" });
-  check("tx 확정 실패 -> 실행 실패", t.outcome, "failed");
-  check("tx 확정 실패 -> 사유 unconfirmed", t.reason, "unconfirmed");
+  const t = await settleSend(settleInput);
+  check("redeem 확정 실패 -> 실행 실패", t.outcome, "failed");
+  check("redeem 확정 실패 -> 사유", t.reason, "redeem-unconfirmed-or-reverted");
 }
 {
   const settleSend = makeSettle({ receipt: okReceipt, balanceThrows: true });
-  const t = await settleSend({ before: 100n, address: "0xa", txHash: "0xh" });
+  const t = await settleSend(settleInput);
   check("잔고 조회만 실패 -> 완료", t.outcome, "done");
   check("잔고 조회만 실패 -> 사유 balance-unavailable", t.reason, "balance-unavailable");
 }
 {
   const settleSend = makeSettle({ receipt: okReceipt });
-  const t = await settleSend({ before: 100n, address: "0xa", txHash: "0xh" });
+  const t = await settleSend(settleInput);
   check("success + 잔고 정상 -> 완료", t.outcome, "done");
   check("success + 잔고 정상 -> 영수증 있음", t.receipt !== null, true);
   check("영수증에 status 가 담긴다", t.receipt?.status, "success");
-  check("영수증 gas = gasUsed * effectiveGasPrice", t.receipt?.gas, 42000n);
+  check("영수증 gas = deposit + redeem gas", t.receipt?.gas, 84000n);
+  check("영수증에 grant tx 가 담긴다", t.receipt?.grantTxHash, "0xgrant");
+  check("영수증에 deposit block 이 담긴다", t.receipt?.depositBlockNumber, 21n);
+  check("영수증에 redeem block 이 담긴다", t.receipt?.redeemBlockNumber, 22n);
 }
 
 // ── finishTrip: 바퀴가 닫히는 조건 ────────────────────────────────────

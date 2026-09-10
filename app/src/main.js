@@ -13,6 +13,8 @@ const PASSKEY_STORAGE_KEY = "araso.passkey";
 // rpId 이력: arasoapp.vercel.app (9/2 낮, 폐기) → arasoo.vercel.app (9/2 밤 재생성, 현재).
 // 이후 변경 금지 — 바뀌면 기존에 등록된 패스키가 전부 못 찾는 상태가 된다.
 const PRODUCTION_RP_ID = "arasoo.vercel.app";
+const LOCAL_DEV_ENTRY = import.meta.env.MODE === "a172-local" && import.meta.env.VITE_ARASO_LOCAL_DEV_ENTRY === "1";
+const LOCAL_DEV_RP_ID = import.meta.env.VITE_ARASO_LOCAL_DEV_RP_ID || "arasoapp.vercel.app";
 const MONAD_TESTNET_RPC = "https://testnet-rpc.monad.xyz";
 const MONAD_TESTNET = {
   id: 10143,
@@ -155,6 +157,11 @@ function readReceipts() {
       txHash: row.txHash || "",
       depositTxHash: row.depositTxHash || "",
       redeemTxHash: row.redeemTxHash || "",
+      grantTxHash: row.grantTxHash || "",
+      depositBlockNumber: row.depositBlockNumber ? BigInt(row.depositBlockNumber) : 0n,
+      redeemBlockNumber: row.redeemBlockNumber ? BigInt(row.redeemBlockNumber) : 0n,
+      depositGasUsed: row.depositGasUsed ? BigInt(row.depositGasUsed) : 0n,
+      redeemGasUsed: row.redeemGasUsed ? BigInt(row.redeemGasUsed) : 0n,
       shmonReceived: row.shmonReceived ? BigInt(row.shmonReceived) : 0n,
       shmonAfterRedeem: row.shmonAfterRedeem ? BigInt(row.shmonAfterRedeem) : 0n,
       // 옛 영수증에는 status 가 없다. 없으면 빈 값으로 두고 성공이라 넘겨짚지 않는다.
@@ -181,6 +188,11 @@ function rememberReceipt(receipt) {
         txHash: row.txHash,
         depositTxHash: row.depositTxHash || "",
         redeemTxHash: row.redeemTxHash || "",
+        grantTxHash: row.grantTxHash || "",
+        depositBlockNumber: String(row.depositBlockNumber || 0n),
+        redeemBlockNumber: String(row.redeemBlockNumber || 0n),
+        depositGasUsed: String(row.depositGasUsed || 0n),
+        redeemGasUsed: String(row.redeemGasUsed || 0n),
         shmonReceived: String(row.shmonReceived || 0n),
         shmonAfterRedeem: String(row.shmonAfterRedeem || 0n),
         status: row.status || "",
@@ -201,6 +213,14 @@ function getRpId() {
 
 function isProductionRpId() {
   return getRpId() === PRODUCTION_RP_ID;
+}
+
+function isLocalDevRpId() {
+  return LOCAL_DEV_ENTRY && getRpId() === LOCAL_DEV_RP_ID;
+}
+
+function isAllowedPiggyRpId() {
+  return isProductionRpId() || isLocalDevRpId();
 }
 
 function toHex(bytes) {
@@ -299,7 +319,7 @@ function noteRecoverFailure() {
 }
 
 async function openPiggy() {
-  if (!isProductionRpId()) {
+  if (!isAllowedPiggyRpId()) {
     setScene("birth", "Not this door.", `Open Piggy only at ${PRODUCTION_RP_ID}.`);
     return;
   }
@@ -330,7 +350,7 @@ async function openPiggy() {
 }
 
 async function checkPiggy() {
-  if (!isProductionRpId()) {
+  if (!isAllowedPiggyRpId()) {
     setScene("birth", "Not this door.", `Check Piggy only at ${PRODUCTION_RP_ID}.`);
     return;
   }
@@ -353,6 +373,9 @@ function stayHome() {
 }
 
 async function requestGrant(address) {
+  if (isLocalDevRpId() && RELAYER_URL === "__HARNESS_NO_GRANT__") {
+    return { granted: false, txHash: "" };
+  }
   let res;
   try {
     res = await fetch(`${RELAYER_URL}/grant`, {
@@ -448,7 +471,7 @@ async function waitForSuccess(hash) {
   return receipt.status === "success" ? receipt : null;
 }
 
-async function settleSend({ before, address, depositTxHash, depositReceipt, redeemTxHash, shmonReceived }) {
+async function settleSend({ before, address, grantTxHash = "", depositTxHash, depositReceipt, redeemTxHash, shmonReceived }) {
   const redeemReceipt = await waitForSuccess(redeemTxHash);
   if (!redeemReceipt) {
     return { outcome: "failed", reason: "redeem-unconfirmed-or-reverted", receipt: null };
@@ -474,8 +497,13 @@ async function settleSend({ before, address, depositTxHash, depositReceipt, rede
       gas,
       sent: SEND_AMOUNT,
       txHash: redeemTxHash,
+      grantTxHash,
       depositTxHash,
       redeemTxHash,
+      depositBlockNumber: depositReceipt.blockNumber || 0n,
+      redeemBlockNumber: redeemReceipt.blockNumber || 0n,
+      depositGasUsed: depositReceipt.gasUsed || 0n,
+      redeemGasUsed: redeemReceipt.gasUsed || 0n,
       shmonReceived,
       shmonAfterRedeem,
       status: redeemReceipt.status,
@@ -502,7 +530,7 @@ function finishTrip(trip) {
 }
 
 async function sendPiggy() {
-  if (!isProductionRpId()) {
+  if (!isAllowedPiggyRpId()) {
     setScene("sendstay", "Not this door.", `Send Piggy only at ${PRODUCTION_RP_ID}.`);
     return;
   }
@@ -585,6 +613,7 @@ async function sendPiggy() {
     settleSend({
       before: plan.before,
       address: account.address,
+      grantTxHash: state.grantTxHash,
       depositTxHash,
       depositReceipt,
       redeemTxHash,
@@ -639,6 +668,8 @@ function receiptRows(receipt) {
     { label: "Sent", value: formatMoney(receipt.sent) },
     { label: "Cost", value: formatMoney(receipt.gas) },
     { label: "Left", value: formatMoney(receipt.after) },
+    { label: "Tx", value: shortHash(receipt.redeemTxHash || receipt.txHash) },
+    { label: "Block", value: receipt.redeemBlockNumber ? String(receipt.redeemBlockNumber) : "Unknown" },
   ];
 }
 
@@ -897,7 +928,7 @@ function renderReceived() {
 }
 
 function renderBirth() {
-  const blocked = !isProductionRpId();
+  const blocked = !isAllowedPiggyRpId();
   const title = blocked ? "Not this door." : state.message || "You received a Piggy.";
   const detail = blocked ? `Open Piggy only at ${PRODUCTION_RP_ID}.` : state.detail;
   return `
@@ -926,7 +957,7 @@ function renderBirth() {
 }
 
 function renderSendStay() {
-  const blocked = !isProductionRpId();
+  const blocked = !isAllowedPiggyRpId();
   return `
     <section class="stage" data-scene="sendstay">
       ${corner("sendstay")}
@@ -1031,7 +1062,7 @@ function render() {
 
 // 돌아온 사용자는 Received 에 갇히지 않는다 — 이미 credential 이나 주소가 있으면 Birth 로 연다.
 // (Received 는 "아직 아무것도 열지 않은" 첫 진입 전용)
-if (readCredential() || state.address) {
+if (state.scene === "received" && (readCredential() || state.address)) {
   state.scene = "birth";
 }
 
