@@ -329,9 +329,12 @@ h1 {
   animation-play-state: paused !important;
 }
 .nameScene__piggy .pgwrap .eye {
-  /* pgBlink 는 duration 이 3.2s 로 따로 논다 — 0s 로 고정하면 뜬 눈(0%, scaleY(1)) 프레임. */
+  /* [A-403] pgBlink 는 3.2s 로 따로 도는 눈 깜박임이다. A-401 이 몸을 peek 프레임에
+     고정하면서 이것까지 멈춰 눈이 뜬 채 굳었다 — Owner 지시(A-342 «반짝거리고 있어야
+     돼»)와 어긋나 여기만 되돌린다. 위치·몸 파츠 고정과 마스크는 그대로다. duration·
+     keyframes·SVG 눈 파츠는 손대지 않고, 위상만 정상(0 지연)으로 둔 채 계속 돌린다. */
   animation-delay: 0s !important;
-  animation-play-state: paused !important;
+  animation-play-state: running !important;
 }
 
 /* hello 는 현재 빌드에서 재생하지 않는다(A-290). 보관본 `.pghello` 는 `pgHello 11.5s
