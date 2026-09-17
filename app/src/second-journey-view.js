@@ -139,24 +139,25 @@ function readinessStepMarkup(model) {
       <p class="secondJourney__hint">Pick a candidate to check first.</p>
       <div class="secondJourney__footer">
         <button class="sendCard__stay" id="stayButton" type="button">back to Home</button>
-        <button class="sendCard__stay" id="exploreBackButton" type="button">candidates</button>
+        <button class="sendCard__stay" id="exploreBackButton" type="button">back</button>
       </div>
     `;
   }
   const needsJit = decision?.action === "ask" && !jitAnswer && jitQuestion;
   if (needsJit) {
+    // [A-377 §6] 질문이 제목 자리를 쓴다 — chosen.title(카드 이름) + 질문 문장을
+    // 나란히 두 번 찍지 않는다(구 "chosen.title 헤딩 + 질문 문단" 중복 제거).
     const answers = jitQuestion.answers
       .map(
         (answer) => `<button class="secondJourney__jitBtn" type="button" data-jit-answer="${escapeHtml(answer)}">${escapeHtml(answer.replace(/_/g, " "))}</button>`,
       )
       .join("");
     return `
-      <h2 class="secondJourney__heading">${escapeHtml(chosen.title)}</h2>
-      <p class="secondJourney__hint">${escapeHtml(jitQuestion.prompt)}</p>
+      <h2 class="secondJourney__heading">${escapeHtml(jitQuestion.prompt)}</h2>
       <div class="secondJourney__list">${answers}</div>
       <div class="secondJourney__footer">
         <button class="sendCard__stay" id="stayButton" type="button">back to Home</button>
-        <button class="sendCard__stay" id="exploreBackButton" type="button">candidates</button>
+        <button class="sendCard__stay" id="exploreBackButton" type="button">back</button>
       </div>
     `;
   }
@@ -176,7 +177,8 @@ function readinessStepMarkup(model) {
     ${devPreview ? `<p class="secondJourney__mockTag">UI preview — no transaction</p>` : ""}
     <div class="secondJourney__footer">
       <button class="sendCard__stay" id="stayButton" type="button">back to Home</button>
-      ${sendCardButtonMarkup({ id: "secondSendButton", label: "Send this one?", disabled: !canSend })}
+      <button class="sendCard__stay" id="exploreBackButton" type="button">back</button>
+      ${sendCardButtonMarkup({ id: "secondSendButton", label: "Send", disabled: !canSend })}
     </div>
     <p class="secondJourney__reason" id="secondSendReason">${escapeHtml(sendReason || "")}</p>
   `;

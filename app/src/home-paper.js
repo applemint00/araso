@@ -37,12 +37,24 @@ export function homeTimeNow(now = new Date()) {
   return now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+// A-377 §2: 피기 줄(이름/상태) 밑에 붙는 작은 기록 보기 entry. Home 대시보드
+// (main.js homePadMarkup, scene "sendstay")에서만 실제 라벨/id 를 채워 넣는다 — 다른
+// 씬(away/explore/secondAway/secondReturn)에서는 pad 자체가 opacity 0 이 되므로
+// (chog-home.js cardClaimed) 빈 문자열을 넘겨 자동 노출·자동 기록열기를 만들지 않는다
+// (§5 "records view only via Home's explicit user selection"). recordsCount 는 실제
+// state.receipts.length — 0이면 빈상태 라벨, 있으면 개수를 그대로 보여준다(추측 문구 0).
+export function homePaperRecordsEntryMarkup(recordsCount = 0) {
+  const label = recordsCount > 0 ? `records · ${recordsCount}` : "no records yet";
+  return `<button class="homePaper__records" id="homeRecordsButton" type="button">${escapeHtml(label)}</button>`;
+}
+
 export function homePaperMarkup({
   name = "Piggy",
   homeCount = 1,
   awayCount = 0,
   label = "still in home",
   time = "",
+  recordsEntryMarkup = "",
 } = {}) {
   return `
     <div class="homePaperMount">
@@ -59,6 +71,7 @@ export function homePaperMarkup({
           <div class="homePaper__piggyInfo">
             <div class="homePaper__name">${escapeHtml(name)}</div>
             <div class="homePaper__state">${escapeHtml(label)}</div>
+            ${recordsEntryMarkup}
           </div>
           <img class="homePaper__face" src="${CARD_DIR}/home-face.png" alt="" aria-hidden="true" />
         </div>

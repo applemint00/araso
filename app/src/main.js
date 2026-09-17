@@ -12,7 +12,7 @@ import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-
 import { createDepartPlayback } from "./piggy-depart.js";
 import { nameCardMarkup, mountNameCard } from "./name-card.js";
 import { returnSceneMarkup, mountReturnView } from "./return-view.js";
-import { homePaperMarkup, homeStatusFromScene, homeTimeNow } from "./home-paper.js";
+import { homePaperMarkup, homePaperRecordsEntryMarkup, homeStatusFromScene, homeTimeNow } from "./home-paper.js";
 import { sendCardButtonMarkup, sendCardMarkup } from "./send-card.js";
 import { receiptPaperMarkup, receiptPaperFields } from "./receipt-paper.js";
 import { buildVisibleLaneChoices, runSecondJourney } from "./job-feed.js";
@@ -83,8 +83,10 @@ const SHMON_ABI = [
 ];
 const RECEIPTS_KEY = "araso.receipts";
 const TRIP_CLOSED_KEY = "araso.tripClosed";
-// 보관은 최근 2건까지 — 이번 바퀴와 그 앞의 바퀴 하나. 그 이상은 아직 화면에 열 자리가 없다.
-const RECEIPT_KEEP = 2;
+// [A-377 §3] 보관은 전체 — 저장 cap 을 없앴다(옛 RECEIPT_KEEP=2). 화면 쪽 "최근 3장만"은
+// 저장 개수가 아니라 서류철 미리보기가 보여주는 장수일 뿐이다 — RECORDS_FOLDER_PREVIEW.
+// 그 뒤(4건째부터)도 records 전체목록에서는 그대로 열린다(renderRecords()).
+const RECORDS_FOLDER_PREVIEW = 3;
 
 // --- 탄생 한 바퀴의 세 가지 사실 (A-292 번호 8) -------------------------
 // 셋은 서로 다른 사실이라 각각 따로 기록한다. 하나로 묶으면 「이름은 아직인데
@@ -227,11 +229,12 @@ function readCredential() {
 
 // receipt 의 금액은 BigInt 라 JSON 이 그대로 담지 못한다. 넣을 때 문자열로 눕히고 읽을 때 되세운다.
 // 한 건이라도 모양이 어긋나면 통째로 버린다 — 반쯤 읽힌 영수증으로 숫자를 그리지 않는다.
+// [A-377 §3] 더 이상 slice 하지 않는다 — 전체를 읽는다(저장 cap 제거, RECEIPT_KEEP 폐기).
 function readReceipts() {
   try {
     const stored = JSON.parse(localStorage.getItem(RECEIPTS_KEY) || "[]");
     if (!Array.isArray(stored)) return [];
-    return stored.slice(0, RECEIPT_KEEP).map((row) => ({
+    return stored.map((row) => ({
       before: BigInt(row.before),
       after: BigInt(row.after),
       gas: BigInt(row.gas),
@@ -255,33 +258,48 @@ function readReceipts() {
   }
 }
 
+function serializeReceiptRow(row) {
+  return {
+    before: String(row.before),
+    after: String(row.after),
+    gas: String(row.gas),
+    sent: String(row.sent),
+    txHash: row.txHash,
+    depositTxHash: row.depositTxHash || "",
+    redeemTxHash: row.redeemTxHash || "",
+    grantTxHash: row.grantTxHash || "",
+    depositBlockNumber: String(row.depositBlockNumber || 0n),
+    redeemBlockNumber: String(row.redeemBlockNumber || 0n),
+    depositGasUsed: String(row.depositGasUsed || 0n),
+    redeemGasUsed: String(row.redeemGasUsed || 0n),
+    shmonReceived: String(row.shmonReceived || 0n),
+    shmonAfterRedeem: String(row.shmonAfterRedeem || 0n),
+    status: row.status || "",
+    at: row.at,
+  };
+}
+
+// 실제 tx 증거(redeemTxHash 우선, 없으면 txHash)로만 "같은 바퀴"를 판정한다 — 추측으로
+// 서로 다른 바퀴를 합치지 않는다(§4 receiptIdentity 지시와 같은 원칙, 방향만 반대: 여기는
+// 이미 저장된 것과 **완전히 같은** tx 가 다시 들어왔을 때만 중복을 막는다).
+function receiptIdentityKey(receipt) {
+  return (receipt && (receipt.redeemTxHash || receipt.txHash)) || "";
+}
+
+// [A-377 §3] 전체 보관(cap 제거) + 반복 호출/탭이 같은 바퀴를 새 항목으로 또 쌓지 않게.
+// finishTrip 은 정상 경로에서 트랜잭션당 한 번만 부르지만, 방어적으로 여기서도 막는다 —
+// 실제 tx 식별자가 직전 0번과 같을 때만 중복으로 본다(값 없는 receipt 는 항상 새로 쌓는다,
+// 식별자가 없어 "같다"고 볼 근거가 없으므로).
 function rememberReceipt(receipt) {
-  const kept = [receipt, ...state.receipts].slice(0, RECEIPT_KEEP);
+  const key = receiptIdentityKey(receipt);
+  if (key && state.receipts[0] && receiptIdentityKey(state.receipts[0]) === key) {
+    state.receiptIndex = 0;
+    return;
+  }
+  const kept = [receipt, ...state.receipts];
   state.receipts = kept;
   state.receiptIndex = 0;
-  localStorage.setItem(
-    RECEIPTS_KEY,
-    JSON.stringify(
-      kept.map((row) => ({
-        before: String(row.before),
-        after: String(row.after),
-        gas: String(row.gas),
-        sent: String(row.sent),
-        txHash: row.txHash,
-        depositTxHash: row.depositTxHash || "",
-        redeemTxHash: row.redeemTxHash || "",
-        grantTxHash: row.grantTxHash || "",
-        depositBlockNumber: String(row.depositBlockNumber || 0n),
-        redeemBlockNumber: String(row.redeemBlockNumber || 0n),
-        depositGasUsed: String(row.depositGasUsed || 0n),
-        redeemGasUsed: String(row.redeemGasUsed || 0n),
-        shmonReceived: String(row.shmonReceived || 0n),
-        shmonAfterRedeem: String(row.shmonAfterRedeem || 0n),
-        status: row.status || "",
-        at: row.at,
-      })),
-    ),
-  );
+  localStorage.setItem(RECEIPTS_KEY, JSON.stringify(kept.map(serializeReceiptRow)));
 }
 
 function writeCredential(credential) {
@@ -1117,6 +1135,26 @@ function handleJitAnswer(value) {
   render();
 }
 
+// [A-377 §6] 한 걸음만 되돌린다, 선택은 보존한다 — readiness 단계 안에는 실제로 두
+// 페이지가 있다(질문 화면 / READY+Permission+amount 화면). 질문에 이미 답한 뒤라면
+// 그 답만 지우고 질문 화면으로 돌아간다(후보 선택은 그대로). 아직 질문 전(또는 질문이
+// 필요 없는 후보)이면 후보 목록으로 돌아간다(관심 선택은 그대로 — Home 닫기가 아니다).
+function handleReadinessBack() {
+  const sj = state.secondJourney;
+  const hasJitQuestion = (sj.flow?.jitQuestions?.length || 0) > 0;
+  if (hasJitQuestion && sj.jitAnswer) {
+    sj.jitAnswer = null;
+    recomputeSecondJourneyFlow();
+    render();
+    return;
+  }
+  sj.step = "candidates";
+  sj.chosenDestinationId = null;
+  sj.jitAnswer = null;
+  recomputeSecondJourneyFlow();
+  render();
+}
+
 // 입력창마다 전체 render() 를 다시 돌리면 포커스/커서가 끊긴다 — Send 버튼/사유 줄만
 // 직접 손본다(fitCardAnchor 류 기존 관례와 같다).
 function updateSecondJourneyReadinessUI() {
@@ -1160,13 +1198,7 @@ function wireExploreCard() {
     sj.step = "interests";
     render();
   });
-  document.querySelector("#exploreBackButton")?.addEventListener("click", () => {
-    sj.step = "candidates";
-    sj.chosenDestinationId = null;
-    sj.jitAnswer = null;
-    recomputeSecondJourneyFlow();
-    render();
-  });
+  document.querySelector("#exploreBackButton")?.addEventListener("click", handleReadinessBack);
   document.querySelectorAll(".secondJourney__checkBtn").forEach((btn) => {
     btn.addEventListener("click", () => handleCandidateCheck(btn.dataset.destinationId));
   });
@@ -1356,6 +1388,29 @@ function goHomeFromFilebox() {
   setScene("sendstay", "Piggy is home.", "");
 }
 
+// [A-377 §2] Home 피기 칸의 "records" entry — 사용자가 명시적으로 눌렀을 때만 부른다.
+// 읽기 전용: 아무것도 저장하지 않는다(§3 "반복탭이 영수증을 새로 저장하지 않게").
+function openRecords() {
+  setScene("records", "", "");
+}
+
+function goHomeFromRecords() {
+  setScene("sendstay", "Piggy is home.", "");
+}
+
+// 목록에서 항목 하나를 연다 — index 만 바꾸고 filebox 종이를 그대로 재사용한다(재디자인 0).
+function openRecordFromList(index) {
+  const i = Number(index);
+  if (!Number.isInteger(i) || i < 0 || i >= state.receipts.length) return;
+  state.receiptIndex = i;
+  setScene("filebox");
+}
+
+// filebox 상세 → 목록으로 되돌아간다("전체 기록목록에서... 목록으로 돌아가고", §3).
+function openRecordsFromFilebox() {
+  setScene("records");
+}
+
 // @DEV_ONLY
 function resetLocalTest() {
   localStorage.removeItem(PASSKEY_STORAGE_KEY);
@@ -1389,6 +1444,16 @@ function resetLocalTest() {
   state.secondJourney = createEmptySecondJourney();
   noteRecoverSuccess(); // 실패 카운터도 초기화 — 리셋 후엔 복구를 다시 처음부터 시도한다
   setScene("birth", "You received a Piggy.", "Local test memory cleared.");
+}
+
+// [A-377 §4] records 목록/폴더 미리보기는 실제 receipt 텍스트(이름/날짜/상태)를 넣는다 —
+// 다른 파일(home-paper.js/send-card.js 등)과 같은 escape 규칙.
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function shortHash(hash) {
@@ -2184,9 +2249,14 @@ const HOME_FIRST_JOURNEY_CARD_MS = 1200;
 // 후버 노트패드에 넣을 실제 데이터 — Piggy 는 한 기기에 하나뿐이라 지금 어디 있는지는
 // scene 하나로 정해진다(home-paper.js homeStatusFromScene). 샘플 이름/시간을 쓰지 않는다.
 function homePadMarkup(scene) {
+  // [A-377 §2] 기록 보기 entry 는 Home 대시보드(scene "sendstay")에서만 실제로 채운다.
+  // 다른 씬에서는 이 pad 자체가 opacity 0 이 되므로(chog-home.js cardClaimed) 빈 문자열을
+  // 주고, Home 이 아닌 곳에서 자동으로 기록이 열리는 경로를 만들지 않는다(§5).
+  const recordsEntryMarkup = scene === "sendstay" ? homePaperRecordsEntryMarkup(state.receipts.length) : "";
   const markup = homePaperMarkup({
     name: displayPiggyName(),
     time: homeTimeNow(),
+    recordsEntryMarkup,
     ...homeStatusFromScene(scene),
   });
   const hasRealReceipt = state.receipts.some((receipt) => receipt && (receipt.txHash || receipt.redeemTxHash));
@@ -2684,11 +2754,15 @@ function mountReturn() {
   });
 }
 
+// [A-377 §3/§4] 옛 tripsButton 은 0/1 두 값만 토글해 3건째부터는 열 자리가 없었다(참고
+// 초안이 지적한 그 결함 그대로 이 파일에도 있었다) — 전체 목록(renderRecords())으로 열어
+// 그 결함을 없앤다. 목록에서 각 항목을 열면 이 화면(하나의 receipt)으로 오고, 여기서
+// "records" 를 누르면 다시 목록으로, "home" 을 누르면 Home 으로 — 세 방향 다 남는다.
 function renderFileBox() {
-  // 최신이 0번. 두 건이 있으면 직전 바퀴로 넘겨볼 수 있다 — 2회차에서 앞 영수증이 사라지면
-  // 무엇이 달라졌는지 대조할 것이 없다.
+  // 최신이 0번(내림차순 저장). state.receiptIndex 는 records 목록에서 고른 실제 인덱스다 —
+  // 여기서 새로 계산하거나 저장하지 않는다(읽기 전용 진입, §3 "반복탭이 새로 저장하지 않게").
   const receipt = state.receipts[state.receiptIndex] || null;
-  const hasPrevious = state.receipts.length > 1;
+  const hasMore = state.receipts.length > 1;
   const rows = receiptRows(receipt);
   const rowsMarkup = rows.length
     ? rows
@@ -2714,14 +2788,71 @@ function renderFileBox() {
         <div class="filebox__paper">${paperMarkup}</div>
         <div class="receipt">${rowsMarkup}${receiptCheck(receipt)}</div>
       </article>
-      ${
-        hasPrevious
-          ? `<button class="tiny trips" id="tripsButton">${state.receiptIndex === 0 ? "last trip" : "this trip"}</button>`
-          : ""
-      }
+      ${hasMore ? `<button class="tiny trips" id="recordsListButton" type="button">all records</button>` : ""}
       <!-- [A-360 §3] filebox 에는 다음 진입이 없었다 — Home 복귀와 Explore 진입을
            연결하는 첫 걸음. Home 에 도착한 뒤 Chog 탭이 Explore 를 연다. -->
       <button class="tiny home" id="fileboxHomeButton" type="button">home</button>
+      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+    </section>
+  `;
+}
+
+// [A-377 §2/§3] Home 기록 보기 entry 가 여는 전체 기록 목록. 저장은 전체(cap 없음), 여기
+// 서도 전부 열 수 있다 — "최근 3장" 은 위 folder 미리보기(RECORDS_FOLDER_PREVIEW)만의
+// 표시 규칙이다. ReceiptFile 원본 앞/뒤 폴더 자산(폴더백/폴더프론트, A-346 피기귀환에서
+// 이미 쓰던 것)을 그대로 재사용한다 — 새 폴더 그림을 굽지 않는다. 개별 Receipt 종이는
+// renderFileBox() 가 이미 쓰는 receiptPaperMarkup/receiptPaperFields 그대로다(재디자인 0).
+function renderRecords() {
+  const name = displayPiggyName();
+  const receipts = state.receipts;
+  const preview = receipts.slice(0, RECORDS_FOLDER_PREVIEW);
+  const rotations = [-2.2, 1.8, -1.0];
+  const tops = [8, 24, 40];
+  const slipsMarkup = preview
+    .map((receipt, i) => {
+      const fields = receiptPaperFields({ receipt, name });
+      return `
+        <div class="recordsFolder__slip" style="top: ${tops[i] ?? 8}px; transform: translateX(-50%) rotate(${rotations[i] ?? 0}deg); z-index: ${2 + i};">
+          <div class="recordsFolder__slipRow">
+            <span>${escapeHtml(fields.name)}</span>
+            <span>${escapeHtml(fields.date)}</span>
+          </div>
+          <div class="recordsFolder__slipStatus">&gt; ${escapeHtml(fields.statusLabel)}</div>
+        </div>
+      `;
+    })
+    .join("");
+  const listMarkup = receipts.length
+    ? receipts
+        .map((receipt, index) => {
+          const fields = receiptPaperFields({ receipt, name });
+          return `
+            <button class="recordsRow" type="button" data-receipt-index="${index}">
+              <span class="recordsRow__date">${escapeHtml(fields.date)}</span>
+              <span class="recordsRow__status">${escapeHtml(fields.statusLabel)}</span>
+            </button>
+          `;
+        })
+        .join("")
+    : `<p class="recordsEmpty">No records yet. They'll show up here after a real trip.</p>`;
+  return `
+    <section class="stage" data-scene="records">
+      ${corner("records")}
+      <article class="note recordsPanel">
+        <p class="eyebrow">RECEIPTS</p>
+        ${
+          receipts.length
+            ? `<div class="recordsFolder" aria-hidden="true">
+                <img class="recordsFolder__back" src="/motion/piggy-return/folder-back.png" alt="" />
+                ${slipsMarkup}
+                <img class="recordsFolder__front" src="/motion/piggy-return/folder-front.png" alt="" />
+              </div>
+              <p class="recordsFolder__caption">kept ${receipts.length} &middot; showing latest ${preview.length}</p>`
+            : ""
+        }
+        <div class="recordsList">${listMarkup}</div>
+      </article>
+      <button class="tiny home" id="recordsHomeButton" type="button">home</button>
       ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
@@ -2750,7 +2881,9 @@ function render() {
               ? renderSecondAway()
               : state.scene === "secondReturn"
                 ? renderSecondReturn()
-                : renderBirth();
+                : state.scene === "records"
+                  ? renderRecords()
+                  : renderBirth();
   // 장면이 바뀌면 Invite 의 예약된 단계 전환은 전부 버린다 — 화면이 없는데 타이머만 남으면
   // 엉뚱한 시점에 Birth 로 넘어간다.
   if (state.scene !== "received") clearInviteTimers();
@@ -2767,12 +2900,14 @@ function render() {
   document.querySelector("#nameForm")?.addEventListener("submit", savePiggyName);
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);
   document.querySelector("#stayButton")?.addEventListener("click", stayHome);
-  document.querySelector("#tripsButton")?.addEventListener("click", () => {
-    state.receiptIndex = state.receiptIndex === 0 ? 1 : 0;
-    render();
-  });
+  document.querySelector("#recordsListButton")?.addEventListener("click", openRecordsFromFilebox);
   document.querySelector("#fileboxHomeButton")?.addEventListener("click", goHomeFromFilebox);
   document.querySelector("#nextErrandButton")?.addEventListener("click", openSecondJourneyExplore);
+  document.querySelector("#homeRecordsButton")?.addEventListener("click", openRecords);
+  document.querySelector("#recordsHomeButton")?.addEventListener("click", goHomeFromRecords);
+  document.querySelectorAll(".recordsRow").forEach((btn) => {
+    btn.addEventListener("click", () => openRecordFromList(btn.dataset.receiptIndex));
+  });
   if (import.meta.env.DEV) {
     document.querySelector("#resetButton")?.addEventListener("click", resetLocalTest);
   }
