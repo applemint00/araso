@@ -67,6 +67,7 @@ export function mountReturnView(opts) {
     reduced = false,
     play = true,
     onOpenFilebox = () => {},
+    openFileLabel = "open the file",
     onError = () => {},
     onIdleEnter = () => {},
     createPlayback = createReturnPlayback,
@@ -78,6 +79,7 @@ export function mountReturnView(opts) {
   const tapBtn = $("returnTap");
   const hint = $("returnHint");
   const openBtn = $("returnOpen");
+  if (openBtn) openBtn.textContent = openFileLabel;
   const nameTag = $("returnName");
   const chogRoot = root.querySelector("#chogHome");
   // 알람 hop 과 숨김은 **바깥 wrapper** 에만 건다.

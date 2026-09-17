@@ -1342,6 +1342,7 @@ function mountSecondReturn() {
     },
     reduced: prefersReducedMotion(),
     play: true,
+    openFileLabel: "Home",
     onOpenFilebox: finishSecondJourney,
     onError: finishSecondJourney,
     onIdleEnter: () => {
