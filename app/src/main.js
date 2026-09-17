@@ -1508,16 +1508,11 @@ function receiptCheck(receipt) {
 // SVG 는 그림이 아니라 편집 가능한 도면이기 때문이다(Owner 판정 2026-09-03).
 // 원본 = <private>** (커밋 대상 아님).
 const EGG_BIG_SRC = "/egg/egg_idle.png";
-// Piggy 본체 파일 없음 (gift-piggy PIGGY_DESIGN_ASSET_SPEC.md §6 완료 인벤토리에 Piggy 자산 부재,
-// §8 미정에도 "Egg 정확한 형태 생성물 있으나 lock 아님"만 있음) → 새로 그리지 않고
-// Egg 6종 중 부화 후 프레임(egg_crack)으로 대체. UNKNOWN: 스펙대로 된 Piggy 파일.
-const PIGGY_STANDIN_SRC = "/egg/egg_crack.png";
 const CHOG_IDLE_SRC = "/chog/chog_idle@2x.png";
 // [A-318] Away 걸음 대역(CHOG_WALK_FRAMES / chogWalkCycle)은 제거했다 — away 도
 // Home 의 확정 Chog 를 그대로 쓴다. 대역을 두면 같은 화면에 초그가 둘이 된다.
 
 // scene 별 구석 캐릭터. 모든 화면 = Chog idle 작게(away 만 walk 순환으로 대체).
-// 탄생 이후(sendstay/filebox) = Piggy 대역(Egg 부화 후 프레임)도 곁에 둔다.
 function corner(scene) {
   // Home(sendstay)에는 확정 Piggy·Chog 본체가 서 있다. 거기에 대역까지 두면
   // 화면에 같은 캐릭터가 둘이 된다 — §8 「캐릭터 중복 0」.
@@ -1526,12 +1521,13 @@ function corner(scene) {
   // **기존 Home Chog 를 그대로 둔다** — 여기서 걷기 대역을 만들면 초그가 둘이 된다.
   // [A-360] explore/secondAway/secondReturn 도 같은 Home 판(homeCharacter/chogHome)을
   // 그대로 쓰는 씬이라 같은 이유로 구석 대역을 뺀다.
+  // [A-381 §1] filebox 는 Owner 가 거부한 별도 구석 Piggy 대역 껍질을 뺐다 — filebox 는
+  // 더 이상 이 함수를 부르지 않는다(renderFileBox 참조). 남은 씬(birth/records 등)은
+  // 기존 그대로 Chog idle 만 작게 남긴다.
   if (["sendstay", "away", "explore", "secondAway", "secondReturn"].includes(scene)) return "";
-  const showPiggyStandin = scene === "filebox";
   return `
     <div class="corner" aria-hidden="true">
       <img class="chog-idle" src="${CHOG_IDLE_SRC}" alt="" />
-      ${showPiggyStandin ? `<img class="piggy-corner" src="${PIGGY_STANDIN_SRC}" alt="" />` : ""}
     </div>
   `;
 }
@@ -2770,33 +2766,36 @@ function mountReturn() {
 // 초안이 지적한 그 결함 그대로 이 파일에도 있었다) — 전체 목록(renderRecords())으로 열어
 // 그 결함을 없앤다. 목록에서 각 항목을 열면 이 화면(하나의 receipt)으로 오고, 여기서
 // "records" 를 누르면 다시 목록으로, "home" 을 누르면 Home 으로 — 세 방향 다 남는다.
+//
+// [A-381 §1/§2] Owner 가 거부한 옛 껍질(겹친 folder--1/2/3 + tape/tag + filebox 큰외곽
+// border + filebox 전용 corner 장식(피기 대역))은 전부 뺐다 — 새 자산 0, 승인된
+// receiptPaperMarkup + 실제데이터만 기존 공통카드 자리(filebox__paper)에서 그대로 연다.
+// 기록이 없거나(state.receipts 비었거나) receiptIndex 가 가리키는 실제 receipt 가 없으면
+// (예: 빈 배열에 index 0, 지운 적 없는데 범위 밖) 빈 Unknown 영수증을 합성하지 않고
+// records 빈 상태로 보낸다 — renderRecords() 는 receipts.length===0 일 때 이미
+// "No records yet" 빈 상태를 그린다(§renderRecords). 실제 저장된 Unknown(필드 일부
+// 없음)은 이 가드에 걸리지 않는다 — receipt 객체 자체는 있고 필드만 없는 경우이므로
+// receiptRows/receiptPaperFields 의 기존 Unknown/— 표시로 그대로 정직하게 남는다.
 function renderFileBox() {
   // 최신이 0번(내림차순 저장). state.receiptIndex 는 records 목록에서 고른 실제 인덱스다 —
   // 여기서 새로 계산하거나 저장하지 않는다(읽기 전용 진입, §3 "반복탭이 새로 저장하지 않게").
-  const receipt = state.receipts[state.receiptIndex] || null;
+  const receipt = state.receipts[state.receiptIndex] ?? null;
+  if (!receipt) return renderRecords();
   const hasMore = state.receipts.length > 1;
   const rows = receiptRows(receipt);
-  const rowsMarkup = rows.length
-    ? rows
-        .map(
-          (row) =>
-            `<p class="receipt-row"><span class="label">${row.label}</span><span class="value">${row.value}</span></p>`,
-        )
-        .join("")
-    : `<p class="receipt-row"><span class="label">Trip</span><span class="value">${shortHash(state.txHash)}</span></p>`;
+  const rowsMarkup = rows
+    .map(
+      (row) =>
+        `<p class="receipt-row"><span class="label">${row.label}</span><span class="value">${row.value}</span></p>`,
+    )
+    .join("");
   // [A-346] 귀환 두 번째 탭에서 정착한 것과 **같은 종이**(receipt-paper.js)를 여기서도 쓴다 —
   // 파일 정리 뒤에도 같은 영수증이 이어져 보이게. 아래 Sent/Cost/Left/Tx/Block 상세 증거줄은
   // 지우지 않고 그대로 둔다(§2 「읽기상세에 보존」) — 이 종이는 그 요약일 뿐이다.
   const paperMarkup = receiptPaperMarkup(receiptPaperFields({ receipt, name: displayPiggyName() }));
   return `
     <section class="stage" data-scene="filebox">
-      ${corner("filebox")}
       <article class="filebox">
-        <div class="folder folder--1"></div>
-        <div class="folder folder--2"></div>
-        <div class="folder folder--3"></div>
-        <div class="tape" aria-hidden="true"></div>
-        <div class="tag" aria-hidden="true"></div>
         <div class="filebox__paper">${paperMarkup}</div>
         <div class="receipt">${rowsMarkup}${receiptCheck(receipt)}</div>
       </article>
