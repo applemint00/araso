@@ -116,15 +116,14 @@ function displayPiggyName() {
 
 const app = document.querySelector("#app");
 
-// [A-387-a/b] render() 의 씬 분기(아래, 파일 끝의 큰 삼항식)가 실제로 다루는 이름의
-// 전체 목록. 이 목록 밖 값은 전부 마지막 else 분기 renderBirth() 로 떨어진다 — 그 분기는
-// 2026-09-03 최초 씬 배선 커밋(1102c18)부터 있던 "정해지지 않은 값의 기본값"이고, Invite
-// 직후 실제 인증 게이트(Open/Check Piggy)로서는 정상이지만 그 밖의 경로에서 우연히
-// 걸리면 옛 decorative 패널이 정상 흐름에 끼어든 것처럼 보인다(Owner screenshot,
-// A-387-a §2). 지금까지 실제 setScene() 호출과 computeInitialScene() 은 전부 이 목록
-// 안의 값만 써 왔다 — 유일하게 검증 없이 임의 문자열을 받는 지점은 아래
-// window.__arasoScene()(DEV 전용 콘솔 도우미, 683783b 에서 도입 — 도입 때부터 지금까지
-// 검증이 없었다) 뿐이었다. 그 지점만 이 목록으로 막는다.
+// [A-387-a/b → A-389] render() 의 씬 분기(아래, 파일 끝의 큰 삼항식)가 실제로 다루는
+// 이름의 전체 목록. 이 목록 밖 값은 전부 마지막 else 분기로 떨어진다 — 2026-09-03 최초
+// 씬 배선 커밋(1102c18)부터 있던 "정해지지 않은 값의 기본값"이다. "birth" 는 여전히
+// 실제 인증 실패 카드(renderAuthCard, 구 renderBirth — A-389 §1)의 씬 이름이다.
+// 지금까지 실제 setScene() 호출과 computeInitialScene() 은 전부 이 목록 안의 값만 써
+// 왔다 — 유일하게 검증 없이 임의 문자열을 받는 지점은 아래 window.__arasoScene()
+// (DEV 전용 콘솔 도우미, 683783b 에서 도입 — 도입 때부터 지금까지 검증이 없었다) 뿐이었다.
+// 그 지점만 이 목록으로 막는다.
 const KNOWN_SCENES = [
   "received",
   "hatch",
@@ -137,6 +136,12 @@ const KNOWN_SCENES = [
   "secondAway",
   "secondReturn",
   "birth",
+  // [A-389, Owner 승인 2026-09-18] "authfail" 은 실제 state.scene 값이 되지 않는다 — DEV
+  // 콘솔 도우미(window.__arasoScene, import.meta.env.DEV 안에서만 존재)가 이 이름을
+  // 실제 dispatch 로 넘기기 전에 가로채 "birth"(renderAuthCard, 승인 인증실패 카드)를
+  // 표시 전용으로 미리보기한다. 목록에는 이 도우미의 기존 검증 게이트를 통과시키려고만
+  // 올린다 — 실제 인증 호출·저장 쓰기·finishHatch·금융 호출은 전부 0 이다.
+  "authfail",
 ];
 
 // scene 은 credential/txHash 로부터 최초 1회 파생하고, 그 뒤로는 사용자 행동에 따라
@@ -234,6 +239,13 @@ const state = {
   // scope 가 유효할 때 second-journey-state.js 저장소로도 남는다(§5) — 그 외 필드
   // (선택 후보·amount·permission 체크)는 새로고침에 남지 않는다.
   secondJourney: createEmptySecondJourney(),
+  // [A-389] birth 카드(구 renderBirth 자리 — 이제 renderAuthCard)의 표시 국면.
+  // "checking"(진행 중, 버튼 없음) 이외에는 항상 "idle" — 문자열 파싱으로 국면을
+  // 추측하지 않고 각 호출부가 명시적으로 세운다. authCancelled 는 직전 실패가
+  // 진짜 WebAuthn 취소(cause.name === "NotAllowedError")였는지를 기록한다 —
+  // 다음 시도가 그 값을 이어받지 않도록 매 호출부가 다시 세운다.
+  authPhase: "idle",
+  authCancelled: false,
 };
 state.scene = computeInitialScene(!!state.credential, state.tripClosed, !!state.address);
 // 최초 진입이 곧장 Name it 이라는 것은 이름을 짓다 나갔다 왔다는 뜻이다.
@@ -559,6 +571,18 @@ function savePiggyName(event) {
   else sceneTimeout(go, 620);
 }
 
+// [A-389] 취소인지 판정 — 추측이 아니라 실제 원인을 본다. @category-labs/mera 는
+// PASSKEY_OPERATION_FAILED 하나로 취소/미지원/이상한 credential 을 모두 묶지만
+// (dist/passkey.js MeraError("PASSKEY_OPERATION_FAILED", ..., { cause: error })),
+// 원본 WebAuthn 예외를 cause 에 그대로 보존한다 — 브라우저가 사용자 취소·타임아웃에
+// 쓰는 표준 DOMException 이름은 NotAllowedError 다(WebAuthn 레벨3). 이 신호가 없으면
+// UNKNOWN 으로 두고(추론 금지) 일반 실패 문구로 보여준다.
+function isCancelledAuthError(error) {
+  if (!isMeraError(error)) return false;
+  const cause = error.cause;
+  return !!cause && typeof cause === "object" && cause.name === "NotAllowedError";
+}
+
 function formatError(error) {
   if (isMeraError(error)) {
     return `${error.code}: ${error.message}`;
@@ -616,10 +640,16 @@ function noteRecoverFailure() {
 
 async function openPiggy() {
   if (!isAllowedPiggyRpId()) {
+    // [A-389 §3] 지원되지 않는 origin — 실패/취소로 위장하지 않고 실제 이유(state.detail)를
+    // 그대로 보여준다. 인증 호출 자체를 하지 않는다(불가능한 auth 호출 0).
+    state.authPhase = "idle";
+    state.authCancelled = false;
     setScene("birth", "Not this door.", `Open Piggy only at ${PRODUCTION_RP_ID}.`);
     return;
   }
 
+  state.authPhase = "checking";
+  state.authCancelled = false;
   setScene("birth", "The egg is checking this device.", "Face ID may appear once.");
 
   try {
@@ -639,6 +669,7 @@ async function openPiggy() {
     localStorage.setItem("araso.prfSalt", toHex(result.prfSalt));
     localStorage.setItem(PIGGY_RECEIVED_KEY, "1");
     noteRecoverSuccess();
+    state.authPhase = "idle";
 
     // 실제 인증이 성공한 뒤에만 탄생 연출이 돈다(A-292 번호 2). 연출은 성공 사실을
     // 만들지 않는다 — 이미 만들어진 사실 위에서 도는 것뿐이다. 실패는 아래 catch 로 가고
@@ -650,23 +681,42 @@ async function openPiggy() {
       setScene("hatch");
     }
   } catch (error) {
+    state.authPhase = "idle";
+    state.authCancelled = isCancelledAuthError(error);
     setScene("birth", "Piggy could not open here.", formatError(error));
+  }
+}
+
+// [A-389] 이미 Piggy 를 받은 기기에서 다시 Face ID 를 눌러도 새 패스키를 만들지 않는다 —
+// 옛 renderBirth() 는 이 조건일 때 Open 버튼 자체를 숨겨서 막았다(2026-09-02 주소 3개
+// 사고). 그 버튼 껍질은 지웠지만 판정 로직은 그대로 여기로 옮긴다 — Try again 이 이
+// 조건에 걸리면 새로 만들지 않고 기존 Check Piggy 복구로 대신한다.
+function startPiggyOpen() {
+  if (readCredential() || hasReceivedPiggy() || state.address) {
+    checkPiggy();
+  } else {
+    openPiggy();
   }
 }
 
 async function checkPiggy() {
   if (!isAllowedPiggyRpId()) {
+    state.authPhase = "idle";
+    state.authCancelled = false;
     setScene("birth", "Not this door.", `Check Piggy only at ${PRODUCTION_RP_ID}.`);
     return;
   }
 
   // 생성 폴백 없음 — 이 버튼은 절대 새 패스키를 만들지 않는다.
+  state.authPhase = "checking";
+  state.authCancelled = false;
   setScene("birth", "Chog is checking if this is the same Piggy.", "Face ID may appear once.");
 
   try {
     await recoverPiggy();
     noteRecoverSuccess();
     localStorage.setItem(PIGGY_RECEIVED_KEY, "1");
+    state.authPhase = "idle";
     // 복구는 신규 탄생이 아니다 — 해치·hello 를 다시 재생하지 않는다(§7 checkPiggy 행).
     // 다만 이름이 아직 없으면 그 칸만 마저 채운다. 그때 Piggy 는 숨은 상태다(A-288).
     if (!readPiggyName()) {
@@ -676,6 +726,8 @@ async function checkPiggy() {
     }
   } catch (error) {
     noteRecoverFailure();
+    state.authPhase = "idle";
+    state.authCancelled = isCancelledAuthError(error);
     setScene("birth", "Chog could not find Piggy here.", formatError(error));
   }
 }
@@ -866,6 +918,8 @@ async function sendPiggy() {
       noteRecoverSuccess();
     } catch (error) {
       noteRecoverFailure();
+      state.authPhase = "idle";
+      state.authCancelled = isCancelledAuthError(error);
       setScene("birth", "Chog could not wake Piggy.", formatError(error));
       return;
     }
@@ -1534,6 +1588,10 @@ function resetLocalTest() {
   // 0" — 이건 애초에 이 함수가 원래 지우던 첫 Journey 키가 아니라 별개 이름공간이다).
   state.secondJourney = createEmptySecondJourney();
   noteRecoverSuccess(); // 실패 카운터도 초기화 — 리셋 후엔 복구를 다시 처음부터 시도한다
+  // [A-389] authPhase/authCancelled 도 같이 되돌린다 — 아니면 리셋 직전 실패가 취소였을 때
+  // 그 표시가 그대로 남아 "Local test memory cleared." 옆에 "Face ID was cancelled." 가 붙는다.
+  state.authPhase = "idle";
+  state.authCancelled = false;
   setScene("birth", "You received a Piggy.", "Local test memory cleared.");
 }
 
@@ -1585,7 +1643,6 @@ function receiptCheck(receipt) {
 // app/public/ 에 두지 않는다 — 배포된 파일은 URL 만 알면 누구나 받아갈 수 있고,
 // SVG 는 그림이 아니라 편집 가능한 도면이기 때문이다(Owner 판정 2026-09-03).
 // 원본 = <private>** (커밋 대상 아님).
-const EGG_BIG_SRC = "/egg/egg_idle.png";
 const CHOG_IDLE_SRC = "/chog/chog_idle@2x.png";
 // [A-318] Away 걸음 대역(CHOG_WALK_FRAMES / chogWalkCycle)은 제거했다 — away 도
 // Home 의 확정 Chog 를 그대로 쓴다. 대역을 두면 같은 화면에 초그가 둘이 된다.
@@ -1706,7 +1763,11 @@ function setInvitePhase(phase) {
   if (label) label.textContent = phase === "checking" ? "checking..." : "Face ID";
 }
 
-// 봉투 열기 = 이 화면의 유일한 입력. 뜯기는 순서가 끝나면 Birth 로 넘어간다.
+// 봉투 열기 = 이 화면의 유일한 입력. 뜯기는 순서가 끝나면 실제 Face ID 를 켠다.
+// [A-389 §1] 옛 renderBirth() 의 Open 버튼(대기 화면 → 한 번 더 탭)을 지웠으므로, 봉투
+// 연출이 끝나는 순간이 곧 실제 인증 시도다. 새 패스키를 만들지 여부는 여전히
+// startPiggyOpen() 의 기존 판정(이미 Piggy 를 받았으면 recover, 아니면 create)이 정한다 —
+// 여기서 새로 만들지 않는다.
 function openInvite() {
   const board = document.querySelector(".invite");
   if (!board || (board.dataset.phase || "closed") !== "closed") return;
@@ -1715,9 +1776,7 @@ function openInvite() {
   INVITE_TIMELINE.forEach(([at, phase]) => {
     inviteTimers.push(setTimeout(() => setInvitePhase(phase), at));
   });
-  inviteTimers.push(
-    setTimeout(() => setScene("birth", "You received a Piggy.", "Open it with your face. Once."), 5900),
-  );
+  inviteTimers.push(setTimeout(() => startPiggyOpen(), 5900));
 }
 
 // 봉투 hero — 두 아트보드가 같은 480×365 안쪽 좌표를 쓴다. 모바일은 그 덩어리를 0.55833 로 줄인다.
@@ -1812,32 +1871,42 @@ function renderReceived() {
   `;
 }
 
-function renderBirth() {
+// [A-389] 옛 renderBirth() 자리 — egg-big·구석 대역 Chog·검정 .note 패널·"Not this
+// door." 큰 제목·Open/Check 패널을 전부 지우고, 승인된 인증실패 카드로 바꾼다.
+// 보호 로직(isAllowedPiggyRpId)은 그대로 옮겨 왔다 — 지운 것은 UI 껍질뿐이다.
+// 종이는 AskNameIt(nameCard, name-card.js)의 바탕/비율(460×300)/재질(ivory 텍스처)/
+// 잉크색을 그대로 쓴다 — Name it 제목 이미지와 이름 입력칸은 옮기지 않는다. 버튼은
+// sendCardButtonMarkup 의 기존 ButtonKit(문구를 그림이 아니라 텍스트로 얹는 A361 방식,
+// send-card.js 참고)을 그대로 재사용한다 — "Try again"/"Check Piggy" 낱말 PNG 는 없다.
+function renderAuthCard() {
   const blocked = !isAllowedPiggyRpId();
-  const title = blocked ? "Not this door." : state.message || "You received a Piggy.";
-  const detail = blocked ? `Open Piggy only at ${PRODUCTION_RP_ID}.` : state.detail;
+  const checking = !blocked && state.authPhase === "checking";
+  const heading = checking ? state.message || "Checking…" : "Couldn't open Piggy";
+  const body = checking
+    ? state.detail || "Face ID may appear once."
+    : state.authCancelled
+      ? "Face ID was cancelled."
+      : state.detail || "Try again, or use Check Piggy to recover.";
+  const actions = checking
+    ? ""
+    : `
+        <div class="authCard__actions">
+          ${sendCardButtonMarkup({ id: "authTryAgainButton", label: "Try again", disabled: blocked })}
+          ${sendCardButtonMarkup({ id: "checkButton", label: "Check Piggy", disabled: blocked })}
+        </div>
+      `;
   return `
     <section class="stage" data-scene="birth">
-      <img class="egg-big" src="${EGG_BIG_SRC}" alt="" aria-hidden="true" />
-      ${corner("birth")}
-      <article class="note">
-        <p class="eyebrow">Araso</p>
-        <h1>${title}</h1>
-        ${detail ? `<p class="detail">${detail}</p>` : ""}
-        ${state.address ? `<p class="address">${state.address}</p>` : ""}
-        <div class="actions">
-          ${
-            // 이미 Piggy 를 받은 사람에게는 Open 을 아예 숨긴다 — 두 번째 Open 은 새 계정이다
-            // (2026-09-02 주소 3개로 갈린 사고의 직접 원인). 버튼은 항상 2개 이하.
-            // credential 이 지워져도 「Piggy 받음」이 서 있으면 새로 만들라고 안내하지 않는다.
-            // 남는 길은 Check Piggy 하나다(A-292 번호 7).
-            readCredential() || hasReceivedPiggy() || state.address
-              ? ""
-              : `<button class="primary" id="openButton" ${blocked ? "disabled" : ""}>Open</button>`
-          }
-          <button class="secondary" id="checkButton" ${blocked ? "disabled" : ""}>Check Piggy</button>
+      ${buttonInkFilter()}
+      <div class="authCard">
+        <img class="authCard__chog chog-idle" src="${CHOG_IDLE_SRC}" alt="" aria-hidden="true" />
+        <div class="authCard__paper">
+          <p class="authCard__eyebrow">Araso</p>
+          <h1 class="authCard__title">${heading}</h1>
+          <p class="authCard__body">${body}</p>
+          ${actions}
         </div>
-      </article>
+      </div>
       ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
@@ -3081,7 +3150,7 @@ function render() {
               ? renderSecondAway()
               : state.scene === "secondReturn"
                 ? renderSecondReturn()
-                : renderBirth();
+                : renderAuthCard();
   // 장면이 바뀌면 Invite 의 예약된 단계 전환은 전부 버린다 — 화면이 없는데 타이머만 남으면
   // 엉뚱한 시점에 Birth 로 넘어간다.
   if (state.scene !== "received") clearInviteTimers();
@@ -3092,7 +3161,9 @@ function render() {
     fitInvite();
     mountInviteChog();
   }
-  document.querySelector("#openButton")?.addEventListener("click", openPiggy);
+  // [A-389 §2] Try again → 정본 Invite/Face ID 화면(즉시 새 패스키 생성 0 — 사용자가
+  // 다시 탭해야 startPiggyOpen() 이 돈다). Check Piggy → 기존 복구(checkPiggy, 생성 폴백 0).
+  document.querySelector("#authTryAgainButton")?.addEventListener("click", () => setScene("received", "", ""));
   document.querySelector("#checkButton")?.addEventListener("click", checkPiggy);
   document.querySelector("#skipHatchButton")?.addEventListener("click", finishHatch, { once: true });
   document.querySelector("#nameForm")?.addEventListener("submit", savePiggyName);
@@ -3157,14 +3228,39 @@ window.addEventListener("beforeunload", endActiveSession);
 // 확인할 방법이 달리 없다. 인증·저장·게이트는 건드리지 않는다 — 화면만 띄운다.
 // 프로덕션 번들에는 실리지 않는다(import.meta.env.DEV).
 if (import.meta.env.DEV) {
-  window.__arasoScene = (scene, { arrival = false, resumed = false, secondJourneyPreview = false } = {}) => {
+  window.__arasoScene = (
+    scene,
+    { arrival = false, resumed = false, secondJourneyPreview = false, reason } = {},
+  ) => {
     // [A-387-a/b] 이 콘솔 도우미는 683783b 도입 때부터 scene 인자를 검증 없이 그대로
     // setScene() 에 넘겼다. 오타·옛 이름(예: "home")을 주면 render() 의 마지막 else
-    // 분기가 조용히 renderBirth() 의 옛 Open/Check Piggy 패널을 그려, 검토자가 마치 그
-    // 패널이 정상 화면 사이에 끼어든 것처럼 착각하게 만든다(Owner screenshot 의심 경로
-    // 중 하나, A-387-a §2). 인증·rpId·저장은 건드리지 않는다 — scene 문자열만 막는다.
+    // 분기가 조용히 옛 Open/Check Piggy 패널을 그려, 검토자가 마치 그 패널이 정상 화면
+    // 사이에 끼어든 것처럼 착각하게 만든다(Owner screenshot 의심 경로 중 하나, A-387-a §2).
+    // 인증·rpId·저장은 건드리지 않는다 — scene 문자열만 막는다.
     if (!KNOWN_SCENES.includes(scene)) {
       console.warn(`[__arasoScene] unknown scene "${scene}" — ignored, staying on "${state.scene}". Valid: ${KNOWN_SCENES.join(", ")}`);
+      return state.scene;
+    }
+    // [A-389, Owner 승인 2026-09-18] localhost 는 isAllowedPiggyRpId() 밖이라 실제 Face ID 를
+    // 켤 수 없다 — 그래서 승인된 인증실패 카드(birth/renderAuthCard)도 실제 앱에서 눈으로
+    // 볼 방법이 없었다. 이 분기는 **화면만** 띄운다: 실제 WebAuthn 호출 0, 패스키 생성 0,
+    // localStorage 쓰기 0(BIRTH_PLAYED_KEY/PIGGY_RECEIVED_KEY/이름 전부 0), finishHatch 0,
+    // 금융 호출 0 — openPiggy()/checkPiggy() 를 부르지 않고 카드가 읽는 표시 상태
+    // (authPhase/authCancelled/detail)만 직접 만든다. 콘솔:
+    //   window.__arasoScene("authfail", { reason: "cancelled" | "notfound" | "unsupported" })
+    // reason 이 없거나 모르는 값이면 "notfound"(일반 실패 문구)로 본다. isAllowedPiggyRpId·
+    // PRODUCTION_RP_ID·getRpId 는 그대로다 — "unsupported" 도 그 실제 판정을 덮지 않고,
+    // 버튼에 문구만 맞춰 보여준다.
+    if (scene === "authfail") {
+      const AUTH_FAIL_PREVIEWS = {
+        cancelled: { cancelled: true, detail: "" },
+        notfound: { cancelled: false, detail: "PASSKEY_OPERATION_FAILED: Passkey assertion failed (DEV preview — no real auth call)" },
+        unsupported: { cancelled: false, detail: `Open Piggy only at ${PRODUCTION_RP_ID}. (DEV preview — no real auth call)` },
+      };
+      const preview = AUTH_FAIL_PREVIEWS[reason] || AUTH_FAIL_PREVIEWS.notfound;
+      state.authPhase = "idle";
+      state.authCancelled = preview.cancelled;
+      setScene("birth", "", preview.detail);
       return state.scene;
     }
     state.homeArrival = arrival;

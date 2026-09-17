@@ -541,6 +541,70 @@ h1 {
   filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
 }
 
+/* [A-389] 승인된 인증실패 카드 — 옛 renderBirth() 의 egg-big/검정 .note 패널/Open·Check
+   패널을 대체한다. 종이는 AskNameIt(.nameCard, 위 :293–314)의 바탕(ivory 텍스처)·비율
+   (460×300)·재질(같은 3px 라운드 + 3단 그림자)·잉크색(#141210)을 그대로 옮긴다 — Name it
+   제목 이미지·이름 입력칸(.nameCard__title/.nameCard__field)은 옮기지 않는다. 날짜 자리에
+   쓰던 letter-spacing/Georgia serif 조합(.nameCard__day 참고)만 eyebrow 글자에 옮긴다.
+   버튼은 새로 만들지 않고 .sendCard__btn 의 기존 ButtonKit 을 그대로 부른다(main.js
+   sendCardButtonMarkup 재사용). 옆의 idle Chog 는 다른 씬과 같은 .chog-idle 자산·크기
+   그대로 — 새 캐릭터·새 포즈 0. */
+.authCard {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.authCard__chog {
+  flex: 0 0 auto;
+}
+
+.authCard__paper {
+  position: relative;
+  width: min(460px, 100%);
+  min-height: 300px;
+  box-sizing: border-box;
+  background: #ebe3d5 url("/card/paper_tex_ivory.png") center / 290px auto;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1), 0 3px 0 rgba(0, 0, 0, 0.06), 0 12px 22px rgba(0, 0, 0, 0.48);
+  padding: 32px 36px;
+  color: #141210;
+}
+
+.authCard__eyebrow {
+  margin: 0 0 10px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(20, 18, 16, 0.55);
+}
+
+.authCard__title {
+  margin: 0 0 12px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 26px;
+  line-height: 1.15;
+  color: #141210;
+}
+
+.authCard__body {
+  margin: 0;
+  font: 600 15px/1.5 system-ui, sans-serif;
+  color: rgba(20, 18, 16, 0.78);
+}
+
+.authCard__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 24px;
+}
+
 /* [A-356 §1 → A-359 §1 교정] 공통 카드 자리 — 승인 Send 미리보기 숫자(중앙 기준
    왼쪽32/위48, 285×364)는 **실제 뷰포트 CSS px** 다. 예전에는 이 요소가 #homeBoard 의
    자식이라 fitHomeBoard() 의 스케일 s 를 한 번 더 받아, 실측이 285×364 가 아니라
@@ -1239,13 +1303,8 @@ h1 {
 }
 
 /* --- character art: file images (img), no CSS-drawn shapes --- */
-.egg-big {
-  display: block;
-  width: 144px;
-  height: auto;
-  margin: 0 auto 32px;
-}
-
+/* [A-389] .egg-big 삭제 — 옛 renderBirth() 의 큰 알 이미지였다. 그 화면 자체를
+   승인 인증실패 카드로 바꾸며 함께 지웠다(자산 파일은 그대로, 참조만 뺐다). */
 .corner {
   position: fixed;
   right: 24px;
