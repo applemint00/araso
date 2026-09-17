@@ -35,6 +35,15 @@ body {
   background-color: var(--paper);
 }
 
+/* Home 은 승인 배경이 해치 뒤의 단색이다(A-308 §13). 옛 노트지·테이프는 이 씬에서만
+   덮어 가린다 — `body` 규칙은 그대로 두므로 Invite 의 ground 와 다른 씬은 영향이 없다. */
+.stage[data-scene="sendstay"] {
+  position: relative;
+  background: #050505;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
 button {
   font: inherit;
 }
@@ -140,6 +149,10 @@ h1 {
   margin-top: 24px;
 }
 
+.actions--single {
+  grid-template-columns: 1fr;
+}
+
 .primary,
 .secondary {
   min-height: 48px;
@@ -157,6 +170,1009 @@ h1 {
 
 .secondary {
   border: 1px solid rgba(237, 232, 220, 0.22);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+/* === 탄생 한 바퀴 — 해치 · Name it · 첫 Home (A-292) ==================
+   캐릭터·모션은 확정 보관본 것이다. 아래는 그 모션을 걸어 두는 자리이고,
+   카드·노트패드 UI 는 보관본이 스스로 NOT_APPROVED 라고 적었다 — 여기서
+   디자인을 확정했다고 주장하지 않는다.
+   파츠 애니메이션 자체는 `/motion/hatch.css` · `/motion/name.css` 에 있다. */
+
+.stage--hatch,
+.stage--name {
+  position: relative;
+  background: #050505;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* 해치 — 알이 놓일 자리. 크기·중심은 /motion/hatch.css 의 #piggyHatchStage 가 정한다. */
+.hatchStage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.tiny.skip {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  z-index: 3;
+}
+
+/* Name it — 보관본 씬 3 아트보드(1280×800)를 좌표 그대로 옮긴다.
+   좁은 화면에서는 그림을 다시 짜지 않고 판을 통째로 축소해 넣는다(§O: 아트보드 통째
+   이식 + scale 만. 반응형 재작성·비율 변경 금지). 축척은 fitNameScene() 이 넣는다. */
+.nameScene {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1280px;
+  height: 800px;
+  transform-origin: 0 0;
+}
+
+/* [A-348-c] 이중 오프셋 수정: `motion/name-piggy.html` 의 첫 `.pgwrap` 자신이 이미
+   `position:absolute; left:380px; top:252px; width:230px` 를 인라인으로 갖고 있다(원본
+   파츠 그대로, 이 파일은 allowlist 밖이라 고치지 않는다). mountName() 은 이 fragment 를
+   그대로 innerHTML 로 넣으므로, 이 wrapper 가 **같은 left/top 을 한 번 더** 걸면
+   (380,252) 가 두 번 겹쳐 실제로는 (760,504) 에 앉는다 — 웅크림 구간에도 카드(612–1072,
+   292–592) 밖으로 못 나와 얼굴이 카드 아래에 묻힌다(Owner 전달본
+   `scene-card-handoff/README.md` 원인 진단과 같다). 고치는 값은 하나만 고른다: 이
+   wrapper 를 positioned 컨테이너로 만들지 않는다 — 그러면 `.pgwrap` 의 containing block 이
+   `.nameScene`(0,0 기준)으로 올라가 fragment 자신의 380/252 가 **한 번만** 적용된다.
+   캐릭터 keyframe·좌표는 그대로, 여기서 좌표를 새로 만들지 않았다. */
+/* [A-354 · Owner 화면검토] 「피기가 왼쪽으로 더가야 해 … 팔이 오른쪽에서 걸리고 있어」.
+   측정: armR 은 `pgPaw` 로 origin(838,490) 기준 회전+스케일한다. 대기 루프 중 최댓값은
+   와인드업 프레임(rotate(-58deg) scaleX(.62) scaleY(1.12), 11.5s 중 ~2.15%)에서 팔끝이
+   로컬(1139.2,565.2)까지 나간다(다음 프레임 rotate(-98) scaleX(.1) scaleY(1.16), 스케일이
+   먼저·회전이 나중 적용) — 정지 포즈 팔끝(945.5)보다 더 오른쪽이다. 230px 렌더 기준
+   배율 .23 을 곱하고 스트로크 절반(17.5 × |scaleX| × .23)을 더하면 wrap 좌측(380px)
+   에서 화면 x≈642.4px 까지 나가, 카드 왼쪽 모서리(612px, `.nameScene__pad{left:612px}`)
+   를 약 30.4px 넘어선다(node 순수계산, `<private>` 재현
+   가능 — 스크린샷 대신 좌표 계산으로 검증, 렌더 확인은 Codex 화면검토 몫).
+   `translate`(margin 아님)를 쓰는 이유: `.pgwrap` 은 이미 자기 자신에게 인라인
+   `position:absolute;left:380px;top:252px`를 갖고 있다 — 여기서 `position`이나
+   `left/top`을 다시 주면 위 A-348-c 이중오프셋이 재발한다. `transform`은 A-348-c 가
+   막으려던 것(레이아웃 offset 중복)과 다르다 — containing block 이 이 래퍼로 올라가도
+   그 래퍼 자신의 padding box 원점은 여전히 (0,0)이라 380/252 는 한 번만 적용되고,
+   `translateX`는 그 위에 **시각적으로만** 더해진다. `.pgwrap` 자신의 `pgMove` 애니메이션
+   transform 은 자식 요소 것이라 이 부모 translateX 와 서로 덮지 않는다(합성). 대기 자세와
+   Save 시작 rect(`#namePiggy .pgsvg`.getBoundingClientRect())는 같은 부모 translateX 를
+   함께 받으므로 별도 보정 없이 이어진다. 이동량 36px = 계산된 29px 초과분 + 여유 ~7px,
+   "최소 이동" 취지로 반올림. 실제 화면 재생 미확인 — 계산 근거만(node 로 좌표만 검증
+   가능, 렌더 픽셀 확인은 Codex 화면검토 몫). */
+.nameScene__piggy {
+  transition: opacity 0.32s ease, transform 0.32s cubic-bezier(0.2, 0.9, 0.3, 1);
+  transform: translateX(-36px);
+}
+
+/* hello 는 현재 빌드에서 재생하지 않는다(A-290). 보관본 `.pghello` 는 `pgHello 11.5s
+   … infinite` 루프에 묶여 있어 대기 중 혼자 뜬다 — Name it 안에서만 그리기를 멈춘다.
+   **자산·마크업은 지우지 않았다.** 나중에 hello 를 켤 때 이 두 줄만 걷어내면 된다. */
+.nameScene .pghello {
+  display: none;
+  animation: none !important;
+}
+
+/* 이탈 후 복귀 = 숨은 상태. Save 가 이 클래스를 벗긴다(A-288 · A-290).
+   visibility 까지 끄는 이유는 숨은 동안 파츠 애니메이션이 돌지 않게 하려는 것이다. */
+.nameScene.is-hidden .nameScene__piggy {
+  opacity: 0;
+  visibility: hidden;
+  /* 왼쪽 보정(translateX(-36px))을 여기서도 유지 — 숨김↔표시 전환이 transform 을
+     같이 트랜지션하므로, 이 값이 빠지면 복귀 순간 X 축이 같이 튄다. */
+  transform: translateX(-36px) translateY(10px) scale(0.96);
+}
+
+.nameScene__chog {
+  position: absolute;
+  left: 196px;
+  top: 556px;
+  width: 104px;
+}
+
+/* Name it 카드 — Owner 지정 AskNameIt.dc.html 460×300 엽서(A-324).
+   자리(A-344): 카드 **윗변은 옛 노트패드 top 292 그대로** 둔다. name.css pgMove 의
+   웅크림 구간(46.5–85%) Piggy 는 wrapper(380,252)+translate(305,-123) → 잉크 x685–915,
+   눈 y≈267 · 입 y≈291 이라, 윗변 250.5 에서는 얼굴이 가려졌다. 292 면 귀·눈·입이 위로 나오고
+   몸은 종이 뒤. left 는 대기 구간 Piggy(x380–610)와 겹치지 않게 612 — 웅크림 x685–915 는
+   카드(612–1072) 안에 든다. 캐릭터 좌표·scale·keyframe·z 순서 변경 0. */
+.nameScene__pad {
+  position: absolute;
+  left: 612px;
+  top: 292px;
+  width: 460px;
+  height: 300px;
+}
+
+.nameCard {
+  position: relative;
+  width: 460px;
+  height: 300px;
+  background: #ebe3d5 url("/card/paper_tex_ivory.png") center / 290px auto;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1), 0 3px 0 rgba(0, 0, 0, 0.06), 0 12px 22px rgba(0, 0, 0, 0.48);
+}
+
+.nameCard__dot {
+  position: absolute;
+  left: 32px;
+  top: 30px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #141210;
+}
+
+/* 날짜만 동적 텍스트 — 웹폰트를 싣지 않고 시스템 serif 로 같은 자리·크기. */
+.nameCard__date {
+  position: absolute;
+  right: 34px;
+  top: 26px;
+  text-align: right;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+}
+
+.nameCard__day {
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 2px;
+  color: #141210;
+}
+
+.nameCard__weekday {
+  margin-top: 4px;
+  font-size: 7.5px;
+  line-height: 1;
+  letter-spacing: 1.8px;
+  color: rgba(20, 18, 16, 0.55);
+}
+
+.nameCard__got,
+.nameCard__title {
+  position: absolute;
+  left: 46px;
+  filter: url(#askink);
+  transform: rotate(-2deg);
+  transform-origin: 0 50%;
+}
+
+.nameCard__got {
+  top: 84px;
+}
+
+.nameCard__title {
+  top: 74px;
+}
+
+.nameCard__got img,
+.nameCard__title img {
+  display: block;
+  width: auto;
+  margin-bottom: 4px;
+}
+
+.nameCard__got img {
+  height: 25px;
+}
+
+.nameCard__title img {
+  height: 30px;
+}
+
+.nameCard__field {
+  position: absolute;
+  left: 48px;
+  top: 152px;
+  width: 224px;
+}
+
+.nameCard__field input {
+  display: block;
+  box-sizing: border-box;
+  width: 224px;
+  height: 34px;
+  margin: 0;
+  padding: 0 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #141210;
+  font: 600 20px/34px system-ui, sans-serif;
+}
+
+.nameCard__line {
+  display: block;
+  margin-top: 2px;
+}
+
+.nameCard__ok,
+.nameCard__save {
+  position: absolute;
+  right: 40px;
+  /* 39px — 원본 AskNameIt 의 inline baseline 5px 보정(A-332, 실측 button top 226→221). */
+  bottom: 39px;
+  line-height: 0;
+}
+
+.nameCard__btn {
+  display: block;
+}
+
+/* 한 장 안의 두 상태. 도착 → ok → Name it. */
+.nameCard[data-phase="arrival"] .nameCard__title,
+.nameCard[data-phase="arrival"] .nameCard__form,
+.nameCard[data-phase="name"] .nameCard__got,
+.nameCard[data-phase="name"] .nameCard__ok {
+  display: none;
+}
+
+/* ButtonKit 버튼 — 구운 3조각 껍질 (ButtonKit.dc.html :24–50 · NOTES §14).
+   옛 `.pgsave` 종이칩은 ButtonKit 이 「superseded by this for all buttons」로 대체했다.
+   둥근 모서리(radius 29)와 종이 결은 PNG 안에 구워져 있다 — CSS radius·검은 외곽선을
+   새로 만들지 않고, paper_tex_ivory 를 버튼에 덧입히지도 않는다. */
+.btnink-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+.pkbtn {
+  position: relative;
+  display: inline-block;
+  border: 0;
+  padding: 0;
+  background: none;
+  line-height: 0;
+  cursor: pointer;
+  filter: drop-shadow(0 3px 0 rgba(60, 45, 20, 0.26)) drop-shadow(0 8px 14px rgba(0, 0, 0, 0.42));
+}
+
+.pkbtn__shell {
+  display: flex;
+  height: 51px;
+}
+
+/* 끝 조각은 기본 폭 30. 가운데만 늘어난다 — 최소 비 3.05:1 (156×51) 이상. */
+.pkbtn__cap {
+  display: block;
+  width: 30px;
+  height: 51px;
+}
+
+.pkbtn__mid {
+  display: block;
+  width: 96px;
+  height: 51px;
+  background: url("/card/btn_m.png") repeat-x;
+  background-size: auto 51px;
+}
+
+.pkbtn__word {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  display: block;
+  height: 26px;
+  width: auto;
+  filter: url(#btnink);
+  pointer-events: none;
+}
+
+/* 누름 — 3조각을 눌린 판으로 바꾸고 3px 내려간다. */
+.pkbtn:active .pkbtn__cap--l {
+  content: url("/card/btn_l_p.png");
+}
+
+.pkbtn:active .pkbtn__cap--r {
+  content: url("/card/btn_r_p.png");
+}
+
+.pkbtn:active .pkbtn__mid {
+  background-image: url("/card/btn_m_p.png");
+}
+
+.pkbtn:focus-visible {
+  outline: 2px solid #e0b100;
+  outline-offset: 4px;
+}
+
+/* OFF — 낱말만 흐려진다. 종이 색은 그대로 둔다(NOTES §14).
+   `opacity: 1` 은 브라우저 기본 disabled 스타일을 되돌리는 것이다 —
+   그대로 두면 UA 가 버튼 전체를 0.52 로 낮춰 종이까지 바랜다(실측). */
+.pkbtn:disabled {
+  cursor: default;
+  opacity: 1;
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
+}
+
+.pkbtn:disabled .pkbtn__word {
+  opacity: 0.34;
+}
+
+/* 카드 버튼 — AskNameIt 122×40 (cap23 · mid76 반복 · cap23), 낱말 높이 20. */
+.nameCard__btn .pkbtn__shell {
+  height: 40px;
+}
+
+.nameCard__btn .pkbtn__cap {
+  width: 23px;
+  height: 40px;
+}
+
+.nameCard__btn .pkbtn__mid {
+  width: 76px;
+  height: 40px;
+  background-size: auto 40px;
+}
+
+.nameCard__btn .pkbtn__word {
+  height: 20px;
+}
+
+.nameCard__btn:not(:disabled):active {
+  transform: translateY(3px);
+}
+
+/* Name 버튼 전용 그림자 — 원본 AskNameIt 은 drop-shadow(0 2px 5px rgba(0,0,0,.30)) 하나뿐이다(A-332).
+   공용 .pkbtn 의 2단 그림자(누름턱+확산, :400)는 다른 버튼에서 그대로 두고, Name 카드 버튼만 덮는다. */
+.nameCard__btn {
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
+}
+
+/* [A-356 §1 → A-359 §1 교정] 공통 카드 자리 — 승인 Send 미리보기 숫자(중앙 기준
+   왼쪽32/위48, 285×364)는 **실제 뷰포트 CSS px** 다. 예전에는 이 요소가 #homeBoard 의
+   자식이라 fitHomeBoard() 의 스케일 s 를 한 번 더 받아, 실측이 285×364 가 아니라
+   s 배만큼 더 작게(997×717 뷰포트에서 226.23×288.94) 나왔다(A359_checks.json 재현).
+   지금은 main.js renderSendStay() 가 이 요소를 `.stage` 의 **직계 자식**으로 돌려
+   무대 밖(뷰포트 좌표계)에 둔다 — s 의 영향을 받지 않는다. `left:50%;top:50%` 는
+   `.stage`(패딩 0 보더, 뷰포트 폭/높이) 의 패딩박스 기준이라 그대로 뷰포트 중앙이다.
+   아주 좁은 화면에서 고정 285×364 가 넘칠 수 있어 --cardShrink(기본 1, main.js
+   fitCardAnchor() 가 아래 .sendCard 규칙의 scale() 에서만 곱한다) 로 그 경우만 등축
+   축소한다 —
+   .cardAnchor 자신의 크기(285×364)는 그대로 두고(hitbox 계산의 기준값이 바뀌지 않게),
+   실제 보이는 카드만 안에서 줄어든다. 자리표시(.cardAnchor)와 실제 내용의 등축 축소
+   (.cardAnchor__fit, 아래 .sendCard 규칙)를 분리해 글자/버튼이 비균등으로 찌그러지지
+   않게 한다. */
+.cardAnchor {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 285px;
+  height: 364px;
+  transform: translate(calc(-50% - 32px), calc(-50% - 48px));
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* [A-358 §1 → A-359 §2 교정] 실측 147.05×288.94(뷰포트 997px) 의 원인은 둘이었다
+   (명세 §1 "두 원인이 모두 남았다"): (가) 이 틀이 board 좌표계 안(#homeBoard 자식)에
+   있어 fitHomeBoard() 축척을 한 번 더 받은 것 — 위 .cardAnchor 주석의 A-359 §1 로
+   고쳤다. (나) .sendCard 자기 자신은 여전히 380px 폭 그대로였던 것 — 이 틀만 285/.65=
+   438.461538 로 넓히고 380px 카드를 안에서 레터박스로 가운데만 놓으면(A-358 이 한 것)
+   **틀**의 bbox 는 285 가 나와도 **`.sendCard` 자신의** bbox 는 여전히 247(=380×.65) 이다
+   — "실제 .sendCard DOM bbox" 를 재는 성공조건을 못 채운다("틀 아닌 실제 bbox", 명세
+   §1). 그래서 이제 이 틀은 위치만 전달하고(크기·스케일 없음), 438.461538×560 폭과
+   등축 .65 는 **`.sendCard` 자신**(아래)이 직접 갖는다. */
+.cardAnchor__fit {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.cardAnchor__fit > * {
+  pointer-events: auto;
+}
+
+/* Send 카드 — 정본 SendCard.dc.html 380×560(A-336). 옛 어두운 .note/.primary/.secondary
+   대신 이 껍질을 쓴다. 안의 값은 전부 실제 sendstay 사실이다(§구현경계 5) — 견본 "go to the
+   market"/JIT 칩/금액 칸/거짓 READY 는 넣지 않았다.
+   [A-359 §2] 명세가 "`.sendCard` 자체 layout 438.461538×560 + 등축 .65 → 285×364" 를
+   못박아, 이 요소 자신을 380 이 아니라 438.461538 폭으로 두고 등축 .65 를 여기서 직접
+   건다(438.461538×.65=285, 560×.65=364 — getBoundingClientRect() 는 transform 적용 후
+   값을 주므로 이 요소의 실측 bbox 가 그대로 285×364 다). 위 .cardAnchor__fit(부모, 285×
+   364 를 그대로 채움) 의 50%/50% + 절반음수 margin 으로 먼저 이 요소의 **미축소** 중심을
+   부모 중심에 맞추고, scale 은 transform-origin:center 로 같은 중심을 축으로 돌아 중심이
+   흔들리지 않는다 — 그래서 축소된 285×364 가 .cardAnchor 의 285×364 를 정확히 채운다
+   (레터박스 0). 왼쪽 고정폭(left:46px 류) 글자는 그대로 남고, left+right 를 같이 쓰는
+   .sendCard__footer 만 넓어진 폭만큼 커지는데 — 이것도 이 요소 전체에 걸리는 단일
+   scale(.65) 하나를 그대로 받으니 비균등 찌그러짐은 아니다(상자 자체가 커진 것뿐).
+   --cardShrink 는 main.js fitCardAnchor() 가 아주 좁은 화면에서만 1 미만으로 준다. */
+.sendCard {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 438.461538px;
+  height: 560px;
+  margin-left: -219.230769px;
+  margin-top: -280px;
+  transform: scale(calc(0.65 * var(--cardShrink, 1)));
+  transform-origin: center;
+  background: #ebe3d5 url("/card/paper_tex_ivory.png") center / 290px auto;
+  border-radius: 3px;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1), 0 3px 0 rgba(0, 0, 0, 0.06), 0 12px 22px rgba(0, 0, 0, 0.48);
+}
+
+.sendCard__dot {
+  position: absolute;
+  left: 28px;
+  top: 30px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #141210;
+}
+
+.sendCard__date {
+  position: absolute;
+  left: 104px;
+  top: 26px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+}
+
+.sendCard__day {
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 2px;
+  color: #141210;
+}
+
+.sendCard__weekday {
+  margin-top: 4px;
+  font-size: 7.5px;
+  line-height: 1;
+  letter-spacing: 1.8px;
+  color: rgba(20, 18, 16, 0.6);
+}
+
+.sendCard__dom {
+  position: absolute;
+  right: 32px;
+  top: 25px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-size: 10px;
+  color: #141210;
+}
+
+.sendCard__title {
+  position: absolute;
+  left: 44px;
+  top: 96px;
+  height: 30px;
+  filter: url(#askink);
+  transform: rotate(-2deg);
+  transform-origin: 0 50%;
+}
+
+.sendCard__title img {
+  display: block;
+  height: 30px;
+  width: auto;
+}
+
+.sendCard__message {
+  position: absolute;
+  left: 46px;
+  top: 150px;
+  width: 290px;
+  margin: 0;
+  font: italic 17px/1.25 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+
+.sendCard__terms {
+  position: absolute;
+  left: 46px;
+  top: 206px;
+  width: 290px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.sendCard__terms li {
+  font: 400 13px/1.3 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.78);
+}
+
+.sendCard__meta {
+  position: absolute;
+  left: 46px;
+  top: 300px;
+  width: 290px;
+}
+
+.sendCard__detail,
+.sendCard__address {
+  margin: 0 0 6px;
+  font: italic 12px/1.4 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.6);
+}
+
+.sendCard__address {
+  font-style: normal;
+  font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+
+.sendCard__footer {
+  position: absolute;
+  left: 44px;
+  right: 36px;
+  bottom: 34px;
+}
+
+.sendCard__rule {
+  height: 1px;
+  background: rgba(20, 18, 16, 0.28);
+  margin-bottom: 12px;
+}
+
+.sendCard__footerRow {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.sendCard__stay {
+  border: 0;
+  padding: 0;
+  background: none;
+  cursor: pointer;
+  font: italic 13px/1.4 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.55);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.sendCard__stay:hover {
+  color: #141210;
+}
+
+/* 카드 버튼 — SendCard 122×40 (cap23 · mid76 반복 · cap23), 낱말 높이 20 (원본 그대로). */
+.sendCard__btn .pkbtn__shell {
+  height: 40px;
+}
+
+.sendCard__btn .pkbtn__cap {
+  width: 23px;
+  height: 40px;
+}
+
+.sendCard__btn .pkbtn__mid {
+  width: 76px;
+  height: 40px;
+  background-size: auto 40px;
+}
+
+.sendCard__btn .pkbtn__word {
+  height: 20px;
+}
+
+.sendCard__btn {
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
+}
+
+.sendCard__btn:not(:disabled):active {
+  transform: translateY(3px);
+}
+
+/* [A-360] Second Journey 카드 — 새 카드/종이 자산 0. 위 `.sendCard`(438.461538×560,
+   등축 .65 → 285×364, A-359 실측 그대로)를 그대로 재사용하고, 안쪽만 목록형 본문으로
+   바꾼다 — 같은 종이(#ebe3d5 + paper_tex_ivory.png)·같은 그림자·같은 seri프 글꼴
+   (send-card.js/home-paper.js/receipt-paper.js 와 같은 방법, 웹폰트 0). */
+.secondJourneyCard {
+  overflow: hidden;
+}
+
+.secondJourney__body {
+  position: absolute;
+  left: 30px;
+  top: 56px;
+  width: 378px;
+  height: 462px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.secondJourney__heading {
+  margin: 0 0 8px;
+  font: 700 20px/1.2 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+
+.secondJourney__hint {
+  margin: 0 0 12px;
+  font: italic 13px/1.4 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.65);
+}
+
+.secondJourney__list {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 14px;
+  padding: 0;
+}
+
+.secondJourney__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font: 400 13px/1.3 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+
+.secondJourney__candidate {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 2px 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(20, 18, 16, 0.15);
+}
+
+.secondJourney__candidateTitle {
+  font: 600 13px/1.3 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+
+.secondJourney__candidateStatus {
+  grid-column: 1 / 2;
+  font: italic 11.5px/1.3 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.6);
+}
+
+.secondJourney__checkBtn {
+  grid-row: 1 / 3;
+  justify-self: end;
+  border: 1px solid rgba(20, 18, 16, 0.35);
+  background: transparent;
+  color: #141210;
+  font: 400 12px/1 Georgia, "Times New Roman", serif;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.secondJourney__jitBtn {
+  border: 1px solid rgba(20, 18, 16, 0.35);
+  background: transparent;
+  color: #141210;
+  font: 400 12px/1 Georgia, "Times New Roman", serif;
+  padding: 6px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.secondJourney__amountRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 10px 0;
+  font: 400 13px/1.3 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+
+.secondJourney__amountRow input {
+  width: 110px;
+  font: 400 13px/1.3 "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+  padding: 4px 6px;
+  border: 1px solid rgba(20, 18, 16, 0.35);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.4);
+  color: #141210;
+}
+
+.secondJourney__reason {
+  min-height: 14px;
+  margin: 0 0 10px;
+  font: italic 11.5px/1.3 Georgia, "Times New Roman", serif;
+  color: rgba(140, 58, 46, 0.9);
+}
+
+.secondJourney__mockTag {
+  margin: 0 0 10px;
+  font: 700 10px/1.2 Georgia, "Times New Roman", serif;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: rgba(140, 58, 46, 0.9);
+}
+
+.secondJourney__footer {
+  position: absolute;
+  left: 30px;
+  right: 30px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.secondJourney__primary {
+  border: 0;
+  background: #141210;
+  color: #ebe3d5;
+  font: 600 13px/1 Georgia, "Times New Roman", serif;
+  padding: 10px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+}
+
+.secondJourney__primary:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* 첫 Home — 확정 걷기로 들어와 앉는다. 캐릭터는 하나뿐이고, 걷기와 앉기는
+   같은 자리에서 교대한다(둘이 동시에 보이면 캐릭터가 둘로 보인다). */
+/* Home 판 — 승인 「씬 4 Home 구현 수치」의 1256×772 좌표계. 좁은 화면에서도 그림을
+   다시 짜지 않고 판을 통째로 축소해 가운데 넣는다(§O). 배치는 fitHomeBoard() /
+   layoutHomeCharacter() 가 픽셀로 넣는다 — 여기서는 좌표계만 세운다.
+   노트지·구멍 배경은 넣지 않는다(ground 는 해치 전까지). */
+.homeBoard {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1256px;
+  height: 772px;
+  transform-origin: 0 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.homeChar {
+  position: absolute;
+  inset: 0;
+}
+
+/* 걷기와 앉기는 각자의 발밑 기준으로 같은 바닥선(FLOOR 648)에 놓인다. */
+.homeChar__walk,
+.homeChar__seat {
+  position: absolute;
+  display: block;
+  height: auto;
+}
+
+/* 걷기 → 앉기 교대는 정본대로 **즉시**다. opacity 에 transition 을 걸면 walk 가 사라진
+   뒤 seat 가 차오르는 동안 잠깐 아무도 없는 프레임이 생긴다(실측 ~30ms). */
+.homeChar__seat {
+  transform-origin: 50% 100%;
+}
+
+/* 이동 중에만 걷기 프레임이 보인다. 출발점은 Save 직전 Piggy 의 실제 rect 다 —
+   화면 밖에서 끌어오지 않는다. */
+.homeChar__walk {
+  visibility: hidden;
+}
+
+.homeChar[data-arrival="1"][data-phase="walk"] .homeChar__walk {
+  visibility: visible;
+}
+
+.homeChar__name {
+  position: absolute;
+  width: 120px;
+  color: #ede8dc;
+  font-size: 13px;
+  text-align: center;
+  letter-spacing: 0.2px;
+}
+
+/* --- Home Chog (A-308) ------------------------------------------------
+   좌표는 corner 로컬이고, 판으로 옮기는 일은 `.chogHome` 의 transform 하나가 한다
+   (`chog-home.js` 가 `translate(...) scale(homeScale)` 를 넣는다).
+   파츠 위치·회전 중심도 전부 JS 가 픽셀로 넣는다 — 여기서 좌표를 다시 정하지 않는다. */
+.chogHome {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1256px;
+  height: 772px;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+
+.chogHome__stack,
+.chogHome__sleep {
+  position: absolute;
+  inset: 0;
+}
+
+.chogHome__sleep {
+  display: none;
+}
+
+.chogHome__part,
+.chogHome__walk,
+.chogHome__handoff,
+.chogHome__padWrap {
+  position: absolute;
+  display: block;
+  /* 파츠는 이미 제자리에 구워져 있다. 브라우저가 다시 다듬지 않게 둔다. */
+  image-rendering: auto;
+}
+
+/* Home 노트패드 — 정본 HomeNotepad.dc.html(A-336). 실제 용지 400×568 을 0.275 로 줄여
+   chogHomePad 의 옛 110×111 손끝 박스(지금은 110×156 — 위 chog-home.js 주석 참조)에 넣는다.
+   회전·확대·등장 타이밍은 chog-home.js draw() 의 pad.style.transform 이 그대로 맡는다. */
+.homePaperMount {
+  position: absolute;
+  overflow: visible;
+}
+
+.homePaper {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 400px;
+  height: 568px;
+  background: #ebe3d5 url("/card/paper_tex_ivory.png") center / 290px auto;
+  border-radius: 3px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
+  transform: scale(0.275);
+  transform-origin: 0 0;
+}
+
+.homePaper__card {
+  position: absolute;
+  background: #f6f0e4 url("/card/paper_tex_ivory.png") center / 290px auto;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1), 0 3px 0 rgba(0, 0, 0, 0.06), 0 10px 18px rgba(0, 0, 0, 0.28);
+  box-sizing: border-box;
+}
+
+.homePaper__card--status {
+  left: 26px;
+  top: 34px;
+  width: 348px;
+  padding: 20px 20px 18px;
+}
+
+.homePaper__card--piggy {
+  left: 26px;
+  top: 214px;
+  width: 348px;
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+/* UNKNOWN: 원본 HOME 제목은 Playfair Display weight 900 로 구운 PNG(§구현경계 2).
+   이 회차 샌드박스는 그 굽기 경로(헤드리스 브라우저·폰트 변환기)를 안전하게 확보하지
+   못해 시스템 serif 텍스트로 대체했다 — 웹폰트는 싣지 않는다. A-336 보고 참조. */
+.homePaper__heading {
+  display: flex;
+  justify-content: center;
+  font: 900 25px/1 Georgia, "Times New Roman", serif;
+  color: #141210;
+  letter-spacing: 0.5px;
+}
+
+.homePaper__statusRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-top: 14px;
+}
+
+.homePaper__statusText {
+  font: italic 17px/1.2 Georgia, "Times New Roman", serif;
+  color: #141210;
+  letter-spacing: 1.2px;
+}
+
+.homePaper__time {
+  font: italic 13px/1.2 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.55);
+  white-space: nowrap;
+}
+
+.homePaper__num {
+  font: 700 30px/1 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+
+.homePaper__piggyInfo {
+  flex: 1;
+}
+
+.homePaper__name {
+  font: italic 21px/1.2 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+
+.homePaper__state {
+  margin-top: 4px;
+  font: italic 13px/1.2 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.55);
+}
+
+.homePaper__face {
+  width: 34px;
+  display: block;
+}
+
+.homePaper__mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 54px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+}
+
+.homePaper__stamp {
+  width: 52px;
+  transform: rotate(-5deg);
+  display: block;
+}
+
+.homePaper__logo {
+  width: 218px;
+  display: block;
+}
+
+/* 원본 `<g id="pad">` 와 같은 계층: wrapper 가 원점 0,0 에서 변환되고
+   그 안의 img 가 -105,-102 오프셋을 갖는다. */
+.chogHome__padWrap {
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  opacity: 0;
+}
+
+.chogHome__padWrap img {
+  display: block;
+}
+
+.chogHome__handoff {
+  position: absolute;
+}
+
+/* 손이 닿는 자리만 입력을 받는다 — 뒤의 카드 버튼을 가로채지 않는다. */
+.chogHome__hit {
+  position: absolute;
+  pointer-events: auto;
+  cursor: default;
+  background: transparent;
+}
+
+.chogHome__hit:focus-visible {
+  outline: 2px solid #e0b100;
+  outline-offset: 4px;
+}
+
+/* 3분 무입력 플래그(`data-drowsy`)는 타이머가 세워 두지만 **아무 것도 그리지 않는다.**
+   투명도를 낮춰 졸기처럼 보이게 하던 규칙은 제거했다 — 그건 졸기가 아니라 흐려지기였다.
+   실제 Chog 180000ms 졸기(`sleep-motion.js`)는 다음 Home Chog 묶음에서 연결한다. */
+
+@media (prefers-reduced-motion: reduce) {
+  .nameScene__piggy {
+    transition: none;
+  }
 }
 
 /* --- character art: file images (img), no CSS-drawn shapes --- */
@@ -279,7 +1295,9 @@ h1 {
 .filebox {
   position: relative;
   width: min(480px, 100%);
-  height: 320px;
+  /* [A-346] receiptPaper(§ 아래) 가 folder--3 위에 얹히면서 늘어난 실사용 높이.
+     folder·tape·tag 좌표는 그대로 320px 판 기준이다 — 변경 0. */
+  height: 380px;
   background: var(--paper);
   border: 1px solid rgba(237, 232, 220, 0.16);
   border-radius: 6px;
@@ -336,11 +1354,12 @@ h1 {
   border-radius: 2px;
 }
 
-/* 대조 한 줄이 늘면서 네 줄이 됐다 — 종이(folder--3, 80..248) 안에 들어오도록 시작점을 올린다. */
+/* [A-346] receiptPaper(위 filebox__paper, top6 + scale.82 ≈ 190px 바닥)가 이 자리를 덮게
+   돼서 상세 증거 줄은 그 아래로 내렸다 — 줄 자체(Sent/Cost/Left/Tx/Block)는 그대로다. */
 .receipt {
   position: absolute;
   left: 96px;
-  top: 116px;
+  top: 208px;
   margin: 0;
   color: #161616;
   font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
@@ -381,6 +1400,14 @@ h1 {
   left: auto;
   right: 24px;
   bottom: 96px;
+}
+
+/* [A-360] filebox 에는 다음 진입이 없었다 — Home 복귀 버튼. tripsButton(96px)과
+   겹치지 않게 기본 우하단 24px 자리를 쓴다(reset은 좌하단이라 겹치지 않는다). */
+.tiny.home {
+  left: auto;
+  right: 24px;
+  bottom: 24px;
 }
 
 @media (max-width: 620px) {
@@ -699,15 +1726,26 @@ h1 {
   opacity: 0.55;
 }
 
-.invite__chogIdle {
+/* --- Invite Chog (A-312) ---------------------------------------------
+   옛 정지 PNG(`chog_invite@2x.png`)를 9/17 승인 파츠로 바꿨다. 자리는 그대로다 —
+   모바일은 `.invite__chog` 안쪽의 옛 `chogIdle` 자리, wide 는 `.invite__chogNative`.
+   파츠는 padding 을 포함한 한 상자라, 그 상자를 앵커보다 padding 비율만큼 넓게 잡는다.
+   CSS `chog-idle` 흔들림은 쓰지 않는다 — 승인 idle(깜박임·손 흔들기)이 대신한다. */
+.chogInvite {
   position: absolute;
-  left: 47px;
-  top: -3px;
-  width: 62px;
-  height: 76px;
-  object-fit: contain;
-  transform-origin: 50% 90%;
-  animation: chog-idle 2.6s ease-in-out infinite;
+  left: -10.4px;   /* 62 * (200/1380) */
+  top: -21.5px;    /* 76 * (200/1780) */
+  width: 80px;     /* 62 * (1780/1380) */
+  height: 91.4px;  /* 76 * (2140/1780) */
+  pointer-events: none;
+}
+
+.chogInvite__part {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 
 .invite__copy {
@@ -938,11 +1976,38 @@ h1 {
   opacity: 0.25;
 }
 
-.invite--wide .invite__chogIdle {
-  left: 325px;
-  top: 512px;
-  width: 96px;
-  height: 119px;
+/* wide — 승인 앵커 `#bhv` left 321.7 top 496.9 107.6x139.9 (1280x800 판). */
+.invite__chogNative {
+  position: absolute;
+  left: 321.7px;
+  top: 496.9px;
+  width: 107.6px;
+  height: 139.9px;
+}
+
+.invite__chogNative .chogInvite {
+  left: -15.59px;  /* 107.6 * (200/1380) */
+  top: -15.72px;   /* 139.9 * (200/1780) */
+  width: 138.79px; /* 107.6 * (1780/1380) */
+  height: 168.19px;/* 139.9 * (2140/1780) */
+}
+
+/* 해치 씬의 Chog — 초대에서 이어진 같은 캐릭터. 자리 점프가 없도록 같은 앵커를 쓴다. */
+.hatchChog {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 107.6px;
+  height: 139.9px;
+  transform: translate(-260%, -6%);
+  pointer-events: none;
+}
+
+.hatchChog .chogInvite {
+  left: -15.59px;
+  top: -15.72px;
+  width: 138.79px;
+  height: 168.19px;
 }
 
 @keyframes spark-out {
@@ -955,3 +2020,183 @@ h1 {
   40% { transform: scale(1.4); }
   100% { transform: scale(1); }
 }
+
+/* --- 출발 무대 (A-316) -------------------------------------------------
+   Canvas 한 장. 원본 벡터는 앱에 없고 구운 PNG 만 그린다.
+   판(1256×772)을 화면에 맞춰 통째로 축소한 크기를 그대로 쓴다. */
+.departStage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* A-320/A-322 — 귀환 씬. 종이 버튼은 renderer 가 준 board rect 로 **매 프레임** 놓인다.
+   중앙 고정값(left:50% top:42% 232x268)은 실제 그림 자리와 달라서 없앴다. */
+.stage[data-scene="return"] { background: #050505; }
+.returnTap {
+  position: fixed;          /* canvas 의 client rect 위에 직접 놓는다 */
+  left: 0; top: 0; width: 0; height: 0;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  z-index: 3;
+  cursor: pointer;
+  pointer-events: none;
+  color: inherit;
+}
+.returnTap.is-live { pointer-events: auto; }
+.returnTap:disabled { pointer-events: none; }
+.returnTap[hidden] { display: none !important; }
+.returnTap:focus-visible { outline: 2px solid #ffd43b; outline-offset: 3px; }
+.returnTap__hint {
+  position: fixed;
+  transform: translateX(-50%);
+  font-size: 12px;
+  letter-spacing: .04em;
+  color: #cbc3b2;
+  white-space: nowrap;
+  z-index: 3;
+  pointer-events: none;
+}
+.returnOpen {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 4;
+}
+.returnName {
+  position: absolute;
+  width: 120px;
+  text-align: center;
+}
+
+/* [A-346] 확대된 영수증 위에 정본 receiptPaper(196px 고정)를 얹는다. tapBtn 자신은
+   renderer 의 paperBoard rect 그대로(hitbox·타이밍 변경 0) — 종이는 그 중심에 고정폭으로
+   앵커한다(원본 종이 비율 유지, §3). tapBtn 폭이 196px 와 달라지는 것은 A346 보고에 남긴다. */
+.returnTap__rows {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+/* --- 영수증 종이 — 정본 Receipt.dc.html (canvas/onboarding_scenes_20260916, A-346).
+   196px 폭 고정. 완료(rotate -1.2deg) / 빈손(rotate 2.4deg, #8C3A2E) 두 상태.
+   README(같은 폴더) "영수증 · 서류철 — 종이 그대로": 종이결 타일(paper_tex_ivory.png) 0,
+   평평한 #F2ECE0 배경 그대로. return-view.js 의 tap-gate 확대 종이와 filebox 읽기가
+   이 같은 markup 을 재사용해 하나로 이어진다. */
+/* [A-348 §2] return-view.js 의 placePaper() 가 실제 paperBoard(hitbox) 크기에 맞춰
+   --paperScale 을 채워 넣는다(비율보존 contain-fit, 종이/글자/이미지가 한 transform 을
+   같이 탄다 — 첫 탭 1.18 확대도 이 값 하나에 실려 온다). 주입이 없는 자리(filebox 등)는
+   기본값 1 — 기존 표시 크기 그대로. */
+/* [A-352 §4] 원인 — .receiptPaper__sheet 의 box-shadow(2번째 값 0 10px 20px rgba(0,0,0,.45))
+   는 sheet 자신의 사각 박스 기준으로 칠해진다. teeth(<img>)는 marginTop -1px 로 sheet 바로
+   아래 겹치는 형제 요소라, sheet 의 box-shadow 가 teeth 영역까지 번져 들어간다 — teeth PNG의
+   지그재그 V 틈(알파 0)으로 그 그림자가 그대로 비쳐 톱니 줄 전체가 어두워 보였다. A-348 은
+   이걸 teeth 에 종이색 #f2ece0 background 를 깔아 가렸는데, 그러면 V 틈 자체가 막혀 원본의
+   알파 외곽(오려낸 실톱니 모양)이 사라진다 — 통과 주장 금지 대상. 실제 원인은 그림자가
+   "sheet 만의 사각형" 기준이라는 것이므로, 그림자를 sheet 대신 sheet+teeth 를 함께 담는
+   래퍼(.receiptPaper 자신)에 filter:drop-shadow 로 옮긴다 — drop-shadow 는 래퍼 안 전체
+   내용을 합성한 뒤의 실제 알파(= teeth 의 투명 V 틈 포함)를 기준으로 그림자를 만들어서,
+   틈으로는 여전히 비쳐 보이되 box-shadow 처럼 사각형으로 덮어씌우지 않는다. offset/blur
+   값은 원래 box-shadow 와 동일(spread 0 이라 drop-shadow 로 그대로 옮길 수 있다). */
+.receiptPaper {
+  position: relative;
+  width: 196px;
+  transform: rotate(-1.2deg) scale(var(--paperScale, 1));
+  transform-origin: center center;
+  pointer-events: none;
+  filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.08)) drop-shadow(0 10px 20px rgba(0, 0, 0, 0.45));
+}
+.receiptPaper--empty {
+  transform: rotate(2.4deg) scale(var(--paperScale, 1));
+}
+.receiptPaper__sheet {
+  position: relative;
+  background: #f2ece0;
+  padding: 16px 16px 22px;
+  box-sizing: border-box;
+}
+.receiptPaper__logoRow {
+  text-align: center;
+}
+.receiptPaper__logo {
+  width: 104px;
+  display: block;
+  margin: 0 auto;
+}
+.receiptPaper__date {
+  margin-top: 4px;
+  text-align: center;
+  font: italic 12px/1 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.55);
+}
+.receiptPaper__rule {
+  height: 1px;
+  background: rgba(20, 18, 16, 0.35);
+  margin: 10px 0;
+}
+.receiptPaper__name {
+  margin-bottom: 8px;
+  text-align: center;
+  font: italic 15px/1.2 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+.receiptPaper__row {
+  display: flex;
+  justify-content: space-between;
+  font: 400 13px/1.6 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+.receiptPaper__status {
+  font: italic 13px/1 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+.receiptPaper--empty .receiptPaper__status {
+  color: #8c3a2e;
+}
+/* [A-348 §1] 원인 재진단(A-352) — receipt_teeth.svg 는 지그재그 톱니 사이가 투명이다. A-348
+   은 여기 종이색 #f2ece0 background 를 깔아 어두워 보이는 걸 가렸지만, 그러면 V 틈 자체가
+   막혀 원본 알파 외곽이 사라진다(단색 사각 처리 — 통과 주장 금지). 실제 원인은 이 img 가
+   아니라 형제 .receiptPaper__sheet 의 box-shadow 가 marginTop -1px 로 겹친 teeth 영역까지
+   번져 V 틈으로 비쳤던 것 — 그 box-shadow 를 위 .receiptPaper 래퍼의 filter:drop-shadow 로
+   옮겨 원인만 고쳤다. 여기는 원본 알파 그대로 — background 0, 자산·SVG 변경 0. */
+.receiptPaper__teeth {
+  display: block;
+  width: 196px;
+  margin-top: -1px;
+}
+
+/* filebox 읽기 — 같은 receiptPaper 를 축소해 folder--3 위에 앉힌다. 아래 .receipt 는
+   기존 Money/Cost/Left/Tx/Block 상세 증거 그대로(§2 「읽기상세에 보존」) — 지우지 않는다. */
+.filebox__paper {
+  position: absolute;
+  left: 50%;
+  top: 6px;
+  transform: translateX(-50%) scale(0.82);
+  transform-origin: top center;
+}
+
+/* 귀환 알람 hop 전용 겹 — Chog 모듈 자신의 corner transform 을 덮지 않기 위해 한 겹 더 둔다. */
+.returnChogHop { position: absolute; inset: 0; transform-origin: 0 0; }
+.returnChogHop[hidden] { display: none !important; }
+
+/* A361: reuse paper shells, with readable dynamic labels. */
+.sendCard__btn .pkbtn__text {
+  display: flex; align-items: center; justify-content: center;
+  height: 100%; font: 600 16px/1.2 Georgia, serif; color: #141210;
+  filter: none;
+}
+.homePaper .homeNextErrand {
+  position: absolute; left: 50%; top: 330px;
+  transform: translateX(-50%); pointer-events: auto;
+}
+.homePaper .homeNextErrand:active { transform: translateX(-50%) translateY(3px); }
+.homePaper .homeNextErrand:disabled { pointer-events: none; }
