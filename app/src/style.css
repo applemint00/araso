@@ -265,6 +265,75 @@ h1 {
   transform: translateX(-36px);
 }
 
+/* [A-401] 대기 상태 = 카드 뒤 웅크림(peek) 로 고정. 이전엔 11.5s 루프 내내 "옆에 서있기 ↔
+   웅크려 얼굴만"을 반복해서, 시간의 상당 부분(퍼센트 계산상 0–33.043%·90.243–100% 구간,
+   ≈44%)에 Piggy 전체가 카드 옆에 그대로 서 있었다(오늘 스크린 확인이 아니라 name.css
+   pgMove 키프레임 퍼센트 직접 계산으로 확인 — 첫 줄 참고). name.css 는 allowlist 밖이라
+   키프레임 자체(퍼센트·델타)는 고치지 않는다 — 대신 이미 정의된 "웅크림 구간"
+   (46.522%–85.217%, 이 구간에서 pgMove translate 는 (286–324px, -122~-129px) 로만
+   미세하게 흔들리며 안정) 안의 한 지점에서 rig 전체(몸통·팔·다리·눈·입) 애니메이션을
+   동시에 일시정지해 그 프레임을 대기 자세로 굳힌다. 고른 지점 = 50.391%(11.5s 중
+   5.795s) — pgMove 가 보간 없이 정확히 translate(305px,-129px) 로 정의된 지점.
+   이 구간은 pgArm(41.4–91.03% opacity:0)이라 팔이 이미 안 보이고, pgLegL/R 도
+   46.522–89.652% 사이 translate/rotate 0(중립)이라 다리도 그 순간엔 움직이지 않는다 —
+   그래서 몸 전체를 같은 순간에 세워도 팔다리가 따로 노는 것처럼 어긋나지 않는다
+   (name.css 키프레임 퍼센트 직접 대조로 확인, 렌더 확인은 Codex 몫). 앵커(pgwrap 자신의
+   inline left:380/top:252)와 부모 translateX(-36px) 보정은 그대로 — 새 좌표를 만들지
+   않고 기존 앵커의 기존 프레임 하나를 고정할 뿐이다. !important 는 name.css 의 <link>
+   가 이 파일보다 늦게 DOM 에 붙어(mountName() 동적 삽입) 캐스케이드 순서상 이 규칙을
+   되돌릴 수 있어 넣었다(specificity 로도 이기지만 이중 안전장치). 계산된 rect 는
+   NOTES_explore_page.md·OUTBOX 보고 참고. */
+.nameScene__piggy {
+  width: 1280px;
+  height: 800px;
+  /* 카드 밑선(292+300=592, .nameScene__pad 참고) 기준 클립 — 몸/팔/발이 실수로도 카드
+     밑으로 새지 않게 하는 안전장치. 위 고정 프레임 계산상 여유가 커서(~222px) 지금은
+     실제로 잘리는 부분이 없다 — 요구된 "카드 바닥 기준 마스크"를 명시적으로 건다. */
+  clip-path: inset(0 0 208px 0);
+}
+
+.nameScene__piggy .pgwrap {
+  animation-delay: -5.795s !important;
+  animation-play-state: paused !important;
+}
+.nameScene__piggy .pgwrap .up {
+  animation-delay: -5.795s !important;
+  animation-play-state: paused !important;
+}
+.nameScene__piggy .pgwrap .face {
+  animation-delay: -5.795s !important;
+  animation-play-state: paused !important;
+}
+.nameScene__piggy .pgwrap .armR {
+  animation-delay: -5.795s, -5.795s !important;
+  animation-play-state: paused, paused !important;
+}
+.nameScene__piggy .pgwrap .armL {
+  animation-delay: -5.795s !important;
+  animation-play-state: paused !important;
+}
+.nameScene__piggy .pgwrap .legL {
+  animation-delay: -5.795s !important;
+  animation-play-state: paused !important;
+}
+.nameScene__piggy .pgwrap .legR {
+  animation-delay: -5.795s !important;
+  animation-play-state: paused !important;
+}
+.nameScene__piggy .pgwrap .m-norm {
+  animation-delay: -5.795s !important;
+  animation-play-state: paused !important;
+}
+.nameScene__piggy .pgwrap .m-flat {
+  animation-delay: -5.795s !important;
+  animation-play-state: paused !important;
+}
+.nameScene__piggy .pgwrap .eye {
+  /* pgBlink 는 duration 이 3.2s 로 따로 논다 — 0s 로 고정하면 뜬 눈(0%, scaleY(1)) 프레임. */
+  animation-delay: 0s !important;
+  animation-play-state: paused !important;
+}
+
 /* hello 는 현재 빌드에서 재생하지 않는다(A-290). 보관본 `.pghello` 는 `pgHello 11.5s
    … infinite` 루프에 묶여 있어 대기 중 혼자 뜬다 — Name it 안에서만 그리기를 멈춘다.
    **자산·마크업은 지우지 않았다.** 나중에 hello 를 켤 때 이 두 줄만 걷어내면 된다. */
@@ -446,7 +515,10 @@ h1 {
   background: none;
   line-height: 0;
   cursor: pointer;
-  filter: drop-shadow(0 3px 0 rgba(60, 45, 20, 0.26)) drop-shadow(0 8px 14px rgba(0, 0, 0, 0.42));
+  /* [A-401] 硬 입체턱(0 3px 0, 0 blur) 제거 — 버튼 밖 soft 그림자 하나로만 깊이를 낸다.
+     각 카드(.nameCard__btn/.sendCard__btn)는 자기 그림자로 이 값을 덮으므로 여기는
+     bare .pkbtn 를 쓸 미래 대비 기본값이다. */
+  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
 }
 
 .pkbtn__shell {
@@ -511,24 +583,31 @@ h1 {
   opacity: 0.34;
 }
 
-/* 카드 버튼 — AskNameIt 122×40 (cap23 · mid76 반복 · cap23), 낱말 높이 20. */
+/* 카드 버튼 — AskNameIt 원본 122×40(cap23·mid76 반복·cap23, 낱말 높이 20) 이었으나
+   [A-401] "작게·균일비율" 요청으로 shell 높이를 34 로 한 번 더 줄인다(40→34, ×0.85).
+   cap 은 원본 자산 실측 비율(90:153 = btn_l/r.png 실치수, SHA 확인)대로
+   width = height*30/51 = height*10/17 을 지켜 가로세로를 따로 늘이지 않는다
+   (34*10/17=20 정확히 나눠떨어짐 — 반올림 오차 없음). mid 는 반복무늬라 늘어짐 자체가
+   없지만 같은 비율 96/51 을 써서 64(=34*96/51)로 맞춘다. word 낱말 이미지는 height 만
+   주면 width:auto 로 자기 원본 비율을 그대로 유지한다(결·손글씨 늘림 없음) — 26/51 비를
+   유지해 17.33(=34*26/51) 로 둔다. */
 .nameCard__btn .pkbtn__shell {
-  height: 40px;
+  height: 34px;
 }
 
 .nameCard__btn .pkbtn__cap {
-  width: 23px;
-  height: 40px;
+  width: 20px;
+  height: 34px;
 }
 
 .nameCard__btn .pkbtn__mid {
-  width: 76px;
-  height: 40px;
-  background-size: auto 40px;
+  width: 64px;
+  height: 34px;
+  background-size: auto 34px;
 }
 
 .nameCard__btn .pkbtn__word {
-  height: 20px;
+  height: 17.33px;
 }
 
 .nameCard__btn:not(:disabled):active {
@@ -866,24 +945,26 @@ h1 {
   color: #141210;
 }
 
-/* 카드 버튼 — SendCard 122×40 (cap23 · mid76 반복 · cap23), 낱말 높이 20 (원본 그대로). */
+/* 카드 버튼 — SendCard 원본 122×40(cap23·mid76 반복·cap23, 낱말 높이 20) 이었으나
+   [A-401] Name 카드 버튼과 같은 이유·같은 비율로 shell 높이 34 로 줄인다(계산 근거는
+   .nameCard__btn .pkbtn__shell 위 주석 참고 — 같은 ButtonKit 자산·같은 40→34 축소). */
 .sendCard__btn .pkbtn__shell {
-  height: 40px;
+  height: 34px;
 }
 
 .sendCard__btn .pkbtn__cap {
-  width: 23px;
-  height: 40px;
+  width: 20px;
+  height: 34px;
 }
 
 .sendCard__btn .pkbtn__mid {
-  width: 76px;
-  height: 40px;
-  background-size: auto 40px;
+  width: 64px;
+  height: 34px;
+  background-size: auto 34px;
 }
 
 .sendCard__btn .pkbtn__word {
-  height: 20px;
+  height: 17.33px;
 }
 
 .sendCard__btn {
