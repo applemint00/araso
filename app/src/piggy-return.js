@@ -340,7 +340,7 @@ export function createReturnRenderer(canvas, opts) {
     }
 
     // ③ 폴더 뒤 → 영수증 → 폴더 앞. 원본 z 순서 그대로.
-    const folderRect = [630, 626, 130, 100];
+    const folderRect = [580, 626, 130, 100];
     if (folderAlpha > 0 && img("folder-back")) {
       ctx.save(); enterGroup(); ctx.globalAlpha = folderAlpha;
       ctx.drawImage(img("folder-back"), ...folderRect); ctx.restore();
