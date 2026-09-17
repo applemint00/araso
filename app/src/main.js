@@ -1231,7 +1231,7 @@ function renderExplore() {
       <div class="cardAnchor" id="sendCardAnchor">
         <div class="cardAnchor__fit">${cardMarkup}</div>
       </div>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -1252,7 +1252,7 @@ function renderSecondAway() {
         <p class="line">${state.secondJourney.awayLine || "Piggy is checking a second errand."}</p>
       </article>
       <p class="secondJourney__mockTag">UI preview — no transaction</p>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -1329,7 +1329,7 @@ function renderSecondReturn() {
     receiptRowsMarkup: receiptPaperMarkup(secondJourneyReceiptFields(state.secondJourney.mockReceipt, displayPiggyName())),
     name: displayPiggyName(),
     homeChogMarkup: chogHomeMarkup({ padMarkup: homePadMarkup("return") }),
-    devExtra: `<p class="secondJourney__mockTag">UI preview — no transaction</p>${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}`,
+    devExtra: `<p class="secondJourney__mockTag">UI preview — no transaction</p>${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}`,
   });
 }
 
@@ -1409,6 +1409,19 @@ function openRecordFromList(index) {
 // filebox 상세 → 목록으로 되돌아간다("전체 기록목록에서... 목록으로 돌아가고", §3).
 function openRecordsFromFilebox() {
   setScene("records");
+}
+
+// [A-379 §4] "reset local test" 버튼은 개발자 전용 — 일반 localhost/제품 화면에 섞이면
+// 안 된다(Owner 지적). import.meta.env.DEV 만으로는 모든 DEV 빌드에서 항상 보인다. 명시적
+// ?debug=1 옵트인이 함께 있을 때만 켠다. 조건 헬퍼 하나로 모든 렌더 지점에 적용한다 — DOM에
+// 넣은 뒤 CSS 로 가리지 않는다(아예 마크업을 만들지 않는다).
+function isDevDebugOptIn() {
+  if (!import.meta.env.DEV) return false;
+  try {
+    return new URLSearchParams(window.location.search).get("debug") === "1";
+  } catch {
+    return false;
+  }
 }
 
 // @DEV_ONLY
@@ -1751,7 +1764,7 @@ function renderBirth() {
           <button class="secondary" id="checkButton" ${blocked ? "disabled" : ""}>Check Piggy</button>
         </div>
       </article>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -2092,7 +2105,7 @@ function renderHatch() {
       <div class="hatchStage" id="hatchStage" aria-hidden="true"></div>
       <div class="hatchChog" id="hatchChog" aria-hidden="true">${chogInviteMarkup()}</div>
       <button class="tiny skip" id="skipHatchButton" type="button">건너뛰기</button>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -2181,7 +2194,7 @@ function renderName() {
           ${nameCardMarkup({ phase: state.nameResumed ? "name" : "arrival", name: readPiggyName() })}
         </div>
       </div>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -2586,8 +2599,7 @@ function renderSendStay() {
       ${corner("sendstay")}
       ${homeCharacter(piggyName)}
       ${cardAnchorMarkup}
-      <button class="tiny check" id="checkButton" ${blocked ? "disabled" : ""}>check same Piggy</button>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -2674,7 +2686,7 @@ function renderAway() {
       <article class="note note--quiet">
         <p class="line">${state.awayLine}</p>
       </article>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -2699,7 +2711,7 @@ function renderReturn() {
     receiptRowsMarkup: returnReceiptRows(),
     name: displayPiggyName(),
     homeChogMarkup: chogHomeMarkup({ padMarkup: homePadMarkup("return") }),
-    devExtra: import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : "",
+    devExtra: isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : "",
   });
 }
 
@@ -2792,7 +2804,7 @@ function renderFileBox() {
       <!-- [A-360 §3] filebox 에는 다음 진입이 없었다 — Home 복귀와 Explore 진입을
            연결하는 첫 걸음. Home 에 도착한 뒤 Chog 탭이 Explore 를 연다. -->
       <button class="tiny home" id="fileboxHomeButton" type="button">home</button>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -2853,7 +2865,7 @@ function renderRecords() {
         <div class="recordsList">${listMarkup}</div>
       </article>
       <button class="tiny home" id="recordsHomeButton" type="button">home</button>
-      ${import.meta.env.DEV ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -2908,7 +2920,7 @@ function render() {
   document.querySelectorAll(".recordsRow").forEach((btn) => {
     btn.addEventListener("click", () => openRecordFromList(btn.dataset.receiptIndex));
   });
-  if (import.meta.env.DEV) {
+  if (isDevDebugOptIn()) {
     document.querySelector("#resetButton")?.addEventListener("click", resetLocalTest);
   }
 

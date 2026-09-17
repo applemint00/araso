@@ -98,46 +98,87 @@ const settleInput = {
 }
 
 // ── finishTrip: 바퀴가 닫히는 조건 ────────────────────────────────────
-function runFinish(trip) {
+// [A-379 §1] 옛 기대("완료 -> away")는 A-320 이후의 실제 finishTrip 과 어긋났다 —
+// 현재 코드는 성공 + **실제 영수증**이 있을 때만 return 씬으로 간다(main.js finishTrip,
+// `if (trip.receipt) { state.returnArrival = true; setScene("return", ...) }`).
+// 영수증이 없는 완료는 그대로 기존 away → filebox 확인 경로를 탄다. 세 계약을 각각의
+// 케이스로 나누고, 기대값을 코드가 아니라 canon(주석 [A-320])에 맞춘다.
+//
+// rememberReceipt 는 여기서 실제 함수가 아니라 스텁이다 — 저장 자체의 중복-방지 계약
+// (같은 tx 반복 저장 금지)은 실제 함수를 격리 VM 에서 도는 receipt-storage.mjs 가 잰다.
+// 이 파일은 finishTrip 이 receipt 가 있을 때 저장 함수를 **호출한다는 사실**만 별도
+// 케이스로 확인하고, 그 저장 함수 내부의 중복 조건과는 분리해 둔다.
+function runFinish(trip, { autoTimeout = true } = {}) {
   const store = new Map();
-  const state = { tripOutcome: "", tripReason: "", tripClosed: false, awayLine: "I'll check it.", receipts: [] };
+  const state = {
+    tripOutcome: "",
+    tripReason: "",
+    tripClosed: false,
+    awayLine: "I'll check it.",
+    returnArrival: false,
+    receipts: [],
+  };
   const scenes = [];
+  let rememberCalls = 0;
   const localStorage = {
     getItem: (k) => (store.has(k) ? store.get(k) : null),
     setItem: (k, v) => store.set(k, v),
     removeItem: (k) => store.delete(k),
   };
   const TRIP_CLOSED_KEY = "araso.tripClosed";
-  const rememberReceipt = (r) => state.receipts.unshift(r);
+  const rememberReceipt = (r) => {
+    rememberCalls += 1;
+    state.receipts.unshift(r);
+  };
   const setScene = (scene, message = "", detail = "") => scenes.push({ scene, message, detail });
-  const setTimeout = () => {};
+  // 실제 finishTrip 은 영수증 없는 완료에서 1200ms 뒤 filebox 로 넘어간다("기존 확인 경로").
+  // 그 경로를 검증하려면 콜백을 실제로 실행해야 한다 — 기본은 즉시 실행.
+  const setTimeout = autoTimeout ? (fn) => fn() : () => {};
   const finishTrip = eval(`(${finishTripSrc})`);
   finishTrip(trip);
-  return { state, scenes, store };
+  return { state, scenes, store, rememberCalls };
 }
 
 {
   const { state, scenes } = runFinish({ outcome: "failed", reason: "reverted", receipt: null });
-  check("실패 -> 바퀴 안 닫힘", state.tripClosed, false);
-  check("실패 -> 돌아왔다고 말하지 않음", state.awayLine, "I'll check it.");
-  check("실패 -> Owner 원본 문구", scenes[0].message, "couldn't finish this one.");
-  check("실패 -> filebox 로 안 간다", scenes[0].scene, "sendstay");
+  check("failed -> 바퀴 안 닫힘", state.tripClosed, false);
+  check("failed -> 돌아왔다고 말하지 않음", state.awayLine, "I'll check it.");
+  check("failed -> Owner 원본 문구", scenes[0].message, "couldn't finish this one.");
+  check("failed -> Home(sendstay) 로 간다", scenes[0].scene, "sendstay");
+  check("failed -> returnArrival 세우지 않음", state.returnArrival, false);
 }
 {
-  const { state, scenes, store } = runFinish({
+  // 실제 성공 + 실제 영수증 -> return, returnArrival true (A-320 계약).
+  const { state, scenes, store, rememberCalls } = runFinish({
     outcome: "done",
     reason: "ok",
     receipt: { txHash: "0xh", status: "success" },
   });
-  check("완료 -> 바퀴 닫힘", state.tripClosed, true);
-  check("완료 -> 저장에 남는다", store.get("araso.tripClosed"), "1");
-  check("완료 -> 영수증 저장", state.receipts.length, 1);
-  check("완료 -> away 로 간다", scenes[0].scene, "away");
+  check("성공+영수증 -> 바퀴 닫힘", state.tripClosed, true);
+  check("성공+영수증 -> 저장에 남는다", store.get("araso.tripClosed"), "1");
+  check("성공+영수증 -> return 씬으로 간다", scenes[0].scene, "return");
+  check("성공+영수증 -> returnArrival true", state.returnArrival, true);
+  check("성공+영수증 -> away/filebox 로는 안 간다", scenes.length, 1);
 }
 {
-  const { state } = runFinish({ outcome: "done", reason: "balance-unavailable", receipt: null });
-  check("숫자만 없는 완료 -> 바퀴 닫힘", state.tripClosed, true);
-  check("숫자만 없는 완료 -> 저장할 영수증 없음", state.receipts.length, 0);
+  // 저장 호출 자체는 별도 케이스로 — 저장 함수 내부의 중복-방지 조건과는 분리한다
+  // (그 조건은 receipt-storage.mjs 가 실제 rememberReceipt 로 잰다).
+  const { rememberCalls } = runFinish({
+    outcome: "done",
+    reason: "ok",
+    receipt: { txHash: "0xh2", status: "success" },
+  });
+  check("성공+영수증 -> rememberReceipt 정확히 1회 호출", rememberCalls, 1);
+}
+{
+  // done 이지만 실제 영수증이 없음 -> 기존 확인 경로(away -> filebox), return 아님.
+  const { state, scenes, rememberCalls } = runFinish({ outcome: "done", reason: "balance-unavailable", receipt: null });
+  check("영수증 없는 완료 -> 바퀴 닫힘", state.tripClosed, true);
+  check("영수증 없는 완료 -> 저장할 영수증 없음", state.receipts.length, 0);
+  check("영수증 없는 완료 -> rememberReceipt 호출 안 함", rememberCalls, 0);
+  check("영수증 없는 완료 -> away 로 먼저 간다", scenes[0].scene, "away");
+  check("영수증 없는 완료 -> returnArrival 세우지 않음", state.returnArrival, false);
+  check("영수증 없는 완료 -> 뒤이어 filebox 확인 경로로 넘어간다", scenes[1]?.scene, "filebox");
 }
 
 console.log(`\n${pass}/${pass + fail} PASS`);
