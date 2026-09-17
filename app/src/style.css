@@ -2208,3 +2208,69 @@ h1 {
 }
 .homePaper .homeNextErrand:active { transform: translateX(-50%) translateY(3px); }
 .homePaper .homeNextErrand:disabled { pointer-events: none; }
+
+/* A373 Explore review patch: AskCard structure only; common card geometry stays inherited. */
+.secondJourney__masthead {
+  position: absolute;
+  inset: 26px 32px auto 28px;
+  display: grid;
+  grid-template-columns: 60px 1fr 14px;
+  align-items: start;
+  gap: 8px;
+  margin: 0;
+  font: 700 10px/1 "Playfair Display", Georgia, serif;
+  letter-spacing: 2px;
+  color: #141210;
+}
+.secondJourney__dot { width: 5px; height: 5px; margin-top: 1px; border-radius: 50%; background: #141210; }
+.secondJourney__page { text-align: right; letter-spacing: 0; }
+.secondJourneyCard .secondJourney__heading { margin: 0 0 8px; color: #141210; }
+.secondJourneyCard .secondJourney__heading--interests {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 0 14px;
+  width: max-content;
+  transform: rotate(-2deg);
+  transform-origin: left center;
+  filter: url(#a373-askink);
+}
+.secondJourney__heading--interests img { display: block; height: 26px; width: auto; }
+.secondJourney__inkDefs { position: absolute; width: 0; height: 0; overflow: hidden; }
+.secondJourneyCard .secondJourney__list--interests { gap: 12px; margin: 84px 0 14px 16px; max-height: 176px; overflow-y: auto; }
+.secondJourneyCard .secondJourney__list--interests .secondJourney__item {
+  position: relative;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  padding: 1px 3px 1px 0;
+  font: 400 13px/1.2 "Playfair Display", Georgia, serif;
+}
+.secondJourneyCard .secondJourney__list--interests .secondJourney__item input {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.secondJourneyCard .secondJourney__list--interests .secondJourney__item input:focus-visible { outline: none; }
+.secondJourney__checkbox { display: block; width: 14px; height: 14px; overflow: visible; flex: 0 0 14px; }
+.secondJourney__boxInk path, .secondJourney__checkInk path { fill: none; stroke: #141210; stroke-linecap: round; stroke-linejoin: round; }
+.secondJourney__boxInk path { stroke-width: 3; filter: url(#a373-cb); }
+.secondJourney__checkInk { display: none; }
+.secondJourney__checkInk path { stroke-width: 4.4; filter: url(#a373-ck); }
+.secondJourneyCard .secondJourney__list--interests .secondJourney__item:has(input:checked) { background: rgba(224,177,0,.18); border-radius: 2px; }
+.secondJourneyCard .secondJourney__list--interests .secondJourney__item:has(input:checked) .secondJourney__checkInk { display: block; }
+.secondJourney__label { position: relative; white-space: nowrap; }
+.secondJourney__underline { display:block; width:100%; height:6px; margin-top:2px; overflow:visible; }
+.secondJourney__underline path { fill:none; stroke:#141210; stroke-width:1.6; stroke-linecap:round; filter:url(#a373-cb); }
+.secondJourneyCard .secondJourney__footer { position: relative; z-index: 3; }
+
+.secondJourneyCard .secondJourney__body { top:96px; height:428px; }
+.secondJourney__date small { display:block; font-size:7.5px; opacity:.6; margin-top:4px; letter-spacing:1.8px; }
+.secondJourney__dot { margin-top:4px; }
+.secondJourneyCard > .sendCard__dot { display:none; }
+.secondJourney__list--interests .secondJourney__item:has(input:focus-visible) { outline:2px solid #e0b100; outline-offset:3px; }
+.secondJourneyCard .secondJourney__footer { position:absolute; left:14px; right:8px; bottom:0; }

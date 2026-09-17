@@ -24,6 +24,7 @@ import {
   validatePersistenceScope,
 } from "./second-journey-state.js";
 import {
+  paperStatusCopy,
   secondJourneyCardMarkup,
   secondJourneyReceiptFields,
   secondJourneySendReason,
@@ -1129,7 +1130,7 @@ function updateSecondJourneyReadinessUI() {
   const reasonEl = document.querySelector("#secondSendReason");
   if (reasonEl) reasonEl.textContent = secondJourneySendReason(preflight, devPreview);
   const preflightEl = document.querySelector("#secondJourneyPreflightLine");
-  if (preflightEl) preflightEl.textContent = preflight ? `> ${preflight.status} · ${preflight.reason || ""}` : "";
+  if (preflightEl) preflightEl.textContent = preflight ? paperStatusCopy(preflight.status) : "";
   const amountErrorEl = document.querySelector("#secondAmountError");
   if (amountErrorEl) amountErrorEl.textContent = validateSecondAmount(sj.amount).error || "";
 }
