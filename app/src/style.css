@@ -35,6 +35,14 @@ body {
   background-color: var(--paper);
 }
 
+/* Invite 는 앞에 제 노트(.invite__paper)를 들고 있다. body 의 노트 이미지까지 깔리면 뒤로
+   또 한 장이 겹쳐 보인다(Owner 2026-09-18 «불투명하게 만들지말고 겹치는걸 고쳐서 없애야지»).
+   덮개를 씌우지 않고 뒤 이미지 생성 자체를 멈춘다 — 앞 노트·줄·구멍·테이프·봉투·초그는 그대로.
+   기본색 var(--paper) 유지(A-371). */
+body:has(.stage--invite) {
+  background-image: none;
+}
+
 /* Home 은 승인 배경이 해치 뒤의 단색이다(A-308 §13). 옛 노트지·테이프는 이 씬에서만
    덮어 가린다 — `body` 규칙은 그대로 두므로 Invite 의 ground 와 다른 씬은 영향이 없다. */
 .stage[data-scene="sendstay"] {
@@ -1435,9 +1443,6 @@ h1 {
    그림을 다시 짜지 않고 판을 통째로 축소한다(scale 은 JS 의 fitInvite 가 넣는다) — 좌표·간격
    비율이 캔버스와 어긋나지 않게 하려는 것이다. --- */
 .stage--invite {
-  /* body 의 bg_notebook_dark.png 에 이미 테이프가 구워져 있어 초대 종이 뒤로 큰 테이프가
-     비친다(Owner 2026-09-18). 이 씬만 배경을 덮는다 — body 배경·자산은 그대로다(A-369). */
-  background: #050505;
   padding: 0;
   align-content: center;
   overflow: hidden;
