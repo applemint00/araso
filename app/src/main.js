@@ -1021,7 +1021,7 @@ async function sendPiggy() {
 
 function createEmptySecondJourney() {
   return {
-    step: "interests", // interests | candidates | readiness
+    step: "interests", // interests | candidates | readiness | note
     selectedIds: [],
     chosenDestinationId: null,
     jitAnswer: null,
@@ -1033,7 +1033,80 @@ function createEmptySecondJourney() {
     flow: null, // 마지막 runSecondJourney() 결과
     mockReceipt: null, // makeMockReceipt() 출력 — 메모리만, 실제 receipts 에 안 감
     awayLine: "",
+    // [A-405/A-405-a] seedStage: "A" | "B" | "done" — 최초 seed(관심0/이벤트0)만 A→B
+    // 두 세트를 거친다. 반복 방문·edit interests 는 항상 "done"(단일 bounded 세트).
+    // 새 persisted 필드를 추가하지 않는다 — ensureSecondJourneyDomainState() 가 이미
+    // 들고 있는 domainState.interests/processedEventIds 에서 매번 다시 유추한다
+    // (inferSeedStage). 그래서 새로고침해도 "이미 관심이 있다/이미 seed A 를 한 번
+    // none 했다"는 사실은 살아남는다 — 다만 "seed B 까지 갔었다"는 이 세션 메모리에만
+    // 있고 새로고침 중간에 끊기면 done(반복 모드)으로 떨어진다(§UNKNOWN, OUTBOX 보고).
+    seedStage: null,
+    // interestsNote: seed A none 뒤 같은 interests 화면 위에 얹는 Chog/Paper 한 줄 —
+    // 목록은 세트B로 교체되고, 이 노트는 다음 저장/이탈까지 그대로 남는다(타이머 없음).
+    interestsNote: null,
+    // note/noteQueue: 목록 없이 문구만 보여주고 Home 으로 닫는 종결 화면(seed B 소진,
+    // 본편 반복 none). render() 가 이 큐를 sceneTimeout 으로 한 걸음씩 넘긴다.
+    note: null,
+    noteQueue: [],
   };
+}
+
+// Explore 에서 한 번에 내놓는 최대 후보 수 — job-feed.js EXPLORE_ERRANDS(8개 정본)는
+// 그대로 두고, 이 view/delivery 경계에서만 최대 5개로 자른다(§success_criteria
+// "표시 개수와 실제 선택가능 ids 일치, all=현재 제시목록"). job-feed.js 는 고치지 않는다.
+const MAX_EXPLORE_VISIBLE = 5;
+// seed B 소진("okay./maybe later.") 및 본편 반복 none 종결 노트가 화면에 머무는 시간 —
+// 기존 filebox 자동전환(A-292, 1200ms)과 같은 값을 재사용한다(새 타이밍 발명 0).
+const EXPLORE_NOTE_MS = 1200;
+
+// domainState 가 진짜 "한 번도 Explore 선택을 한 적 없는" 상태인지 본다. 새 persisted
+// 필드를 추가하지 않고 이미 있는 두 필드로만 유추한다:
+//   interests.length>0            → 이미 뭔가 골랐다 — seed 대상 아님(done)
+//   processedEventIds.length===0  → 이 계정/체인 scope 에서 저장 이벤트 자체가 0 —
+//                                    최초 seed 세트A
+//   processedEventIds.length===1  → interests 가 비었는데 이벤트가 하나 있다 = 세트A를
+//                                    none 으로 한 번 처리했다(현재 코드 경로에서 interests
+//                                    가 비어 있는 동안 processedEventIds 를 늘리는 곳은
+//                                    applyExploreSelection 의 none/unsure 분기뿐이다) —
+//                                    세트B
+//   그 외                          → 이미 세트A/B 를 다 거쳤거나 반복 방문 — done
+function inferSeedStage(domainState) {
+  if (!domainState) return "A";
+  if ((domainState.interests || []).length > 0) return "done";
+  const noneEvents = (domainState.processedEventIds || []).length;
+  if (noneEvents <= 0) return "A";
+  if (noneEvents === 1) return "B";
+  return "done";
+}
+
+// 지금 이 순간 카드에 실제로 그려질(=선택 가능한) errand 목록. job-feed.js 의 8개 정본
+// 순서(baseScore desc)는 그대로 인용만 하고 여기서 최대 5개로 자른다.
+//   seedStage "A" → 앞 5개(세트A)
+//   seedStage "B" → 나머지 3개(세트B) — 5개를 채우려 다른 걸 더 넣거나 합성하지 않는다
+//                    (§A-405-a "5개를 채우려 중복/합성 0")
+//   그 외("done"/edit) → 이미 선택된 id 를 먼저 지키고, 남는 자리를 정본 순서로 채운다
+//                    (edit interests 로 돌아왔을 때 이미 체크된 항목이 화면 밖으로
+//                    밀려나 "표시id != 선택가능id" 가 되는 것을 막는다)
+function computeExploreDisplayErrands(sj) {
+  const all = buildVisibleLaneChoices();
+  if (sj?.seedStage === "A") return all.slice(0, MAX_EXPLORE_VISIBLE);
+  if (sj?.seedStage === "B") return all.slice(MAX_EXPLORE_VISIBLE);
+  const preferredIds = sj?.selectedIds || [];
+  const picked = [];
+  const seen = new Set();
+  for (const errand of all) {
+    if (preferredIds.includes(errand.id)) {
+      picked.push(errand);
+      seen.add(errand.id);
+    }
+  }
+  for (const errand of all) {
+    if (picked.length >= MAX_EXPLORE_VISIBLE) break;
+    if (seen.has(errand.id)) continue;
+    picked.push(errand);
+    seen.add(errand.id);
+  }
+  return picked.slice(0, MAX_EXPLORE_VISIBLE);
 }
 
 // Second Journey 저장 scope — 실제 계정 주소가 있어야 유효하다(§5 "실제계정/체인scope
@@ -1157,8 +1230,14 @@ function buildSecondJourneyViewModel() {
   const canSend = devPreview && preflight?.status === "JOB_READY" && preflight?.executionPermission === true;
   return {
     step: sj.step,
-    errands: buildVisibleLaneChoices(),
+    // [A-405] 최대 5개 bounded 세트만 넘긴다 — job-feed.js 의 8개 canonical 은 그대로
+    // 두고 이 view model 경계에서만 자른다. "all" 선택은 항상 이 배열 전체를 뜻한다.
+    errands: sj.step === "interests" ? computeExploreDisplayErrands(sj) : [],
     selectedIds: sj.selectedIds,
+    // interests 단계는 sj.interestsNote(타이머 0, 다음 저장/이탈까지 유지), 종결
+    // note 단계는 sj.note(sceneTimeout 큐) — 같은 model.note 자리를 각 단계 markup 이
+    // 서로 다른 뜻으로 읽는다(둘이 동시에 쓰이지 않는다).
+    note: sj.step === "interests" ? sj.interestsNote || null : sj.note || null,
     destinations: flow?.destinations || [],
     chosen,
     decision: chosen?.decision || null,
@@ -1181,21 +1260,40 @@ function openSecondJourneyExplore() {
   const sj = state.secondJourney;
   const domainState = ensureSecondJourneyDomainState();
   sj.selectedIds = (domainState.interests || []).map((item) => item.errandId);
-  sj.step = sj.selectedIds.length ? "candidates" : "interests";
   sj.chosenDestinationId = null;
   sj.jitAnswer = null;
   sj.permission = false;
   sj.amount = "";
+  sj.interestsNote = null;
+  sj.note = null;
+  sj.noteQueue = [];
+  // [A-405-a] 관심이 이미 있으면(=이미 뭔가 골라둔 재방문) 곧장 candidates 로 — 기존
+  // 회귀 동작 그대로. 관심이 비어 있을 때만 seedStage 를 다시 유추한다(최초 seed A/B
+  // 이어가기 또는 반복 방문 단일 세트).
+  sj.step = sj.selectedIds.length ? "candidates" : "interests";
+  sj.seedStage = sj.selectedIds.length ? "done" : inferSeedStage(domainState);
   recomputeSecondJourneyFlow();
   setScene("explore", "", "");
 }
 
+// [A-405] "표시 id == 선택가능 id" 를 여기서도 다시 지킨다 — DOM 에서 온 ids 를 그대로
+// 믿지 않고, 지금 실제로 그려졌어야 할 bounded 세트(computeExploreDisplayErrands)에
+// 없는 id 는 버린다. 빠르게 두 번 저장을 눌러도(예: 재렌더 전에 큐잉된 옛 클릭) 화면에
+// 없던 항목이 섞여 들어가지 않는다.
 function handleExploreSave(ids) {
   const sj = state.secondJourney;
   const domainState = ensureSecondJourneyDomainState();
-  const errandChoices = buildVisibleLaneChoices();
-  const selectedErrands = ids.map((id) => errandChoices.find((errand) => errand.id === id)).filter(Boolean);
-  const kind = selectedErrands.length === 0 ? "none" : selectedErrands.length === 1 ? "one" : "multi";
+  const displayed = computeExploreDisplayErrands(sj);
+  const displayedIds = displayed.map((errand) => errand.id);
+  const safeIds = [...new Set(ids)].filter((id) => displayedIds.includes(id));
+  const selectedErrands = safeIds.map((id) => displayed.find((errand) => errand.id === id)).filter(Boolean);
+
+  if (selectedErrands.length === 0) {
+    handleExploreNone();
+    return;
+  }
+
+  const kind = selectedErrands.length === 1 ? "one" : "multi";
   const selection = { kind, errandIds: selectedErrands.map((errand) => errand.id), errands: selectedErrands };
   const preferenceUpdate = { preference: domainState.preference, delta: {}, signal: kind, fixedPersonalityLabel: null };
   const stateUpdate = applyExploreSelection(domainState, selection, preferenceUpdate, {
@@ -1204,7 +1302,11 @@ function handleExploreSave(ids) {
   });
   sj.domainState = stateUpdate.state;
   persistSecondJourneyDomainState();
-  sj.selectedIds = ids;
+  sj.selectedIds = selection.errandIds;
+  // one/multi(= 지금 보여준 세트 전체를 골랐으면 그게 곧 "all") 선택은 A 든 B 든 seed
+  // 시퀀스를 벗어나 기존 bounded preference + checking 흐름으로 합류한다(§A-405-a 3).
+  sj.seedStage = "done";
+  sj.interestsNote = null;
   sj.step = "candidates";
   sj.chosenDestinationId = null;
   sj.jitAnswer = null;
@@ -1212,6 +1314,76 @@ function handleExploreSave(ids) {
   sj.amount = "";
   recomputeSecondJourneyFlow();
   render();
+}
+
+// [A-405-a] none 은 항상 weak hint 만 남긴다(applyExploreSelection 의 addsInterest 는
+// kind:"none" 에서 false — 기존 관심 삭제0/신규 관심 추가0). 그 다음 어디로 가는지만
+// seedStage 로 갈린다:
+//   seed 세트A → Chog "…none?" / Paper "okay. one more." 를 같은 interests 화면에
+//                얹고 세트B 로 목록만 교체(타이머 없음 — 카드 이탈 전까지 그대로 보인다)
+//   seed 세트B → 종결 note("okay."/"maybe later.") 뒤 Home
+//   그 외(반복 방문) → 종결 note 두 걸음("not these?"/"for now." 뒤 "maybe later.") 뒤 Home
+function handleExploreNone() {
+  const sj = state.secondJourney;
+  const domainState = ensureSecondJourneyDomainState();
+  const selection = { kind: "none", errandIds: [], errands: [] };
+  const preferenceUpdate = { preference: domainState.preference, delta: {}, signal: "none", fixedPersonalityLabel: null };
+  const stateUpdate = applyExploreSelection(domainState, selection, preferenceUpdate, {
+    eventId: `explore-none-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    now: new Date().toISOString(),
+  });
+  sj.domainState = stateUpdate.state;
+  persistSecondJourneyDomainState();
+  sj.selectedIds = [];
+  sj.chosenDestinationId = null;
+
+  if (sj.seedStage === "A") {
+    sj.seedStage = "B";
+    sj.interestsNote = { chogLine: "…none?", paperLine: "okay. one more." };
+    sj.step = "interests";
+    recomputeSecondJourneyFlow();
+    render();
+    return;
+  }
+
+  if (sj.seedStage === "B") {
+    beginExploreNoteSequence([{ chogLine: "okay.", paperLine: "maybe later." }]);
+    return;
+  }
+
+  beginExploreNoteSequence([
+    { chogLine: "not these?", paperLine: "for now." },
+    { chogLine: "", paperLine: "maybe later." },
+  ]);
+}
+
+// 목록 없는 종결 화면 큐 — render() 가 씬에 묶인 sceneTimeout 으로 한 걸음씩 넘긴다.
+// 카드 이탈(다른 render()) 이 오면 teardownScene() 이 예약된 timeout 을 지워, 이미 닫힌
+// 카드 위에 뒤늦게 다음 문구가 덮어씌워지지 않는다(§A-405 "빠른 중복입력/씬 이탈 가드",
+// 기존 sceneTimeout/onSceneTeardown 패턴 재사용 — 새 타이머 체계 0).
+function beginExploreNoteSequence(notes) {
+  const sj = state.secondJourney;
+  sj.step = "note";
+  sj.interestsNote = null;
+  sj.note = notes[0];
+  sj.noteQueue = notes.slice(1);
+  render();
+}
+
+function advanceExploreNote() {
+  const sj = state.secondJourney;
+  if (sj.step !== "note") return;
+  if (sj.noteQueue.length) {
+    sj.note = sj.noteQueue[0];
+    sj.noteQueue = sj.noteQueue.slice(1);
+    render();
+    return;
+  }
+  sj.note = null;
+  // [A-405-a] Piggy 출발0/Send0 — 그냥 Home. stayHome() 의 첫 Journey 전용 카피
+  // ("Piggy stayed home today.")를 재사용하지 않고, goHomeFromFilebox() 와 같은
+  // 중립 복귀만 쓴다(§禁 raw 내부 문자열 노출0, 새 카피 발명 최소화).
+  setScene("sendstay", "", "");
 }
 
 function handleCandidateCheck(destinationId) {
@@ -1289,6 +1461,10 @@ function wireExploreCard() {
     handleExploreSave(ids);
   });
   document.querySelector("#exploreEditButton")?.addEventListener("click", () => {
+    // [A-405] edit interests 는 seed 재방문이 아니다 — 항상 "done"(단일 bounded 세트,
+    // 이미 고른 id 우선 유지 — computeExploreDisplayErrands 참고).
+    sj.seedStage = "done";
+    sj.interestsNote = null;
     sj.step = "interests";
     render();
   });
@@ -3221,6 +3397,12 @@ function render() {
   if (state.scene === "explore") {
     mountHome({ cardClaimed: true });
     wireExploreCard();
+    // [A-405-a] 종결 note("okay./maybe later." 류)만 씬에 묶인 타이머로 한 걸음
+    // 넘긴다 — 다음 render()(카드 이탈·다른 클릭)가 오면 teardownScene() 이 이 예약을
+    // 지워 뒤늦은 덮어쓰기를 막는다(기존 sceneTimeout 패턴, 새 타이머 체계 0).
+    if (state.secondJourney.step === "note") {
+      sceneTimeout(advanceExploreNote, EXPLORE_NOTE_MS);
+    }
   }
   if (state.scene === "secondAway") mountSecondAway();
   if (state.scene === "secondReturn") mountSecondReturn();

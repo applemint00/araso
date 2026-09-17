@@ -2622,7 +2622,12 @@ h1 {
 }
 .secondJourney__heading--interests img { display: block; height: 26px; width: auto; }
 .secondJourney__inkDefs { position: absolute; width: 0; height: 0; overflow: hidden; }
-.secondJourneyCard .secondJourney__list--interests { gap: 12px; margin: 84px 0 14px 16px; max-height: 176px; overflow-y: auto; }
+/* [A-405] 최대 5개(main.js computeExploreDisplayErrands)만 그려지므로 스크롤이
+   필요 없다 — max-height/overflow-y:auto 를 없애 스크롤바0·클리핑으로 글자 숨김0을
+   보장한다(옛 176px 캡은 8개 canonical 전부를 넣던 시절 값이었다). */
+.secondJourneyCard .secondJourney__list--interests { gap: 12px; margin: 84px 0 14px 16px; max-height: none; overflow: visible; }
+.secondJourneyCard .secondJourney__note--chog,
+.secondJourneyCard .secondJourney__note--paper { margin-left: 16px; }
 .secondJourneyCard .secondJourney__list--interests .secondJourney__item {
   position: relative;
   align-items: center;
