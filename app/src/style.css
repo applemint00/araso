@@ -1416,25 +1416,49 @@ h1 {
   bottom: 24px;
 }
 
-/* [A-383 §1/§2] Home 카드 오른쪽 기록 카드 — 별도 records 전체화면(옛 .note/.eyebrow,
-   Owner FAIL) 대신 HomeNotepad/현재 home-paper 와 같은 바탕(.homePaper 와 값이 같다) 위에
-   얹는다. 위치 기준판(.recordsCardAnchor)은 Home 카드 앵커(.cardAnchor, 285×364, 중앙
-   -32/-48) 오른쪽에 gap(24px) 만큼 떨어진 자리를 잡을 뿐이고, 실제 보이는 종이는 자식
-   .recordsCard 다 — .cardAnchor/.cardAnchor__fit 관례와 같은 "자리판과 실물을 나눈다"
-   원칙(위 §A-359 주석)을 그대로 따른다. 폭 256.338px = Home 카드 실제 종이와 같은
-   400:568 비율을 Home 카드와 같은 높이 364에 맞춘 값(main.js RECORDS_CARD_W, 같은 계산). */
+/* [A-383 §1/§2 → A-387 교정] Home 카드 오른쪽 기록 카드 — 별도 records 전체화면(옛
+   .note/.eyebrow, Owner FAIL) 대신 HomeNotepad/현재 home-paper 와 같은 바탕(.homePaper 와
+   값이 같다) 위에 얹는다. [A-387] Codex 실화면검토(1335×717) FAIL: 아래 left/top/width/
+   height 는 "공통 Send 앵커(.cardAnchor, 285×364, 중앙 -32/-48)가 곧 실제 Home 종이"라는
+   틀린 가정의 계산값이었다(실측 x695,y350,w136,h185 vs 이 계산 x802,y129,w256,h364 — Home
+   위에 부분 겹침). 이제 이 값들은 JS 가 붙기 전까지의 자리표시자일 뿐이고, main.js
+   alignRecordsCardToHomePaper() 가 열릴 때 실제 `.homePaper` rect 를 재서 이 자리를 그
+   오른쪽·같은 top·같은 크기·24px 간격(gap)으로 즉시 덮어쓴다(열려 있는 동안 계속). 실제
+   보이는 종이는 자식 .recordsCard 다 — .cardAnchor/.cardAnchor__fit 관례와 같은
+   "자리판과 실물을 나눈다" 원칙(위 §A-359 주석)을 그대로 따른다. */
 .recordsCardAnchor {
   position: absolute;
-  left: calc(50% + 110.5px + 24px); /* Home 카드 앵커 오른쪽 가장자리(중심+142.5-32) + gap */
-  top: calc(50% - 230px); /* Home 카드 앵커 위쪽 가장자리(중심-182-48) 와 같다 */
+  left: calc(50% + 110.5px + 24px);
+  top: calc(50% - 230px);
   width: 256.338px;
   height: 364px;
   z-index: 5;
   pointer-events: none;
+  opacity: 1;
+  transform: translateX(0);
 }
 
 .recordsCardAnchor[hidden] {
   display: none;
+}
+
+/* [A-387-a] Owner 지시: Home 카드 옆으로 스르륵 여는 짧은 open transition만 — 새 모션
+   디자인 확대가 아니라 open 진입 한 번에만 거는 opacity/이동이다. main.js openRecordsCard()
+   가 --opening 을 걸었다가 다음 프레임에 뗀다. reduced-motion 은 transition 자체를
+   0으로 죽여 즉시 표시한다(이중 안전망 — JS 도 그 경우 클래스를 아예 걸지 않는다). */
+.recordsCardAnchor:not(.recordsCardAnchor--opening) {
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.recordsCardAnchor--opening {
+  opacity: 0;
+  transform: translateX(-12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .recordsCardAnchor {
+    transition: none !important;
+  }
 }
 
 .recordsCard {

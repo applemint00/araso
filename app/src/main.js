@@ -116,6 +116,29 @@ function displayPiggyName() {
 
 const app = document.querySelector("#app");
 
+// [A-387-a/b] render() 의 씬 분기(아래, 파일 끝의 큰 삼항식)가 실제로 다루는 이름의
+// 전체 목록. 이 목록 밖 값은 전부 마지막 else 분기 renderBirth() 로 떨어진다 — 그 분기는
+// 2026-09-03 최초 씬 배선 커밋(1102c18)부터 있던 "정해지지 않은 값의 기본값"이고, Invite
+// 직후 실제 인증 게이트(Open/Check Piggy)로서는 정상이지만 그 밖의 경로에서 우연히
+// 걸리면 옛 decorative 패널이 정상 흐름에 끼어든 것처럼 보인다(Owner screenshot,
+// A-387-a §2). 지금까지 실제 setScene() 호출과 computeInitialScene() 은 전부 이 목록
+// 안의 값만 써 왔다 — 유일하게 검증 없이 임의 문자열을 받는 지점은 아래
+// window.__arasoScene()(DEV 전용 콘솔 도우미, 683783b 에서 도입 — 도입 때부터 지금까지
+// 검증이 없었다) 뿐이었다. 그 지점만 이 목록으로 막는다.
+const KNOWN_SCENES = [
+  "received",
+  "hatch",
+  "name",
+  "sendstay",
+  "away",
+  "return",
+  "filebox",
+  "explore",
+  "secondAway",
+  "secondReturn",
+  "birth",
+];
+
 // scene 은 credential/txHash 로부터 최초 1회 파생하고, 그 뒤로는 사용자 행동에 따라
 // 명시적으로 전환한다(완전 파생이 아님 — away/filebox 전환은 진행 중인 네트워크 상태를 담아야 해서
 // 이벤트 사실만으로는 부족하다).
@@ -430,6 +453,7 @@ function setScene(scene, message = "", detail = "") {
   // 열린 채로 새는 경로를 만들지 않는다.
   state.recordsCardVisible = false;
   state.recordsDetailIndex = null;
+  stopRecordsAlignLoop();
   state.scene = scene;
   state.message = message;
   state.detail = detail;
@@ -1406,22 +1430,46 @@ function goHomeFromFilebox() {
 // teardownScene() 이 mountChogHome() 을 처음부터 다시 마운트해 이미 손끝-고정(pinned)으로
 // 열려 있는 Home 카드가 닫혀 버린다(chog-home.js mountChogHome, `let pinned = false`
 // 초기값). 그래서 여기서는 이미 그려져 있던(hidden) 기록 카드 DOM만 그대로 채워 보여준다.
+// [A-387] Codex 실화면검토 FAIL: 옛 fitRecordsCard() 는 "공통 Send 앵커(285×364)가 곧
+// 실제 Home 종이"라고 가정했지만 실측은 달랐다(x695,y350,w136,h185 vs 계산 x802,y129,
+// w256,h364). alignRecordsCardToHomePaper() 가 그 자리에서 실제 `.homePaper` rect 를
+// 재서 맞추고, startRecordsAlignLoop() 가 열려 있는 동안 계속 따라간다(도킹 애니메이션·
+// 리사이즈 전부 포함 — chog-home.js 는 매 프레임 pad.style.transform 을 직접 쓴다, 그
+// 파일은 allowlist 밖이라 고치지 않고 읽기만 했다).
 function openRecordsCard() {
   const anchor = document.querySelector("#recordsCardAnchor");
   if (!anchor) return;
   state.recordsCardVisible = true;
   state.recordsDetailIndex = null;
-  anchor.hidden = false;
-  fitRecordsCard();
   renderRecordsCardBody();
+  alignRecordsCardToHomePaper();
+  // [A-387-a] Owner 지시: 카드가 Home 옆으로 스르륵 열리는 짧은 open transition만(새
+  // 모션 디자인 확대 금지) — 숨김을 풀기 **전에** .recordsCardAnchor--opening(초기
+  // opacity 0/이동)을 먼저 걸어 둬야 첫 페인트가 이미 그 상태로 나가고, 다음 프레임에
+  // 떼면 CSS transition 이 자연스럽게 걸린다(순서를 반대로 하면 한 프레임 풀-오퍼시티로
+  // 반짝인 뒤 되감기는 것처럼 보인다). reduced-motion 은 즉시 표시(클래스를 아예 걸지
+  // 않는다 — CSS 쪽에도 안전망으로 media query 를 뒀다).
+  const reduced = prefersReducedMotion();
+  if (!reduced) anchor.classList.add("recordsCardAnchor--opening");
+  anchor.hidden = false;
+  if (!reduced) {
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => anchor.classList.remove("recordsCardAnchor--opening"));
+    });
+  }
+  startRecordsAlignLoop();
 }
 
 // 닫으면 원래 Home 그대로(§4) — 기록 카드만 숨기고 그 옆 Home 카드는 손대지 않는다.
 function closeRecordsCard() {
   state.recordsCardVisible = false;
   state.recordsDetailIndex = null;
+  stopRecordsAlignLoop();
   const anchor = document.querySelector("#recordsCardAnchor");
-  if (anchor) anchor.hidden = true;
+  if (anchor) {
+    anchor.hidden = true;
+    anchor.classList.remove("recordsCardAnchor--opening");
+  }
 }
 
 // 목록 → 상세, 상세 → 목록. 같은 카드 영역 안에서 내용만 바꾼다(§4 "선택한 영수증
@@ -2393,12 +2441,12 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
   const fit = fitHomeBoard();
   layoutHomeCharacter();
   fitCardAnchor();
-  fitRecordsCard();
+  if (state.recordsCardVisible) alignRecordsCardToHomePaper();
   sceneListener(window, "resize", () => {
     fitHomeBoard();
     layoutHomeCharacter();
     fitCardAnchor();
-    fitRecordsCard();
+    if (state.recordsCardVisible) alignRecordsCardToHomePaper();
   });
 
   // Home Chog — Piggy 와 같은 판·같은 발선. 같은 Save 전환에서 함께 출발한다.
@@ -2841,16 +2889,15 @@ function renderFileBox() {
   `;
 }
 
-// [A-383 §1/§2/§4] Home 카드 오른쪽에 펼치는 기록 카드 — 별도 records 전체화면 대신
-// 같은 sendstay 렌더 안에 늘 그려 두고(hidden) recordsCardVisible 로만 보인다.
-// 바탕은 HomeNotepad/현재 home-paper 종이(#EBE3D5 + paper_tex_ivory.png, radius 3,
-// 그림자 0 14px 30px — .homePaper 와 같은 값, style.css)를 그대로 쓴다. 검정 .note 패널·
-// 노란 RECEIPTS 제목(옛 renderRecords(), Owner FAIL)은 쓰지 않는다. 크기는 Home 카드와
-// "같은 홈패드 비율"(원본 종이 400:568)을 Home 카드와 같은 높이 364에 맞춘 것이다 —
-// chog-home.js sharedCardPadTarget() 이 이미 쓰는 finalPaperScale 과 같은 계산
-// (364/568×400 ≈ 256.338)이라 Home 카드의 실제 종이 폭과 정확히 같다.
-const RECORDS_CARD_W = (364 * 400) / 568; // ≈256.338 — Home 카드 실제 종이 폭과 동일
-const RECORDS_CARD_H = 364;
+// [A-383 §1/§2/§4 → A-387 교정] Home 카드 오른쪽에 펼치는 기록 카드 — 별도 records
+// 전체화면 대신 같은 sendstay 렌더 안에 늘 그려 두고(hidden) recordsCardVisible 로만
+// 보인다. 바탕은 HomeNotepad/현재 home-paper 종이(#EBE3D5 + paper_tex_ivory.png,
+// radius 3, 그림자 0 14px 30px — .homePaper 와 같은 값, style.css)를 그대로 쓴다. 검정
+// .note 패널·노란 RECEIPTS 제목(옛 renderRecords(), Owner FAIL)은 쓰지 않는다. [A-387]
+// 크기는 더 이상 여기 상수로 미리 계산하지 않는다 — Codex 실화면검토가 "공통 Send
+// 앵커(285×364)가 곧 Home 종이" 가정이 실측과 다르다고 밝혀서(실측 x695,y350,w136,
+// h185), alignRecordsCardToHomePaper() 가 실제 `.homePaper` rect 를 그대로 물려받는다
+// (아래). 간격만 이 상수를 유지한다.
 const RECORDS_CARD_GAP = 24;
 
 function recordsCardListMarkup() {
@@ -2964,20 +3011,51 @@ function recordsCardMarkup() {
   `;
 }
 
-// fitCardAnchor() 와 같은 등축-축소 원리를 기록 카드 자리까지 넓힌 것 — 새 모바일
-// 디자인이 아니라 같은 계산을 확장했을 뿐이다(§3 "기존 레이아웃 범위 안에서"). 아주 좁은
-// 화면에서 Home 카드 + gap + 기록 카드 합이 넘칠 때만 기록 카드 쪽을 등축으로 줄인다.
-function fitRecordsCard() {
-  const el = document.querySelector("#recordsCardAnchor");
-  if (!el) return;
-  const homeHalfW = 285 / 2;
-  const offX = 32;
-  const offY = 48;
-  const margin = 12;
-  const rightExtent = homeHalfW - offX + RECORDS_CARD_GAP + RECORDS_CARD_W + margin;
-  const shrinkW = window.innerWidth / 2 / rightExtent;
-  const shrinkH = window.innerHeight / 2 / (RECORDS_CARD_H / 2 + offY + margin);
-  el.style.setProperty("--recordsShrink", String(Math.min(1, shrinkW, shrinkH)));
+// [A-387] Codex 실화면검토(Chrome 127.0.0.1:5173, 1335×717) FAIL 교정 — 옛
+// fitRecordsCard() 는 "공통 Send 앵커(.cardAnchor, 중앙 -32/-48, 285×364)가 곧 실제
+// Home 종이"라고 가정했다. 실측은 달랐다: 실제 `.homePaper` 는 x695,y350,w136,h185인데
+// 그 가정으로 그린 기록 카드는 x802,y129,w256,h364 — Home 위에 부분 겹치고 크기·높이도
+// 다르다(전체 PASS 아님). 이 함수는 그 가정을 버리고 열려 있는 실제 `.homePaper` DOM
+// 요소의 getBoundingClientRect() 를 그대로 읽어 기록 카드를 그 오른쪽·같은 top·같은
+// 크기·24px 간격(RECORDS_CARD_GAP)으로 맞춘다. Home 종이는 chog-home.js draw() 가 매
+// 프레임 pad.style.transform 을 직접 쓰는 손끝-도킹 애니메이션이라(그 파일은 allowlist
+// 밖이라 고치지 않고 읽기만 확인했다) 고정 CSS 식으로 흉내낼 수 없다 — 그래서 열려
+// 있는 동안은 실측을 계속 반복한다(아래 startRecordsAlignLoop). 종이 자체가 이미 작은
+// 화면에서 줄어든 실측 크기를 그대로 물려받으므로, 기록 카드만 따로 등축 축소하던 옛
+// --recordsShrink 계산은 더 이상 필요하지 않다(같은 값을 두 번 줄이지 않는다).
+function alignRecordsCardToHomePaper() {
+  const anchor = document.querySelector("#recordsCardAnchor");
+  const stage = document.querySelector('.stage[data-scene="sendstay"]');
+  const paper = document.querySelector(".homePaper");
+  if (!anchor || !stage || !paper) return;
+  const paperRect = paper.getBoundingClientRect();
+  if (!paperRect.width || !paperRect.height) return;
+  const stageRect = stage.getBoundingClientRect();
+  const left = paperRect.right - stageRect.left + RECORDS_CARD_GAP;
+  const top = paperRect.top - stageRect.top;
+  anchor.style.left = `${left}px`;
+  anchor.style.top = `${top}px`;
+  anchor.style.width = `${paperRect.width}px`;
+  anchor.style.height = `${paperRect.height}px`;
+}
+
+// 기록 카드가 열려 있는 동안 실제 Home 종이를 계속 따라간다(리사이즈·도킹 애니메이션·
+// 등축 축소 전부 이 하나로 커버된다 — 개별 이벤트를 추측해 걸지 않는다). closeRecordsCard()
+// 또는 다음 setScene() 이 stopRecordsAlignLoop() 로 반드시 멈춘다.
+let recordsAlignFrame = 0;
+
+function startRecordsAlignLoop() {
+  stopRecordsAlignLoop();
+  const tick = () => {
+    alignRecordsCardToHomePaper();
+    recordsAlignFrame = requestAnimationFrame(tick);
+  };
+  recordsAlignFrame = requestAnimationFrame(tick);
+}
+
+function stopRecordsAlignLoop() {
+  if (recordsAlignFrame) cancelAnimationFrame(recordsAlignFrame);
+  recordsAlignFrame = 0;
 }
 
 function render() {
@@ -3080,6 +3158,15 @@ window.addEventListener("beforeunload", endActiveSession);
 // 프로덕션 번들에는 실리지 않는다(import.meta.env.DEV).
 if (import.meta.env.DEV) {
   window.__arasoScene = (scene, { arrival = false, resumed = false, secondJourneyPreview = false } = {}) => {
+    // [A-387-a/b] 이 콘솔 도우미는 683783b 도입 때부터 scene 인자를 검증 없이 그대로
+    // setScene() 에 넘겼다. 오타·옛 이름(예: "home")을 주면 render() 의 마지막 else
+    // 분기가 조용히 renderBirth() 의 옛 Open/Check Piggy 패널을 그려, 검토자가 마치 그
+    // 패널이 정상 화면 사이에 끼어든 것처럼 착각하게 만든다(Owner screenshot 의심 경로
+    // 중 하나, A-387-a §2). 인증·rpId·저장은 건드리지 않는다 — scene 문자열만 막는다.
+    if (!KNOWN_SCENES.includes(scene)) {
+      console.warn(`[__arasoScene] unknown scene "${scene}" — ignored, staying on "${state.scene}". Valid: ${KNOWN_SCENES.join(", ")}`);
+      return state.scene;
+    }
     state.homeArrival = arrival;
     state.nameResumed = resumed;
     // [A-358 §5] DEV 전용 fixture — arrival 을 away/return 씬의 기존 1회성 모션 표
