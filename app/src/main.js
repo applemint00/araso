@@ -728,7 +728,11 @@ async function checkPiggy() {
     noteRecoverFailure();
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
-    setScene("birth", "Chog could not find Piggy here.", formatError(error));
+    // [A-389-a] 복구 실패는 짧고 구분되는 원인만 보여준다 — cancelled 는 renderAuthCard 가
+    // "Face ID was cancelled."로 따로 가로챈다(authCancelled). 그 외(NotFound 등)는 원본
+    // 기술 에러 문자열(formatError) 대신 이 짧은 문구를 쓴다. 두 버튼 다시 보이는 것은
+    // authPhase="idle" 복귀만으로 충분(§actions checking 게이트, 새로 disabled 걸지 않음).
+    setScene("birth", "Chog could not find Piggy here.", "Couldn't find your Piggy.");
   }
 }
 
@@ -1878,6 +1882,10 @@ function renderReceived() {
 // 잉크색을 그대로 쓴다 — Name it 제목 이미지와 이름 입력칸은 옮기지 않는다. 버튼은
 // sendCardButtonMarkup 의 기존 ButtonKit(문구를 그림이 아니라 텍스트로 얹는 A361 방식,
 // send-card.js 참고)을 그대로 재사용한다 — "Try again"/"Check Piggy" 낱말 PNG 는 없다.
+// [A-391 / A-391-a,b] 옆 Chog 는 옛 CHOG_IDLE_SRC(40×40 구석 아이콘, .chog-idle)가 아니라
+// 현재 Invite/Hatch 가 실제 쓰는 동일 정본 — chogInviteMarkup()(같은 함수, 같은 DIR=/motion/
+// chog-invite 자산 호출)을 그대로 재사용한다. 다른 PNG로 재조립하지 않는다 — render() 는
+// state.scene === "birth" 일 때 mountInviteChog() 를 새 함수 없이 그대로 불러 붙인다.
 function renderAuthCard() {
   const blocked = !isAllowedPiggyRpId();
   const checking = !blocked && state.authPhase === "checking";
@@ -1887,11 +1895,14 @@ function renderAuthCard() {
     : state.authCancelled
       ? "Face ID was cancelled."
       : state.detail || "Try again, or use Check Piggy to recover.";
+  // [A-391 §2 / A-389-a] Try again 은 실제 auth 호출이 없는 안전한 내비게이션(Invite/Face ID
+  // 앞화면 복귀, main.js render() 의 #authTryAgainButton 배선 참고) — !isAllowedPiggyRpId() 로
+  // 막을 이유가 없다. Check Piggy 는 실제 복구 호출이라 unsupported origin 에서 계속 막는다.
   const actions = checking
     ? ""
     : `
         <div class="authCard__actions">
-          ${sendCardButtonMarkup({ id: "authTryAgainButton", label: "Try again", disabled: blocked })}
+          ${sendCardButtonMarkup({ id: "authTryAgainButton", label: "Try again", disabled: false })}
           ${sendCardButtonMarkup({ id: "checkButton", label: "Check Piggy", disabled: blocked })}
         </div>
       `;
@@ -1899,7 +1910,7 @@ function renderAuthCard() {
     <section class="stage" data-scene="birth">
       ${buttonInkFilter()}
       <div class="authCard">
-        <img class="authCard__chog chog-idle" src="${CHOG_IDLE_SRC}" alt="" aria-hidden="true" />
+        <div class="authCard__chog" aria-hidden="true">${chogInviteMarkup()}</div>
         <div class="authCard__paper">
           <p class="authCard__eyebrow">Araso</p>
           <h1 class="authCard__title">${heading}</h1>
@@ -3161,6 +3172,9 @@ function render() {
     fitInvite();
     mountInviteChog();
   }
+  // [A-391 / A-391-a] 승인 인증실패 카드(birth)의 옆 Chog — Invite/Hatch 와 똑같이
+  // mountInviteChog() 를 그대로 불러 [data-chog-invite] 를 붙인다. 새 mount 로직 0.
+  if (state.scene === "birth") mountInviteChog();
   // [A-389 §2] Try again → 정본 Invite/Face ID 화면(즉시 새 패스키 생성 0 — 사용자가
   // 다시 탭해야 startPiggyOpen() 이 돈다). Check Piggy → 기존 복구(checkPiggy, 생성 폴백 0).
   document.querySelector("#authTryAgainButton")?.addEventListener("click", () => setScene("received", "", ""));

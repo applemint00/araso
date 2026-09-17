@@ -547,8 +547,9 @@ h1 {
    제목 이미지·이름 입력칸(.nameCard__title/.nameCard__field)은 옮기지 않는다. 날짜 자리에
    쓰던 letter-spacing/Georgia serif 조합(.nameCard__day 참고)만 eyebrow 글자에 옮긴다.
    버튼은 새로 만들지 않고 .sendCard__btn 의 기존 ButtonKit 을 그대로 부른다(main.js
-   sendCardButtonMarkup 재사용). 옆의 idle Chog 는 다른 씬과 같은 .chog-idle 자산·크기
-   그대로 — 새 캐릭터·새 포즈 0. */
+   sendCardButtonMarkup 재사용). [A-391/A-391-a] 옆 Chog 는 옛 40×40 .chog-idle 구석
+   아이콘이 아니라 Invite wide/Hatch 가 쓰는 같은 정본 앵커(.invite__chogNative /
+   .hatchChog, INVITE_ANCHOR_WIDE 107.6×139.9)를 그대로 재사용한다 — 새 캐릭터·새 포즈 0. */
 .authCard {
   display: flex;
   align-items: flex-end;
@@ -558,7 +559,18 @@ h1 {
 }
 
 .authCard__chog {
+  position: relative;
   flex: 0 0 auto;
+  width: 107.6px;
+  height: 139.9px;
+  pointer-events: none;
+}
+
+.authCard__chog .chogInvite {
+  left: -15.59px;  /* 107.6 * (200/1380) — .invite__chogNative/.hatchChog 와 동일 앵커 */
+  top: -15.72px;   /* 139.9 * (200/1780) */
+  width: 138.79px; /* 107.6 * (1780/1380) */
+  height: 168.19px;/* 139.9 * (2140/1780) */
 }
 
 .authCard__paper {
