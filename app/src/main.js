@@ -85,7 +85,8 @@ const RECEIPTS_KEY = "araso.receipts";
 const TRIP_CLOSED_KEY = "araso.tripClosed";
 // [A-377 §3] 보관은 전체 — 저장 cap 을 없앴다(옛 RECEIPT_KEEP=2). 화면 쪽 "최근 3장만"은
 // 저장 개수가 아니라 서류철 미리보기가 보여주는 장수일 뿐이다 — RECORDS_FOLDER_PREVIEW.
-// 그 뒤(4건째부터)도 records 전체목록에서는 그대로 열린다(renderRecords()).
+// 그 뒤(4건째부터)도 Home 카드 오른쪽 기록 카드의 전체 목록에서는 그대로 열린다
+// (§A-383 recordsCardListMarkup()).
 const RECORDS_FOLDER_PREVIEW = 3;
 
 // --- 탄생 한 바퀴의 세 가지 사실 (A-292 번호 8) -------------------------
@@ -200,6 +201,11 @@ const state = {
   // 없다 — 새 대기 초수를 여기서 만들지 않는다(A-354-b 지시). 이번 라운드는 항상 false로
   // 시작하고 올리는 배선은 다음 라운드(send-card.js 변경) 몫이다. UNKNOWN 으로 보고.
   sendCardVisible: false,
+  // [A-383 §1] Home 카드 오른쪽에 펼치는 기록 카드 — 별도 화면 전환이 아니라 같은
+  // sendstay 렌더 안의 표시 상태다. recordsCardVisible 은 열림/닫힘, recordsDetailIndex
+  // 는 null(목록) 또는 실제 state.receipts 인덱스(상세). 둘 다 메모리 값이다(저장 0).
+  recordsCardVisible: false,
+  recordsDetailIndex: null,
   // [A-360] Second Journey — Explore/후보check/JIT/permission/amount/Send 진행 상태.
   // 메모리 값이다(§forbidden "fixture 결과는 메모리만"). 관심(interests)만 계정/체인
   // scope 가 유효할 때 second-journey-state.js 저장소로도 남는다(§5) — 그 외 필드
@@ -418,6 +424,12 @@ function prefersReducedMotion() {
 }
 
 function setScene(scene, message = "", detail = "") {
+  // [A-383 §4] "닫으면 원래 Home 그대로" — 기록 카드는 render() 를 부르지 않는 직접 DOM
+  // 토글로만 열린다(openRecordsCard, §5 주석). 그래서 어떤 이유로든 씬을 다시 그리면
+  // (Send/Stay 결과, 재방문 등) 기록 카드는 항상 닫힌 채로 새로 시작한다 — 다른 씬 전환에
+  // 열린 채로 새는 경로를 만들지 않는다.
+  state.recordsCardVisible = false;
+  state.recordsDetailIndex = null;
   state.scene = scene;
   state.message = message;
   state.detail = detail;
@@ -1388,27 +1400,43 @@ function goHomeFromFilebox() {
   setScene("sendstay", "Piggy is home.", "");
 }
 
-// [A-377 §2] Home 피기 칸의 "records" entry — 사용자가 명시적으로 눌렀을 때만 부른다.
-// 읽기 전용: 아무것도 저장하지 않는다(§3 "반복탭이 영수증을 새로 저장하지 않게").
-function openRecords() {
-  setScene("records", "", "");
+// [A-383 §1] Home 피기 칸의 "records" entry — 별도 화면 전환이 아니라 Home 카드 오른쪽에
+// 기록 카드를 편다. 읽기 전용: 아무것도 저장하지 않는다(§3 "반복탭이 영수증을 새로
+// 저장하지 않게"). setScene()/render() 를 부르지 않는다 — 부르면 render() 의
+// teardownScene() 이 mountChogHome() 을 처음부터 다시 마운트해 이미 손끝-고정(pinned)으로
+// 열려 있는 Home 카드가 닫혀 버린다(chog-home.js mountChogHome, `let pinned = false`
+// 초기값). 그래서 여기서는 이미 그려져 있던(hidden) 기록 카드 DOM만 그대로 채워 보여준다.
+function openRecordsCard() {
+  const anchor = document.querySelector("#recordsCardAnchor");
+  if (!anchor) return;
+  state.recordsCardVisible = true;
+  state.recordsDetailIndex = null;
+  anchor.hidden = false;
+  fitRecordsCard();
+  renderRecordsCardBody();
 }
 
-function goHomeFromRecords() {
-  setScene("sendstay", "Piggy is home.", "");
+// 닫으면 원래 Home 그대로(§4) — 기록 카드만 숨기고 그 옆 Home 카드는 손대지 않는다.
+function closeRecordsCard() {
+  state.recordsCardVisible = false;
+  state.recordsDetailIndex = null;
+  const anchor = document.querySelector("#recordsCardAnchor");
+  if (anchor) anchor.hidden = true;
 }
 
-// 목록에서 항목 하나를 연다 — index 만 바꾸고 filebox 종이를 그대로 재사용한다(재디자인 0).
-function openRecordFromList(index) {
+// 목록 → 상세, 상세 → 목록. 같은 카드 영역 안에서 내용만 바꾼다(§4 "선택한 영수증
+// 상세는 오른쪽 같은 카드 영역에서 교체"). index 가 실제 receipt 범위를 벗어나면
+// 목록으로 그대로 둔다 — 없는 영수증을 합성해 상세로 열지 않는다.
+function showRecordDetail(index) {
   const i = Number(index);
   if (!Number.isInteger(i) || i < 0 || i >= state.receipts.length) return;
-  state.receiptIndex = i;
-  setScene("filebox");
+  state.recordsDetailIndex = i;
+  renderRecordsCardBody();
 }
 
-// filebox 상세 → 목록으로 되돌아간다("전체 기록목록에서... 목록으로 돌아가고", §3).
-function openRecordsFromFilebox() {
-  setScene("records");
+function showRecordsList() {
+  state.recordsDetailIndex = null;
+  renderRecordsCardBody();
 }
 
 // [A-379 §4] "reset local test" 버튼은 개발자 전용 — 일반 localhost/제품 화면에 섞이면
@@ -1449,6 +1477,8 @@ function resetLocalTest() {
   state.tripReason = "";
   state.receipts = [];
   state.receiptIndex = 0;
+  state.recordsCardVisible = false;
+  state.recordsDetailIndex = null;
   state.nameResumed = false;
   state.homeArrival = false;
   // [A-360] Second Journey 는 메모리 상태만 되돌린다 — second-journey-state.js 저장소
@@ -2363,10 +2393,12 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
   const fit = fitHomeBoard();
   layoutHomeCharacter();
   fitCardAnchor();
+  fitRecordsCard();
   sceneListener(window, "resize", () => {
     fitHomeBoard();
     layoutHomeCharacter();
     fitCardAnchor();
+    fitRecordsCard();
   });
 
   // Home Chog — Piggy 와 같은 판·같은 발선. 같은 Save 전환에서 함께 출발한다.
@@ -2595,6 +2627,7 @@ function renderSendStay() {
       ${corner("sendstay")}
       ${homeCharacter(piggyName)}
       ${cardAnchorMarkup}
+      ${recordsCardMarkup()}
       ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
@@ -2762,26 +2795,27 @@ function mountReturn() {
   });
 }
 
-// [A-377 §3/§4] 옛 tripsButton 은 0/1 두 값만 토글해 3건째부터는 열 자리가 없었다(참고
-// 초안이 지적한 그 결함 그대로 이 파일에도 있었다) — 전체 목록(renderRecords())으로 열어
-// 그 결함을 없앤다. 목록에서 각 항목을 열면 이 화면(하나의 receipt)으로 오고, 여기서
-// "records" 를 누르면 다시 목록으로, "home" 을 누르면 Home 으로 — 세 방향 다 남는다.
+// [A-383] filebox 는 First/Second Journey 의 귀환 직후 화면(mountReturn onOpenFilebox/
+// onError, DEV 씬점프)에서만 온다 — 이번 회차는 이 흐름을 바꾸지 않는다(§5). 전체
+// 기록목록/기록카드는 이제 Home 카드 오른쪽 기록 카드(recordsCardMarkup 이하)로
+// 옮겨갔으므로 여기의 옛 "all records" 지름길(구 records 전체화면)은 없앴다 — 목적지
+// 화면 자체가 없어졌기 때문이다. 남는 것은 "home" 복귀뿐이다.
 //
 // [A-381 §1/§2] Owner 가 거부한 옛 껍질(겹친 folder--1/2/3 + tape/tag + filebox 큰외곽
 // border + filebox 전용 corner 장식(피기 대역))은 전부 뺐다 — 새 자산 0, 승인된
 // receiptPaperMarkup + 실제데이터만 기존 공통카드 자리(filebox__paper)에서 그대로 연다.
 // 기록이 없거나(state.receipts 비었거나) receiptIndex 가 가리키는 실제 receipt 가 없으면
-// (예: 빈 배열에 index 0, 지운 적 없는데 범위 밖) 빈 Unknown 영수증을 합성하지 않고
-// records 빈 상태로 보낸다 — renderRecords() 는 receipts.length===0 일 때 이미
-// "No records yet" 빈 상태를 그린다(§renderRecords). 실제 저장된 Unknown(필드 일부
-// 없음)은 이 가드에 걸리지 않는다 — receipt 객체 자체는 있고 필드만 없는 경우이므로
-// receiptRows/receiptPaperFields 의 기존 Unknown/— 표시로 그대로 정직하게 남는다.
+// (예: 빈 배열에 index 0, 지운 적 없는데 범위 밖) 빈 Unknown 영수증을 합성하지 않는다 —
+// 이 경로는 방어적 예외 상태라 다음 render() 에서 바로 Home 으로 되돌린다(옛 records
+// 전체화면 폴백은 그 화면 자체가 없어져 더 이상 쓸 수 없다).
 function renderFileBox() {
-  // 최신이 0번(내림차순 저장). state.receiptIndex 는 records 목록에서 고른 실제 인덱스다 —
-  // 여기서 새로 계산하거나 저장하지 않는다(읽기 전용 진입, §3 "반복탭이 새로 저장하지 않게").
+  // 최신이 0번(내림차순 저장). state.receiptIndex 는 여기서 새로 계산하거나 저장하지
+  // 않는다(읽기 전용 진입, §3 "반복탭이 새로 저장하지 않게").
   const receipt = state.receipts[state.receiptIndex] ?? null;
-  if (!receipt) return renderRecords();
-  const hasMore = state.receipts.length > 1;
+  if (!receipt) {
+    queueMicrotask(() => setScene("sendstay", "Piggy is home.", ""));
+    return `<section class="stage" data-scene="filebox"></section>`;
+  }
   const rows = receiptRows(receipt);
   const rowsMarkup = rows
     .map(
@@ -2799,7 +2833,6 @@ function renderFileBox() {
         <div class="filebox__paper">${paperMarkup}</div>
         <div class="receipt">${rowsMarkup}${receiptCheck(receipt)}</div>
       </article>
-      ${hasMore ? `<button class="tiny trips" id="recordsListButton" type="button">all records</button>` : ""}
       <!-- [A-360 §3] filebox 에는 다음 진입이 없었다 — Home 복귀와 Explore 진입을
            연결하는 첫 걸음. Home 에 도착한 뒤 Chog 탭이 Explore 를 연다. -->
       <button class="tiny home" id="fileboxHomeButton" type="button">home</button>
@@ -2808,17 +2841,33 @@ function renderFileBox() {
   `;
 }
 
-// [A-377 §2/§3] Home 기록 보기 entry 가 여는 전체 기록 목록. 저장은 전체(cap 없음), 여기
-// 서도 전부 열 수 있다 — "최근 3장" 은 위 folder 미리보기(RECORDS_FOLDER_PREVIEW)만의
-// 표시 규칙이다. ReceiptFile 원본 앞/뒤 폴더 자산(폴더백/폴더프론트, A-346 피기귀환에서
-// 이미 쓰던 것)을 그대로 재사용한다 — 새 폴더 그림을 굽지 않는다. 개별 Receipt 종이는
-// renderFileBox() 가 이미 쓰는 receiptPaperMarkup/receiptPaperFields 그대로다(재디자인 0).
-function renderRecords() {
+// [A-383 §1/§2/§4] Home 카드 오른쪽에 펼치는 기록 카드 — 별도 records 전체화면 대신
+// 같은 sendstay 렌더 안에 늘 그려 두고(hidden) recordsCardVisible 로만 보인다.
+// 바탕은 HomeNotepad/현재 home-paper 종이(#EBE3D5 + paper_tex_ivory.png, radius 3,
+// 그림자 0 14px 30px — .homePaper 와 같은 값, style.css)를 그대로 쓴다. 검정 .note 패널·
+// 노란 RECEIPTS 제목(옛 renderRecords(), Owner FAIL)은 쓰지 않는다. 크기는 Home 카드와
+// "같은 홈패드 비율"(원본 종이 400:568)을 Home 카드와 같은 높이 364에 맞춘 것이다 —
+// chog-home.js sharedCardPadTarget() 이 이미 쓰는 finalPaperScale 과 같은 계산
+// (364/568×400 ≈ 256.338)이라 Home 카드의 실제 종이 폭과 정확히 같다.
+const RECORDS_CARD_W = (364 * 400) / 568; // ≈256.338 — Home 카드 실제 종이 폭과 동일
+const RECORDS_CARD_H = 364;
+const RECORDS_CARD_GAP = 24;
+
+function recordsCardListMarkup() {
   const name = displayPiggyName();
   const receipts = state.receipts;
   const preview = receipts.slice(0, RECORDS_FOLDER_PREVIEW);
   const rotations = [-2.2, 1.8, -1.0];
   const tops = [8, 24, 40];
+  if (!receipts.length) {
+    // §4 "무기록은 같은 종이에 짧은 빈 상태만, 합성 Unknown receipt 생성 금지".
+    return `
+      <div class="recordsCard__panel recordsCard__panel--empty">
+        <p class="recordsCard__empty">No records yet. They'll show up here after a real trip.</p>
+      </div>
+      <button class="recordsCard__close" id="recordsCardClose" type="button">close</button>
+    `;
+  }
   const slipsMarkup = preview
     .map((receipt, i) => {
       const fields = receiptPaperFields({ receipt, name });
@@ -2833,40 +2882,102 @@ function renderRecords() {
       `;
     })
     .join("");
-  const listMarkup = receipts.length
-    ? receipts
-        .map((receipt, index) => {
-          const fields = receiptPaperFields({ receipt, name });
-          return `
-            <button class="recordsRow" type="button" data-receipt-index="${index}">
-              <span class="recordsRow__date">${escapeHtml(fields.date)}</span>
-              <span class="recordsRow__status">${escapeHtml(fields.statusLabel)}</span>
-            </button>
-          `;
-        })
-        .join("")
-    : `<p class="recordsEmpty">No records yet. They'll show up here after a real trip.</p>`;
+  // 전부 저장, 전부 열 수 있다(§4) — "최근 3장" 은 위 folder 미리보기(RECORDS_FOLDER_PREVIEW)
+  // 만의 표시 규칙이다.
+  const rowsMarkup = receipts
+    .map((receipt, index) => {
+      const fields = receiptPaperFields({ receipt, name });
+      return `
+        <button class="recordsCard__row" type="button" data-receipt-index="${index}">
+          <span class="recordsCard__rowDate">${escapeHtml(fields.date)}</span>
+          <span class="recordsCard__rowStatus">&gt; ${escapeHtml(fields.statusLabel)}</span>
+        </button>
+      `;
+    })
+    .join("");
   return `
-    <section class="stage" data-scene="records">
-      ${corner("records")}
-      <article class="note recordsPanel">
-        <p class="eyebrow">RECEIPTS</p>
-        ${
-          receipts.length
-            ? `<div class="recordsFolder" aria-hidden="true">
-                <img class="recordsFolder__back" src="/motion/piggy-return/folder-back.png" alt="" />
-                ${slipsMarkup}
-                <img class="recordsFolder__front" src="/motion/piggy-return/folder-front.png" alt="" />
-              </div>
-              <p class="recordsFolder__caption">kept ${receipts.length} &middot; showing latest ${preview.length}</p>`
-            : ""
-        }
-        <div class="recordsList">${listMarkup}</div>
-      </article>
-      <button class="tiny home" id="recordsHomeButton" type="button">home</button>
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
-    </section>
+    <div class="recordsCard__panel recordsCard__panel--folder">
+      <div class="recordsFolder" aria-hidden="true">
+        <img class="recordsFolder__back" src="/motion/piggy-return/folder-back.png" alt="" />
+        ${slipsMarkup}
+        <img class="recordsFolder__front" src="/motion/piggy-return/folder-front.png" alt="" />
+      </div>
+      <p class="recordsCard__caption">kept ${receipts.length} &middot; showing latest ${preview.length}</p>
+    </div>
+    <div class="recordsCard__panel recordsCard__panel--list">
+      <div class="recordsCard__list">${rowsMarkup}</div>
+    </div>
+    <button class="recordsCard__close" id="recordsCardClose" type="button">close</button>
   `;
+}
+
+// 선택한 영수증 상세 — 같은 카드 영역에서 목록을 대체한다(§4). filebox 와 같은
+// receiptPaperMarkup/receiptRows/receiptCheck(실제 tx/block 상세)를 그대로 쓴다(재디자인 0).
+function recordsCardDetailMarkup(index) {
+  const receipt = state.receipts[index] ?? null;
+  if (!receipt) return recordsCardListMarkup();
+  const name = displayPiggyName();
+  const paperMarkup = receiptPaperMarkup(receiptPaperFields({ receipt, name }));
+  const rows = receiptRows(receipt);
+  const rowsMarkup = rows
+    .map(
+      (row) =>
+        `<p class="receipt-row"><span class="label">${row.label}</span><span class="value">${row.value}</span></p>`,
+    )
+    .join("");
+  return `
+    <div class="recordsCard__panel recordsCard__panel--detail">
+      <div class="recordsCard__detailPaper">${paperMarkup}</div>
+      <div class="recordsCard__detailRows">${rowsMarkup}${receiptCheck(receipt)}</div>
+    </div>
+    <button class="recordsCard__back" id="recordsCardBack" type="button">back to list</button>
+    <button class="recordsCard__close" id="recordsCardClose" type="button">close</button>
+  `;
+}
+
+function recordsCardBodyMarkup() {
+  return state.recordsDetailIndex == null
+    ? recordsCardListMarkup()
+    : recordsCardDetailMarkup(state.recordsDetailIndex);
+}
+
+// openRecordsCard()/showRecordDetail()/showRecordsList() 가 render() 를 다시 부르지 않고
+// 이 함수로 카드 내용만 바꾼다 — Home 카드(chogHome pinned 상태)를 건드리지 않는다.
+function renderRecordsCardBody() {
+  const body = document.querySelector("#recordsCardBody");
+  if (body) body.innerHTML = recordsCardBodyMarkup();
+}
+
+// [A-383 §3] Home 카드 앵커(.cardAnchor, 285×364, 중앙 -32/-48)의 오른쪽에 gap 만큼
+// 떨어져 자리잡는다 — 앵커 자체는 옮기지 않는다(Home 카드 위치·크기 불변, §3). 세로는
+// Home 카드와 같은 top(중앙 -230). 실제 렌더 markup 은 renderSendStay() 에서 항상 함께
+// 그려지고(hidden), openRecordsCard() 가 hidden 만 뗀다 — 씬 전환 0.
+function recordsCardMarkup() {
+  return `
+    <div class="recordsCardAnchor" id="recordsCardAnchor" ${state.recordsCardVisible ? "" : "hidden"}>
+      <div class="recordsCard" id="recordsCard">
+        <div class="recordsCard__body" id="recordsCardBody">${
+          state.recordsCardVisible ? recordsCardBodyMarkup() : ""
+        }</div>
+      </div>
+    </div>
+  `;
+}
+
+// fitCardAnchor() 와 같은 등축-축소 원리를 기록 카드 자리까지 넓힌 것 — 새 모바일
+// 디자인이 아니라 같은 계산을 확장했을 뿐이다(§3 "기존 레이아웃 범위 안에서"). 아주 좁은
+// 화면에서 Home 카드 + gap + 기록 카드 합이 넘칠 때만 기록 카드 쪽을 등축으로 줄인다.
+function fitRecordsCard() {
+  const el = document.querySelector("#recordsCardAnchor");
+  if (!el) return;
+  const homeHalfW = 285 / 2;
+  const offX = 32;
+  const offY = 48;
+  const margin = 12;
+  const rightExtent = homeHalfW - offX + RECORDS_CARD_GAP + RECORDS_CARD_W + margin;
+  const shrinkW = window.innerWidth / 2 / rightExtent;
+  const shrinkH = window.innerHeight / 2 / (RECORDS_CARD_H / 2 + offY + margin);
+  el.style.setProperty("--recordsShrink", String(Math.min(1, shrinkW, shrinkH)));
 }
 
 function render() {
@@ -2892,9 +3003,7 @@ function render() {
               ? renderSecondAway()
               : state.scene === "secondReturn"
                 ? renderSecondReturn()
-                : state.scene === "records"
-                  ? renderRecords()
-                  : renderBirth();
+                : renderBirth();
   // 장면이 바뀌면 Invite 의 예약된 단계 전환은 전부 버린다 — 화면이 없는데 타이머만 남으면
   // 엉뚱한 시점에 Birth 로 넘어간다.
   if (state.scene !== "received") clearInviteTimers();
@@ -2911,13 +3020,24 @@ function render() {
   document.querySelector("#nameForm")?.addEventListener("submit", savePiggyName);
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);
   document.querySelector("#stayButton")?.addEventListener("click", stayHome);
-  document.querySelector("#recordsListButton")?.addEventListener("click", openRecordsFromFilebox);
   document.querySelector("#fileboxHomeButton")?.addEventListener("click", goHomeFromFilebox);
   document.querySelector("#nextErrandButton")?.addEventListener("click", openSecondJourneyExplore);
-  document.querySelector("#homeRecordsButton")?.addEventListener("click", openRecords);
-  document.querySelector("#recordsHomeButton")?.addEventListener("click", goHomeFromRecords);
-  document.querySelectorAll(".recordsRow").forEach((btn) => {
-    btn.addEventListener("click", () => openRecordFromList(btn.dataset.receiptIndex));
+  // [A-383 §1] Home 카드 오른쪽 기록 카드 — 별도 화면 전환 없이 같은 sendstay DOM 안에서
+  // 열림/목록/상세/닫힘을 전부 위임 클릭 하나로 배선한다(카드 내용은 render() 를 다시
+  // 부르지 않고 renderRecordsCardBody() 가 innerHTML 만 바꾸므로, 매번 다시 부를 필요가
+  // 없다 — 이 델리게이션은 이번 sendstay 마운트 동안 계속 유효하다).
+  document.querySelector("#homeRecordsButton")?.addEventListener("click", openRecordsCard);
+  document.querySelector("#recordsCard")?.addEventListener("click", (event) => {
+    if (event.target.closest("#recordsCardClose")) {
+      closeRecordsCard();
+      return;
+    }
+    if (event.target.closest("#recordsCardBack")) {
+      showRecordsList();
+      return;
+    }
+    const row = event.target.closest(".recordsCard__row");
+    if (row) showRecordDetail(row.dataset.receiptIndex);
   });
   if (isDevDebugOptIn()) {
     document.querySelector("#resetButton")?.addEventListener("click", resetLocalTest);

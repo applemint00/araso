@@ -1416,11 +1416,164 @@ h1 {
   bottom: 24px;
 }
 
-/* [A-377 §2/§3] Home 기록 보기가 여는 전체 목록 — .note/.eyebrow(기존 일반 패널 관례)
-   위에 얹는다. 새 카드 종이/버튼 껍질을 만들지 않는다. */
-.recordsPanel {
-  width: min(420px, 100%);
+/* [A-383 §1/§2] Home 카드 오른쪽 기록 카드 — 별도 records 전체화면(옛 .note/.eyebrow,
+   Owner FAIL) 대신 HomeNotepad/현재 home-paper 와 같은 바탕(.homePaper 와 값이 같다) 위에
+   얹는다. 위치 기준판(.recordsCardAnchor)은 Home 카드 앵커(.cardAnchor, 285×364, 중앙
+   -32/-48) 오른쪽에 gap(24px) 만큼 떨어진 자리를 잡을 뿐이고, 실제 보이는 종이는 자식
+   .recordsCard 다 — .cardAnchor/.cardAnchor__fit 관례와 같은 "자리판과 실물을 나눈다"
+   원칙(위 §A-359 주석)을 그대로 따른다. 폭 256.338px = Home 카드 실제 종이와 같은
+   400:568 비율을 Home 카드와 같은 높이 364에 맞춘 값(main.js RECORDS_CARD_W, 같은 계산). */
+.recordsCardAnchor {
+  position: absolute;
+  left: calc(50% + 110.5px + 24px); /* Home 카드 앵커 오른쪽 가장자리(중심+142.5-32) + gap */
+  top: calc(50% - 230px); /* Home 카드 앵커 위쪽 가장자리(중심-182-48) 와 같다 */
+  width: 256.338px;
+  height: 364px;
+  z-index: 5;
+  pointer-events: none;
+}
+
+.recordsCardAnchor[hidden] {
+  display: none;
+}
+
+.recordsCard {
+  position: absolute;
+  inset: 0;
+  transform: scale(var(--recordsShrink, 1));
+  transform-origin: top left;
+  background: #ebe3d5 url("/card/paper_tex_ivory.png") center / 290px auto;
+  border-radius: 3px;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.55);
+  box-sizing: border-box;
+  padding: 18px 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+  pointer-events: auto;
+}
+
+.recordsCard__body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  flex: 1;
+}
+
+/* 안쪽 이빨판 — .homePaper__card 와 같은 재질(§2 "Home 카드의 폰트·자간·재질 체계를 유지"). */
+.recordsCard__panel {
+  background: #f6f0e4 url("/card/paper_tex_ivory.png") center / 290px auto;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1), 0 3px 0 rgba(0, 0, 0, 0.06), 0 10px 18px rgba(0, 0, 0, 0.28);
+  box-sizing: border-box;
+  padding: 12px 12px 10px;
+}
+
+.recordsCard__panel--folder {
+  flex: 0 0 auto;
+}
+
+.recordsCard__panel--list,
+.recordsCard__panel--detail {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.recordsCard__panel--empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.recordsCard__empty {
+  margin: 0;
+  font: italic 13px/1.4 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.6);
+}
+
+.recordsCard__caption {
+  margin: 6px 0 0;
+  text-align: center;
+  font: italic 11px/1.3 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.55);
+}
+
+.recordsCard__list {
+  display: grid;
+  gap: 2px;
+}
+
+.recordsCard__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid rgba(20, 18, 16, 0.15);
+  background: transparent;
+  padding: 8px 2px;
   text-align: left;
+  cursor: pointer;
+}
+
+.recordsCard__row:hover,
+.recordsCard__row:focus-visible {
+  background: rgba(224, 177, 0, 0.14);
+  outline: none;
+}
+
+.recordsCard__rowDate {
+  font: italic 13px/1.2 Georgia, "Times New Roman", serif;
+  color: #141210;
+}
+
+.recordsCard__rowStatus {
+  font: italic 11px/1.2 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.55);
+}
+
+.recordsCard__detailPaper {
+  display: flex;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+.recordsCard__detailRows {
+  margin: 10px 4px 0;
+  color: #161616;
+  font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
+  font-size: 12px;
+}
+
+/* 닫기/목록으로 — 새 버튼 껍질이 아니라 기존 .homePaper__records 관례(밑줄 글자)를
+   그대로 쓴다(§2 재질 체계 유지). */
+.recordsCard__back,
+.recordsCard__close {
+  align-self: flex-start;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: italic 12px/1.2 Georgia, "Times New Roman", serif;
+  color: rgba(20, 18, 16, 0.55);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.recordsCard__back:hover,
+.recordsCard__close:hover {
+  color: #141210;
+}
+
+.recordsCard__close {
+  align-self: flex-end;
 }
 
 .recordsFolder {
@@ -1470,59 +1623,6 @@ h1 {
   margin-top: 4px;
   font: italic 9.5px/1 Georgia, "Times New Roman", serif;
   color: rgba(14, 12, 10, 0.6);
-}
-
-.recordsFolder__caption {
-  margin: 0 0 16px;
-  text-align: center;
-  font: italic 11px/1.3 Georgia, "Times New Roman", serif;
-  color: rgba(237, 232, 220, 0.5);
-}
-
-.recordsList {
-  display: grid;
-  gap: 2px;
-  max-height: min(46vh, 360px);
-  overflow-y: auto;
-}
-
-.recordsRow {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  border: 0;
-  border-bottom: 1px solid rgba(237, 232, 220, 0.14);
-  background: transparent;
-  padding: 10px 2px;
-  color: var(--ink);
-  font-size: 13px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.recordsRow:hover,
-.recordsRow:focus-visible {
-  background: rgba(224, 177, 0, 0.1);
-  outline: none;
-}
-
-.recordsRow__date {
-  font-family: Georgia, "Times New Roman", serif;
-  font-style: italic;
-  color: rgba(237, 232, 220, 0.85);
-}
-
-.recordsRow__status {
-  font-family: "IBM Plex Mono", "SF Mono", ui-monospace, monospace;
-  font-size: 11px;
-  color: rgba(237, 232, 220, 0.5);
-}
-
-.recordsEmpty {
-  margin: 8px 0 0;
-  color: rgba(237, 232, 220, 0.55);
-  font-size: 13px;
 }
 
 @media (max-width: 620px) {
