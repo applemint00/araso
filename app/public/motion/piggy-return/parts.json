@@ -1,0 +1,470 @@
+{
+  "card": "A-320",
+  "generated_by": "<private>",
+  "note": "로컬 사본 전용. 공개·배포 금지. 원본은 <private>** 에만 둔다.",
+  "source": {
+    "assets.js": "1c9fdaadefce822e",
+    "renderer.js": "b2ca9d5becf66819",
+    "player.js": "7fe0c3b9da7aa98e",
+    "index.html": "8358bd23c23a887b",
+    "assets/source-data.js": "e4dc0b2512ca3405"
+  },
+  "source_stage": [
+    1200,
+    800
+  ],
+  "total_seconds": 15.6,
+  "home_adapter": {
+    "board": [
+      1256,
+      772
+    ],
+    "scale": 0.6880733944954128,
+    "dx": 373.01573394495415,
+    "dy": 137.39220183486242,
+    "formula": "s = 150/218 · dx = 966.135 − 862·s · dy = 491.75 − 515·s",
+    "aspect_note": "Return 최종 seat 는 (862,515,218,218) 정사각이라 Home 비율과 다르다. 캐릭터 원본 비율 1056×1102 로 h 를 218*1102/1056 으로 쓴다."
+  },
+  "raster_scale": 2,
+  "factors": {
+    "piggy": 0.16513761467889906,
+    "piggy_hold": 0.18495412844036696,
+    "stage": 0.6880733944954128
+  },
+  "parts": {
+    "piggy-body": {
+      "files": [
+        "piggy-walk-00.png",
+        "piggy-walk-01.png",
+        "piggy-walk-02.png",
+        "piggy-walk-03.png",
+        "piggy-walk-04.png",
+        "piggy-walk-05.png",
+        "piggy-walk-06.png",
+        "piggy-walk-07.png",
+        "piggy-walk-08.png",
+        "piggy-walk-09.png",
+        "piggy-walk-10.png",
+        "piggy-walk-11.png",
+        "piggy-walk-12.png",
+        "piggy-walk-13.png",
+        "piggy-walk-14.png",
+        "piggy-walk-15.png",
+        "piggy-walk-16.png",
+        "piggy-walk-17.png",
+        "piggy-walk-18.png",
+        "piggy-walk-19.png",
+        "piggy-walk-20.png",
+        "piggy-walk-21.png",
+        "piggy-walk-22.png",
+        "piggy-walk-23.png",
+        "piggy-walk-24.png",
+        "piggy-walk-25.png",
+        "piggy-walk-26.png",
+        "piggy-walk-27.png",
+        "piggy-walk-28.png",
+        "piggy-walk-29.png",
+        "piggy-walk-30.png",
+        "piggy-walk-31.png",
+        "piggy-walk-32.png",
+        "piggy-walk-33.png",
+        "piggy-walk-34.png",
+        "piggy-walk-35.png",
+        "piggy-walk-36.png",
+        "piggy-walk-37.png",
+        "piggy-walk-38.png",
+        "piggy-walk-39.png",
+        "piggy-walk-40.png",
+        "piggy-walk-41.png",
+        "piggy-walk-42.png",
+        "piggy-walk-43.png",
+        "piggy-walk-44.png",
+        "piggy-walk-45.png",
+        "piggy-walk-46.png",
+        "piggy-walk-47.png",
+        "piggy-turn-00.png",
+        "piggy-turn-01.png",
+        "piggy-turn-02.png",
+        "piggy-turn-03.png",
+        "piggy-turn-04.png",
+        "piggy-turn-05.png",
+        "piggy-turn-06.png",
+        "piggy-turn-07.png",
+        "piggy-turn-08.png",
+        "piggy-turn-09.png",
+        "piggy-turn-10.png",
+        "piggy-turn-11.png",
+        "piggy-turn-12.png",
+        "piggy-turn-13.png",
+        "piggy-turn-14.png",
+        "piggy-turn-15.png",
+        "piggy-turn-16.png",
+        "piggy-turn-17.png",
+        "piggy-turn-18.png",
+        "piggy-turn-19.png",
+        "piggy-turn-20.png",
+        "piggy-turn-21.png",
+        "piggy-turn-22.png",
+        "piggy-turn-23.png",
+        "piggy-turn-24.png"
+      ],
+      "count": 73,
+      "canvas": [
+        315,
+        398
+      ],
+      "origin": {
+        "x": 63.0154,
+        "y": -46.9846,
+        "w": 952.4308,
+        "h": 1206.2769
+      },
+      "ppu": 0.33027523,
+      "display_factor": 0.16513761,
+      "display_px": [
+        157.28,
+        199.2
+      ],
+      "bytes": 1391233,
+      "note": "walk48(원본 rig() 가 붙인 양다리 합성) + turn25(원본 배열). 공통 canvas, origin 은 piggy 로컬 좌표."
+    },
+    "piggy-rest-arm": {
+      "files": [
+        "piggy-rest-morph-00.png",
+        "piggy-rest-morph-01.png",
+        "piggy-rest-morph-02.png",
+        "piggy-rest-morph-03.png",
+        "piggy-rest-morph-04.png",
+        "piggy-rest-morph-05.png",
+        "piggy-rest-morph-06.png",
+        "piggy-rest-morph-07.png",
+        "piggy-rest-morph-08.png",
+        "piggy-rest-morph-09.png",
+        "piggy-rest-morph-10.png",
+        "piggy-rest-morph-11.png",
+        "piggy-rest-morph-12.png",
+        "piggy-rest-morph-13.png",
+        "piggy-rest-morph-14.png",
+        "piggy-rest-morph-15.png",
+        "piggy-rest-morph-16.png",
+        "piggy-rest-turn-00.png",
+        "piggy-rest-turn-01.png",
+        "piggy-rest-turn-02.png",
+        "piggy-rest-turn-03.png",
+        "piggy-rest-turn-04.png",
+        "piggy-rest-turn-05.png",
+        "piggy-rest-turn-06.png",
+        "piggy-rest-turn-07.png",
+        "piggy-rest-turn-08.png",
+        "piggy-rest-turn-09.png",
+        "piggy-rest-turn-10.png",
+        "piggy-rest-turn-11.png",
+        "piggy-rest-turn-12.png",
+        "piggy-rest-turn-13.png",
+        "piggy-rest-turn-14.png",
+        "piggy-rest-turn-15.png",
+        "piggy-rest-turn-16.png",
+        "piggy-rest-turn-17.png",
+        "piggy-rest-turn-18.png",
+        "piggy-rest-turn-19.png",
+        "piggy-rest-turn-20.png",
+        "piggy-rest-turn-21.png",
+        "piggy-rest-turn-22.png",
+        "piggy-rest-turn-23.png",
+        "piggy-rest-turn-24.png",
+        "piggy-rest-front.png",
+        "piggy-rest-right.png"
+      ],
+      "count": 44,
+      "canvas": [
+        105,
+        152
+      ],
+      "origin": {
+        "x": -0.2769,
+        "y": 422.8,
+        "w": 317.4769,
+        "h": 461.3231
+      },
+      "ppu": 0.33027523,
+      "display_factor": 0.16513761,
+      "display_px": [
+        52.43,
+        76.18
+      ],
+      "bytes": 125878,
+      "note": "toss 뒤 내려놓은 왼팔. lower>.75 에서 몸 **뒤**에 먼저 그린다."
+    },
+    "piggy-hold": {
+      "files": [
+        "piggy-hold.png"
+      ],
+      "count": 1,
+      "canvas": [
+        162,
+        136
+      ],
+      "origin": {
+        "x": 206.6923,
+        "y": 469.0,
+        "w": 436.6154,
+        "h": 368.9231
+      },
+      "ppu": 0.36990826,
+      "display_factor": 0.18495413,
+      "display_px": [
+        80.75,
+        68.23
+      ],
+      "bytes": 3428,
+      "note": "holding 팔. present 에서 scale(1.12) 까지 받으므로 그 배율로 굽는다."
+    },
+    "piggy-seat": {
+      "files": [
+        "piggy-seat.png"
+      ],
+      "count": 1,
+      "canvas": [
+        300,
+        313
+      ],
+      "stage_rect": [
+        862,
+        515,
+        218,
+        227.49621212121212
+      ],
+      "display_px": [
+        150.0,
+        156.53
+      ],
+      "bytes": 17601,
+      "note": "원본 Return 은 218×218 정사각. 캐릭터 원본 비율(1056×1102)로 h 를 늘려 Home 과 같은 비율로 맞췄다 — aspect adapter 차이."
+    },
+    "portal-ring": {
+      "files": [
+        "portal-ring.png"
+      ],
+      "count": 1,
+      "canvas": [
+        258,
+        394
+      ],
+      "origin": {
+        "x": 366.1,
+        "y": 221.75,
+        "w": 187.8,
+        "h": 286.5
+      },
+      "display_px": [
+        129.22,
+        197.13
+      ],
+      "bytes": 34775,
+      "note": "원본 crayon wave. 런타임이 portalTransform(translate 460 365 · scale) 을 건다 — 굽지 않았다."
+    },
+    "portal-mask": {
+      "files": [
+        "portal-mask.png"
+      ],
+      "count": 1,
+      "canvas": [
+        1651,
+        1101
+      ],
+      "stage_rect": [
+        0,
+        0,
+        1200,
+        800
+      ],
+      "bytes": 12848,
+      "note": "원본 #reveal. 런타임이 같은 portalTransform 을 걸고 destination-in 으로 쓴다."
+    },
+    "folder-back": {
+      "files": [
+        "folder-back.png"
+      ],
+      "count": 1,
+      "canvas": [
+        179,
+        138
+      ],
+      "stage_rect": [
+        630,
+        626,
+        130,
+        100
+      ],
+      "display_px": [
+        89.45,
+        68.81
+      ],
+      "bytes": 1925
+    },
+    "folder-front": {
+      "files": [
+        "folder-front.png"
+      ],
+      "count": 1,
+      "canvas": [
+        179,
+        138
+      ],
+      "stage_rect": [
+        630,
+        626,
+        130,
+        100
+      ],
+      "display_px": [
+        89.45,
+        68.81
+      ],
+      "bytes": 1025
+    },
+    "receipt-paper": {
+      "files": [
+        "receipt-paper.png"
+      ],
+      "count": 1,
+      "canvas": [
+        455,
+        520
+      ],
+      "source_px": [
+        430,
+        346
+      ],
+      "display_px": [
+        227.34,
+        259.82
+      ],
+      "bytes": 369757,
+      "note": "원본 ivory PNG 를 최대 표시(확대 1.18 포함)의 2배로 줄인 것. 카드 UI 는 이 칸에서 확정하지 않는다."
+    },
+    "chog-rest": {
+      "files": [
+        "chog-rest.png"
+      ],
+      "count": 1,
+      "canvas": [
+        200,
+        260
+      ],
+      "origin": {
+        "x": -30,
+        "y": -20,
+        "w": 1730,
+        "h": 2250
+      },
+      "display_factor": 0.057670891446147315,
+      "display_px": [
+        99.77,
+        129.76
+      ],
+      "bytes": 14785,
+      "note": "CHOG_FILING_SOURCE viewBox(-30,-20,1730,2250) 그대로 — 원본이 자르는 범위. 무대 rect(759,559+hop,145,188). 런타임 로드 제외(초기 Chog 는 기존 Home Chog 를 유지한다)."
+    },
+    "chog-native": {
+      "files": [
+        "chog-native-00.png",
+        "chog-native-01.png",
+        "chog-native-02.png",
+        "chog-native-03.png",
+        "chog-native-04.png",
+        "chog-native-05.png",
+        "chog-native-06.png",
+        "chog-native-07.png",
+        "chog-native-08.png",
+        "chog-native-09.png",
+        "chog-native-10.png",
+        "chog-native-11.png",
+        "chog-native-12.png",
+        "chog-native-13.png",
+        "chog-native-14.png",
+        "chog-native-15.png",
+        "chog-native-16.png",
+        "chog-native-17.png",
+        "chog-native-18.png",
+        "chog-native-19.png",
+        "chog-native-20.png",
+        "chog-native-21.png",
+        "chog-native-22.png",
+        "chog-native-23.png",
+        "chog-native-24.png"
+      ],
+      "count": 25,
+      "canvas": [
+        198,
+        252
+      ],
+      "origin": {
+        "x": 223.7808,
+        "y": 125.0577,
+        "w": 1596.0231,
+        "h": 2034.7923
+      },
+      "ppu": 0.12404876,
+      "display_factor": 0.06202438,
+      "display_px": [
+        98.99,
+        126.21
+      ],
+      "bytes": 364139,
+      "note": "수령 뒤 Chog. 무대에서 width 2048*203/2252, height 203."
+    },
+    "chog-palm": {
+      "files": [
+        "chog-palm-00.png",
+        "chog-palm-01.png",
+        "chog-palm-02.png",
+        "chog-palm-03.png",
+        "chog-palm-04.png",
+        "chog-palm-05.png",
+        "chog-palm-06.png",
+        "chog-palm-07.png",
+        "chog-palm-08.png",
+        "chog-palm-09.png",
+        "chog-palm-10.png",
+        "chog-palm-11.png",
+        "chog-palm-12.png",
+        "chog-palm-13.png",
+        "chog-palm-14.png",
+        "chog-palm-15.png",
+        "chog-palm-16.png",
+        "chog-palm-17.png",
+        "chog-palm-18.png",
+        "chog-palm-19.png",
+        "chog-palm-20.png",
+        "chog-palm-21.png",
+        "chog-palm-22.png",
+        "chog-palm-23.png",
+        "chog-palm-24.png"
+      ],
+      "count": 25,
+      "canvas": [
+        189,
+        50
+      ],
+      "origin": {
+        "x": 260.1986,
+        "y": 1115.7986,
+        "w": 1523.1874,
+        "h": 404.3258
+      },
+      "ppu": 0.12404876,
+      "display_factor": 0.06202438,
+      "display_px": [
+        94.47,
+        25.08
+      ],
+      "bytes": 36444,
+      "note": "손바닥 overlay(NATIVE_ARMS). 원본은 palm-tip circle(r145) 로 잘라 쓴다 — clip 은 런타임."
+    }
+  },
+  "file_count": 175,
+  "total_bytes": 2373838,
+  "decoded_bytes": 54844956,
+  "over_2x": []
+}

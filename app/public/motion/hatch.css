@@ -1,0 +1,17 @@
+/* 확정 보관본 connected/index.html 의 #same-page-hatch-style 사본.
+   바뀐 것은 무대 배치 규칙 하나뿐이다 — 보관본은 봉투 속 알의 화면 좌표에 fixed 로
+   얹었는데, 이 앱에는 그 봉투 알이 없어서 씬 가운데에 놓는다.
+   rig 안쪽(파츠 좌표·z·transform-origin)은 손대지 않았다. */
+#piggyHatchStage{position:absolute;left:50%;top:50%;width:min(62vw,300px);aspect-ratio:225/186;transform:translate(-50%,-52%);display:none;overflow:visible;pointer-events:none;z-index:72;transform-origin:50% 82%;isolation:isolate}
+  #piggyHatchStage.is-live{display:block}
+  #piggyHatchStage .rig{position:absolute!important;left:0!important;top:0!important;width:100%!important;aspect-ratio:225/186;isolation:isolate;transform-origin:50% 82%;will-change:transform}
+  #piggyHatchStage .layer,#piggyHatchStage .chip{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;pointer-events:none;opacity:0}
+  #piggyHatchStage .behind{z-index:10}#piggyHatchStage #seatBodyPeek{left:34.222%;top:46.237%;width:31.111%;height:39.253%;inset:auto;object-fit:contain;z-index:11}#piggyHatchStage #leg{z-index:18;transform-origin:43% 64%}
+  #piggyHatchStage .egg{z-index:20}#piggyHatchStage .crack{z-index:21}#piggyHatchStage .shell{z-index:23;transform-origin:50% 64%;will-change:transform,opacity}
+  #piggyHatchStage #seatBody,#piggyHatchStage #seatHead,#piggyHatchStage #standOhno,#piggyHatchStage #standMid,#piggyHatchStage #standSmile{inset:auto;left:34.222%;top:46.237%;width:31.111%;height:39.253%;object-fit:contain;transform-origin:50% 88%}
+  #piggyHatchStage #seatBody{z-index:15;clip-path:none;-webkit-mask-image:none;mask-image:none;transform-origin:50% 55%}#piggyHatchStage #seatHead{display:none}
+  #piggyHatchStage #standOhno,#piggyHatchStage #standMid,#piggyHatchStage #standSmile{z-index:17}#piggyHatchStage #chips{position:absolute;inset:0;z-index:30;pointer-events:none}#piggyHatchStage .chip{display:block;transform-box:border-box;transform-origin:48% 64.516%;will-change:transform,opacity}
+  #piggyHatchStage #break4,#piggyHatchStage #break5{z-index:14;transform-origin:50% 82%}#piggyHatchStage #break4{clip-path:inset(0 53% 0 0)}#piggyHatchStage #break5{clip-path:inset(0 0 0 47%)}
+  #piggyHatchStage .shadow{position:absolute;z-index:5;left:37%;top:81%;width:28%;height:5%;border-radius:50%;background:#050505;opacity:.26;filter:blur(2px);transform-origin:50%}
+  #piggyHatchControls{display:none!important}
+  @media (prefers-reduced-motion:reduce){#piggyHatchStage .rig,#piggyHatchStage .layer,#piggyHatchStage .chip,#piggyHatchStage .shell{will-change:auto}}

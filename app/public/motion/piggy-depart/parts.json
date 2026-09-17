@@ -1,0 +1,414 @@
+{
+ "card": "A-318",
+ "generated_by": "<private>",
+ "note": "로컬 사본 전용. 공개·배포 금지. 원본은 <private>** 에만 둔다.",
+ "source": {
+  "departure.js": "bc70a0794d7ae578180415835adc6f54708fc5856e5465714c2ed1f7bf4ff1a7"
+ },
+ "piggy_local_viewBox": {
+  "x": 125.5,
+  "y": 17.5,
+  "w": 801.0,
+  "h": 1075.0
+ },
+ "padding": {
+  "l": 260,
+  "t": 120,
+  "r": 560,
+  "b": 120
+ },
+ "padded_viewBox": {
+  "x": -134.5,
+  "y": -102.5,
+  "w": 1621.0,
+  "h": 1315.0
+ },
+ "canvas_px": [
+  446,
+  362
+ ],
+ "px_per_user_unit": 0.27522935779816515,
+ "raster_scale": 2,
+ "display_w_board_px": 110.22935779816514,
+ "stage_fit": 1,
+ "part_scale_board": 0.13761467889908258,
+ "group_scale": 0.6880733944954128,
+ "standing_transform": "scale(.2) translate(1000 0) scale(-1 1)",
+ "standing_transform_applied": "runtime (굽지 않는다 — bake/runtime 중 한 번만)",
+ "z_order": [
+  "ears_R",
+  "walk-legR",
+  "walk-legL",
+  "walk-handR",
+  "rear_ears",
+  "body",
+  "face(eye_L,eye_R,mouth_smile,mouth_strait)",
+  "group8",
+  "hand_L_hold(walk-v6,walk-v7)"
+ ],
+ "owner_map": {
+  "ears_R": "ears_R",
+  "Vector": "ears_R",
+  "Vector_2": "ears_R",
+  "rear_ears": "rear_ears",
+  "rear_Vector": "rear_ears",
+  "rear_Vector_4": "rear_ears",
+  "Vector_3": "body",
+  "eye_L": "eye_L",
+  "eye_R": "eye_R",
+  "mouth_smile": "mouth_smile",
+  "mouth_strait": "mouth_strait",
+  "Group 8": "group8",
+  "Vector_4": "group8",
+  "Vector_5": "group8",
+  "leg_R": "walk-legR",
+  "leg_L": "walk-legL",
+  "hand_R": "walk-handR",
+  "Vector_6": "walk-v6",
+  "Vector_7": "walk-v7",
+  "turn-face-window": "face-window"
+ },
+ "owner_duplicates": [],
+ "file_count": 257,
+ "total_bytes": 921556,
+ "parts": {
+  "ears_R": {
+   "file": "ears_R.png",
+   "owns": [
+    "ears_R",
+    "Vector",
+    "Vector_2"
+   ],
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 2981,
+   "sha256": "99f614486e048d52",
+   "runtime": "transform translate(-230*profile) · opacity · visibility",
+   "z": 1
+  },
+  "rear_ears": {
+   "file": "rear_ears.png",
+   "owns": [
+    "rear_ears",
+    "rear_Vector",
+    "rear_Vector_4"
+   ],
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 4387,
+   "sha256": "d6e9c3dd82469178",
+   "runtime": "visibility (rearView)",
+   "static_baked": "translate(940 35) scale(-1 1) — 자식 자기 속성",
+   "z": 5
+  },
+  "body": {
+   "file": "body.png",
+   "owns": [
+    "Vector_3"
+   ],
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 8133,
+   "sha256": "ef5a6fca210adb44",
+   "runtime": "없음(정지)",
+   "z": 6
+  },
+  "eye_L": {
+   "file": "eye_L.png",
+   "owns": [
+    "eye_L"
+   ],
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 988,
+   "sha256": "e9c73c9620840821",
+   "runtime": "opacity 1-side",
+   "z": 7
+  },
+  "eye_R": {
+   "file": "eye_R.png",
+   "owns": [
+    "eye_R"
+   ],
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 1001,
+   "sha256": "accce180eedfcc51",
+   "runtime": "없음",
+   "z": 7
+  },
+  "mouth_smile": {
+   "file": "mouth_smile.png",
+   "owns": [
+    "mouth_smile"
+   ],
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 1266,
+   "sha256": "d0a3893c15d87d04",
+   "runtime": "transform translate(130*profile)",
+   "z": 7
+  },
+  "mouth_strait": {
+   "file": "mouth_strait.png",
+   "owns": [
+    "mouth_strait"
+   ],
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 724,
+   "sha256": "be4f33fbe15c673e",
+   "runtime": "없음",
+   "z": 7,
+   "note": "원본 bbox 0 — 빈 경로"
+  },
+  "group8": {
+   "file": "group8.png",
+   "owns": [
+    "Group 8",
+    "Vector_4",
+    "Vector_5"
+   ],
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 2550,
+   "sha256": "df867325b8a07a37",
+   "runtime": "transform translate(150*side+130*back, 35*back) · visibility",
+   "z": 8
+  },
+  "walk-legR": {
+   "files": "walk-legR-00..47.png",
+   "owns": [
+    "leg_R"
+   ],
+   "count": 48,
+   "canvas": [
+    446,
+    362
+   ],
+   "z": 2,
+   "total_bytes": 195369,
+   "runtime": "없음"
+  },
+  "walk-legL": {
+   "files": "walk-legL-00..47.png",
+   "owns": [
+    "leg_L"
+   ],
+   "count": 48,
+   "canvas": [
+    446,
+    362
+   ],
+   "z": 3,
+   "total_bytes": 180617,
+   "runtime": "없음"
+  },
+  "walk-handR": {
+   "files": "walk-handR-00..47.png",
+   "owns": [
+    "hand_R"
+   ],
+   "count": 48,
+   "canvas": [
+    446,
+    362
+   ],
+   "z": 4,
+   "total_bytes": 140175,
+   "runtime": "transform translate(-430*back)"
+  },
+  "walk-v6": {
+   "files": "walk-v6-00..47.png",
+   "owns": [
+    "Vector_6"
+   ],
+   "count": 48,
+   "canvas": [
+    446,
+    362
+   ],
+   "z": 9,
+   "total_bytes": 90241,
+   "runtime": "부모 hand_L_hold 가 transform 소유"
+  },
+  "walk-v7": {
+   "files": "walk-v7-00..47.png",
+   "owns": [
+    "Vector_7"
+   ],
+   "count": 48,
+   "canvas": [
+    446,
+    362
+   ],
+   "z": 9,
+   "total_bytes": 135662,
+   "runtime": "부모 hand_L_hold 가 transform 소유"
+  },
+  "seat-idle": {
+   "file": "seat-idle.png",
+   "source": "piggy_assembled_seat_idle.svg",
+   "source_sha256": "f1d6d0bea83759d2",
+   "canvas": [
+    300,
+    300
+   ],
+   "bytes": 17246,
+   "placed_at": {
+    "x": 862,
+    "y": 515,
+    "w": 218,
+    "h": 218
+   }
+  },
+  "seat-lookup": {
+   "file": "seat-lookup.png",
+   "source": "piggy_assembled_seat_lookupR.svg",
+   "source_sha256": "e342be1cdadec47a",
+   "canvas": [
+    300,
+    300
+   ],
+   "bytes": 16913,
+   "placed_at": {
+    "x": 862,
+    "y": 515,
+    "w": 218,
+    "h": 218
+   }
+  },
+  "work-open": {
+   "file": "work-open.png",
+   "source": "piggy_work_open.svg",
+   "source_sha256": "60ce0930284c2ace",
+   "canvas": [
+    300,
+    300
+   ],
+   "bytes": 16927,
+   "placed_at": {
+    "x": 862,
+    "y": 515,
+    "w": 218,
+    "h": 218
+   }
+  },
+  "work-half": {
+   "file": "work-half.png",
+   "source": "piggy_work_half.svg",
+   "source_sha256": "ef39f2efe46041e0",
+   "canvas": [
+    300,
+    300
+   ],
+   "bytes": 16697,
+   "placed_at": {
+    "x": 862,
+    "y": 515,
+    "w": 218,
+    "h": 218
+   }
+  },
+  "work-shut": {
+   "file": "work-shut.png",
+   "source": "piggy_work_shut.svg",
+   "source_sha256": "dff823809c1fa89e",
+   "canvas": [
+    300,
+    300
+   ],
+   "bytes": 16562,
+   "placed_at": {
+    "x": 862,
+    "y": 515,
+    "w": 218,
+    "h": 218
+   }
+  },
+  "portal-ring": {
+   "file": "portal-ring.png",
+   "canvas": [
+    319,
+    429
+   ],
+   "bytes": 33483,
+   "stage_rect": [
+    364,
+    254,
+    232,
+    312
+   ],
+   "stroke": "#FFD43B w9 crayon",
+   "note": "원본 portalLine/portalRim 이 같은 d 를 쓴다 — 한 장으로 둘 다 그린다(교대만 런타임)"
+  },
+  "portal-depth": {
+   "file": "portal-depth.png",
+   "canvas": [
+    319,
+    429
+   ],
+   "bytes": 18615,
+   "stage_rect": [
+    364,
+    254,
+    232,
+    312
+   ]
+  },
+  "entry-mask": {
+   "file": "entry-mask.png",
+   "canvas": [
+    1651,
+    1101
+   ],
+   "bytes": 16416,
+   "stage_rect": [
+    0,
+    0,
+    1200,
+    800
+   ],
+   "note": "흰 영역 = 보이는 곳. Canvas destination-in 으로 쓴다"
+  },
+  "face-window": {
+   "shape": "ellipse",
+   "owns": [
+    "turn-face-window"
+   ],
+   "cx": 500.0,
+   "cy": 450.0,
+   "rx": 320.0,
+   "ry": 360.0,
+   "file": null,
+   "bytes": 0,
+   "note": "standing 지역 좌표. 런타임 clip — 굽지 않는다"
+  },
+  "face-mask": {
+   "file": "face-mask.png",
+   "canvas": [
+    446,
+    362
+   ],
+   "bytes": 4603,
+   "owns": [],
+   "runtime": "로드하지 않음 — face-window 기하로 대체(파일은 보존)"
+  }
+ }
+}
