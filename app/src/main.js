@@ -1279,8 +1279,10 @@ function buildSecondJourneyViewModel() {
   };
 }
 
-// Chog 탭 → Explore. 첫 Journey 카드가 떠 있는 동안은 chog-home.js 의 cardClaimed
-// 가드가 이 콜백 자체를 부르지 않는다(§A-360 §3 주석).
+// [A-411-r] Second Journey Explore 진입점. A-411-p 는 이 함수를 Chog 탭(onTap)에도
+// 걸었으나, 그 배선은 Owner 최신 규칙과 충돌해 되돌렸다(mountHome() onTap 주석 참고) —
+// 이제 이 함수를 부르는 자리는 mountHome() settle() 의 state.homeQuietForExplore
+// 자동전개뿐이다. Chog 탭은 다시 관여하지 않는다.
 function openSecondJourneyExplore() {
   if (!state.receipts.some((r) => r && r.txHash) && !(import.meta.env.DEV && state.secondJourney.devPreview)) return;
   const sj = state.secondJourney;
@@ -2649,9 +2651,11 @@ const HOME_FIRST_JOURNEY_CARD_MS = 1200;
 // 후버 노트패드에 넣을 실제 데이터 — Piggy 는 한 기기에 하나뿐이라 지금 어디 있는지는
 // scene 하나로 정해진다(home-paper.js homeStatusFromScene). 샘플 이름/시간을 쓰지 않는다.
 // [A-411-p] Owner 확정: Home 에는 "next errand" 버튼이 없다(A-411-n §1). 옛
-// canOpenSecondJourney/nextErrandButton 삽입을 없앤다 — Second Journey 진입은 이제
-// settle() 의 조용한-뒤-Paper 자동전개(아래)와 Chog 탭(onTap, mountHome() 참고)
-// 뿐이다. 버튼이 없어졌으므로 chog-home.js draw() 의 #nextErrandButton 참조도 함께 정리했다.
+// canOpenSecondJourney/nextErrandButton 삽입을 없앤다 — 버튼이 없어졌으므로 chog-home.js
+// draw() 의 #nextErrandButton 참조도 함께 정리했다.
+// [A-411-r] Second Journey 진입은 이제 settle() 의 조용한-뒤-Paper 자동전개(아래)
+// 하나뿐이다 — A-411-p 가 걸었던 Chog 탭(onTap) 직행은 Owner 최신 규칙과 충돌해
+// 되돌렸다(mountHome() onTap 주석 참고). Chog 탭은 원래 HOME 패드를 열 뿐이다.
 function homePadMarkup(scene) {
   // [A-377 §2] 기록 보기 entry 는 Home 대시보드(scene "sendstay")에서만 실제로 채운다.
   // 다른 씬에서는 이 pad 자체가 opacity 0 이 되므로(chog-home.js cardClaimed) 빈 문자열을
@@ -2780,13 +2784,14 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
       onFrame: (step) => runSceneFrames(step),
       onCleanup: (fn) => onSceneTeardown(fn),
       listen: (target, type, handler, options) => sceneListener(target, type, handler, options),
-      // [A-411-p] Home next errand 버튼을 없앤 뒤, Second Journey 로 들어가는 수동
-      // 진입로는 이 Chog 탭뿐이다 — chog-home.js 는 이미 A-360 §3 부터 이 자리
-      // (pinned && !cardClaimed 일 때만 호출)를 갖고 있었고, 지금까지 아무도 연결하지
-      // 않았을 뿐이다(§A-360 §3 주석 "Home 에 도착한 뒤 Chog 탭이 Explore 를 연다").
-      // cardClaimed 가 true 인 동안(첫 Journey 카드가 떠 있거나 이미 explore 안)은
-      // chog-home.js 자신이 이 콜백을 안 부른다 — 새 가드를 여기 추가하지 않는다.
-      onTap: openSecondJourneyExplore,
+      // [A-411-r] A-411-p 회귀 교정 — Chog 탭(onTap)을 openSecondJourneyExplore 로 배선한
+      // 것은 Owner 의 최신 확정과 충돌했다: 졸던 Chog 를 깨우는 탭은 기존 손올리기
+      // 모션과 함께 "원래 HOME 패드"(homePadMarkup, 기존 HOME 현황 그대로)를 여는
+      // 계약으로 되돌린다. 그 여닫음 자체는 이 콜백과 무관하게 chog-home.js 의
+      // pinned/progress(위 draw()) 가 이미 하고 있으므로, onTap 은 다시 no-op 이면
+      // 된다 — Chog 클릭을 Explore 직행으로 재활용하지 않는다(A-411-r 스펙). Second
+      // Journey 자동 진입은 settle() 의 state.homeQuietForExplore 분기(아래)로만 남는다.
+      onTap: () => {},
     });
     onSceneTeardown(() => {
       homeChog = null;
@@ -3552,8 +3557,9 @@ function render() {
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);
   document.querySelector("#stayButton")?.addEventListener("click", stayHome);
   document.querySelector("#fileboxHomeButton")?.addEventListener("click", goHomeFromFilebox);
-  // [A-411-p] "next errand" 버튼 제거 — Second Journey 진입은 settle() 자동전개와
-  // Chog 탭(onTap)만 남는다(위 homePadMarkup 주석).
+  // [A-411-p] "next errand" 버튼 제거.
+  // [A-411-r] Second Journey 진입은 settle() 자동전개뿐이다 — Chog 탭(onTap)은 다시
+  // 원래 HOME 패드를 여닫을 뿐, Explore 직행이 아니다(위 homePadMarkup/mountHome 주석).
   // [A-383 §1] Home 카드 오른쪽 기록 카드 — 별도 화면 전환 없이 같은 sendstay DOM 안에서
   // 열림/목록/상세/닫힘을 전부 위임 클릭 하나로 배선한다(카드 내용은 render() 를 다시
   // 부르지 않고 renderRecordsCardBody() 가 innerHTML 만 바꾸므로, 매번 다시 부를 필요가
