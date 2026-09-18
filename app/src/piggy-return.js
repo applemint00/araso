@@ -390,7 +390,12 @@ export function createReturnRenderer(canvas, opts) {
     // 위를 palm-tip 원(cx=palmX cy=1280 r=145, drawPalm 이 이미 이 클립을 쓴다)으로
     // 자른 손끝 레이어가 덮는다 — 손이 종이를 쥔 것처럼 보이게 하는 원본의 후처리다.
     // t>=14 부터는 (a) 를 멈추고(위 폴더 사이 레이어가 대신 그린다) (b) 만 계속 그린다.
-    if (t >= 11.4) {
+    // [A-414-e] filing 이 끝나면(t>=RETURN_TOTAL_S) canvas native Chog 를 그만 그린다 —
+    // 소유권이 DOM Home Chog(원본 Home-ready 자세)로 돌아가는 자리다. 이 canvas 는 folder/
+    // Piggy 는 그대로 그려 "정착"(A-322 교정 3)을 지키고, Chog 자체만 넘긴다. 같은 프레임에
+    // return-view.js placeChog() 가 meta.chogOwner 로 chogWrap 을 다시 보이므로, 두 Chog 가
+    // 겹치는 프레임 0(아래 chogOwner 필드와 같은 경계 t<RETURN_TOTAL_S 를 쓴다).
+    if (t >= 11.4 && t < RETURN_TOTAL_S) {
       drawNativeChog(t);
       if (t < 14 && !hidePaper && img("receipt-paper")) {
         ctx.save();
@@ -425,9 +430,11 @@ export function createReturnRenderer(canvas, opts) {
     return {
       t, phase: s.phase, opening, emerge, turn, present, delivery, settle,
       paperBoard,
-      // 화면이 소유권을 가릴 수 있도록 매 프레임 알려 준다. [A-322 교정 1]
-      // t<11.4 = Home DOM Chog 만 · t>=11.4 = canvas native Chog 만.
-      chogOwner: t >= 11.4 ? "canvas" : "dom",
+      // 화면이 소유권을 가릴 수 있도록 매 프레임 알려 준다. [A-322 교정 1 → A-414-e 연장]
+      // t<11.4 = Home DOM Chog 만 · 11.4<=t<RETURN_TOTAL_S = canvas native Chog 만 ·
+      // t>=RETURN_TOTAL_S(filed) = 다시 Home DOM Chog 만(원본 Home-ready 복귀, 위 ④ 블록과
+      // 같은 경계).
+      chogOwner: (t >= 11.4 && t < RETURN_TOTAL_S) ? "canvas" : "dom",
       // [A-348 §3] 이번 프레임에 종이를 실제로 그렸는지 — hidePaper 로 건너뛴 프레임은
       // "dom"(그 자리는 DOM 이 그린다), 그렸으면 "canvas". 아무 것도 안 그렸으면 null.
       // t>=11.4 && t<14 는 위 ④ nativePaper 후처리가 그리므로 여기서도 "canvas" 다.
@@ -437,7 +444,7 @@ export function createReturnRenderer(canvas, opts) {
       receipt: { x: rx, y: ry, w: rw, h: rh },
       hand,
       alertHop: t >= 0.7 && t < 2.8 ? -5 * Math.sin(Math.PI * clamp((t - 0.7) / 0.55)) : 0,
-      nativeVisible: t >= 11.4,
+      nativeVisible: t >= 11.4 && t < RETURN_TOTAL_S,
       done: t >= RETURN_TOTAL_S,
     };
   }

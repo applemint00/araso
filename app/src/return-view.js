@@ -169,8 +169,18 @@ export function mountReturnView(opts) {
     chogWrap.style.transform = hop ? `translateY(${hop * RETURN_GEOMETRY.group.scale}px)` : "";
   }
 
+  // [A-414-e] "문서 받기 전 checking 0" — Chog 옆 발화(main.js state.awayLine/
+  // returnArrivalAlarm)는 지금까지 mount 즉시(정적 markup)로 판정돼 실제 손전달 이벤트와
+  // 무관했다. piggy-return.js 는 매 프레임 이미 chogOwner 를 알려준다(dom→canvas 전환 =
+  // Piggy 가 종이를 Chog 손에 넘기기 시작하는 시점, piggy-return.js:430 — 원본 stateAt phase
+  // "Chog receives" 시작과 같은 t=11.4 경계, character_motion_confirmed_20260917/
+  // reference-preview/return/renderer.js 의 같은 리터럴과 대조 완료). 그 순간을 한 번
+  // 잡아 두면(아래 received) 화면 쪽(main.js)이 mount-time 정적 문구 대신 이 실제 수령
+  // 신호로 checking/coming 발화를 켤 수 있다 — 이 파일은 문구 자체를 모른다(§1 계약).
+  let received = false;
   function onFrame(meta) {
     lastFrame = meta;
+    if (meta && meta.chogOwner === "canvas") received = true;
     placePaper(meta);
     placeChog(meta);
   }
@@ -237,8 +247,12 @@ export function mountReturnView(opts) {
   if (openBtn) listen(openBtn, "click", () => onOpenFilebox());
 
   playback.start();
+  // [A-414-e] `received` — main.js 가 기존 `filed` 폴링(§mountReturn, runSceneFrames)과
+  // 같은 방식으로 붙여 쓰는 게터다: true 가 되는 순간부터(문서가 실제로 Chog 손에 들어간
+  // 뒤) "checking"/coming 발화를 켜고, 이미 있는 `filed` 로 끈다. mount 시점 정적 판정을
+  // 대체하는 신호이지 문구 자체는 아니다 — 문구·타이밍 정책은 main.js 몫(계약 §1).
   return { playback, placePaper: () => placePaper(lastFrame), get lastFrame() { return lastFrame; },
-           get filed() { return filed; } };
+           get received() { return received; }, get filed() { return filed; } };
 }
 
 export const RETURN_VIEW_GEOMETRY = { board: [BOARD_W, BOARD_H], homeCenter: HOME_CENTER, homeFloor: HOME_FLOOR };

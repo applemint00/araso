@@ -101,6 +101,14 @@ function sendCardTermRowMarkup(term) {
 //   terms    지금 실제로 유효한 약관 3줄 — "up to $5" 등, 견본 문구로 바꾸지 않는다.
 //            체크박스 줄(원본 13px/1.2)에 정렬한다 — 옛 밋밋한 <ul><li> 대신.
 //   blocked  rpId 밖이면 Send 를 잠근다.
+//
+// [A-415 item1] 순서 교정: NOTES_explore_page.md §16.2/§16.3 및 SendCard.dc.html 원본
+// 실측 결과 원본은 체크리스트(top206)가 위, 설명(top300)이 아래이고 설명은 정체
+// (font 400, italic 아님, color rgba(20,18,16,.78))다. 이 파일은 기존에 message(설명)를
+// terms(체크리스트)보다 앞에 두고 있었다 — 순서를 뒤집어 마크업(DOM/읽기 순서)을
+// 원본과 맞춘다. 실제 화면상 y좌표는 두 블록 모두 position:absolute(top 고정값)라
+// style.css 쪽 값(현재 .sendCard__message top:150/italic, .sendCard__terms top:206)이
+// 바뀌어야 시각적으로도 맞다 — 이 파일 소유 범위 밖이라 통합자에게 별도 보고한다.
 export function sendCardMarkup({
   message = "",
   detail = "",
@@ -122,12 +130,12 @@ export function sendCardMarkup({
       <div class="sendCard__title">
         <span class="sendCard__titleText">send?</span>
       </div>
-      ${message ? `<p class="sendCard__message">${escapeHtml(message)}</p>` : ""}
       ${
         terms.length
           ? `<div class="sendCard__terms">${terms.map((t) => sendCardTermRowMarkup(t)).join("")}</div>`
           : ""
       }
+      ${message ? `<p class="sendCard__message">${escapeHtml(message)}</p>` : ""}
       ${
         detail || address
           ? `<div class="sendCard__meta">

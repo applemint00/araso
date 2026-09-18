@@ -3440,11 +3440,10 @@ function returnCheckingLine() {
 // 서로 다른 id/역할로 남겨 SecondPaper 의 checking 표시와도 섞이지 않게 한다.
 function chogHomeMarkupForReturn(scene) {
   let markup = chogHomeMarkup({ padMarkup: homePadMarkup(scene) });
-  const checkText = returnCheckingLine();
-  if (checkText) {
-    const bubble = `<span class="chogCheckLine" id="returnCheckLine">${escapeHtml(checkText)}</span>`;
-    markup = markup.replace('<div class="chogHome__hit"', `${bubble}<div class="chogHome__hit"`);
-  }
+  // [A-415 / A-414-e] 체킹 발화는 **여기서 미리 붙이지 않는다**. Owner 실화면 지적:
+  // 초그가 문서를 받기도 전에 checking 을 말했다 — 마운트 시점의 정적 판정(awayLine)으로
+  // 그렸기 때문이다. 이제 return-view 가 실제 수령 순간(canvas 가 Chog 소유권을 갖는
+  // t≈11.4s, 손전달 시작)에 켜 주는 `received` 를 보고 mountReturn() 이 그때 끼운다.
   if (state.returnArrivalAlarm) {
     const alarm = `<span class="chogCheckLine" id="returnArrivalAlarm">${escapeHtml(displayPiggyName())} is coming home</span>`;
     markup = markup.replace('<div class="chogHome__hit"', `${alarm}<div class="chogHome__hit"`);
@@ -3491,6 +3490,20 @@ function mountReturn() {
   // 정한 것과 같은 판정이다(state.awayLine 은 그 사이 바뀌지 않는다). 안 붙었으면(정상
   // 흐름 — finishTrip() 이 이미 "It's back." 로 넘겨 놓은 뒤) 아래 감시를 아예 안 켠다.
   const hadCheckLine = !!returnCheckingLine();
+  // [A-415] 수령 전에는 발화가 없다 — received 가 처음 true 가 되는 순간 한 번만 끼운다.
+  let checkLineShown = false;
+  const insertCheckLine = () => {
+    if (checkLineShown) return;
+    const host = document.querySelector(".chogHome");
+    const hit = host?.querySelector(".chogHome__hit");
+    if (!host || !hit) return;
+    const bubble = document.createElement("span");
+    bubble.className = "chogCheckLine";
+    bubble.id = "returnCheckLine";
+    bubble.textContent = returnCheckingLine();
+    host.insertBefore(bubble, hit);
+    checkLineShown = true;
+  };
   // [A-413 §4] 알람 발화가 이번 진입에 실제로 붙었는지 — 위 teardown 과 별개로, "파일링이
   // 끝나면 같은 씬 안에서 곧장 지운다"는 §411-i 와 같은 규율을 알람에도 그대로 적용한다.
   const hadAlarm = !!state.returnArrivalAlarm;
@@ -3543,6 +3556,8 @@ function mountReturn() {
   if ((hadCheckLine || hadAlarm) && returnView) {
     runSceneFrames(() => {
       if (!valid()) return false;
+      // [A-415] 수령(received) 뒤에만 발화를 켠다. 문서 받기 전 checking 0.
+      if (hadCheckLine && returnView.received) insertCheckLine();
       if (returnView.filed) {
         if (hadCheckLine) document.querySelector("#returnCheckLine")?.remove();
         if (hadAlarm) {
