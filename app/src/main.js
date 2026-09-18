@@ -3072,15 +3072,42 @@ function returnReceiptRows() {
   return receiptPaperMarkup(receiptPaperFields({ receipt, name: displayPiggyName() }));
 }
 
+// [A-411-i] Owner 판정: 귀환/최종수납씬 가운데 독립 "I'll check it." 문구는 남으면 안
+// 된다 — 그 체킹은 초그 역할이라 A-411-e 에서 이미 승인된 것과 같은 낱말("checking...",
+// main.js updateInviteFace())로, 초그 옆에 작게만 보인다. state.awayLine 이 아직
+// "I'll check it."(초기값·sendPiggy() 대입, §963)인 동안만 "체킹 중"이고, finishTrip()
+// 성공이 "It's back."(§902)으로 넘겨 놓은 뒤에는 그 사실 자체가 없다 — 새 상태 0,
+// 있는 값만 읽는다.
+function returnCheckingLine() {
+  return state.awayLine === "I'll check it." ? "checking..." : "";
+}
+
+// chogHomeMarkup() 이 돌려주는 것은 `.chogHome` 그 자신이다 — place(CORNER_TX,CORNER_TY,
+// HOME_SCALE)(chog-home.js) 변환이 이 요소 하나에 걸리므로, 발화를 그 **안**(마지막 자식
+// .chogHome__hit 바로 앞)에 끼우면 별도 좌표 계산 없이 캐릭터와 같은 변환을 그대로
+// 받는다 — "캐릭터 따라 위치" 요구를 새 산수 없이 만족한다. INK box(chog-home.js 351..
+// 548,276..527)보다 오른쪽에 두어 얼굴·몸을 가리지 않는다(스타일은 style.css
+// .chogCheckLine, 기존 .notice 노란(var(--gold)) 텍스트 톤 재사용 — 새 그래픽/모션 0).
+function chogHomeMarkupWithCheckLine(scene) {
+  const base = chogHomeMarkup({ padMarkup: homePadMarkup(scene) });
+  const text = returnCheckingLine();
+  if (!text) return base;
+  const bubble = `<span class="chogCheckLine" id="returnCheckLine">${escapeHtml(text)}</span>`;
+  return base.replace('<div class="chogHome__hit"', `${bubble}<div class="chogHome__hit"`);
+}
+
 // 장면 — 귀환. 화면 바인딩은 `return-view.js` 가 갖는다 —
 // 앱과 로컬 검토 하네스가 **같은 것**을 쓰기 위해서다(A-322 교정 7).
 // 여기서 넘기는 것은 화면 입력뿐이다. finance 는 이 파일에 남는다.
 function renderReturn() {
   return returnSceneMarkup({
-    line: state.awayLine,
+    // [A-411-i] 가운데 독립 문구 제거 — 같은 텍스트는 이제 초그 옆 발화만 맡는다.
+    // return-view.js #returnLine 은 그대로 두되(그 파일은 이번 수정 범위 밖) 빈 문자열만
+    // 넘긴다 — 광역 CSS 로 그 줄 자체를 숨기지 않으므로 다른 필수 상태 문구엔 영향 0.
+    line: "",
     receiptRowsMarkup: returnReceiptRows(),
     name: displayPiggyName(),
-    homeChogMarkup: chogHomeMarkup({ padMarkup: homePadMarkup("return") }),
+    homeChogMarkup: chogHomeMarkupWithCheckLine("return"),
     devExtra: isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : "",
   });
 }
@@ -3097,8 +3124,12 @@ function mountReturn() {
   const play = state.returnArrival;
   state.returnArrival = false;
 
+  // [A-411-i] 체킹 발화가 이번 진입에 실제로 붙었는지 — renderReturn() 이 같은 조건으로
+  // 정한 것과 같은 판정이다(state.awayLine 은 그 사이 바뀌지 않는다). 안 붙었으면(정상
+  // 흐름 — finishTrip() 이 이미 "It's back." 로 넘겨 놓은 뒤) 아래 감시를 아예 안 켠다.
+  const hadCheckLine = !!returnCheckingLine();
   let errored = false;
-  mountReturnView({
+  const returnView = mountReturnView({
     isValid: valid,
     schedule: (step) => runSceneFrames(step),
     listen: (target, type, handler, options) => sceneListener(target, type, handler, options),
@@ -3134,6 +3165,23 @@ function mountReturn() {
     // raw setTimeout 이 아니라 씬 lifecycle 에 등록된 타이머다(A-322 교정 5).
     onIdleEnter: () => { sceneTimeout(() => { if (valid()) setScene("filebox"); }, 0); },
   });
+
+  // [A-411-i] "수납 완료 후 남아있는 체킹 발화 0" — 둘째 탭(File it) 완료는 return-view.js
+  // 소유(onFiled, 그 파일 재렌더 없이 DOM 만 직접 고친다)라 이 파일이 다시 그리지 않는다.
+  // 그 완료를 이 파일 쪽에서 알 방법은 mountReturnView() 가 돌려주는 `filed` 게터뿐이라,
+  // 씬 lifecycle 에 이미 있는 runSceneFrames() 로 매 프레임 한 번 확인해 지운다 — 새 폴링
+  // 장치를 만들지 않는다. 씬을 나가면(teardown) runSceneFrames 자신이 멈추고, 어차피
+  // render() 의 innerHTML 통째 교체가 이 span 을 포함해 전부 지운다(§401 주석).
+  if (hadCheckLine && returnView) {
+    runSceneFrames(() => {
+      if (!valid()) return false;
+      if (returnView.filed) {
+        document.querySelector("#returnCheckLine")?.remove();
+        return false;
+      }
+      return true;
+    });
+  }
 }
 
 // [A-383] filebox 는 First/Second Journey 의 귀환 직후 화면(mountReturn onOpenFilebox/

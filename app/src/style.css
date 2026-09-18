@@ -1446,6 +1446,29 @@ h1 {
   outline-offset: 4px;
 }
 
+/* [A-411-i] Owner: 귀환/최종수납씬 가운데 독립 "I'll check it." 대신, 같은 체킹 상태를
+   초그 옆 작은 노란 발화로만 보인다(main.js returnCheckingLine/chogHomeMarkupWithCheckLine
+   만 이 클래스를 붙인다 — 다른 씬 0). 새 말풍선 그래픽은 만들지 않는다 — 기존 안내줄
+   `.notice` 의 노란(var(--gold)) 텍스트 톤만 그대로 가져온다. `.chogHome` 안(마지막 자식
+   .chogHome__hit 바로 앞)에 두어 그 부모에 걸리는 place(CORNER_TX,CORNER_TY,HOME_SCALE)
+   변환(chog-home.js)을 그대로 받는다 — 그래서 캐릭터가 움직이면 이 글자도 같이
+   움직이고, 화면 크기와도 캐릭터와 같은 비율로 커지고 작아진다. 자리는 INK
+   box(chog-home.js 351..548,276..527) 오른쪽 바깥이라 얼굴·몸·(카드는 별도 좌표계인
+   returnTap 이 손끝 자리에 뜨는 동안만 보인다) 어느 쪽도 겹치지 않는다. */
+.chogCheckLine {
+  position: absolute;
+  left: 560px;
+  top: 320px;
+  max-width: 260px;
+  color: var(--gold);
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.55);
+}
+
 /* 3분 무입력 플래그(`data-drowsy`)는 타이머가 세워 두지만 **아무 것도 그리지 않는다.**
    투명도를 낮춰 졸기처럼 보이게 하던 규칙은 제거했다 — 그건 졸기가 아니라 흐려지기였다.
    실제 Chog 180000ms 졸기(`sleep-motion.js`)는 다음 Home Chog 묶음에서 연결한다. */
