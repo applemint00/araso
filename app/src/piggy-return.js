@@ -347,18 +347,25 @@ export function createReturnRenderer(canvas, opts) {
     }
 
     let papX = 0, papY = 0;
-    const paperVisible = t >= 10.9
-      ? t < 14
-      : delivery > 0 && !carryHome;
+    if (t >= 10.9) {
+      // 종착점은 실제 적용한 Chog 행렬로 옮긴 손끝이다(board 좌표). 이 자리는 t>=11.4
+      // 구간에도 nativePaper(아래 ④)가 그대로 써야 하므로 paperVisible 게이트 밖에서
+      // 항상 계산해 둔다.
+      // 원본: receiptX = mix(976, hand.x − 15, handoff) — 976·15·29 는 무대 단위다.
+      papX = mix(GROUP_DX + 976 * GROUP_SCALE, hand.x - 15 * GROUP_SCALE, handoff);
+      papY = mix(GROUP_DY + 632 * GROUP_SCALE, hand.y - 29 * GROUP_SCALE, handoff)
+        + 70 * GROUP_SCALE * smooth((t - 14) / 0.7);
+    }
+    // [renderer.js 46행 sceneSVG] 일반(폴더 사이) 영수증은
+    // `delivery>0 && !carryHome && !(t>=11.4 && t<14)` 일 때만 그린다 — 11.4~14 구간은
+    // 원본이 이 레이어를 끄고 대신 손끝의 nativePaper(renderer.js 62-65행)로 넘긴다.
+    // t>=6.3 부터 delivery 는 항상 1, carryHome 은 8.85~10.9 뿐이라 t>=11.4 구간에서는
+    // 이 식이 정확히 `t>=14` 로 접힌다.
+    const paperVisible = t >= 11.4 ? t >= 14 : delivery > 0 && !carryHome;
     if (paperVisible && img("receipt-paper")) {
       ctx.save();
       if (t >= 10.9) {
-        // 종착점은 실제 적용한 Chog 행렬로 옮긴 손끝이다(board 좌표).
         ctx.scale(sx(), sx());
-        // 원본: receiptX = mix(976, hand.x − 15, handoff) — 976·15·29 는 무대 단위다.
-        papX = mix(GROUP_DX + 976 * GROUP_SCALE, hand.x - 15 * GROUP_SCALE, handoff);
-        papY = mix(GROUP_DY + 632 * GROUP_SCALE, hand.y - 29 * GROUP_SCALE, handoff)
-          + 70 * GROUP_SCALE * smooth((t - 14) / 0.7);
         // 자리 계산은 항상 돈다(paperBoard 가 이 값을 쓴다) — 건너뛰는 것은 그리기 한 줄뿐.
         if (!hidePaper) ctx.drawImage(img("receipt-paper"), papX, papY, rw * GROUP_SCALE, rh * GROUP_SCALE);
       } else {
@@ -378,8 +385,19 @@ export function createReturnRenderer(canvas, opts) {
 
     // ④ Chog — 수령(11.4) 뒤에는 native Chog 가 캔버스에 선다.
     //   그 전에는 **기존 Home Chog(DOM)** 를 그대로 둔다. 여기서 그리지 않는다.
+    // [renderer.js 62-65행 nativePaper(t,x,y) 그대로] native 몸통(chogFilingSVG) 뒤에
+    // (a) t<14 이면 손끝의 종이(papX,papY, 위에서 이미 계산)를 한 번 더 그리고 (b) 그
+    // 위를 palm-tip 원(cx=palmX cy=1280 r=145, drawPalm 이 이미 이 클립을 쓴다)으로
+    // 자른 손끝 레이어가 덮는다 — 손이 종이를 쥔 것처럼 보이게 하는 원본의 후처리다.
+    // t>=14 부터는 (a) 를 멈추고(위 폴더 사이 레이어가 대신 그린다) (b) 만 계속 그린다.
     if (t >= 11.4) {
       drawNativeChog(t);
+      if (t < 14 && !hidePaper && img("receipt-paper")) {
+        ctx.save();
+        ctx.scale(sx(), sx());
+        ctx.drawImage(img("receipt-paper"), papX, papY, rw * GROUP_SCALE, rh * GROUP_SCALE);
+        ctx.restore();
+      }
       if (img(PALM[nativeState(t).frame])) drawPalm(t);
     }
 
@@ -388,8 +406,10 @@ export function createReturnRenderer(canvas, opts) {
     // zoom 은 receipt-card group 의 translate(anchor.zx anchor.zy) scale(zoom) —
     // [A-358 §4 → A-359 §2] 공통 카드 자리 중심(뷰포트 실측), 옛 360/325 도 옛 미보정
     // 596/338 유도값도 아니다.
+    // t>=11.4 && t<14 구간은 위 nativePaper 후처리가 화면에 그리므로, paperBoard 도
+    // 그 시간대에 실제로 보이는 자리(=papX,papY)를 그대로 보고한다.
     let paperBoard = null;
-    if (paperVisible) {
+    if (paperVisible || (t >= 11.4 && t < 14)) {
       if (t >= 10.9) {
         paperBoard = { x: papX, y: papY, w: rw * GROUP_SCALE, h: rh * GROUP_SCALE };
       } else {
@@ -409,8 +429,10 @@ export function createReturnRenderer(canvas, opts) {
       // t<11.4 = Home DOM Chog 만 · t>=11.4 = canvas native Chog 만.
       chogOwner: t >= 11.4 ? "canvas" : "dom",
       // [A-348 §3] 이번 프레임에 종이를 실제로 그렸는지 — hidePaper 로 건너뛴 프레임은
-      // "dom"(그 자리는 DOM 이 그린다), 그렸으면 "canvas". paperVisible 이 아예 아니면 null.
-      paperOwner: !paperVisible ? null : (hidePaper ? "dom" : "canvas"),
+      // "dom"(그 자리는 DOM 이 그린다), 그렸으면 "canvas". 아무 것도 안 그렸으면 null.
+      // t>=11.4 && t<14 는 위 ④ nativePaper 후처리가 그리므로 여기서도 "canvas" 다.
+      paperOwner: paperVisible ? (hidePaper ? "dom" : "canvas")
+        : (t >= 11.4 && t < 14 ? "canvas" : null),
       x, y, size, frame, pickup, handoff, seated, folderAlpha, zoom, sitDrop,
       receipt: { x: rx, y: ry, w: rw, h: rh },
       hand,

@@ -12,7 +12,15 @@ import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-
 import { createDepartPlayback } from "./piggy-depart.js";
 import { nameCardMarkup, mountNameCard } from "./name-card.js";
 import { returnSceneMarkup, mountReturnView } from "./return-view.js";
-import { homePaperMarkup, homePaperRecordsEntryMarkup, homeStatusFromScene, homeTimeNow } from "./home-paper.js";
+import {
+  homePaperMarkup,
+  homePaperRecordsEntryMarkup,
+  homeStatusFromScene,
+  homeTimeNow,
+  homeMoneyMarkup,
+  homePiggyDetailMarkup,
+  HOME_NOT_APPLICABLE_LABEL,
+} from "./home-paper.js";
 import { sendCardButtonMarkup, sendCardMarkup } from "./send-card.js";
 import { receiptPaperMarkup, receiptPaperFields } from "./receipt-paper.js";
 import { buildVisibleLaneChoices, runSecondJourney } from "./job-feed.js";
@@ -224,6 +232,17 @@ const state = {
   departureArrival: false,
   // 귀환 연출 1회용 표. sendPiggy 와 달리 finishTrip 의 성공+영수증에서만 선다.
   returnArrival: false,
+  // [A-413 §4] 작은 노란 알람 + "[실제 저장 이름] is coming home" 문구용 — 단수 실제
+  // 귀환(finishTrip 성공+receipt)에서만 finishTrip() 이 세운다. 위 returnArrival 과
+  // 일부러 분리한 값이다: returnArrival 은 mountReturn() 이 마운트되는 즉시 소비해서
+  // "이번 진입에서 걷기 연출을 돌릴지"만 판정하고 꺼지지만, 이 문구는 그 순간이 아니라
+  // return 씬이 실제로 화면에 떠 있는 동안(=파일링 완료 또는 씬 이탈까지) 유지돼야 한다
+  // (mountReturn()/chogHomeMarkupForReturn 참고). 이름 자체는 여기 담지 않고 그릴 때
+  // displayPiggyName() 을 그대로 다시 읽는다 — finishTrip() 소스는 app/test/return-outcome.mjs
+  // 가 함수 본문만 잘라 최소 스텁 위에서 돌리므로(§그 파일 주석) displayPiggyName 처럼
+  // 그 스텁에 없는 이름을 finishTrip 안에서 직접 부르면 그 격리 테스트가 깨진다 — 그래서
+  // 여기는 불리언 표 하나만 세운다. 모의 인원/누적 Receipt 카운트/큐는 만들지 않는다.
+  returnArrivalAlarm: false,
   // [A-354-b] 도착 즉시 큰 Send 카드가 캐릭터를 덮는 동작을 막는다(Owner 실측:
   // renderSendStay 의 중앙고정 SendCardStage 와 Home 판 fitHomeBoard() 축소가 서로 다른
   // 좌표계라 380×560 카드가 초그를 완전히 가림). Home 대기(Chog·HomeNotepad 만)와 Send
@@ -237,6 +256,19 @@ const state = {
   // 는 null(목록) 또는 실제 state.receipts 인덱스(상세). 둘 다 메모리 값이다(저장 0).
   recordsCardVisible: false,
   recordsDetailIndex: null,
+  // [A-412 §1] 왼쪽 NOW 종이 내부 모드 — "home" | "money" | "piggyDetail". 세션 메모리
+  // 값이라 저장소에 남기지 않는다(§forbidden "새 storage 스키마 0"). sendstay 가 아닌
+  // 씬에서는 항상 "home"으로 취급한다(homePaperEffectiveMode) — 다른 씬으로 옮겨가면
+  // setScene() 이 이 값을 다시 "home"으로 내린다(§383 recordsCardVisible 과 같은 자리 규율).
+  homePaperMode: "home",
+  // [A-412 §3] 실제 읽기 원천(publicClient/readShmonBalance) 조회 상태 — "idle" | "loading"
+  // | "ready" | "error". 값 자체는 세션 메모리다. Money 모드를 열 때만 조회하고, 실패해도
+  // 자동으로 wallet 연결/인증 재시도를 걸지 않는다(§forbidden) — 사용자가 같은 종이의
+  // "다시 읽기" 버튼을 눌러야 재조회한다.
+  homeMoneyStatus: "idle",
+  homeMoneyNativeWei: null, // 집에 있는 실제 네이티브 MON 잔액(publicClient.getBalance)
+  homeMoneyShmonWei: null, // Piggy 에게 맡긴/실제 나가 있는 shMON 잔액(readShmonBalance)
+  homeMoneyErrorText: null,
   // [A-360] Second Journey — Explore/후보check/JIT/permission/amount/Send 진행 상태.
   // 메모리 값이다(§forbidden "fixture 결과는 메모리만"). 관심(interests)만 계정/체인
   // scope 가 유효할 때 second-journey-state.js 저장소로도 남는다(§5) — 그 외 필드
@@ -485,6 +517,11 @@ function setScene(scene, message = "", detail = "") {
   state.recordsCardVisible = false;
   state.recordsDetailIndex = null;
   stopRecordsAlignLoop();
+  // [A-412 §1] Money/Piggy 상세는 sendstay 안의 내부 전환일 뿐이다 — 다른 씬으로 나가면
+  // (Send/Stay 결과, 귀환, 재방문 등) 항상 닫힌 HOME 모습으로 새로 시작한다. 조회해 둔
+  // 잔액(homeMoneyStatus 등)은 지우지 않는다 — 다시 Money 를 열면 그 값을 그대로 보여주고
+  // 필요하면 사용자가 다시 읽는다.
+  state.homePaperMode = "home";
   state.scene = scene;
   state.message = message;
   state.detail = detail;
@@ -924,6 +961,10 @@ function finishTrip(trip) {
   // transient 플래그라 새로고침·재방문에서는 다시 재생되지 않는다.
   if (trip.receipt) {
     state.returnArrival = true;
+    // [A-413 §4] 단수 실제 귀환 — 표만 세운다(이름은 그릴 때 displayPiggyName() 을 다시
+    // 읽는다, 위 state 선언부 주석 참고). 문구의 생명주기는 mountReturn()/
+    // chogHomeMarkupForReturn 이 관리한다.
+    state.returnArrivalAlarm = true;
     setScene("return", "Piggy is home.", "One tag.");
     return;
   }
@@ -2656,17 +2697,250 @@ const HOME_FIRST_JOURNEY_CARD_MS = 1200;
 // [A-411-r] Second Journey 진입은 이제 settle() 의 조용한-뒤-Paper 자동전개(아래)
 // 하나뿐이다 — A-411-p 가 걸었던 Chog 탭(onTap) 직행은 Owner 최신 규칙과 충돌해
 // 되돌렸다(mountHome() onTap 주석 참고). Chog 탭은 원래 HOME 패드를 열 뿐이다.
+// [A-412 §1] Money/Piggy 상세는 sendstay(=실제 Home 대시보드)안에서만 뜻이 있다. 다른
+// 씬은 이 pad 를 그대로 재사용하지만(homeCharacter/renderAway/renderReturn 등) 그 안에서는
+// 늘 "home" 두 카드만 보여준다 — state.homePaperMode 가 어쩌다 남아 있어도(§setScene 이
+// 보통 지운다) 새지 않는다.
+function homePaperEffectiveMode(scene) {
+  return scene === "sendstay" ? state.homePaperMode : "home";
+}
+
+// [A-412 §3] MON/shMON 값 하나를 사람이 읽는 자릿수로 줄인다. 기존 formatMoney()(receiptRows
+// 등)는 "$" 를 붙이는 옛 화면 전용 표기라 여기서 재사용하지 않는다 — MON 을 USD 로 쓰지
+// 않는다(§forbidden). 값이 없으면(null/undefined) null 을 그대로 돌려줘 호출부가 미확인으로
+// 그린다 — 0 을 대신 넣지 않는다.
+function formatHomeMoneyAmount(wei) {
+  if (wei === null || wei === undefined) return null;
+  let value;
+  try {
+    value = Number(formatEther(wei));
+  } catch {
+    return null;
+  }
+  if (!Number.isFinite(value)) return null;
+  const decimals = value !== 0 && Math.abs(value) < 0.001 ? 6 : 4;
+  const fixed = value.toFixed(decimals);
+  return fixed.includes(".") ? fixed.replace(/0+$/, "").replace(/\.$/, "") : fixed;
+}
+
+// 지금 이 기기의 하나뿐인 Piggy가 실제로 밖에 나가 있는 중인가 — home-paper.js
+// homeStatusFromScene() 과 같은 판정(scene==="away")을 여기서도 그대로 쓴다(판정 두 번 0).
+function homeMoneyAwayNow() {
+  return state.scene === "away";
+}
+
+// [A-412 §3/§4] Money 카드 본문 — "at home" / "with [이름]" / "actually away" 를 한 번에
+// 두 줄만 켠다(같은 shMON 잔액을 소유(엔트러스트)와 상태(지금 밖) 양쪽으로 중복합산하지
+// 않는다, canon "with 와 away 가 같은 돈이면 중복합산행 0"). 클릭 가능한 한 줄만
+// #homePaperMoneyRow 로 Piggy 상세를 연다.
+function homeMoneyBodyMarkup(name) {
+  const time = homeTimeNow();
+  if (state.homeMoneyStatus === "idle" || state.homeMoneyStatus === "loading") {
+    return homeMoneyMarkup({
+      title: "MY MONEY",
+      time,
+      rows: [
+        { label: "at home", checking: true },
+        { id: "homePaperMoneyRow", label: `with ${name}`, checking: true },
+      ],
+    });
+  }
+  if (state.homeMoneyStatus === "error") {
+    return homeMoneyMarkup({
+      title: "MY MONEY",
+      time,
+      status: {
+        text: state.homeMoneyErrorText || "couldn't read the balance.",
+        retryLabel: "try reading again",
+      },
+    });
+  }
+  const awayNow = homeMoneyAwayNow();
+  const nativeAmount = formatHomeMoneyAmount(state.homeMoneyNativeWei);
+  const shmonAmount = formatHomeMoneyAmount(state.homeMoneyShmonWei);
+  return homeMoneyMarkup({
+    title: "MY MONEY",
+    time,
+    rows: [
+      { label: "at home", amount: nativeAmount, unit: nativeAmount === null ? undefined : "MON" },
+      {
+        id: "homePaperMoneyRow",
+        label: `with ${name}`,
+        amount: awayNow ? HOME_NOT_APPLICABLE_LABEL : shmonAmount,
+        unit: awayNow || shmonAmount === null ? undefined : "shMON",
+        clickable: !awayNow && shmonAmount !== null,
+      },
+      {
+        id: "homePaperMoneyRow",
+        label: "actually away",
+        amount: awayNow ? shmonAmount : HOME_NOT_APPLICABLE_LABEL,
+        unit: awayNow && shmonAmount !== null ? "shMON" : undefined,
+        clickable: awayNow && shmonAmount !== null,
+      },
+    ],
+  });
+}
+
+// [A-412-b §2] Piggy 상세 — 실제 확인 가능한 필드만 채운다. 근거 없는 필드는 null(미확인),
+// 이 Piggy/이번 트립에 구조적으로 없는 값은 HOME_NOT_APPLICABLE_LABEL(해당없음)로 갈라
+// 쓴다. "changed"/"work state"/"expected back" 은 현재 이 앱에 그 값을 뜻이 갈리지 않게
+// 알려주는 원천이 없어(§보고 "미확인 필드") null 로 둔다 — receipt-paper.js 가 "kept" 를
+// 같은 이유로 비워 두는 것과 같은 판단이다. "went out with"/"cost so far" 는 마지막
+// 실제 receipt(state.receipts[0])에 있는 그대로다(sent/gas, main.js settleSend()가 이미
+// 만든 값 — 새로 계산하지 않는다).
+function homePiggyDetailBodyMarkup(name) {
+  const time = homeTimeNow();
+  if (state.homeMoneyStatus === "idle" || state.homeMoneyStatus === "loading") {
+    return homePiggyDetailMarkup({ name, time, status: { text: "확인중", retryLabel: "try reading again" } });
+  }
+  if (state.homeMoneyStatus === "error") {
+    return homePiggyDetailMarkup({
+      name,
+      time,
+      status: {
+        text: state.homeMoneyErrorText || "couldn't read the balance.",
+        retryLabel: "try reading again",
+      },
+    });
+  }
+  const shmonAmount = formatHomeMoneyAmount(state.homeMoneyShmonWei);
+  const receipt = state.receipts[0] || null;
+  const sentAmount = receipt ? formatHomeMoneyAmount(receipt.sent) : null;
+  const gasAmount = receipt ? formatHomeMoneyAmount(receipt.gas) : null;
+  return homePiggyDetailMarkup({
+    name,
+    time,
+    wentOutWith: receipt ? (sentAmount === null ? null : `${sentAmount} MON`) : HOME_NOT_APPLICABLE_LABEL,
+    now: shmonAmount === null ? null : `${shmonAmount} shMON`,
+    changed: null,
+    workState: null,
+    expectedBack: null,
+    costSoFar: receipt ? (gasAmount === null ? null : `${gasAmount} MON`) : HOME_NOT_APPLICABLE_LABEL,
+  });
+}
+
 function homePadMarkup(scene) {
-  // [A-377 §2] 기록 보기 entry 는 Home 대시보드(scene "sendstay")에서만 실제로 채운다.
-  // 다른 씬에서는 이 pad 자체가 opacity 0 이 되므로(chog-home.js cardClaimed) 빈 문자열을
-  // 주고, Home 이 아닌 곳에서 자동으로 기록이 열리는 경로를 만들지 않는다(§5).
-  const recordsEntryMarkup = scene === "sendstay" ? homePaperRecordsEntryMarkup(state.receipts.length) : "";
-  return homePaperMarkup({
-    name: displayPiggyName(),
+  const mode = homePaperEffectiveMode(scene);
+  const name = displayPiggyName();
+  // [A-377 §2] 기록 보기 entry 는 Home 대시보드(scene "sendstay")의 "home" 모드에서만
+  // 실제로 채운다. 다른 씬/모드에서는 이 pad 자체가 opacity 0 이거나(chog-home.js
+  // cardClaimed) Money/Piggy 상세 본문이 대신 그 자리를 쓰므로(§home-paper.js
+  // homePaperMarkup mode!=="home" 분기) 빈 문자열을 주고, 자동으로 기록이 열리는 경로를
+  // 만들지 않는다(§5).
+  const recordsEntryMarkup = mode === "home" && scene === "sendstay" ? homePaperRecordsEntryMarkup(state.receipts.length) : "";
+  const base = {
+    name,
     time: homeTimeNow(),
     recordsEntryMarkup,
     ...homeStatusFromScene(scene),
-  });
+  };
+  if (mode === "home") {
+    return homePaperMarkup({ mode: "home", ...base });
+  }
+  const bodyMarkup = mode === "money" ? homeMoneyBodyMarkup(name) : homePiggyDetailBodyMarkup(name);
+  return homePaperMarkup({ mode, ...base, bodyMarkup });
+}
+
+// [A-412 §3] 실제 읽기(publicClient.getBalance/readShmonBalance)만 — write/서명/tx 는
+// 여기 없다. 이미 진행 중이면(requestId 로 판정) 겹쳐 부르지 않는다. state.address 가
+// 없으면(이론상 sendstay 는 인증된 뒤에만 뜬다) 새 인증/wallet-connect 흐름을 걸지 않고
+// 그냥 에러 상태로 남긴다(§forbidden "auth 재시도 프롬프트 0") — 재시도 버튼은 이
+// 함수를 다시 부를 뿐이다.
+let homeMoneyRequestSeq = 0;
+async function fetchHomeMoneyData() {
+  const requestId = ++homeMoneyRequestSeq;
+  if (!state.address) {
+    state.homeMoneyStatus = "error";
+    state.homeMoneyErrorText = "no saved account to read from yet.";
+    refreshHomePaperMount();
+    return;
+  }
+  state.homeMoneyStatus = "loading";
+  refreshHomePaperMount();
+  let nativeWei = null;
+  let shmonWei = null;
+  let errorText = null;
+  try {
+    [nativeWei, shmonWei] = await Promise.all([
+      publicClient.getBalance({ address: state.address }),
+      readShmonBalance(state.address),
+    ]);
+  } catch (error) {
+    errorText = error instanceof Error ? error.message : String(error);
+  }
+  if (requestId !== homeMoneyRequestSeq) return; // 더 최신 요청이 이미 떴다.
+  if (errorText) {
+    state.homeMoneyStatus = "error";
+    state.homeMoneyErrorText = errorText;
+  } else {
+    state.homeMoneyStatus = "ready";
+    state.homeMoneyErrorText = null;
+    state.homeMoneyNativeWei = nativeWei;
+    state.homeMoneyShmonWei = shmonWei;
+  }
+  refreshHomePaperMount();
+}
+
+// homePaperMarkup() 이 돌려주는 것은 `.homePaperMount` 통째다. chog-home.js layout() 이
+// 이 wrapper **자신**(padChild)의 left/top/width/height 를 한 번만 재는데, wrapper 를
+// 통째로 새 노드로 갈면 그 참조가 끊긴다 — 그래서 wrapper 는 그대로 두고 **안의
+// `#homePaper` 부분만** 꺼내 innerHTML 로 바꿔 끼운다(render() 를 다시 부르지 않는다 —
+// 그러면 mountChogHome() 이 처음부터 다시 돌아 손끝-고정 상태가 끊긴다, §openRecordsCard
+// 주석과 같은 이유).
+function extractHomePaperInner(markup) {
+  const temp = document.createElement("div");
+  temp.innerHTML = markup;
+  return temp.querySelector("#homePaper")?.outerHTML || "";
+}
+
+function refreshHomePaperMount() {
+  const mount = document.querySelector(".homePaperMount");
+  if (!mount) return;
+  const inner = extractHomePaperInner(homePadMarkup(state.scene));
+  if (inner) mount.innerHTML = inner;
+}
+
+// [A-412 §1] 집도장 클릭 — HOME 이면 Money 를 열고(그리고 아직 안 읽었으면/실패했으면
+// 곧장 읽는다), 그 밖(Money/Piggy 상세)이면 곧장 HOME 으로 되돌린다(home-paper.js 의
+// stampLabel "Back to home" 과 같은 계약). sendstay 가 아니면(다른 씬에서 우연히 눌려도)
+// 아무 것도 하지 않는다 — Money 개념 자체가 sendstay 안에서만 있다.
+function toggleHomePaperMoneyMode() {
+  if (state.scene !== "sendstay") return;
+  if (state.homePaperMode === "home") {
+    state.homePaperMode = "money";
+    refreshHomePaperMount();
+    if (state.homeMoneyStatus === "idle" || state.homeMoneyStatus === "error") fetchHomeMoneyData();
+  } else {
+    state.homePaperMode = "home";
+    refreshHomePaperMount();
+  }
+}
+
+// [A-412 §1] 같은 왼쪽 종이 안 위임 클릭 하나 — `.homePaperMount` 는 chog-home.js 가
+// 참조를 쥐고 있는 안정된 노드라(위 refreshHomePaperMount 주석) render() 를 다시 부르지
+// 않는 내부 전환에도 매번 새로 붙일 필요가 없다(§recordsCard 델리게이션과 같은 자리 규율,
+// render() 의 #recordsCard 리스너 참고).
+function handleHomePaperMountClick(event) {
+  if (state.scene !== "sendstay") return;
+  if (event.target.closest("#homePaperMoneyToggle")) {
+    toggleHomePaperMoneyMode();
+    return;
+  }
+  if (event.target.closest("#homePiggyDetailBack")) {
+    state.homePaperMode = "money";
+    refreshHomePaperMount();
+    return;
+  }
+  if (event.target.closest("#homeMoneyRetry") || event.target.closest("#homePiggyDetailRetry")) {
+    fetchHomeMoneyData();
+    return;
+  }
+  if (event.target.closest("#homePaperMoneyRow")) {
+    if (state.homePaperMode === "money" && state.homeMoneyStatus === "ready") {
+      state.homePaperMode = "piggyDetail";
+      refreshHomePaperMount();
+    }
+  }
 }
 
 // [A-356 §1 → A-359 §1 교정] cardAnchorMarkup 은 이제 여기(#homeBoard 안)에 얹지
@@ -3156,12 +3430,26 @@ function returnCheckingLine() {
 // 받는다 — "캐릭터 따라 위치" 요구를 새 산수 없이 만족한다. INK box(chog-home.js 351..
 // 548,276..527)보다 오른쪽에 두어 얼굴·몸을 가리지 않는다(스타일은 style.css
 // .chogCheckLine, 기존 .notice 노란(var(--gold)) 텍스트 톤 재사용 — 새 그래픽/모션 0).
-function chogHomeMarkupWithCheckLine(scene) {
-  const base = chogHomeMarkup({ padMarkup: homePadMarkup(scene) });
-  const text = returnCheckingLine();
-  if (!text) return base;
-  const bubble = `<span class="chogCheckLine" id="returnCheckLine">${escapeHtml(text)}</span>`;
-  return base.replace('<div class="chogHome__hit"', `${bubble}<div class="chogHome__hit"`);
+//
+// [A-413 §4] 같은 자리에 두 번째 발화(작은 노란 "[이름] is coming home" 알람)를 더 끼운다.
+// state.returnArrivalAlarm 은 finishTrip() 이 실제 단수 귀환에서만 세우고, mountReturn()
+// 이 이 씬의 표시 생명주기(파일링 완료/씬 이탈)가 끝날 때만 지운다 — state.returnArrival
+// (mountReturn() 이 마운트되는 즉시 소비하는 1회용 재생 표)과는 다른 값이라 이 문구가
+// 그 소비 순간에 같이 사라지지 않는다. 둘은 실제로 동시에 서지 않는다(귀환 성공은 항상
+// awayLine 을 "It's back."으로 먼저 넘겨 두므로 returnCheckingLine() 이 비어 있다) — 그래도
+// 서로 다른 id/역할로 남겨 SecondPaper 의 checking 표시와도 섞이지 않게 한다.
+function chogHomeMarkupForReturn(scene) {
+  let markup = chogHomeMarkup({ padMarkup: homePadMarkup(scene) });
+  const checkText = returnCheckingLine();
+  if (checkText) {
+    const bubble = `<span class="chogCheckLine" id="returnCheckLine">${escapeHtml(checkText)}</span>`;
+    markup = markup.replace('<div class="chogHome__hit"', `${bubble}<div class="chogHome__hit"`);
+  }
+  if (state.returnArrivalAlarm) {
+    const alarm = `<span class="chogCheckLine" id="returnArrivalAlarm">${escapeHtml(displayPiggyName())} is coming home</span>`;
+    markup = markup.replace('<div class="chogHome__hit"', `${alarm}<div class="chogHome__hit"`);
+  }
+  return markup;
 }
 
 // 장면 — 귀환. 화면 바인딩은 `return-view.js` 가 갖는다 —
@@ -3175,7 +3463,7 @@ function renderReturn() {
     line: "",
     receiptRowsMarkup: returnReceiptRows(),
     name: displayPiggyName(),
-    homeChogMarkup: chogHomeMarkupWithCheckLine("return"),
+    homeChogMarkup: chogHomeMarkupForReturn("return"),
     devExtra: isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : "",
   });
 }
@@ -3192,10 +3480,20 @@ function mountReturn() {
   const play = state.returnArrival;
   state.returnArrival = false;
 
+  // [A-413 §4] 안전망 — 이 return 씬을 어떤 경로로 떠나든(파일링/실패 폴백/재방문 즉시
+  // filebox 행) 알람 표는 다음 씬으로 새지 않는다. 정상 경로(파일링 완료)는 아래
+  // runSceneFrames 감시가 더 먼저(같은 씬 안에서 DOM만) 지우고 이 값도 같이 비운다 —
+  // 이 teardown 은 그 감시가 못 미친 나머지 이탈 경로(에러 폴백/즉시 filebox 등)를 덮는
+  // 마지막 안전망이다.
+  onSceneTeardown(() => { state.returnArrivalAlarm = false; });
+
   // [A-411-i] 체킹 발화가 이번 진입에 실제로 붙었는지 — renderReturn() 이 같은 조건으로
   // 정한 것과 같은 판정이다(state.awayLine 은 그 사이 바뀌지 않는다). 안 붙었으면(정상
   // 흐름 — finishTrip() 이 이미 "It's back." 로 넘겨 놓은 뒤) 아래 감시를 아예 안 켠다.
   const hadCheckLine = !!returnCheckingLine();
+  // [A-413 §4] 알람 발화가 이번 진입에 실제로 붙었는지 — 위 teardown 과 별개로, "파일링이
+  // 끝나면 같은 씬 안에서 곧장 지운다"는 §411-i 와 같은 규율을 알람에도 그대로 적용한다.
+  const hadAlarm = !!state.returnArrivalAlarm;
   let errored = false;
   const returnView = mountReturnView({
     isValid: valid,
@@ -3240,11 +3538,17 @@ function mountReturn() {
   // 씬 lifecycle 에 이미 있는 runSceneFrames() 로 매 프레임 한 번 확인해 지운다 — 새 폴링
   // 장치를 만들지 않는다. 씬을 나가면(teardown) runSceneFrames 자신이 멈추고, 어차피
   // render() 의 innerHTML 통째 교체가 이 span 을 포함해 전부 지운다(§401 주석).
-  if (hadCheckLine && returnView) {
+  // [A-413 §4] 알람도 같은 자리에서 같은 방식으로 지운다 — 파일링이 끝나는 순간 DOM 에서
+  // 떼고 state 도 비운다(그 뒤에는 "해당 상태가 끝났다"는 사실 자체가 없다, 새 상태 0).
+  if ((hadCheckLine || hadAlarm) && returnView) {
     runSceneFrames(() => {
       if (!valid()) return false;
       if (returnView.filed) {
-        document.querySelector("#returnCheckLine")?.remove();
+        if (hadCheckLine) document.querySelector("#returnCheckLine")?.remove();
+        if (hadAlarm) {
+          document.querySelector("#returnArrivalAlarm")?.remove();
+          state.returnArrivalAlarm = false;
+        }
         return false;
       }
       return true;
@@ -3565,6 +3869,10 @@ function render() {
   // 부르지 않고 renderRecordsCardBody() 가 innerHTML 만 바꾸므로, 매번 다시 부를 필요가
   // 없다 — 이 델리게이션은 이번 sendstay 마운트 동안 계속 유효하다).
   document.querySelector("#homeRecordsButton")?.addEventListener("click", openRecordsCard);
+  // [A-412 §1] Money/Piggy 상세 내부 전환 — `.homePaperMount` 는 render() 를 다시 부르지
+  // 않는 내부 갱신(refreshHomePaperMount)에도 살아남는 안정된 노드라 위임 클릭 하나로
+  // 충분하다(§recordsCard 와 같은 자리 규율, 바로 아래 리스너 참고).
+  document.querySelector(".homePaperMount")?.addEventListener("click", handleHomePaperMountClick);
   document.querySelector("#recordsCard")?.addEventListener("click", (event) => {
     if (event.target.closest("#recordsCardClose")) {
       closeRecordsCard();
