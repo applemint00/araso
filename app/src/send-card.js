@@ -82,14 +82,34 @@ export function sendCardDate(now = new Date()) {
 // "이미 합의된 실제 조건"을 보여주는 것뿐이고, 새 입력이 아니다 — 눌러서 켜고 끄는
 // <input> 이 아니다(§7 "체크표시는 기존 실제 Permission 의미를 넘어 새권한을 부여하지
 // 않는다"). 원본 13px/1.2 체크행 기준.
+//
+// [A-415-c] 체크행 밑줄(물결선) 복원 — Owner 제공 원본 `<local>`,
+// 감독 보존본 `.../scene-card-handoff/assets/send-checklist-underline-original.svg` 그대로
+// path/viewBox(0 0 86 6)/stroke(#141210 1.6 round-cap) 불변 이식. 원본의 clipPath
+// (id clip0_2_427)는 rect 가 viewBox 와 정확히 같은 86×6 라 시각 효과가 없고, 여러 term
+// 행에 반복되면 id 가 중복돼 무효 HTML이 되므로 드롭한다(시각 차이 없음 — SVG 루트는
+// 기본적으로 자기 뷰포트로 clip 됨). 크기는 원본 authored 치수(86×6, 종횡비 14.33:1)를
+// 그대로 한 번 사용 — 체크리스트 칸(.sendCard__terms width:290, 들여쓰기 20) 안에
+// 넉넉히 들어가고 SendCard.dc.html 실측 물결선(~100×6, 같은 칸)과 크기가 같은 자리수라
+// 별도 동적 재계산 없이 이 값으로 고정한다. 좌측 20px 오프셋 = 체크박스 13 + gap 7
+// (.sendCard__termCheckbox/.sendCard__termRow 실측과 동일) — 라벨 텍스트 시작선에 맞춘다.
+//
+// 노란 하이라이트(SendCard.dc.html top:206px 블록 실측 `background:rgba(224,177,0,.20);
+// width:fit-content; padding:1px 3px 1px 0; border-radius:2px;`, 세 상태 동일 적용)는
+// CSS 라 여기서 넣지 않는다 — style.css 는 통합자 소유, OUTBOX/보고로 전달한다.
 function sendCardTermRowMarkup(term) {
   return `
-    <div class="sendCard__termRow">
-      <svg class="sendCard__termCheckbox" viewBox="0 0 34 34" aria-hidden="true">
-        <g class="sendCard__termBoxInk"><path d="M5 6 L29 4 L30 29 L4 30 Z" /></g>
-        <g class="sendCard__termCheckInk"><path d="M8 18 L15 26 L28 6" /></g>
+    <div class="sendCard__termItem">
+      <div class="sendCard__termRow">
+        <svg class="sendCard__termCheckbox" viewBox="0 0 34 34" aria-hidden="true">
+          <g class="sendCard__termBoxInk"><path d="M5 6 L29 4 L30 29 L4 30 Z" /></g>
+          <g class="sendCard__termCheckInk"><path d="M8 18 L15 26 L28 6" /></g>
+        </svg>
+        <span class="sendCard__termLabel">${escapeHtml(term)}</span>
+      </div>
+      <svg class="sendCard__termUnderline" width="86" height="6" viewBox="0 0 86 6" fill="none" aria-hidden="true" style="display:block; margin:2px 0 0 20px;">
+        <path d="M1 3.40001C17.6667 1.93334 34.6667 2.13334 52 4.00001C69.3333 5.86667 80 5.53334 84 3.00001" stroke="#141210" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
-      <span class="sendCard__termLabel">${escapeHtml(term)}</span>
     </div>
   `;
 }

@@ -927,10 +927,18 @@ h1 {
   gap: 6px;
 }
 
+/* [A-415-c] 정본 SendCard.dc.html top:206 블록의 노란 체크행 하이라이트 복원 —
+   세 상태 모두 같은 값이라 렌더된 term 행 전부에 적용된다(조건부 아님). 새 막대/스트립을
+   만드는 것이 아니라 원본에 있던 표시를 되살리는 것이다(Owner A-415-c 승인). 물결 밑줄은
+   send-card.js 가 Owner 제공 원본 SVG 를 인라인으로 넣는다. */
 .sendCard__termRow {
   display: flex;
   align-items: center;
   gap: 7px;
+  width: fit-content;
+  padding: 1px 3px 1px 0;
+  border-radius: 2px;
+  background: rgba(224, 177, 0, 0.2);
 }
 
 .sendCard__termCheckbox {
