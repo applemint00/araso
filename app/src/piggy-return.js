@@ -339,8 +339,22 @@ export function createReturnRenderer(canvas, opts) {
       }
     }
 
-    // ③ 폴더 뒤 → 영수증 → 폴더 앞. 원본 z 순서 그대로.
-    const folderRect = [580, 626, 130, 100];
+    // ③ 폴더 뒤 → 영수증 → 폴더 앞. 원본 z 순서 그대로(원본 renderer.js:38,43 폴더 draw).
+    // [A-415-e] y=626 은 원본 renderer.js:38 의 리터럴 그대로였지만, 원본은 폴더와 종이가
+    // **한 좌표계**(stage 1200×800)에 있던 반면 이 파일은 폴더를 Piggy group 다리
+    // (enterGroup: GROUP_SCALE/DX/DY)로, 손끝 종이(papX/papY, 위 351-357행)는 Chog
+    // native bridge(NATIVE_K/OX/OY, 65-75행 — Home Chog 잉크에 맞춘 별도 축척)로 각각
+    // board 에 옮긴다 — 두 다리는 거의 같은 배율이지만(≈0.6881 vs ≈0.6887) 원점이 달라
+    // 최종 정착(t=15.6) 종이 아래변이 folder 아래변보다 board 로 약 3.13 낮게 떨어졌다
+    // (폴더 x=580 그대로일 때 폴더 bottom≈636.93, 종이 bottom≈640.06 — 실측, 아래 흰
+    // 조각의 원인). A-375(`folder-left.patch`, 로컬 커밋 e7f3b7f)가 이미 같은 이유로
+    // x 만 630→580 으로 옮겨 손 x 와 맞췄다(y·크기는 그때 안 건드림, OUTBOX #10059-60).
+    // 여기서는 그 축의 y 만 같은 방식으로 맞춘다: t∈[14,15.6] 전 구간에서 종이 bbox 를
+    // 재는 스크립트로 최적 y 를 풀면 632 가 위/아래 여유를 가장 고르게 준다(위 여유
+    // ≈1.30, 아래 여유≈1.00 board 단위, t=14.01/14.70 각각 최악점 — 폴더는 그대로
+    // 580,130,100, **크기·x·레이어 변경 0**, 폴더를 키워 덮지 않는다). 원본 좌표·시간
+    // 함수(stateAt/nativeState/papX·papY mix 식)는 전혀 건드리지 않았다.
+    const folderRect = [580, 632, 130, 100];
     if (folderAlpha > 0 && img("folder-back")) {
       ctx.save(); enterGroup(); ctx.globalAlpha = folderAlpha;
       ctx.drawImage(img("folder-back"), ...folderRect); ctx.restore();

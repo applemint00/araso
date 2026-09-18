@@ -52,6 +52,42 @@ function padRect(vb, fit) {
 const IDLE_BOX = padRect(IDLE_VB, IDLE_FIT);
 const SLEEP_BOX = padRect(SLEEP_VB, SLEEP_FIT);
 
+// --- 졸기 머리 정렬 (A-415-g/h) -------------------------------------------
+// Owner 최종규칙: 졸기도 Home/걷기와 같은 눈없는 정본머리(home-head.png)를 쓰고, 원래
+// 얼굴 방향/좌표는 유지한 채 눈만 sleep-eyes-* 로 단계 교체한다. 기존 sleep-head.png
+// (277×326)는 눈·코가 구워진 옛 자산이라 그 위에 눈 파츠가 또 올라가 두 쌍으로
+// 보였다(감독 스크린샷 리포트). 새 그림·새 추출 0 — 두 PNG 의 알파 실루엣 bbox 를
+// Pillow 로 실측해 같은 좌표계로 옮겨 재사용한다:
+//   home-head.png (270×322)  실루엣 bbox (41,49)-(227,209), 187×161 → 중심(134,129)
+//   sleep-head.png(277×326)  실루엣 bbox (50,52)-(235,212), 186×161 → 중심(142.5,132)
+// 실루엣 크기 187×161 대 186×161(반올림 오차 1px 뿐) 로 캐논 §3 "머리 비율 1.0000"과
+// 일치한다 — 그래서 재추출·재스케일 없이 중심만 맞추는 평행이동(8.5, 3 — sleep 캔버스
+// px) 으로 충분하다. 이 오프셋은 sleep-eyes-* 자체 좌표와도 이미 맞는다: home-head 위의
+// 원래 눈 슬롯(home-face-base.png 다크 bbox 93,125-187,177, homehead 실루엣 대비 오프셋
+// 51/76)을 이 평행이동으로 sleep 캔버스에 옮기면(101.5,128)-(195.5,180) 이 되어
+// sleep-eyes-base.png 실측 눈 bbox(106,129)-(186,166, 오프셋 56/77)와 상단 1px·중심
+// 2.5px 오차로 겹친다 — 눈 파츠 좌표는 그대로 두고 머리만 옮기면 된다.
+const HOME_HEAD_RASTER = { w: 270, h: 322 };
+const SLEEP_HEAD_RASTER = { w: 277, h: 326 };
+const HEAD_ALIGN_DX = 8.5; // sleep 캔버스(277) 기준 px
+const HEAD_ALIGN_DY = 3; // sleep 캔버스(326) 기준 px
+// home-head.png 를 앉힐 자리 — SLEEP_BOX 와 같은 배율(SLEEP_BOX.width/height 는 이미
+// vbw/vbh*fit.k 이므로, 아래도 같은 fit.k 를 공유해 두 파츠가 화면에서 같은 px당
+// 래스터 배율로 그려진다).
+const HEAD_BOX = {
+  left: SLEEP_BOX.left + (HEAD_ALIGN_DX * SLEEP_BOX.width) / SLEEP_HEAD_RASTER.w,
+  top: SLEEP_BOX.top + (HEAD_ALIGN_DY * SLEEP_BOX.height) / SLEEP_HEAD_RASTER.h,
+  width: (HOME_HEAD_RASTER.w * SLEEP_BOX.width) / SLEEP_HEAD_RASTER.w,
+  height: (HOME_HEAD_RASTER.h * SLEEP_BOX.height) / SLEEP_HEAD_RASTER.h,
+};
+// 위 HEAD_BOX 와 짝을 이루는 "user 좌표" 상자 — originPct() 가 pivot(%) 계산에 쓴다.
+const HEAD_VB = {
+  vbx: SLEEP_BOX.vbx + (HEAD_ALIGN_DX * SLEEP_BOX.vbw) / SLEEP_HEAD_RASTER.w,
+  vby: SLEEP_BOX.vby + (HEAD_ALIGN_DY * SLEEP_BOX.vbh) / SLEEP_HEAD_RASTER.h,
+  vbw: (HOME_HEAD_RASTER.w * SLEEP_BOX.vbw) / SLEEP_HEAD_RASTER.w,
+  vbh: (HOME_HEAD_RASTER.h * SLEEP_BOX.vbh) / SLEEP_HEAD_RASTER.h,
+};
+
 // user 좌표의 한 점을 그 PNG 안에서의 % 로 — transform-origin 에 쓴다.
 function originPct(box, ux, uy) {
   return `${((ux - box.vbx) / box.vbw) * 100}% ${((uy - box.vby) / box.vbh) * 100}%`;
@@ -96,8 +132,8 @@ const clamp01 = (v) => Math.min(1, Math.max(0, v));
 const ease = (x) => x * x * (3 - 2 * x);
 const lerp = (a, b, t) => a + (b - a) * t;
 
-function img(name, extra = "") {
-  return `<img class="chogHome__part" data-part="${name}" src="${DIR}/${name}.png" alt="" ${extra} />`;
+function img(name, extra = "", srcName = name) {
+  return `<img class="chogHome__part" data-part="${name}" src="${DIR}/${srcName}.png" alt="" ${extra} />`;
 }
 
 // padMarkup — A-336: 후버 노트패드는 이제 확정 home-paper.js 공유 view 다(예전 단일
@@ -115,7 +151,7 @@ export function chogHomeMarkup({ padMarkup = "" } = {}) {
         <img class="chogHome__walk" id="chogHomeWalk" src="${DIR}/walk-00.png" alt="" />
       </div>
       <div class="chogHome__sleep" id="chogHomeSleep" aria-hidden="true">
-        ${SLEEP_PARTS.map((p) => img(p)).join("")}
+        ${SLEEP_PARTS.map((p) => img(p, "", p === "sleep-head" ? "home-head" : p)).join("")}
         ${EYE_STAGES.map((s) => img(`sleep-eyes-${s}`, `data-eye-stage="${s}"`)).join("")}
       </div>
       <div class="chogHome__padWrap" id="chogHomePad">${padMarkup || `<img src="${DIR}/notepad.png" alt="" />`}</div>
@@ -134,6 +170,10 @@ function layout(root) {
   };
   root.querySelectorAll(".chogHome__stack > *").forEach((el) => put(el, IDLE_BOX));
   root.querySelectorAll(".chogHome__sleep > *").forEach((el) => put(el, SLEEP_BOX));
+  // [A-415-g/h] sleep-head 만 home-head.png(눈없는 정본머리) 자리(HEAD_BOX, 위 실측
+  // 오프셋)로 다시 덮어쓴다. 다리·몸통·눈시트는 그대로 SLEEP_BOX(변경 없음).
+  const sleepHeadPart = root.querySelector('[data-part="sleep-head"]');
+  if (sleepHeadPart) put(sleepHeadPart, HEAD_BOX);
 
   // 회전 중심 — 원본 pivot 을 PNG 안의 % 로 옮긴 것.
   const q = (n) => root.querySelector(`[data-part="${n}"]`);
@@ -155,7 +195,10 @@ function layout(root) {
   const torsoPivotY = 1580 + SLEEP_BODY_TY;
   const head = q("sleep-head");
   const torso = q("sleep-torso");
-  if (head) head.style.transformOrigin = originPct(SLEEP_BOX, headPivotX, headPivotY);
+  // head 는 이제 자기만의 상자(HEAD_BOX)를 쓰므로 pivot% 도 그 상자 기준인 HEAD_VB
+  // 로 다시 잡는다(SLEEP_BOX 기준 % 를 그대로 쓰면 다른 크기 상자에 적용돼 어긋난다).
+  // torso·눈은 여전히 SLEEP_BOX 그대로라 손대지 않는다.
+  if (head) head.style.transformOrigin = originPct(HEAD_VB, headPivotX, headPivotY);
   if (torso) torso.style.transformOrigin = originPct(SLEEP_BOX, 1110, torsoPivotY);
   root.querySelectorAll("[data-eye-stage]").forEach((el) => {
     el.style.transformOrigin = originPct(SLEEP_BOX, headPivotX, headPivotY);

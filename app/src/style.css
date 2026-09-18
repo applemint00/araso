@@ -1613,15 +1613,18 @@ h1 {
   outline-offset: 4px;
 }
 
-/* [A-411-i] Owner: 귀환/최종수납씬 가운데 독립 "I'll check it." 대신, 같은 체킹 상태를
-   초그 옆 작은 노란 발화로만 보인다(main.js returnCheckingLine/chogHomeMarkupWithCheckLine
-   만 이 클래스를 붙인다 — 다른 씬 0). 새 말풍선 그래픽은 만들지 않는다 — 기존 안내줄
-   `.notice` 의 노란(var(--gold)) 텍스트 톤만 그대로 가져온다. `.chogHome` 안(마지막 자식
-   .chogHome__hit 바로 앞)에 두어 그 부모에 걸리는 place(CORNER_TX,CORNER_TY,HOME_SCALE)
-   변환(chog-home.js)을 그대로 받는다 — 그래서 캐릭터가 움직이면 이 글자도 같이
-   움직이고, 화면 크기와도 캐릭터와 같은 비율로 커지고 작아진다. 자리는 INK
-   box(chog-home.js 351..548,276..527) 오른쪽 바깥이라 얼굴·몸·(카드는 별도 좌표계인
-   returnTap 이 손끝 자리에 뜨는 동안만 보인다) 어느 쪽도 겹치지 않는다. */
+/* [A-411-i → A-415-f] Owner: 귀환/최종수납씬 가운데 독립 "I'll check it." 대신, 초그 옆
+   작은 노란 발화 하나만 남긴다 — A-415-f 최종합의로 체킹 문구("checking...")는 수령
+   전/후 어느 쪽도 완전히 없앴고(main.js 의 옛 returnCheckingLine/#returnCheckLine 제거),
+   지금 이 클래스를 붙이는 것은 main.js chogHomeMarkupForReturn() 의 "[이름] is coming
+   home" 알람(#returnArrivalAlarm) 하나뿐이다 — 다른 씬 0. 새 말풍선 그래픽은 만들지
+   않는다 — 기존 안내줄 `.notice` 의 노란(var(--gold)) 텍스트 톤만 그대로 가져온다.
+   `.chogHome` 안(마지막 자식 .chogHome__hit 바로 앞)에 두어 그 부모에 걸리는
+   place(CORNER_TX,CORNER_TY,HOME_SCALE) 변환(chog-home.js)을 그대로 받는다 — 그래서
+   캐릭터가 움직이면 이 글자도 같이 움직이고, 화면 크기와도 캐릭터와 같은 비율로
+   커지고 작아진다. 자리는 INK box(chog-home.js 351..548,276..527) 오른쪽 바깥이라
+   얼굴·몸·(카드는 별도 좌표계인 returnTap 이 손끝 자리에 뜨는 동안만 보인다) 어느 쪽도
+   겹치지 않는다. */
 .chogCheckLine {
   position: absolute;
   left: 560px;

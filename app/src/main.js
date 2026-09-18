@@ -3414,16 +3414,12 @@ function returnReceiptRows() {
   return receiptPaperMarkup(receiptPaperFields({ receipt, name: displayPiggyName() }));
 }
 
-// [A-411-i] Owner 판정: 귀환/최종수납씬 가운데 독립 "I'll check it." 문구는 남으면 안
-// 된다 — 그 체킹은 초그 역할이라 A-411-e 에서 이미 승인된 것과 같은 낱말("checking...",
-// main.js updateInviteFace())로, 초그 옆에 작게만 보인다. state.awayLine 이 아직
-// "I'll check it."(초기값·sendPiggy() 대입, §963)인 동안만 "체킹 중"이고, finishTrip()
-// 성공이 "It's back."(§902)으로 넘겨 놓은 뒤에는 그 사실 자체가 없다 — 새 상태 0,
-// 있는 값만 읽는다.
-function returnCheckingLine() {
-  return state.awayLine === "I'll check it." ? "checking..." : "";
-}
-
+// [A-415-f] Owner 최종합의: 귀환/최종수납씬의 체킹 발화("checking...", A-411-i 가 옮겨
+// 놓았던 "초그 옆 체킹")는 문서 수령 전/후 어느 쪽도 남기지 않는다 — returnCheckingLine()
+// 자체와 c81c05b 의 "received 뒤에만 삽입" 배선을 전부 걷어냈다. 그 삽입을 완성 정본으로
+// 보지 않는다. Second Journey Paper 자신의 "checking…" 상태(receipt-paper.js)는 이
+// 카드와 무관한 다른 상태라 건드리지 않는다.
+//
 // chogHomeMarkup() 이 돌려주는 것은 `.chogHome` 그 자신이다 — place(CORNER_TX,CORNER_TY,
 // HOME_SCALE)(chog-home.js) 변환이 이 요소 하나에 걸리므로, 발화를 그 **안**(마지막 자식
 // .chogHome__hit 바로 앞)에 끼우면 별도 좌표 계산 없이 캐릭터와 같은 변환을 그대로
@@ -3431,19 +3427,21 @@ function returnCheckingLine() {
 // 548,276..527)보다 오른쪽에 두어 얼굴·몸을 가리지 않는다(스타일은 style.css
 // .chogCheckLine, 기존 .notice 노란(var(--gold)) 텍스트 톤 재사용 — 새 그래픽/모션 0).
 //
-// [A-413 §4] 같은 자리에 두 번째 발화(작은 노란 "[이름] is coming home" 알람)를 더 끼운다.
+// [A-413 §4 / A-415-f] 이 씬에 남는 유일한 발화 — 작은 노란 "[이름] is coming home"
+// 알람. 승인 원본(<private>:10 "0.7–1.8 |
+// Alarm: Honeybun is coming back. / Chog만 짧게 반응", 같은 파일 §38 "실제 알림음은
+// 확정 자산이 없어 넣지 않음")에서 Alarm 구간의 시각 요소는 이 문구 카드 하나와 Chog의
+// 짧은 반응(hop)뿐이다 — 별도 벨/링 그래픽은 canon 에 없다(portal-ring 은 그 뒤
+// "Returning" 구간에 Piggy 가 나오는 포털이고 다른 자산·다른 구간이다, piggy-return.js
+// stateAt() phase 표). Chog 의 반응(hop)은 이미 알람 구간(0.7–2.8s)에 걸려 있다
+// (piggy-return.js alertHop → return-view.js placeChog(), 이 파일 범위 밖, 그대로 둔다).
 // state.returnArrivalAlarm 은 finishTrip() 이 실제 단수 귀환에서만 세우고, mountReturn()
-// 이 이 씬의 표시 생명주기(파일링 완료/씬 이탈)가 끝날 때만 지운다 — state.returnArrival
-// (mountReturn() 이 마운트되는 즉시 소비하는 1회용 재생 표)과는 다른 값이라 이 문구가
-// 그 소비 순간에 같이 사라지지 않는다. 둘은 실제로 동시에 서지 않는다(귀환 성공은 항상
-// awayLine 을 "It's back."으로 먼저 넘겨 두므로 returnCheckingLine() 이 비어 있다) — 그래도
-// 서로 다른 id/역할로 남겨 SecondPaper 의 checking 표시와도 섞이지 않게 한다.
+// 이 이 씬의 표시 생명주기(파일링 완료/씬 이탈)가 끝날 때만 지운다 — mount 되는 이
+// markup 에 곧바로 붙으므로 Piggy 가 보이기 시작하는 t=3.15s(piggyVisible, piggy-return.js
+// stateAt())보다 한참 먼저(t≈0) 화면에 있다. received/필드를 기다리지 않는다(옛
+// 체킹줄과 달리 "수령 확인" 신호가 필요 없다).
 function chogHomeMarkupForReturn(scene) {
   let markup = chogHomeMarkup({ padMarkup: homePadMarkup(scene) });
-  // [A-415 / A-414-e] 체킹 발화는 **여기서 미리 붙이지 않는다**. Owner 실화면 지적:
-  // 초그가 문서를 받기도 전에 checking 을 말했다 — 마운트 시점의 정적 판정(awayLine)으로
-  // 그렸기 때문이다. 이제 return-view 가 실제 수령 순간(canvas 가 Chog 소유권을 갖는
-  // t≈11.4s, 손전달 시작)에 켜 주는 `received` 를 보고 mountReturn() 이 그때 끼운다.
   if (state.returnArrivalAlarm) {
     const alarm = `<span class="chogCheckLine" id="returnArrivalAlarm">${escapeHtml(displayPiggyName())} is coming home</span>`;
     markup = markup.replace('<div class="chogHome__hit"', `${alarm}<div class="chogHome__hit"`);
@@ -3486,26 +3484,10 @@ function mountReturn() {
   // 마지막 안전망이다.
   onSceneTeardown(() => { state.returnArrivalAlarm = false; });
 
-  // [A-411-i] 체킹 발화가 이번 진입에 실제로 붙었는지 — renderReturn() 이 같은 조건으로
-  // 정한 것과 같은 판정이다(state.awayLine 은 그 사이 바뀌지 않는다). 안 붙었으면(정상
-  // 흐름 — finishTrip() 이 이미 "It's back." 로 넘겨 놓은 뒤) 아래 감시를 아예 안 켠다.
-  const hadCheckLine = !!returnCheckingLine();
-  // [A-415] 수령 전에는 발화가 없다 — received 가 처음 true 가 되는 순간 한 번만 끼운다.
-  let checkLineShown = false;
-  const insertCheckLine = () => {
-    if (checkLineShown) return;
-    const host = document.querySelector(".chogHome");
-    const hit = host?.querySelector(".chogHome__hit");
-    if (!host || !hit) return;
-    const bubble = document.createElement("span");
-    bubble.className = "chogCheckLine";
-    bubble.id = "returnCheckLine";
-    bubble.textContent = returnCheckingLine();
-    host.insertBefore(bubble, hit);
-    checkLineShown = true;
-  };
-  // [A-413 §4] 알람 발화가 이번 진입에 실제로 붙었는지 — 위 teardown 과 별개로, "파일링이
-  // 끝나면 같은 씬 안에서 곧장 지운다"는 §411-i 와 같은 규율을 알람에도 그대로 적용한다.
+  // [A-413 §4 / A-415-f] 알람 발화가 이번 진입에 실제로 붙었는지 — "파일링이 끝나면 같은
+  // 씬 안에서 곧장 지운다"는 규율을 여기서 적용한다. 체킹 발화(hadCheckLine/
+  // insertCheckLine, A-411-i~A-415)는 Owner 최종합의로 완전히 걷어냈다 — 수령 전/후
+  // 어느 쪽도 "checking..." 을 남기지 않는다(c81c05b 의 received-게이트 삽입 포함).
   const hadAlarm = !!state.returnArrivalAlarm;
   let errored = false;
   const returnView = mountReturnView({
@@ -3545,25 +3527,19 @@ function mountReturn() {
     onIdleEnter: () => { sceneTimeout(() => { if (valid()) setScene("filebox"); }, 0); },
   });
 
-  // [A-411-i] "수납 완료 후 남아있는 체킹 발화 0" — 둘째 탭(File it) 완료는 return-view.js
-  // 소유(onFiled, 그 파일 재렌더 없이 DOM 만 직접 고친다)라 이 파일이 다시 그리지 않는다.
-  // 그 완료를 이 파일 쪽에서 알 방법은 mountReturnView() 가 돌려주는 `filed` 게터뿐이라,
-  // 씬 lifecycle 에 이미 있는 runSceneFrames() 로 매 프레임 한 번 확인해 지운다 — 새 폴링
-  // 장치를 만들지 않는다. 씬을 나가면(teardown) runSceneFrames 자신이 멈추고, 어차피
-  // render() 의 innerHTML 통째 교체가 이 span 을 포함해 전부 지운다(§401 주석).
-  // [A-413 §4] 알람도 같은 자리에서 같은 방식으로 지운다 — 파일링이 끝나는 순간 DOM 에서
-  // 떼고 state 도 비운다(그 뒤에는 "해당 상태가 끝났다"는 사실 자체가 없다, 새 상태 0).
-  if ((hadCheckLine || hadAlarm) && returnView) {
+  // [A-413 §4 / A-415-f] 파일링(File it) 완료는 return-view.js 소유(onFiled, 그 파일
+  // 재렌더 없이 DOM 만 직접 고친다)라 이 파일이 다시 그리지 않는다. 그 완료를 이 파일
+  // 쪽에서 알 방법은 mountReturnView() 가 돌려주는 `filed` 게터뿐이라, 씬 lifecycle 에
+  // 이미 있는 runSceneFrames() 로 매 프레임 한 번 확인해 알람만 지운다 — 새 폴링 장치를
+  // 만들지 않는다. 씬을 나가면(teardown) runSceneFrames 자신이 멈추고, 어차피 render() 의
+  // innerHTML 통째 교체가 이 span 을 포함해 전부 지운다(§401 주석). state 도 같이 비운다
+  // (그 뒤에는 "해당 상태가 끝났다"는 사실 자체가 없다, 새 상태 0).
+  if (hadAlarm && returnView) {
     runSceneFrames(() => {
       if (!valid()) return false;
-      // [A-415] 수령(received) 뒤에만 발화를 켠다. 문서 받기 전 checking 0.
-      if (hadCheckLine && returnView.received) insertCheckLine();
       if (returnView.filed) {
-        if (hadCheckLine) document.querySelector("#returnCheckLine")?.remove();
-        if (hadAlarm) {
-          document.querySelector("#returnArrivalAlarm")?.remove();
-          state.returnArrivalAlarm = false;
-        }
+        document.querySelector("#returnArrivalAlarm")?.remove();
+        state.returnArrivalAlarm = false;
         return false;
       }
       return true;
@@ -3990,7 +3966,13 @@ if (import.meta.env.DEV) {
     // 켜는 것 말고는 아무것도 하지 않는다 — receipt 생성/저장, 서명, broadcast 호출 0,
     // 기존 금융 가드(sendPiggy 순서·rpId·grant·simulate) 불변.
     if (scene === "away") state.departureArrival = arrival;
-    if (scene === "return") state.returnArrival = arrival;
+    // [A-415-f] Owner 실화면 지적("알람이 안 뜬다")의 실제 원인 — 이 DEV 미리보기로
+    // "return" 씬을 열면 finishTrip() 이 실제 단수 귀환에서 항상 같이 세우는 두 표
+    // (returnArrival/returnArrivalAlarm, §963-967) 중 returnArrivalAlarm 은 세우지
+    // 않았다. chogHomeMarkupForReturn() 은 그 표만 보고 알람 span 을 markup 에 붙이므로
+    // (§3441 이하), 이 경로로 들어오면 render() 가 만드는 첫 markup 자체에 알람이 없어
+    // "마운트했는데 안 보인다"로 나타난다 — 실제 성공 경로와 parity 를 맞춘다.
+    if (scene === "return") { state.returnArrival = arrival; state.returnArrivalAlarm = arrival; }
     // [A-360 §7] "UI preview — no transaction" — 이 함수 자체가 이미 import.meta.env.DEV
     // 안에만 있다(production 진입 0). secondJourneyPreview:true 를 명시적으로 넘겼을 때만
     // recomputeSecondJourneyFlow()가 fixture evidence/overrides를 쓰게 된다(§devPreview
