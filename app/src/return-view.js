@@ -255,4 +255,12 @@ export function mountReturnView(opts) {
            get received() { return received; }, get filed() { return filed; } };
 }
 
-export const RETURN_VIEW_GEOMETRY = { board: [BOARD_W, BOARD_H], homeCenter: HOME_CENTER, homeFloor: HOME_FLOOR };
+// alarmBell — main.js chogHomeMarkupForReturn() 이 "발화는 알람 종보다 한 박자 늦게"
+// (Owner GO, 채팅 2026-09-18)를 계산할 때 쓴다. main.js 는 piggy-return.js 를 직접
+// import 하지 않는다(파일 header §1 계약, 이 파일이 유일한 창구) — 그래서 새 숫자를
+// 만들지 않고 piggy-return.js RETURN_GEOMETRY.alarmBell(BELL_START_S/BELL_FADE_S 원본)을
+// 그대로 다시 내보낸다.
+export const RETURN_VIEW_GEOMETRY = {
+  board: [BOARD_W, BOARD_H], homeCenter: HOME_CENTER, homeFloor: HOME_FLOOR,
+  alarmBell: RETURN_GEOMETRY.alarmBell,
+};

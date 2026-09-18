@@ -14,6 +14,36 @@
   font-display: swap;
 }
 
+/* [A-419] Playfair Display — Owner GO 2026-09-18("디자인 지정해서 준 거 넣으라고",
+   경로는 app/public/fonts/ 추가 방식). 지금까지 저장소에 이 폰트 파일이 없어 아래 모든
+   "Playfair Display" 선언이 Georgia 로 폴백되고 있었다(A-415-k 실측 보고).
+   실물 출처: 정본 onboarding_scenes_20260916/*.dc.html 11개가 전부 같은 @font-face
+   base64 woff2 를 싣고 있고, 11개에서 뽑은 바이트의 sha256 이 종별로 각각 하나로 일치한다.
+   그 바이트를 그대로 디코드해 파일로 두었다 — 변환·서브셋 0. Owner 보유 OFL 풀배포본
+   (~/Downloads/Playfair-Display-Full-Version)의 같은 파일과 sha256 이 완전히 일치해
+   정본이 이 배포본으로 만들어진 것을 교차 확인했다. OFL.txt 동봉.
+     PlayfairDisplay-Bold.woff2    70180 B  sha256 6c6311922a4b4a66d0de18a78cd69480360e858ac81ee34ee83617b43688ea42
+     PlayfairDisplay-Italic.woff2  62460 B  sha256 6d9f9a18b8de901e97aa1fb4c7d7320399da856d60ff6ce11b5e7a6021ad2713
+   정본이 지정한 것은 이 두 종(700 normal / 400 italic)뿐이다. 정본에 없는 종(예: 400
+   normal — 본문 13px 역할)은 임의로 보충하지 않는다. [A-421 교정] 그 자리가 "Georgia
+   폴백으로 남는다"는 서술은 **틀렸다** — 실측 결과 400 normal 요청은 패밀리 안의 유일한
+   normal face 인 Bold 로 렌더된다(:3035 실측값 참고). SOURCE_MISSING 으로 남긴다. */
+@font-face {
+  font-family: "Playfair Display";
+  src: url("/fonts/PlayfairDisplay-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Playfair Display";
+  src: url("/fonts/PlayfairDisplay-Italic.woff2") format("woff2");
+  font-weight: 400;
+  font-style: italic;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --font-hand: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
@@ -58,7 +88,8 @@ body {
    또 한 장이 겹쳐 보인다(Owner 2026-09-18 «불투명하게 만들지말고 겹치는걸 고쳐서 없애야지»).
    덮개를 씌우지 않고 뒤 이미지 생성 자체를 멈춘다 — 앞 노트·줄·구멍·테이프·봉투·초그는 그대로.
    기본색 var(--paper) 유지(A-371). */
-body:has(.stage--invite) {
+body:has(.stage--invite),
+body:has(.stage[data-scene="explore"]) { /* [A-421] 카드 씬(Explore→후보→금액)도 같은 테이프 비침 — Owner "카드보이는창에 왜 또 뒤에 스티커" */
   background-image: none;
 }
 
@@ -284,6 +315,37 @@ h1 {
   transform: translateX(-36px);
 }
 
+/* [A-415 item2 · Owner 확정 시퀀스] 해치 후 Piggy 서 있음 → Name 카드 등장과 함께
+   옆으로 슬라이드 → 카드 뒤로 숨음 → Save 후 다시 등장 → Home 이동. 위 baseline
+   transform(translateX(-36px))이 "카드 뒤로 숨은" 최종 자세다 — 새 포즈/새 자산을
+   만들지 않고, 같은 웅크림(peek) 프레임을 이 좌표(숨음)와 아래 두 좌표(서 있음/
+   재등장, 둘 다 translateX(0) = pgwrap 자신의 인라인 left:380 그대로, -36px 보정 없음)
+   사이에서 기존 transition(위 줄, 0.32s)으로만 오간다. clip-path 가드·좌표·frozen pose·
+   eye 깜박임은 손대지 않는다.
+   1) `.is-standing` — name-card.js mountNameCard() 가 첫 해치 진입(data-phase="arrival")
+      에만 mount 직후 붙였다가 한 박자 뒤 뗀다. 붙어있는 동안 Piggy 는 카드 옆에 선
+      채(겹침 없음) 보이고, 떨어지는 순간 baseline 으로 슬라이드해 카드 뒤에 겹친다
+      (DOM 순서상 `.nameScene__pad`(카드)가 뒤에 오므로 겹친 부분은 이미 카드 뒤에
+      그려진다 — z-index 새로 추가하지 않음). 이름 미완 복귀(`.nameScene.is-hidden`)
+      경로에는 name-card.js 가 이 클래스를 붙이지 않는다 — 그 경로는 계속 opacity:0 로
+      숨어 있어야 한다(Save 전 표시 금지). 혹시 같이 붙어도 `.nameScene.is-hidden
+      .nameScene__piggy`(아래, 소스 순서상 더 뒤)가 opacity/visibility/transform 을
+      모두 다시 덮으므로 새지 않는다.
+   2) `:has(#piggyNameInput:disabled)` — "이름 확정(Save)" 신호. main.js savePiggyName()
+      이 이미 Save 클릭 즉시 폼 입력/버튼을 disabled 로 잠그는 기존 동작을 그대로
+      읽을 뿐, 새 상태를 main.js 에 추가하지 않았다. 이 선택자는 ID 를 포함해 위
+      is-hidden 규칙보다 특이도가 높아, 이름 미완 복귀 경로에서 Save 를 누른 순간에도
+      곧장 이겨 재등장을 건다 — 실제로는 같은 동기 코드 안에서 is-hidden 클래스도
+      같이 벗겨지므로(main.js) 화면상 순서 문제는 없다. Home 이동 자체는 여전히
+      savePiggyName() 의 기존 620ms 지연 setScene 이 맡는다(변경 없음). */
+.nameScene__piggy.is-standing {
+  transform: translateX(0);
+}
+
+.nameScene:has(#piggyNameInput:disabled) .nameScene__piggy {
+  transform: translateX(0);
+}
+
 /* [A-401] 대기 상태 = 카드 뒤 웅크림(peek) 로 고정. 이전엔 11.5s 루프 내내 "옆에 서있기 ↔
    웅크려 얼굴만"을 반복해서, 시간의 상당 부분(퍼센트 계산상 0–33.043%·90.243–100% 구간,
    ≈44%)에 Piggy 전체가 카드 옆에 그대로 서 있었다(오늘 스크린 확인이 아니라 name.css
@@ -414,29 +476,32 @@ h1 {
   background: #141210;
 }
 
-/* 날짜만 동적 텍스트 — 웹폰트를 싣지 않고 시스템 serif 로 같은 자리·크기. */
+/* [A-415-k] Owner Figma Typography 패널 실측(스크린샷 3장, 2026-09-18 13:19) — 날짜/요일
+   패밀리를 Send/Explore 와 같은 "Playfair Display" 선언으로 통일한다(실텍스트 폰트파일은
+   여전히 없음 — style.css 상단 CHECK 참고, Georgia 로 폴백). 날짜 15/10/2px, 요일
+   10/7.5/1.8px, 두 줄 다 먹색 #141210(요일은 60% opacity) — 옛 10/7.5 mock 판독 대체. */
 .nameCard__date {
   position: absolute;
   right: 34px;
   top: 26px;
   text-align: right;
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
   font-weight: 700;
 }
 
 .nameCard__day {
-  font-size: 10px;
-  line-height: 1;
+  font-size: 15px;
+  line-height: 10px;
   letter-spacing: 2px;
   color: #141210;
 }
 
 .nameCard__weekday {
   margin-top: 4px;
-  font-size: 7.5px;
-  line-height: 1;
+  font-size: 10px;
+  line-height: 7.5px;
   letter-spacing: 1.8px;
-  color: rgba(20, 18, 16, 0.55);
+  color: rgba(20, 18, 16, 0.6);
 }
 
 .nameCard__got,
@@ -457,9 +522,7 @@ h1 {
 }
 
 /* [A-407] t_got_1/2_cj.png · t_name_it_cj.png(모두 실제 렌더 확인: "you've got" /
-   "the one piggy !" / "name it?", 소문자) → Delicious Handrawn 실텍스트. 기존 이미지
-   높이(25px/30px)를 그대로 font-size 로 옮긴 DRAFT 값 — Figma 정확 크기/행간은
-   UNKNOWN(NAME_FIGMA_TYPOGRAPHY_20260918.md), 정본 대조 전까지 완료 선언 아님. */
+   "the one piggy !" / "name it?", 소문자) → Delicious Handrawn 실텍스트. */
 .nameCard__gotLine,
 .nameCard__titleText {
   display: block;
@@ -471,22 +534,24 @@ h1 {
   white-space: nowrap;
 }
 
-/* [A-407-d DRAFT] Owner 위계 규칙: 도착 카드("you've got the one piggy !")가 그 카드에서
-   가장 큰 글자여야 한다. 실측(HEAD 145352b)에서 .nameCard__gotLine 25px/25px <
-   .nameCard__titleText 30px/30px 로 역전되어 있었다 — 여기서 got 만 25px→34px(line-height
-   동률)로 올려 30px title 보다 크게 만든다. 정확 Figma 수치 아님, Owner 위계 기준 적용한
-   DRAFT 값. 겹침 계산: .nameCard__got top:84px + 34 + 4(margin) + 34 ≈ bottom 156px,
-   버튼 top ≈ 300(card h) - 39(bottom) - 34(shell h) = 227px → 여유 71px, 버튼 침범 0.
-   가로: "the one piggy !" 폭 ≈ 4.717em × 34px ≈ 160px, left 46px 기준 카드 폭(460px) 내
-   여유. title(30px)은 그대로 둔다. */
+/* [A-407-d] Owner 위계 규칙: 도착 카드("you've got the one piggy !")가 그 카드에서
+   가장 큰 글자여야 한다 — got 34px/34px 고정, 이번 A-415-k 로 바꾸지 않는다(Owner
+   "top-hierarchy 는 승인대로 유지, 줄이지 말 것"). 겹침 계산: .nameCard__got top:84px + 34
+   + 4(margin) + 34 ≈ bottom 156px, 버튼 top ≈ 227px → 여유 71px, 버튼 침범 0.
+   [A-415-k] title(name it?)만 Owner Figma exact 36px/line-height30/letter-spacing0 로
+   교체 — got(34px)보다 title(font-size36px) 이 숫자상 커진다(line-height 는 title 30 <
+   got 34 로 여전히 got 줄 높이가 크다). 두 요소는 data-phase 로 상호배타 표시라(아래 "한
+   장 안의 두 상태" 규칙) 같은 화면에 동시에 보이지 않지만, font-size 숫자 자체의 역전은
+   실측 사실이라 여기 명시한다 — 위계 재확인 필요(OWNER_INPUT_REQUIRED, OUTBOX 참고). */
 .nameCard__gotLine {
   font-size: 34px;
   line-height: 34px;
 }
 
 .nameCard__titleText {
-  font-size: 30px;
+  font-size: 36px;
   line-height: 30px;
+  letter-spacing: 0;
 }
 
 .nameCard__field {
@@ -842,6 +907,9 @@ h1 {
   background: #141210;
 }
 
+/* [A-415-k] Owner Figma Typography 실측 — 날짜 15/10/2px, 요일 10/7.5/1.8px, 먹색
+   #141210(요일 60% opacity). 옛 10/7.5 mock 판독 대체. Playfair Display 는 저장소에
+   폰트파일이 없어 Georgia 로 폴백(style.css 상단 CHECK 참고), CSS 선언만 통일. */
 .sendCard__date {
   position: absolute;
   left: 104px;
@@ -852,8 +920,8 @@ h1 {
 
 .sendCard__day {
   font-family: "Playfair Display", Georgia, "Times New Roman", serif;
-  font-size: 10px;
-  line-height: 1;
+  font-size: 15px;
+  line-height: 10px;
   letter-spacing: 2px;
   color: #141210;
 }
@@ -861,18 +929,21 @@ h1 {
 .sendCard__weekday {
   font-family: "Playfair Display", Georgia, "Times New Roman", serif;
   margin-top: 4px;
-  font-size: 7.5px;
-  line-height: 1;
+  font-size: 10px;
+  line-height: 7.5px;
   letter-spacing: 1.8px;
   color: rgba(20, 18, 16, 0.6);
 }
 
 .sendCard__dom {
+  /* [A-419 감사 교정] font-family 선언이 두 번 있어(위 Playfair → 아래 Georgia)
+     뒤가 앞을 덮어써 Playfair 가 죽은 선언이 되어 있었다 — 같은 카드의 .sendCard__day/
+     .sendCard__weekday 는 정상 적용되는데 이 일자 숫자만 Georgia 로 렌더됐다.
+     중복된 Georgia-only 선언을 제거해 한 줄로 합친다(값 추가 0, 폴백 순서 동일). */
   font-family: "Playfair Display", Georgia, "Times New Roman", serif;
   position: absolute;
   right: 32px;
   top: 25px;
-  font-family: Georgia, "Times New Roman", serif;
   font-weight: 700;
   font-size: 10px;
   color: #141210;
@@ -889,13 +960,19 @@ h1 {
 }
 
 /* [A-407] t_send_cj.png(실제 렌더 확인: "send?") → Delicious Handrawn 실텍스트.
-   이미지 bbox 30px 를 옮긴 DRAFT font-size — Figma 정확 수치 UNKNOWN. */
+   [A-415-k] Owner Figma exact 36px/line-height30/letter-spacing0 로 교체(Name·Explore
+   title 과 같은 역할 통일). 겹침 계산(DeliciousHandrawn-Regular.ttf hhea ascent1.0em/
+   descent0.2em 실측): ascent+descent=43.2px @36px, half-leading (30-43.2)/2=-6.6px →
+   위/아래 각 6.6px 오버플로. top:96px 기준 위로는 .sendCard__date/.sendCard__dom(끝
+   ~48px)까지 89.4px 지점이라 여유 41px, 아래로는 .sendCard__terms(top:206)까지 132.6px
+   지점이라 여유 73px — 계산상 겹침 없음(수치 근거, 실제 렌더 화면 확인은 아님). */
 .sendCard__titleText {
   display: block;
   font-family: var(--font-cj);
   font-weight: 400;
-  font-size: 30px;
+  font-size: 36px;
   line-height: 30px;
+  letter-spacing: 0;
   color: #141210;
   white-space: nowrap;
 }
@@ -927,18 +1004,15 @@ h1 {
   gap: 6px;
 }
 
-/* [A-415-c] 정본 SendCard.dc.html top:206 블록의 노란 체크행 하이라이트 복원 —
-   세 상태 모두 같은 값이라 렌더된 term 행 전부에 적용된다(조건부 아님). 새 막대/스트립을
-   만드는 것이 아니라 원본에 있던 표시를 되살리는 것이다(Owner A-415-c 승인). 물결 밑줄은
-   send-card.js 가 Owner 제공 원본 SVG 를 인라인으로 넣는다. */
+/* [A-415-c, 폐기 A-419] 정본 SendCard.dc.html top:206 블록의 노란 체크행 하이라이트를
+   A-415-c 에서 복원했었으나, A-419 spec item 1(FirstSend 체크박스/선택강조 제거)로
+   background/padding/border-radius 를 제거했다 — 물결 밑줄(send-card.js 인라인 SVG)과
+   레이아웃(display/gap/width)은 그대로다. */
 .sendCard__termRow {
   display: flex;
   align-items: center;
   gap: 7px;
   width: fit-content;
-  padding: 1px 3px 1px 0;
-  border-radius: 2px;
-  background: rgba(224, 177, 0, 0.2);
 }
 
 .sendCard__termCheckbox {
@@ -1045,6 +1119,7 @@ h1 {
    (send-card.js/home-paper.js/receipt-paper.js 와 같은 방법, 웹폰트 0). */
 .secondJourneyCard {
   overflow: hidden;
+  color: #141210;
 }
 
 .secondJourney__body {
@@ -1057,9 +1132,22 @@ h1 {
   padding-right: 6px;
 }
 
+/* [A-421] Owner: Candidates/readiness 제목도 Name/Send/Explore 와 같은 정본
+   Delicious Handrawn Regular 36/line-height30/letter-spacing0 로 통일한다. 이 클래스는
+   note(Paper 대사)/Candidates("Candidates")/Check("Check")/JIT질문/chosen.title 화면이
+   전부 공유하는 h2 라 selector 를 나누지 않고(second-journey-view.js 는 이 dispatch의
+   allowlist 밖) 이 한 규칙만 바꿔 전체에 적용한다 — 문구별 분기 없음. 옛 20px/1.2 Georgia
+   700 은 폐기. 실제 렌더/줄바꿈/카드 높이 초과 여부는 브라우저 미보유로 미확인
+   (OWNER_INPUT_REQUIRED — 특히 note/jit 질문처럼 문구 길이가 가변인 화면은 20px→36px
+   확대로 새 겹침 위험이 있을 수 있으나 실측 전이라 임의로 margin/width 를 조정하지
+   않는다). */
 .secondJourney__heading {
   margin: 0 0 8px;
-  font: 700 20px/1.2 Georgia, "Times New Roman", serif;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 36px;
+  line-height: 30px;
+  letter-spacing: 0;
   color: #141210;
 }
 
@@ -1094,7 +1182,7 @@ h1 {
 }
 
 .secondJourney__candidateTitle {
-  font: 600 13px/1.3 Georgia, "Times New Roman", serif;
+  font: 700 13px/1.2 "Playfair Display"; /* NOTES_explore_page.md:634 목록 13/1.2 Playfair (Georgia 600/1.3 는 출처 없음) */
   color: #141210;
 }
 
@@ -1432,6 +1520,8 @@ h1 {
    보이지 않게 넓어진다(paper 가 0.275~0.64 사이로 축소돼 그려지므로 52px 도장은 실제
    화면에서 매우 작다). */
 .homePaper__markButton {
+  /* A-419: pad inherits pointer-events:none; the existing house control must receive clicks. */
+  pointer-events: auto;
   display: block;
   padding: 14px;
   margin: -14px;
@@ -2890,6 +2980,16 @@ h1 {
 }
 .secondJourney__dot { width: 5px; height: 5px; margin-top: 1px; border-radius: 50%; background: #141210; }
 .secondJourney__page { text-align: right; letter-spacing: 0; }
+/* [A-415-k] Owner Figma exact — 날짜 15/10/2px, 요일 10/7.5/1.8px, 먹색 #141210(요일 60%,
+   아래 .secondJourney__date small). masthead 공유 폰트(10px/1, Playfair Display Bold)는
+   dot/page(—) 표식이 계속 쓰므로 그대로 두고, 실제 날짜 텍스트(.secondJourney__date)만
+   여기서 개별 override 한다 — page/dot 크기·자리 변경 0. */
+.secondJourney__date {
+  font-size: 15px;
+  line-height: 10px;
+  letter-spacing: 2px;
+  color: #141210;
+}
 .secondJourneyCard .secondJourney__heading { margin: 0 0 8px; color: #141210; }
 .secondJourneyCard .secondJourney__heading--interests {
   display: grid;
@@ -2902,13 +3002,27 @@ h1 {
 }
 /* [A-407] 인라인 base64 CJ PNG(alt="explore?", 실제 렌더는 "place to" 뿐이던 불일치
    자산) → Delicious Handrawn 실텍스트 "places to explore?"(A-405 Paper 발화 근거).
-   기존 이미지 bbox 26px 를 옮긴 DRAFT font-size — Figma 정확 수치 UNKNOWN. */
+   [A-415-k] Owner Figma exact 36px/line-height30/letter-spacing0 로 교체(Name·Send
+   title 과 통일). 측정(DeliciousHandrawn-Regular.ttf hhea ascent1.0em/descent0.2em):
+   ascent+descent=43.2px @36px, half-leading (30-43.2)/2=-6.6px. 이 요소는
+   `.secondJourneyCard{overflow:hidden}` + `.secondJourney__body{overflow-y:auto}`
+   (아래 top:96 override 참고) 안에 있고 heading 이 body 상단에 여백 없이 붙어 있어(위
+   heading--interests margin-top 0) 위쪽 6.6px 오버플로가 스크롤 상단 밖으로 잘릴 위험이
+   있다 — "places to explore?" 는 소문자(l/t 어센더, p 디센더 있음)라 clip 가능성이
+   있다는 뜻이다. [A-421 명시] 이 6.6px 는 hhea ascent/descent 로 뽑은 **metrics
+   계산값**이지 브라우저에 실제로 렌더해 잰 **측정 클립값이 아니다** — line-height 하프리딩
+   분배·서브픽셀 렌더·폰트 hinting 에 따라 실제 클립량은 이 계산과 다를 수 있다. 아래쪽은
+   .secondJourney__list--interests margin-top:84px 여유가 커서 문제 없다. 위쪽
+   겹침/클리핑은 여기서 해소하지 못했다 — 옛 26px 로 되돌리지 않고, 실제 렌더·cardscale·
+   정렬 근거를 먼저 측정하기 전에는 margin/padding/overflow 를 임의로 바꾸지 않는다.
+   OWNER_INPUT_REQUIRED 로 보고한다(OUTBOX 참고). */
 .secondJourney__exploreText {
   display: block;
   font-family: var(--font-cj);
   font-weight: 400;
-  font-size: 26px;
-  line-height: 26px;
+  font-size: 36px;
+  line-height: 30px;
+  letter-spacing: 0;
   color: #141210;
   white-space: nowrap;
 }
@@ -2919,6 +3033,17 @@ h1 {
 .secondJourneyCard .secondJourney__list--interests { gap: 12px; margin: 84px 0 14px 16px; max-height: none; overflow: visible; }
 .secondJourneyCard .secondJourney__note--chog,
 .secondJourneyCard .secondJourney__note--paper { margin-left: 16px; }
+/* [A-421 SOURCE_MISSING] 아래 font shorthand 는 "Playfair Display" **normal 400** 을
+   요청하지만, 저장소에 등록된 실물 @font-face 는 700 normal(PlayfairDisplay-Bold.woff2)과
+   400 italic(PlayfairDisplay-Italic.woff2) 뿐이다(파일 목록: app/public/fonts/). normal
+   400 은 매칭되는 실물 face 가 없다. [A-421 교정] 여기 있던 "다음 폴백인 Georgia 로
+   조용히 넘어간다"는 **틀렸다** — live 실측: CSS face matching 은 패밀리 밖으로 나가지
+   않고 패밀리 안의 유일한 normal face(Bold)를 골라 **Bold 로 렌더한다**.
+   canvas 실측폭 `400 13px Playfair` 150.88 == `700 13px Playfair` 150.88
+   != `400 13px Georgia` 148.15. 이 Bold 렌더도, Georgia 폴백도 정본 준수로
+   보고하지 않는다(SOURCE_MISSING 유지). 필요한 실물: PlayfairDisplay-Regular.woff2
+   (400 normal). 새 폰트 파일 추가는 이 dispatch(A-421) 범위 밖이라 선언은 바꾸지 않고
+   그대로 둔다 — 실물 source 대조 필요. */
 .secondJourneyCard .secondJourney__list--interests .secondJourney__item {
   position: relative;
   align-items: center;
@@ -2950,9 +3075,222 @@ h1 {
 .secondJourney__underline path { fill:none; stroke:#141210; stroke-width:1.6; stroke-linecap:round; filter:url(#a373-cb); }
 .secondJourneyCard .secondJourney__footer { position: relative; z-index: 3; }
 
-.secondJourneyCard .secondJourney__body { top:96px; height:428px; }
-.secondJourney__date small { display:block; font-size:7.5px; opacity:.6; margin-top:4px; letter-spacing:1.8px; }
+.secondJourneyCard .secondJourney__body { top:96px; height:440px; } /* [A-421] +12 = 버튼 음영(0 2px 0 + 0 5px 7px) 자리. overflow:auto 가 잘라 버튼이 납작했음 */
+.secondJourneyCard .secondJourney__body:has(> .job) { display:flex; flex-direction:column; padding-left:8px; padding-bottom:12px; width:312px; }
+.secondJourneyCard:has(.job) { width:380px; margin-left:-190px; }
+/* [A-421] 두 번째 카드: 고른 행동들 = .job 형식 그대로, 버튼 껍데기만 벗긴다. 줄 간격 20 = INFERRED(시안에 여러 줄 예 없음) */
+.secondJourneyCard .secondJourney__pick { border:0; text-align:left; cursor:pointer; }
+.secondJourneyCard .secondJourney__pick:not(.is-picked) { background:none; } /* 노란 밑강조 = 고른 것 하나만 */
+.secondJourneyCard .secondJourney__pick + .secondJourney__pick { margin-top:20px; }
+.secondJourneyCard .secondJourney__pick:disabled { opacity:.34; cursor:default; } /* [A-421 Owner "그래"] 행동 카드만 시안 380 폭(높이 560 동일) */ /* [A-421] 행동 카드만 — footer margin-top:auto 가 종이 하단에 붙도록(v25 main 과 같은 flex column) */
+/* [A-415-k] Owner Figma exact 요일 10px/line-height7.5px/letter-spacing1.8px, 60% opacity. */
+.secondJourney__date small { display:block; font-size:10px; line-height:7.5px; opacity:.6; margin-top:4px; letter-spacing:1.8px; }
 .secondJourney__dot { margin-top:4px; }
 .secondJourneyCard > .sendCard__dot { display:none; }
 .secondJourney__list--interests .secondJourney__item:has(input:focus-visible) { outline:2px solid #e0b100; outline-offset:3px; }
-.secondJourneyCard .secondJourney__footer { position:absolute; left:14px; right:8px; bottom:0; }
+.secondJourneyCard .secondJourney__footer { position:absolute; left:14px; right:8px; bottom:12px; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   [A-421] 승인 v25 readiness 카드 (선택 이후 금액/수령 카드)
+   원본: <local>
+         scene-card-handoff/amount-card-review/index.html (v25)
+   원본의 `.review-modes` nav 는 검토 하네스 조작부라 이식하지 않았다.
+   값은 원본 shorthand 를 그대로 옮긴 것이다 — 반올림·재해석 0.
+   폰트 매핑: 원본 `Hand` = 우리 `var(--font-cj)`(Delicious Handrawn, 이미 등록됨),
+   원본 `Playfair` = 우리 `"Playfair Display"`(등록된 실물은 700 normal + 400 italic
+   두 종뿐 — 위 @font-face 참고). 새 폰트 파일 추가 0.
+   [SOURCE_MISSING] `italic 400 … Playfair` 는 실물 400 italic 에 정확히 매칭되지만,
+   `400 normal` Playfair 요청은 매칭되는 실물이 없다. 실측(A-421 live 검증): 그 요청은
+   Georgia 로 넘어가지 **않고** 패밀리 안의 유일한 normal face(Bold)를 골라 Bold 로
+   렌더된다 — canvas 폭 `400 13px Playfair` 150.88 == `700 13px Playfair` 150.88
+   != `400 13px Georgia` 148.15. 필요한 실물: PlayfairDisplay-Regular.woff2(400 normal).
+   아래 규칙은 원본이 요구한 400 normal 자리를 쓰지 않으므로 이 문제에 걸리지 않는다.
+   스코프: 마크업 루트는 `.secondJourneyCard` 로 가정한다(다른 작업자가 v25 마크업을
+   emit 한다). `label`/`input` 은 원본에서 요소 선택자였지만 여기서는 기존
+   `.secondJourney__item`(interests 단계 label)·기존 input 규칙과 충돌하지 않도록
+   v25 컨테이너 안으로만 좁혔다.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* 카드 제목(h1 = .job) — 원본 font:400 24px/28px Hand, 노란 연결 강조 */
+.secondJourneyCard .job {
+  color: #141210;
+  margin-top: 52px; /* 시안 절대 위치 실측: 제목 top 148(카드 기준) − 앱 body top 96. 좌 38 = body 30 + padding 8 */
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 28px;
+  letter-spacing: 0;
+  align-self: start;
+  transform: rotate(-2deg);
+  background: linear-gradient(transparent 72%, #E0B10055 72%, #E0B10055 94%, transparent 94%);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+  padding: 0 3px;
+  margin-left: -3px;
+}
+
+.secondJourneyCard .amount label,
+.secondJourneyCard .receive label {
+  font: italic 400 13px/20px "Playfair Display";
+  display: block;
+  margin-bottom: 3px;
+}
+
+.secondJourneyCard .field {
+  display: flex;
+  align-items: baseline;
+  border-radius: 0 0 50% 10%;
+  padding-bottom: 9px;
+  gap: 8px;
+}
+
+.secondJourneyCard .field span,
+.secondJourneyCard .claim-value span {
+  font: 700 32px/38px "Playfair Display";
+}
+
+.secondJourneyCard .field input {
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 46px;
+  line-height: 50px;
+  width: 100%;
+  min-width: 0;
+  color: #141210;
+  border: 0;
+  background: transparent;
+  outline: 0;
+}
+
+.secondJourneyCard .field input:focus-visible {
+  outline: 2px solid #b99c28;
+  outline-offset: 5px;
+}
+
+.secondJourneyCard .field input::placeholder {
+  color: #706b65;
+  opacity: 1;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 32px;
+  line-height: 38px;
+}
+
+.secondJourneyCard .amount-line {
+  display: block;
+  width: 100%;
+  height: auto;
+  margin-top: -3px;
+}
+
+.secondJourneyCard .balance {
+  font: italic 400 12px/18px "Playfair Display";
+  opacity: .75;
+  margin: 12px 0 0;
+}
+
+.secondJourneyCard .condition {
+  font: italic 400 13px/20px "Playfair Display";
+  margin-top: 20px;
+}
+
+.secondJourneyCard .receive + .condition {
+  margin-top: 12px;
+}
+
+.secondJourneyCard .condition .return-time {
+  position: relative;
+  display: inline-block;
+  padding: 13px 18px;
+  margin-left: -10px;
+}
+
+.secondJourneyCard .condition .return-time svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.secondJourneyCard .receive {
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 46px;
+  line-height: 50px;
+  margin-top: 56px;
+  padding-bottom: 9px;
+}
+
+.secondJourneyCard .claim-value {
+  min-height: 50px;
+  overflow-wrap: anywhere;
+}
+
+.secondJourneyCard .claim-value--text {
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 24px;
+  line-height: 50px;
+}
+
+/* [A-421] `.claim-bring` — 수령형의 "to bring home" 줄. v25 원본(index.html:14)에는
+   클래스 없이 인라인 style 로 `font:italic 400 12px/18px Playfair; margin:12px 0 0 10px`
+   로 박혀 있었다. 앱에서는 인라인 style 을 쓰지 않으므로 같은 값을 이 클래스로 옮긴다
+   (값 변경 0 — `.balance` 와 같은 서체·크기이고 margin 만 원본의 `12px 0 0 10px`). */
+.secondJourneyCard .claim-bring {
+  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 12px;
+  line-height: 18px;
+  margin: 12px 0 0 10px;
+}
+
+.secondJourneyCard .failure {
+  color: #823F33;
+  font: italic 400 13px/19px "Playfair Display";
+  margin: 14px 0 0;
+}
+
+.secondJourneyCard .balance,
+.secondJourneyCard .condition,
+.secondJourneyCard .failure {
+  margin-left: 10px;
+}
+
+.secondJourneyCard .amount {
+  margin-top: 56px;
+}
+
+/* footer — 원본 .footer */
+.secondJourneyCard .footer {
+  margin-top: auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #14121035;
+}
+
+.secondJourneyCard .back {
+  font: italic 400 13px/20px "Playfair Display";
+  text-decoration: underline;
+  border: 0;
+  background: none;
+  padding: 8px 0;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* [A-421 Owner 판정 2026-09-18] "버튼은 다 통일이야 — 이미 버튼 네임에 쓰고 있는
+   버튼 써". 여기 있던 v25 전용 Send 버튼 규칙(112×38 / radius 999 / 1px #14121012
+   테두리 / 3중 그림자 / Hand 23px·line26)을 **제거했다**. 종이 버튼 정본은 하나이고
+   그것은 Name 카드 ok/save 가 쓰는 기존 `.pkbtn`(:618, 122×40 / radius 20 / 테두리 0 /
+   0 2px 0 #8b8475 + 0 5px 7px / 낱말 --btnWordSize 20px)이다. 낱말 크기가 20 vs 23 으로
+   다르다는 점을 Owner 에게 알린 뒤 받은 판정이라 **20px(기존 토큰)** 로 통일한다.
+   이 카드의 Send 는 `.pkbtn` 껍질을 그대로 쓰므로 여기에 별도 버튼 규칙을 두지 않는다 —
+   두 정본을 병행하던 상태를 끝낸다. `.back`(위)은 종이 버튼이 아니라 v25 의 밑줄 텍스트
+   버튼이라 그대로 둔다. */

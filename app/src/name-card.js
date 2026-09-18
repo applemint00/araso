@@ -136,6 +136,22 @@ export function mountNameCard(root, { listen, onSubmit, focus = true } = {}) {
   const ok = card.querySelector(".nameCard__okBtn");
   const form = card.querySelector("#nameForm");
 
+  // [A-415 item2] Owner 확정 시퀀스의 첫 프레임("Piggy 서 있음") — 첫 해치 직후
+  // (data-phase="arrival")에만, style.css 의 카드-뒤-웅크림 baseline(translateX(-36px))
+  // 으로 슬라이드해 들어가기 전 한 박자 세워 둔다. 새 포즈/새 자산 0 — 같은 frozen
+  // peek 프레임의 위치만 다르다(`.nameScene__piggy.is-standing`, style.css). 이름
+  // 미완 복귀(phase="name", `.nameScene.is-hidden`)에는 붙이지 않는다 — 그 경로는
+  // Save 전까지 계속 숨어 있어야 한다(Owner 명세: 이름 결정 전 표시 0).
+  if (card.dataset.phase === "arrival") {
+    const piggy = root.querySelector(".nameScene__piggy");
+    if (piggy) {
+      piggy.classList.add("is-standing");
+      setTimeout(() => {
+        if (piggy.isConnected) piggy.classList.remove("is-standing");
+      }, 260);
+    }
+  }
+
   const sync = () => {
     if (!save || !input) return;
     // 저장 진행 중(입력 잠김)이면 버튼을 다시 켜지 않는다 — Save 단일 실행.

@@ -187,7 +187,18 @@ export function createDepartRenderer(canvas, opts) {
    */
   function drawAt(elapsed) {
     const e = Math.max(0, Math.min(DEPART_TOTAL_S, elapsed));
-    const source = mode === "send" ? sendSourceOf(e) : e;
+    // [A-419] work? 홀드식이 이 파일에 없어서 호출부(main.js mountSendCardWorkPose)가
+    // elapsed 자체를 0.8 로 얼려 출발을 막고 있었다 — 그 대가로 아래 깜박임 계산
+    // (`elapsed % 3.6`)이 상수가 되어 work-half/work-shut 이 화면에 한 번도 나오지
+    // 않았다. A-414-b/c 에서 "출발 금지와 깜박임은 수학적으로 동시에 불가"라고 보고한
+    // 것은 오진이며 여기서 정정한다. 확정 원본
+    // `<private>
+    //  departure.js:79` — `const elapsed=t; if(mode==='work')source=.15+.65*ease(elapsed/.55);
+    //  t=source; renderBase(); t=elapsed;` — 는 **씬 시계(source)만** 0.15→0.8 로 올려
+    // 출발 임계 1.0 밑에 영구히 머물게 하고, `elapsed` 는 실제 시계 그대로 흘려 보낸다.
+    // 그래서 두 요구가 동시에 성립한다. 그 식을 그대로 옮긴다(수치 변경 0).
+    const source =
+      mode === "send" ? sendSourceOf(e) : mode === "work" ? 0.15 + 0.65 * ease(elapsed / 0.55) : e;
     const t = sceneTimeOf(source);
 
     ctx = mainCtx;

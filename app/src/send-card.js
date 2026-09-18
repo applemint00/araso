@@ -97,17 +97,19 @@ export function sendCardDate(now = new Date()) {
 // 노란 하이라이트(SendCard.dc.html top:206px 블록 실측 `background:rgba(224,177,0,.20);
 // width:fit-content; padding:1px 3px 1px 0; border-radius:2px;`, 세 상태 동일 적용)는
 // CSS 라 여기서 넣지 않는다 — style.css 는 통합자 소유, OUTBOX/보고로 전달한다.
+// [A-419 item1] 체크박스 SVG 마크업 드롭 — FirstSend 카드는 체크박스/선택강조를
+// 갖지 않는다(SecondExplore 실제 선택 UI는 별도 파일 second-journey-view.js 소유,
+// 여기 손대지 않았다). 위 34×34 체크박스(§7 a377-cb/a377-ck 잉크)가 차지하던 20px
+// (체크박스 13 + gap 7, §A-415-c 주석 참조)만큼의 밑줄 좌측 오프셋도 함께 0으로
+// 되돌린다 — 그 20px 은 체크박스를 피하기 위한 값이었을 뿐, 체크박스가 없으면
+// 남겨둘 근거가 없다. 물결선 path/치수/stroke 자체는 A-415-c 원본 그대로 불변.
 function sendCardTermRowMarkup(term) {
   return `
     <div class="sendCard__termItem">
       <div class="sendCard__termRow">
-        <svg class="sendCard__termCheckbox" viewBox="0 0 34 34" aria-hidden="true">
-          <g class="sendCard__termBoxInk"><path d="M5 6 L29 4 L30 29 L4 30 Z" /></g>
-          <g class="sendCard__termCheckInk"><path d="M8 18 L15 26 L28 6" /></g>
-        </svg>
         <span class="sendCard__termLabel">${escapeHtml(term)}</span>
       </div>
-      <svg class="sendCard__termUnderline" width="86" height="6" viewBox="0 0 86 6" fill="none" aria-hidden="true" style="display:block; margin:2px 0 0 20px;">
+      <svg class="sendCard__termUnderline" width="86" height="6" viewBox="0 0 86 6" fill="none" aria-hidden="true" style="display:block; margin:2px 0 0 0;">
         <path d="M1 3.40001C17.6667 1.93334 34.6667 2.13334 52 4.00001C69.3333 5.86667 80 5.53334 84 3.00001" stroke="#141210" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
     </div>

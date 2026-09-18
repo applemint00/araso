@@ -116,11 +116,14 @@ const WALK_TOTAL_MS = 3000;
 const REST_MS = 240; // 다리가 ±60 로컬에서 제자리로 모이는 시간
 
 // --- 졸기 (sleep-motion.js CONFIG 그대로) --------------------------------
-export const SLEEP_IDLE_MS = 180000;
-const SLEEP_CFG = { dozeSpeed: 13, nodMs: 3800, droop: 4, drop: 34, sink: 12, jerk: 55, sleepNod: 40 };
+export const SLEEP_IDLE_MS = 60000; // [A-421 Owner "일분으로 줄여" 2026-09-18] 180000 → 60000
+// [A-421 Owner "고개가 꾸벅 졸아야해"] droop 4→12, drop 34→60 (INFERRED — 확정본 4/34 는 고개가 거의 안 보였다).
+const SLEEP_CFG = { dozeSpeed: 13, nodMs: 3800, droop: 12, drop: 60, sink: 12, jerk: 55, sleepNod: 40 };
 const SIT_SETTLE_MS = 1100;
 const SIT_DROP_MS = 420;
 const SLEEP_STEP_MS = 20;
+// [A-421 Owner] 졸기 = base→half→sleepy 까지만, 잠들지 않고 반복. false 면 확정본(잠듦·closed) 그대로.
+const DOZE_REPEAT = true;
 // sleep-head 는 placement(scale .895953757) 안에 있으므로, 거기 준 translate 는
 // 화면에서 그만큼 줄어든다. torso 는 sleep-body 바로 밑이라 1:1 이다.
 const HEAD_PLACE_SCALE = 0.895953757;
@@ -153,6 +156,7 @@ export function chogHomeMarkup({ padMarkup = "" } = {}) {
       <div class="chogHome__sleep" id="chogHomeSleep" aria-hidden="true">
         ${SLEEP_PARTS.map((p) => img(p, "", p === "sleep-head" ? "home-head" : p)).join("")}
         ${EYE_STAGES.map((s) => img(`sleep-eyes-${s}`, `data-eye-stage="${s}"`)).join("")}
+        ${img("sleep-face-nosecheeks", 'data-doze-face="1"')}
       </div>
       <div class="chogHome__padWrap" id="chogHomePad">${padMarkup || `<img src="${DIR}/notepad.png" alt="" />`}</div>
       <div class="chogHome__hit" id="chogHomeHit" role="button" tabindex="0" aria-label="Chog"></div>
@@ -200,7 +204,7 @@ function layout(root) {
   // torso·눈은 여전히 SLEEP_BOX 그대로라 손대지 않는다.
   if (head) head.style.transformOrigin = originPct(HEAD_VB, headPivotX, headPivotY);
   if (torso) torso.style.transformOrigin = originPct(SLEEP_BOX, 1110, torsoPivotY);
-  root.querySelectorAll("[data-eye-stage]").forEach((el) => {
+  root.querySelectorAll("[data-eye-stage], [data-doze-face]").forEach((el) => {
     el.style.transformOrigin = originPct(SLEEP_BOX, headPivotX, headPivotY);
   });
 
@@ -258,6 +262,13 @@ function advance(z, now, dt) {
       z.startle = now;
       z.d = Math.max(0.15, z.d - 0.55 * 0.6 * Math.pow(room, 1.3));
     } else dr = p < 0.8 ? p / 0.8 : 1 - (p - 0.8) / 0.2;
+  } else if (z.d > 0.3 && DOZE_REPEAT) {
+    // [A-421 Owner "이거 반복해야해", "하프 슬립까지만 쓰자"] 끝까지 처지면 잠들지 않고 흠칫 깨서
+    // 다시 졸기 시작한다(반복). 깨는 깊이 0.35 = INFERRED(확정본엔 반복 없음).
+    z.start = now;
+    z.len = SLEEP_CFG.nodMs;
+    z.startle = now;
+    z.d = 0.35;
   } else if (z.d > 0.3) {
     if (!z.asleep) {
       z.asleep = true;
@@ -273,7 +284,7 @@ function advance(z, now, dt) {
   const nod = z.asleep ? dr : dr * room;
   const wk = z.asleep ? 0 : Math.max(0, 1 - (now - z.startle) / 420);
   const lv = (z.d * 0.95 + 0.32 * nod) * (1 - wk);
-  z.stage = z.asleep ? "closed" : lv < 0.26 ? "base" : lv < 0.54 ? "half" : lv < 0.82 ? "sleepy" : "closed";
+  z.stage = z.asleep ? "closed" : lv < 0.26 ? "base" : lv < 0.54 ? "half" : lv < 0.82 || DOZE_REPEAT ? "sleepy" : "closed"; // 반복 모드: sleepy 까지만
   const amt = (z.d * 0.85 + nod) * (1 - wk) - 0.3 * wk;
   return {
     stage: z.stage,
@@ -329,6 +340,7 @@ export function mountChogHome(root, opts) {
   const sleepHead = root.querySelector('[data-part="sleep-head"]');
   const sleepTorso = root.querySelector('[data-part="sleep-torso"]');
   const eyes = new Map(EYE_STAGES.map((s) => [s, root.querySelector(`[data-eye-stage="${s}"]`)]));
+  const dozeFace = root.querySelector("[data-doze-face]");
 
   // corner 변환 — 이것 하나가 로컬을 Home 판으로 옮긴다.
   const place = (x, y, sc) => {
@@ -489,6 +501,9 @@ export function mountChogHome(root, opts) {
       el.style.display = stage === out.stage ? "block" : "none";
       el.style.transform = headT; // head 와 같은 행렬 · 같은 origin
     }
+    // [A-421 Owner "넣어라"] 코·볼 — metro pose_v2 pose_sit_sleepy 원본을 눈과 같은 캔버스로 반입
+    // (<private>). 눈처럼 머리와 같이 움직인다.
+    if (dozeFace) dozeFace.style.transform = headT;
     if (sleepTorso) {
       sleepTorso.style.transform = reduced
         ? ""
@@ -586,7 +601,10 @@ export function mountChogHome(root, opts) {
       if (!pinned) requestHover(0);
     });
     listen(hit, "focus", () => requestHover(1));
-    listen(hit, "blur", () => requestHover(0));
+    listen(hit, "blur", () => {
+      // A-419: moving focus to a paper control must preserve the tapped-open Home.
+      if (!pinned) requestHover(0);
+    });
     const toggle = (e) => {
       e.preventDefault();
       pinned = !pinned;

@@ -9,9 +9,9 @@ import { toViemAccount } from "@category-labs/mera/viem";
 import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, parseEther } from "viem";
 import { chogHomeMarkup, mountChogHome, CHOG_HOME_GEOMETRY } from "./chog-home.js";
 import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-invite.js";
-import { createDepartPlayback } from "./piggy-depart.js";
+import { createDepartPlayback, createDepartRenderer, loadDepartAssets } from "./piggy-depart.js";
 import { nameCardMarkup, mountNameCard } from "./name-card.js";
-import { returnSceneMarkup, mountReturnView } from "./return-view.js";
+import { returnSceneMarkup, mountReturnView, RETURN_VIEW_GEOMETRY } from "./return-view.js";
 import {
   homePaperMarkup,
   homePaperRecordsEntryMarkup,
@@ -33,10 +33,13 @@ import {
 } from "./second-journey-state.js";
 import {
   paperStatusCopy,
+  readinessCardKind,
   secondJourneyCardMarkup,
   secondJourneyReceiptFields,
   secondJourneySendReason,
   validateSecondAmount,
+  SECOND_ACTION_TITLES_EN,
+  secondActionTitle,
 } from "./second-journey-view.js";
 import "./style.css";
 
@@ -800,6 +803,11 @@ function stayHome() {
   // [A-354] stay home 을 눌러도 같은 Send 카드가 그대로 남던 버그 교정: sendstay 로 다시
   // 들어갈 때 카드 표시 표를 명시적으로 내려서 Home 대기(초그·HomeNotepad)로 분리한다.
   state.sendCardVisible = false;
+  // [A-414-b] 기대를 풀고 앉는다 — work? 표를 지워서 다음에 카드가 다시 뜨면(다음 Save/
+  // 재방문) 작은 perk 가 처음부터 다시 재생되게 한다. 지금 이 화면엔 카드가 없으니
+  // 진행 중이던 표를 남겨도 아무도 안 보지만, 남겨두면 다음 카드가 "이미 정착한 자세"로
+  // 곧장 뜨는 조용한 버그가 된다.
+  sendWorkStartedAt = null;
   setScene("sendstay", "Piggy stayed home today.", "Chog is quiet.");
 }
 
@@ -949,13 +957,18 @@ function finishTrip(trip) {
   state.tripReason = trip.reason;
   if (trip.receipt) rememberReceipt(trip.receipt);
   if (trip.outcome !== "done") {
-    // 돌아왔다고 말하지 않는다 — awayLine 을 성공 쪽으로 넘기지 않는다.
+    // 돌아왔다고 말하지 않는다 — 실패 경로에서는 "성공 귀환" 쪽 상태를 하나도 세우지 않는다.
     setScene("sendstay", "couldn't finish this one.");
     return;
   }
   state.tripClosed = true;
   localStorage.setItem(TRIP_CLOSED_KEY, "1");
-  state.awayLine = "It's back.";
+  // [이번 dispatch, Owner GO 2026-09-18 "다른 건 지우라고. 지금 승인한 최신 게 확정"]
+  // 여기 있던 `state.awayLine = "It's back.";` 를 지웠다 — 이 값은 어디에서도 렌더되지
+  // 않는 죽은 대입이었다(renderReturn() 은 `line: ""` 만 넘긴다 — 3611행 근방 A-411-i
+  // 주석; renderAway() 도 그 자리를 `""` 로 비운다 — A-415/A-414-a). 이 씬에 남는 유일한
+  // 발화는 아래 returnArrivalAlarm 의 "[이름] is coming home" 한 줄뿐이다(단일 발화 증거
+  // 는 grep, OUTBOX/보고 참고).
   // [A-320] 실제 영수증이 있는 성공에서만 귀환 연출로 들어간다.
   // 영수증이 없으면 기존 「확인 중」 경로를 그대로 둔다 — 없는 값을 만들지 않는다.
   // transient 플래그라 새로고침·재방문에서는 다시 재생되지 않는다.
@@ -1091,6 +1104,7 @@ function createEmptySecondJourney() {
     step: "interests", // interests | candidates | readiness | note
     selectedIds: [],
     chosenDestinationId: null,
+    pickedCandidateId: null, // [A-421] 후보 카드에서 누른 것(ok 전). ok ≠ permission
     jitAnswer: null,
     permission: false,
     amount: "",
@@ -1273,7 +1287,14 @@ function recomputeSecondJourneyFlow() {
     jitAnswer: sj.jitAnswer || undefined,
     preferredDestinationId: chosenId || undefined,
     destinationOverrides: devPreview && chosenId ? buildDevPreviewOverrides(chosenId) : {},
-    permission: sj.permission === true,
+    // [A-421 v25] 사용자용 permission 체크박스는 화면에서 제거했다(Owner 최신 지시:
+    // "이전 permission 체크박스를 사용자 선택 UI로 요구하지 않음"). 권한 요구 자체는
+    // 코드에 그대로 남는다 — second-job-readiness.js:128 은 permission!==true 면
+    // executionPermission 을 주지 않고, handleSecondSend()/canSend 의 fail-closed
+    // 게이트(devPreview && JOB_READY && executionPermission===true)도 손대지 않았다.
+    // devPreview 가 아닌 실제 경로에서는 canSend 가 devPreview 로 이미 막혀 있어 이
+    // 값이 무엇이든 Send 가 열리지 않는다 — 즉 실경로 권한 경계는 변하지 않는다.
+    permission: sj.permission === true || devPreview,
     readinessEvidence: devPreview && chosenId ? buildDevPreviewEvidence(chosenId, Date.now()) : {},
     ruleAgreed: devPreview,
     ruleValues: {
@@ -1289,13 +1310,31 @@ function recomputeSecondJourneyFlow() {
 
 function buildSecondJourneyViewModel() {
   const sj = state.secondJourney;
+  // [A-421 Owner] 몇 번째 Journey: 첫 Journey 닫힘(tripClosed) + 이번 세션 Second 완료 수 + 지금 것.
+  // Second 완료는 세션 메모리뿐(저장 스키마 신설 금지) — 새로고침 뒤엔 2 로 돌아간다.
+  const journeyNumber = 1 + (state.tripClosed ? 1 : 0) + (state.secondJourneyCompletedOnce ? 1 : 0);
   const flow = sj.flow;
   const chosen = (flow?.destinations || []).find((d) => d.id === sj.chosenDestinationId) || null;
   const amountCheck = validateSecondAmount(sj.amount);
   const devPreview = import.meta.env.DEV && sj.devPreview === true;
   const preflight = flow?.preflight || null;
-  const canSend = devPreview && preflight?.status === "JOB_READY" && preflight?.executionPermission === true;
+  // [A-421 v25] 기존 fail-closed 게이트는 그대로 두고, 빈 입력/조건 미충족일 때 Send 를
+  // 더 막는 조건만 덧붙인다(Owner: 빈 입력/조건 미충족 Send disabled). 수령형은 맡길
+  // 금액 칸이 없으므로 금액 조건을 걸지 않는다(APP_HANDOFF.md:24).
+  const needsAmount = readinessCardKind(chosen) !== "collect";
+  const canSend =
+    devPreview &&
+    preflight?.status === "JOB_READY" &&
+    preflight?.executionPermission === true &&
+    (!needsAmount || amountCheck.valid);
+  // [A-421] Candidates/readiness 화면이 job-feed.js 내부 fixture title(예: "Swap-like
+  // Trade")을 그대로 찍는 대신, 이미 interests 단계에서 사용자가 본
+  // errand.label(job-feed.js EXPLORE_ERRANDS, buildVisibleLaneChoices())로 되짚을 수
+  // 있도록 id→label 조회표를 만들어 넘긴다(second-journey-view.js
+  // destinationDisplayLabel() 참고). 새 데이터/새 저장 필드 0 — 순수 조회용.
+  const errandLabelById = Object.fromEntries(buildVisibleLaneChoices().map((errand) => [errand.id, SECOND_ACTION_TITLES_EN[errand.id] || errand.label]));
   return {
+    journeyNumber,
     step: sj.step,
     // [A-405] 최대 5개 bounded 세트만 넘긴다 — job-feed.js 의 8개 canonical 은 그대로
     // 두고 이 view model 경계에서만 자른다. "all" 선택은 항상 이 배열 전체를 뜻한다.
@@ -1306,6 +1345,8 @@ function buildSecondJourneyViewModel() {
     // 서로 다른 뜻으로 읽는다(둘이 동시에 쓰이지 않는다).
     note: sj.step === "interests" ? sj.interestsNote || null : sj.note || null,
     destinations: flow?.destinations || [],
+    pickedCandidateId: sj.pickedCandidateId,
+    errandLabelById,
     chosen,
     decision: chosen?.decision || null,
     jitQuestion: flow?.jitQuestions?.[0] || null,
@@ -1317,6 +1358,34 @@ function buildSecondJourneyViewModel() {
     canSend,
     sendReason: secondJourneySendReason(preflight, devPreview),
     devPreview,
+    ...secondJourneyV25Lines(chosen, preflight),
+  };
+}
+
+// [A-421 v25] 승인 카드가 요구하는 실데이터 줄들. 값이 실제로 확인되지 않은 자리는
+// null 로 남긴다 — 시안의 예시 수치(24 / 3.20 / 0.10 / 2 days, APP_HANDOFF.md:30)를
+// 앱에 상수로 심지 않는다. 빈칸이 정답이고 발명한 문장은 위반이다.
+function secondJourneyV25Lines(chosen, preflight) {
+  return {
+    // "> $N at home · USDC" / 입력 후 "left at home"(APP_HANDOFF.md:10). 앱이 실제로
+    // 읽는 잔액은 네이티브 MON(state.homeMoneyNativeWei) 뿐이고, 달러 표시는 USDC 환산
+    // quote 가 있어야 한다("없으면 숫자 발명 금지", CURRENCY_NOTES.md:3). 현재 quote/
+    // adapter 연결이 없어 이 줄을 비운다(SOURCE_MISSING).
+    balanceLine: null,
+    // [A-421 Owner "있으니까 넣은거야"] 시안 실패 줄(CURRENCY_NOTES.md:9, #823F33 · > 접두 ·
+    // 잔액 아래). 이 문구는 자금 부족(needs funding) 경우에만 쓴다 — 다른 실패엔 강제하지 않는다.
+    failureLine: preflight?.status === "JOB_ELIGIBLE_NEEDS_FUNDING" ? "> cannot go · needs funding" : null,
+    // cost: 실제 비용은 quote/실행비용 원천이 정해진 뒤에만 쓸 수 있다
+    // (CURRENCY_NOTES.md:21). 현재 값은 mock_placeholder "0"(job-feed.js:372)라 비운다.
+    costLine: null,
+    // 예상 귀환: fixture 의 returnModel.maxWait 는 내부 enum("few_days",
+    // job-feed.js:215)이고 승인된 영어 표기가 없다 — 발명하지 않고 비운다.
+    returnEstimate: null,
+    // 수령 값: 실제 claimable evidence 가 있을 때만(APP_HANDOFF.md:24/47). 숫자든 글자든
+    // 같은 value 줄을 쓴다.
+    // [A-421 감독 지적] evidence.claimable 은 단위 없는 게이트 증거(>0 판정용, DEV fixture "1")다 —
+    // USD 환산값이 아니므로 화면 값으로 쓰지 않는다($ 강제·숫자 발명 금지, CURRENCY_NOTES). 환산 quote 가 생기면 연결.
+    claimValue: null,
   };
 }
 
@@ -1330,6 +1399,7 @@ function openSecondJourneyExplore() {
   const domainState = ensureSecondJourneyDomainState();
   sj.selectedIds = (domainState.interests || []).map((item) => item.errandId);
   sj.chosenDestinationId = null;
+  sj.pickedCandidateId = null;
   sj.jitAnswer = null;
   sj.permission = false;
   sj.amount = "";
@@ -1382,6 +1452,7 @@ function handleExploreSave(ids) {
   sj.interestsNote = null;
   sj.step = "candidates";
   sj.chosenDestinationId = null;
+  sj.pickedCandidateId = null;
   sj.jitAnswer = null;
   sj.permission = false;
   sj.amount = "";
@@ -1409,6 +1480,7 @@ function handleExploreNone() {
   persistSecondJourneyDomainState();
   sj.selectedIds = [];
   sj.chosenDestinationId = null;
+  sj.pickedCandidateId = null;
 
   if (sj.seedStage === "A") {
     sj.seedStage = "B";
@@ -1459,6 +1531,32 @@ function advanceExploreNote() {
   setScene("sendstay", "", "");
 }
 
+// [A-421 Owner "시간이랑 고른거 다기록해야해"] 후보 누름·ok 를 시각과 함께 남긴다.
+const SECOND_PICK_LOG_KEY = "araso.secondJourneyPicks";
+function recordSecondPick(event, destinationId) {
+  const destination = (state.secondJourney.flow?.destinations || []).find((d) => d.id === destinationId) || null;
+  const entry = { event, destinationId, action: secondActionTitle(destination) || null, at: new Date().toISOString() };
+  try {
+    const log = JSON.parse(localStorage.getItem(SECOND_PICK_LOG_KEY) || "[]");
+    log.push(entry);
+    localStorage.setItem(SECOND_PICK_LOG_KEY, JSON.stringify(log));
+  } catch {}
+}
+
+function handleCandidatePick(destinationId) {
+  const sj = state.secondJourney;
+  sj.pickedCandidateId = destinationId;
+  recordSecondPick("pick", destinationId);
+  render();
+}
+
+function handleCandidateOk() {
+  const sj = state.secondJourney;
+  if (!sj.pickedCandidateId) return;
+  recordSecondPick("ok", sj.pickedCandidateId);
+  handleCandidateCheck(sj.pickedCandidateId);
+}
+
 function handleCandidateCheck(destinationId) {
   const sj = state.secondJourney;
   sj.chosenDestinationId = destinationId;
@@ -1489,6 +1587,7 @@ function handleReadinessBack() {
   }
   sj.step = "candidates";
   sj.chosenDestinationId = null;
+  sj.pickedCandidateId = null;
   sj.jitAnswer = null;
   recomputeSecondJourneyFlow();
   render();
@@ -1502,14 +1601,30 @@ function updateSecondJourneyReadinessUI() {
   if (!btn) return;
   const devPreview = import.meta.env.DEV && sj.devPreview === true;
   const preflight = sj.flow?.preflight || null;
-  const canSend = devPreview && preflight?.status === "JOB_READY" && preflight?.executionPermission === true;
+  const chosenForSend = (sj.flow?.destinations || []).find((d) => d.id === sj.chosenDestinationId) || null;
+  const needsAmount = readinessCardKind(chosenForSend) !== "collect";
+  const canSend =
+    devPreview &&
+    preflight?.status === "JOB_READY" &&
+    preflight?.executionPermission === true &&
+    (!needsAmount || validateSecondAmount(sj.amount).valid);
   btn.disabled = !canSend;
   const reasonEl = document.querySelector("#secondSendReason");
   if (reasonEl) reasonEl.textContent = secondJourneySendReason(preflight, devPreview);
   const preflightEl = document.querySelector("#secondJourneyPreflightLine");
-  if (preflightEl) preflightEl.textContent = preflight ? paperStatusCopy(preflight.status) : "";
-  const amountErrorEl = document.querySelector("#secondAmountError");
-  if (amountErrorEl) amountErrorEl.textContent = validateSecondAmount(sj.amount).error || "";
+  // [A-421 v25] READY 의 "Send this one?" 제목은 이 카드에서 제거됐다
+  // (CURRENCY_NOTES.md:18) — 상태줄도 READY 면 비운다(second-journey-view.js 동일 규칙).
+  if (preflightEl) preflightEl.textContent = preflight && preflight.status !== "JOB_READY" ? paperStatusCopy(preflight.status) : "";
+  // [A-421 v25] 실패 줄(.failure)은 승인된 케이스별 카피가 있을 때만 켠다. 내부 reason
+  // 코드나 스타일 예시 문구("cannot go · needs funding", CURRENCY_NOTES.md:9)를 공통
+  // 문구로 쓰지 않는다 — 현재는 채울 승인 카피가 없어 항상 비어 있고 숨는다.
+  const failureEl = document.querySelector("#secondAmountError");
+  if (failureEl) {
+    const chosen = (sj.flow?.destinations || []).find((d) => d.id === sj.chosenDestinationId) || null;
+    const line = secondJourneyV25Lines(chosen, preflight).failureLine;
+    failureEl.textContent = line || "";
+    failureEl.hidden = !line;
+  }
 }
 
 // 실제 경로에서는 devPreview 가 항상 false 라 canSend 가 절대 true 가 될 수 없다
@@ -1523,7 +1638,10 @@ function handleSecondSend() {
   const canSend = devPreview && preflight?.status === "JOB_READY" && preflight?.executionPermission === true;
   if (!canSend) return;
   sj.mockReceipt = sj.flow.mockReceipt;
-  sj.awayLine = "Piggy is checking a second errand. (preview)";
+  // [A-419 Source evidence] 승인 발화표에 Away 설명문이 없다 — DRAFT 조합을 앱에 넣지
+  // 않는다(위 secondAway 렌더 주석 참고). 문구는 비우고 표시 자체를 없앤다. 승인된
+  // 문장이 오면 여기서 세운다.
+  sj.awayLine = "";
   setScene("secondAway", "", "");
 }
 
@@ -1542,18 +1660,18 @@ function wireExploreCard() {
     render();
   });
   document.querySelector("#exploreBackButton")?.addEventListener("click", handleReadinessBack);
-  document.querySelectorAll(".secondJourney__checkBtn").forEach((btn) => {
-    btn.addEventListener("click", () => handleCandidateCheck(btn.dataset.destinationId));
+  // [A-421] 옛 사각 `.secondJourney__checkBtn` 대신 확정 종이 버튼(.pkbtn)을 쓰는
+  // second-journey-view.js checkButtonMarkup() 이 내놓는 순수 JS 훅 클래스로 맞춘다.
+  document.querySelectorAll(".secondJourney__pick").forEach((btn) => {
+    btn.addEventListener("click", () => handleCandidatePick(btn.dataset.destinationId));
   });
+  document.querySelector("#secondOkButton")?.addEventListener("click", handleCandidateOk);
   document.querySelectorAll(".secondJourney__jitBtn").forEach((btn) => {
     btn.addEventListener("click", () => handleJitAnswer(btn.dataset.jitAnswer));
   });
-  const permissionInput = document.querySelector("#secondPermission");
-  permissionInput?.addEventListener("change", () => {
-    sj.permission = permissionInput.checked;
-    recomputeSecondJourneyFlow();
-    updateSecondJourneyReadinessUI();
-  });
+  // [A-421 v25] 옛 `#secondPermission` 체크박스는 사용자 화면에서 제거됐다 — 배선도
+  // 함께 없앤다(권한 요구는 recomputeSecondJourneyFlow()/second-job-readiness.js 쪽에
+  // 그대로 남아 있다, 위 주석).
   const amountInput = document.querySelector("#secondAmount");
   amountInput?.addEventListener("input", () => {
     sj.amount = amountInput.value;
@@ -1591,9 +1709,18 @@ function renderSecondAway() {
         ${chogHomeMarkup({ padMarkup: homePadMarkup("away") })}
       </div>
       ${corner("secondAway")}
-      <article class="note note--quiet">
-        <p class="line">${state.secondJourney.awayLine || "Piggy is checking a second errand."}</p>
-      </article>
+      ${
+        // [A-419 Source evidence] 이 자리의 중앙 설명문은 승인 발화표에 없다.
+        // 정본 역할표(onboarding_scenes_20260916/README.md:102-115, NOTES:570-578)의
+        // Away 몫은 `Piggy : work? → yay → grab → go (말 없음, 동작만)` — Piggy 는
+        // 말하지 않는다. "Piggy is checking a second errand."(구) 도, 내가 발주해 넣게
+        // 한 "Piggy went out on a second errand."(신) 도 둘 다 작업자 DRAFT 조합이고
+        // SOURCE PASS 가 아니다. 카드가 "임의 대체문구 발명 0 / 중앙 잔류 0" 을
+        // 명시했는데 내가 문구 교체를 발주한 것이 지시 위반이었다 — 대체가 아니라
+        // 제거가 맞다. First Away 도 같은 이유로 이미 이 자리를 비웠다(A-415 §4).
+        // 새 문구를 넣지 않는다. 승인된 Away 문장이 오면 그때 이 자리에 붙인다.
+        ""
+      }
       <p class="secondJourney__mockTag">UI preview — no transaction</p>
       ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
@@ -1627,6 +1754,11 @@ function mountSecondAway() {
   const advanceToReturn = () => {
     if (advanced || stopped || token !== sceneToken) return;
     advanced = true;
+    // [A-421] Second 단수 귀환도 First 성공 경로(finishTrip §974-978)와 같은 표를 세운다 —
+    // chogHomeMarkupForReturn() 이 이 표만 보고 알람 발화 span 을 붙이고,
+    // beginReturnArrivalAlarm() 이 벨 뒤 한 박자에 그 hidden 을 벗긴다. 재생 표
+    // (returnArrival)는 건드리지 않는다 — Second 는 mountSecondReturn 이 play:true 고정.
+    state.returnArrivalAlarm = true;
     setScene("secondReturn", "", "");
   };
   const canvas = document.querySelector("#departStage");
@@ -1677,10 +1809,14 @@ function mountSecondAway() {
 
 function renderSecondReturn() {
   return returnSceneMarkup({
-    line: "Piggy is home. (preview)",
+    // [A-421] Owner 승인 "가운데 문구가 남으면 안돼" — First(line: "")와 동일, 발화는 알람 한 줄뿐.
+    line: "",
     receiptRowsMarkup: receiptPaperMarkup(secondJourneyReceiptFields(state.secondJourney.mockReceipt, displayPiggyName())),
     name: displayPiggyName(),
-    homeChogMarkup: chogHomeMarkup({ padMarkup: homePadMarkup("return") }),
+    // [A-421] First 와 **같은** 귀환 markup 경로 — 알람 발화 span(#returnArrivalAlarm)이
+    // 여기서만 붙는다. 이전에는 plain chogHomeMarkup() 이라 Second 는 어떤 상태에서도
+    // 알람 DOM 자체가 없었다(감독 OUTBOX 지적). 새 문구/새 자산 0 — 같은 함수 재사용.
+    homeChogMarkup: chogHomeMarkupForReturn("return"),
     devExtra: `<p class="secondJourney__mockTag">UI preview — no transaction</p>${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}`,
   });
 }
@@ -1710,7 +1846,10 @@ function mountSecondReturn() {
     state.secondJourney.selectedIds = [...prior.selectedIds];
     setScene("sendstay", "Piggy is home.", "Second errand filed. (preview)");
   };
-  mountReturnView({
+  // [A-421] First(mountReturn)와 같은 알람 생명주기 — 씬 이탈 정리 + 벨 뒤 한 박자
+  // 발화 공개. 구현은 공용 beginReturnArrivalAlarm() 하나뿐이다(두 번째 구현 0).
+  const hadAlarm = beginReturnArrivalAlarm(valid);
+  const returnView = mountReturnView({
     isValid: valid,
     schedule: (step) => runSceneFrames(step),
     listen: (target, type, handler, options) => sceneListener(target, type, handler, options),
@@ -1738,6 +1877,8 @@ function mountSecondReturn() {
       sceneTimeout(finishSecondJourney, 0);
     },
   });
+  // [A-421] 파일링 완료 시 알람 제거 — First 와 같은 공용 구현.
+  endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid);
 }
 
 function goHomeFromFilebox() {
@@ -2239,7 +2380,7 @@ const HATCH_DURATION = 7200;
 // 첫 Home 걷기 프레임 수. 박자·이동 시간은 아래 「씬 4 Home 구현 수치」 절에 있다.
 const HOME_WALK_FRAMES = 48;
 // Home 무입력 졸기 — 보관본 §3 「Home 무입력180000ms」.
-const HOME_DROWSY_MS = 180000;
+const HOME_DROWSY_MS = 60000; // [A-421 Owner "일분으로 줄여" 2026-09-18] 180000 → 60000, chog-home SLEEP_IDLE_MS 와 동일
 
 // public/ 의 조각은 한 번만 받아 두고 재사용한다. 씬을 여닫을 때마다 다시 받지 않는다.
 const motionParts = new Map();
@@ -2265,6 +2406,20 @@ let inviteChog = null;
 let departAssetsMissing = [];
 // 귀환 파츠 중 못 받은 것(보고용).
 let returnAssetsMissing = [];
+
+// [A-414-b/c] Send 카드의 work? 준비 반응 — piggy-depart.js 의 기존 mode:"work" 렌더러를
+// 그대로 쓴다(새 모션/새 자산 0). 자산은 한 번만 받아 재사용(카드가 여러 번 다시 마운트돼도
+// 다시 fetch 하지 않는다 — sendPiggy() 의 중간 상태 메시지들이 모두 setScene() 이라
+// render()를 다시 부른다, §mountSendCardWorkPose 주석).
+let workAssetsPromise = null;
+function loadWorkAssetsCached() {
+  if (!workAssetsPromise) workAssetsPromise = loadDepartAssets();
+  return workAssetsPromise;
+}
+// 카드가 "새로" 뜬 시각(진짜 시계). 재렌더(같은 sendstay 안에서 메시지만 바뀌는 setScene)
+// 마다 이 값을 다시 잡으면 작은 perk 가 매번 처음부터 다시 튄다 — 카드가 실제로
+// 사라졌다 나타날 때(stayHome, 다음 Save)만 null 로 되돌린다.
+let sendWorkStartedAt = null;
 
 let motionCssLinked = false;
 function linkMotionCss() {
@@ -2534,7 +2689,7 @@ function renderHatch() {
     <section class="stage stage--hatch" data-scene="hatch">
       <div class="hatchStage" id="hatchStage" aria-hidden="true"></div>
       <div class="hatchChog" id="hatchChog" aria-hidden="true">${chogInviteMarkup()}</div>
-      <button class="tiny skip" id="skipHatchButton" type="button">건너뛰기</button>
+      <button class="tiny skip" id="skipHatchButton" type="button">skip</button>
       ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
@@ -2791,7 +2946,7 @@ function homeMoneyBodyMarkup(name) {
 function homePiggyDetailBodyMarkup(name) {
   const time = homeTimeNow();
   if (state.homeMoneyStatus === "idle" || state.homeMoneyStatus === "loading") {
-    return homePiggyDetailMarkup({ name, time, status: { text: "확인중", retryLabel: "try reading again" } });
+    return homePiggyDetailMarkup({ name, time, status: { text: "checking…", retryLabel: "try reading again" } });
   }
   if (state.homeMoneyStatus === "error") {
     return homePiggyDetailMarkup({
@@ -2922,6 +3077,10 @@ function toggleHomePaperMoneyMode() {
 // render() 의 #recordsCard 리스너 참고).
 function handleHomePaperMountClick(event) {
   if (state.scene !== "sendstay") return;
+  if (event.target.closest("#homeRecordsButton")) {
+    openRecordsCard();
+    return;
+  }
   if (event.target.closest("#homePaperMoneyToggle")) {
     toggleHomePaperMoneyMode();
     return;
@@ -3254,6 +3413,97 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
   });
 }
 
+// [A-414-b/c] Send 카드가 실제로 떠 있는 동안 원본 work? 준비 반응(위 보기/작은
+// perk/기다림)을 켠다. piggy-depart.js 는 **새로 건드리지 않는다** — 이미 있는
+// createDepartRenderer(mode:"work")를 그대로 부른다.
+//
+// [보고할 남은 문제] piggy-depart.js drawAt()의 mode==="work" 분기는 확정 원본
+// (`<private>
+// departure.js:79` `source=.15+.65*ease(elapsed/.55)`)과 달리 scene 진행값 `t`를 그
+// 홀드식으로 다시 누르지 않고 `elapsed`를 그대로 t로 흘려보낸다(app/src/
+// piggy-depart.js:190 `const source = mode === "send" ? sendSourceOf(e) : e;`). 그
+// 결과 같은 파일 268~278행의 눈 깜빡임(work-half/shut, `elapsed % 3.6` 이 1.65~2.16
+// 구간일 때만 등장)은 t 도 함께 1.65 이상으로 밀어 올려 rise(1행 위 정의)가 1이 되고
+// 걷기 프레임(stepping)까지 돈다 — "출발하지 않는다"는 주석과 어긋난다. 이 함수는
+// 그 상한(source가 0.8에서 멈추게 하는 홀드)을 호출부에서 흉내내 "출발 금지"
+// 쪽을 지켰고, 그 대가로 실제 반짝임(half/shut)은 지금 못 보여준다 — 눈 깜빡임을
+// 살리려면 app/src/piggy-depart.js:190,266-281 의 mode==="work" 분기를 원본 홀드식으로
+// 고쳐야 한다(내가 건드릴 파일 밖이라 고치지 않고 여기 보고한다).
+function mountSendCardWorkPose() {
+  if (!state.sendCardVisible) {
+    sendWorkStartedAt = null;
+    return;
+  }
+  const canvas = document.querySelector("#sendCardWorkStage");
+  if (!canvas) return;
+  const seatImg = document.querySelector("#homeSeat");
+  const token = sceneToken;
+  let stopped = false;
+  onSceneTeardown(() => {
+    stopped = true;
+  });
+  const alive = () => !stopped && token === sceneToken;
+
+  const fit = () => {
+    const s = Math.min(window.innerWidth / 1256, window.innerHeight / 772);
+    canvas.width = Math.round(1256 * s * (window.devicePixelRatio || 1));
+    canvas.height = Math.round(772 * s * (window.devicePixelRatio || 1));
+    canvas.style.width = `${1256 * s}px`;
+    canvas.style.height = `${772 * s}px`;
+  };
+  fit();
+
+  // 카드가 이번에 처음 뜬 것이면 지금을 0초로 잡는다. 같은 카드가 떠 있는 채로
+  // sendPiggy() 의 중간 메시지(setScene("sendstay", "Piggy is asking to go out.", …))가
+  // 다시 render() 를 부르면 이 함수도 다시 불리지만, sendWorkStartedAt 이 이미 있으니
+  // perk 를 처음부터 다시 재생하지 않는다(재렌더당 중복 준비모션 0).
+  if (sendWorkStartedAt === null) sendWorkStartedAt = performance.now();
+  const reduced = prefersReducedMotion();
+
+  loadWorkAssetsCached().then((res) => {
+    if (!alive()) return;
+    const images = res && res.images;
+    // 자산이 없거나 깨졌으면 이번 반응만 접는다 — 기존 seat.svg 를 그대로 둔다
+    // (Away 의 asset-missing 처리와 같은 원칙, mountAway() onStatus 참고).
+    if (!images || (res && res.missing && res.missing.length)) {
+      departAssetsMissing = (res && res.missing) || departAssetsMissing;
+      return;
+    }
+    if (!alive()) return;
+    const renderer = createDepartRenderer(canvas, { images, mode: "work" });
+    // 캔버스가 실제로 그릴 준비가 된 지금에서야 옛 seat.svg 를 숨긴다 — 자산이
+    // 늦게 오는 동안은 seat.svg 가 계속 보여서 "Piggy 없음" 프레임이 생기지 않는다.
+    if (seatImg) seatImg.style.visibility = "hidden";
+    onSceneTeardown(() => {
+      if (seatImg) seatImg.style.removeProperty("visibility");
+    });
+
+    // [A-419] 홀드식이 이제 원본 자리(piggy-depart.js drawAt, mode "work")에 있다 —
+    // 여기서 흉내내던 mapped 변환은 제거한다. 그 흉내가 elapsed 를 0.8 로 얼려서
+    // 눈 깜박임(work-half/shut)이 한 번도 안 나오던 원인이었다(A-414-b/c 정정).
+    // 이제 **실제 경과 그대로** 넘긴다: 씬 시계는 렌더러가 0.8 에서 홀드해 출발하지
+    // 않고, 깜박임은 실제 시계로 3.6초 주기(1.65s·1.98s)로 계속 돈다.
+    const draw = () => {
+      if (!alive()) return false;
+      renderer.drawAt((performance.now() - sendWorkStartedAt) / 1000);
+      return true; // 깜박임이 계속 돌아야 하므로 카드가 살아 있는 동안 계속 그린다.
+    };
+
+    if (reduced) {
+      // 원본도 reduced 에서는 깜박임을 끄고 한 장만 둔다 — 새 식에서 0.6 은 이미
+      // source 0.8(정착)이고 눈은 open 단계다(깜박임 창 1.65/1.98 밖).
+      renderer.drawAt(0.6);
+      return;
+    }
+    draw();
+    sceneListener(window, "resize", () => {
+      fit();
+      draw();
+    });
+    runSceneFrames(draw);
+  });
+}
+
 // Home 3분 무입력 졸기 타이머. 도착한 그 시점에 시작하고, 입력이 있으면 다시 센다.
 // Home 을 떠나면 씬 정리에서 함께 사라진다.
 // UNKNOWN: 졸기 파츠 연출(보관본 sleep 패키지)은 이번 묶음에서 연결하지 않았다 —
@@ -3304,10 +3554,18 @@ function renderSendStay() {
         </div>
       </div>`
     : "";
+  // [A-414-b] 원본 work? 렌더러(piggy-depart.js mode:"work")를 얹을 자리 — away 씬의
+  // .departStage 와 같은 클래스를 그대로 써서(style.css 새 규칙 0) 같은 1256×772 판
+  // 중앙정렬을 물려받는다. 카드가 떠 있을 때만 존재 — 사라지면 DOM 자체가 없어져
+  // mountSendCardWorkPose() 가 다음 렌더에서 다시 만든다.
+  const sendWorkStageMarkup = state.sendCardVisible
+    ? `<canvas class="departStage" id="sendCardWorkStage" aria-hidden="true"></canvas>`
+    : "";
   return `
     <section class="stage" data-scene="sendstay">
       ${buttonInkFilter()}
       ${corner("sendstay")}
+      ${sendWorkStageMarkup}
       ${homeCharacter(piggyName)}
       ${cardAnchorMarkup}
       ${recordsCardMarkup()}
@@ -3395,9 +3653,14 @@ function renderAway() {
         ${chogHomeMarkup({ padMarkup: homePadMarkup("away") })}
       </div>
       ${corner("away")}
-      <article class="note note--quiet">
-        <p class="line">${state.awayLine}</p>
-      </article>
+      ${
+        // [A-415 §4 / A-414-a] 가운데 독립 문구 제거. A-411-i 가 renderReturn 만 비워서
+        // Away 에는 "I'll check it." 이 그대로 남아 있었다(Owner 12:24 스크린샷). 이 씬의
+        // 체킹은 초그 역할이고 귀환 쪽은 A-415-f 로 발화 자체를 없앴으므로, 여기서도 중앙
+        // 카드를 띄우지 않는다 — 다만 금융/실패 상태 문구(state.message/detail 계열)를
+        // 지우는 것이 아니라, 이 자리에 있던 awayLine 한 줄만 그리지 않는다.
+        ""
+      }
       ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
@@ -3433,20 +3696,76 @@ function returnReceiptRows() {
 // 확정 자산이 없어 넣지 않음")에서 Alarm 구간의 시각 요소는 이 문구 카드 하나와 Chog의
 // 짧은 반응(hop)뿐이다 — 별도 벨/링 그래픽은 canon 에 없다(portal-ring 은 그 뒤
 // "Returning" 구간에 Piggy 가 나오는 포털이고 다른 자산·다른 구간이다, piggy-return.js
-// stateAt() phase 표). Chog 의 반응(hop)은 이미 알람 구간(0.7–2.8s)에 걸려 있다
+// stateAt() phase 표). [주의] 위 문장 "별도 벨/링 그래픽은 canon 에 없다"는 A-413
+// 당시(그 시점 canon) 기준이다 — Owner 가 그 뒤(2026-09-18 채팅)에 실제 알람 종 그래픽을
+// 새로 지시했다(piggy-return.js BELL_* 참고, 그 파일이 그린다). 여기 문장은 그 지시
+// 이전 기록이라 갱신하지 않고 그대로 두되(이 발화 span 의 히스토리 문맥은 바뀌지 않았다)
+// 이 주석으로 바로잡는다 — [A-415-e 흔적 정리, 다음 main.js 에이전트가 또 헷갈리지 않게].
+// Chog 의 반응(hop)은 이미 알람 구간(0.7–2.8s)에 걸려 있다
 // (piggy-return.js alertHop → return-view.js placeChog(), 이 파일 범위 밖, 그대로 둔다).
 // state.returnArrivalAlarm 은 finishTrip() 이 실제 단수 귀환에서만 세우고, mountReturn()
-// 이 이 씬의 표시 생명주기(파일링 완료/씬 이탈)가 끝날 때만 지운다 — mount 되는 이
-// markup 에 곧바로 붙으므로 Piggy 가 보이기 시작하는 t=3.15s(piggyVisible, piggy-return.js
-// stateAt())보다 한참 먼저(t≈0) 화면에 있다. received/필드를 기다리지 않는다(옛
-// 체킹줄과 달리 "수령 확인" 신호가 필요 없다).
+// 이 이 씬의 표시 생명주기(파일링 완료/씬 이탈)가 끝날 때만 지운다.
+//
+// [Owner GO, 채팅 2026-09-18] 순서 확정: "알람 표시 → (살짝 늦게) 초그 발화 → 초그
+// 들어오기." — 발화(이 span)가 알람 종보다 늦게 떠야 한다. markup 은 mount 시 한 번만
+// 만들어지므로(§render()) "늦게 붙이기"는 여기서 span 자체를 `hidden` 으로 먼저 심어
+// 두고, mountReturn() 이 sceneTimeout() 으로 그 hidden 만 나중에 벗기는 방식으로 푼다
+// (style.css 에 `.chogCheckLine{display:...}` 오버라이드가 없어 `[hidden]` UA 규칙이
+// 그대로 먹는다 — style.css 는 이번 dispatch 허용 파일이 아니라 확인만 하고 손대지
+// 않았다). 정확한 지연 값·근거는 mountReturn() 주석 참고. received/필드를 기다리지
+// 않는다(옛 체킹줄과 달리 "수령 확인" 신호가 필요 없다).
 function chogHomeMarkupForReturn(scene) {
   let markup = chogHomeMarkup({ padMarkup: homePadMarkup(scene) });
   if (state.returnArrivalAlarm) {
-    const alarm = `<span class="chogCheckLine" id="returnArrivalAlarm">${escapeHtml(displayPiggyName())} is coming home</span>`;
+    const alarm = `<span class="chogCheckLine" id="returnArrivalAlarm" hidden>${escapeHtml(displayPiggyName())} is coming home</span>`;
     markup = markup.replace('<div class="chogHome__hit"', `${alarm}<div class="chogHome__hit"`);
   }
   return markup;
+}
+
+// [A-421] 알람 발화의 생명주기 — 아래 mountReturn()(First) 과 mountSecondReturn()(Second,
+// §1709 이하) 이 **같은 구현 하나**를 쓴다. Owner 지시("첫 Journey 및 Second Journey 귀환
+// 까지 앱 연결")대로 Second 도 같은 축(벨 → 한 박자 뒤 Chog 발화 → Piggy 등장)을 타야
+// 하는데, 두 번째 알람 구현/새 문구/새 자산을 만들지 않기 위해 mountReturn() 안에 있던
+// 코드를 그대로 이 두 함수로 옮겼다 — 값·순서·주석 근거는 모두 mountReturn() 쪽 원문과
+// 동일하다(새 리터럴 0: 지연은 여전히 RETURN_VIEW_GEOMETRY.alarmBell 의 start/fade 에서
+// 파생된다).
+function beginReturnArrivalAlarm(valid) {
+  // [A-413 §4] 안전망 — 이 귀환 씬을 어떤 경로로 떠나든(파일링/실패 폴백/재방문 즉시
+  // 이탈) 알람 표는 다음 씬으로 새지 않는다.
+  const hadAlarm = !!state.returnArrivalAlarm;
+  onSceneTeardown(() => { state.returnArrivalAlarm = false; });
+  // [Owner GO, 채팅 2026-09-18] "알람 표시 → (살짝 늦게) 초그 발화 → 초그 들어오기" —
+  // chogHomeMarkupForReturn() 이 span 을 `hidden` 으로 심어 두고, 여기서 그 hidden 을
+  // 벗기는 시점만 늦춘다. 알람 종(piggy-return.js BELL_START_S=0.7, BELL_FADE_S=0.15 —
+  // RETURN_VIEW_GEOMETRY.alarmBell 로 재노출된 원본값)이 다 떠오르는 0.85s 에서 같은
+  // 페이드 한 번(0.15s)을 더 기다린 t=1.0s. Piggy 가 보이기 시작하는 t=3.15s
+  // (piggyVisible)보다 한참 이르다. reduced-motion 은 재생 시계가 곧장 t=7.0 으로 뛰어
+  // 종 자체가 그려지지 않으므로 지연 0 으로 즉시 보여준다.
+  if (hadAlarm) {
+    const bell = RETURN_VIEW_GEOMETRY.alarmBell; // {start:0.7, fade:0.15, ...}
+    const reveal = () => { if (valid()) document.querySelector("#returnArrivalAlarm")?.removeAttribute("hidden"); };
+    if (prefersReducedMotion()) reveal();
+    else sceneTimeout(reveal, (bell.start + bell.fade * 2) * 1000);
+  }
+  return hadAlarm;
+}
+
+// [A-413 §4 / A-415-f] 파일링(File it) 완료는 return-view.js 소유(onFiled, 그 파일이 재렌더
+// 없이 DOM 만 고친다)라 이 파일이 다시 그리지 않는다. 완료를 이 파일 쪽에서 알 방법은
+// mountReturnView() 가 돌려주는 `filed` 게터뿐이라, 씬 lifecycle 에 이미 있는
+// runSceneFrames() 로 매 프레임 한 번 확인해 알람만 지운다 — 새 폴링 장치 0.
+function endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid) {
+  if (!hadAlarm || !returnView) return;
+  runSceneFrames(() => {
+    if (!valid()) return false;
+    if (returnView.filed) {
+      document.querySelector("#returnArrivalAlarm")?.remove();
+      state.returnArrivalAlarm = false;
+      return false;
+    }
+    return true;
+  });
 }
 
 // 장면 — 귀환. 화면 바인딩은 `return-view.js` 가 갖는다 —
@@ -3479,16 +3798,17 @@ function mountReturn() {
 
   // [A-413 §4] 안전망 — 이 return 씬을 어떤 경로로 떠나든(파일링/실패 폴백/재방문 즉시
   // filebox 행) 알람 표는 다음 씬으로 새지 않는다. 정상 경로(파일링 완료)는 아래
-  // runSceneFrames 감시가 더 먼저(같은 씬 안에서 DOM만) 지우고 이 값도 같이 비운다 —
-  // 이 teardown 은 그 감시가 못 미친 나머지 이탈 경로(에러 폴백/즉시 filebox 등)를 덮는
-  // 마지막 안전망이다.
-  onSceneTeardown(() => { state.returnArrivalAlarm = false; });
+  // endReturnArrivalAlarmWhenFiled() 감시가 더 먼저(같은 씬 안에서 DOM만) 지우고 이 값도
+  // 같이 비운다 — teardown 은 그 감시가 못 미친 나머지 이탈 경로(에러 폴백/즉시 filebox
+  // 등)를 덮는 마지막 안전망이다.
+  // [A-421] teardown 등록·hadAlarm 판독·발화 지연 공개는 beginReturnArrivalAlarm() 한
+  // 군데로 모았다(Second 와 같은 구현). 순서·값 변화 0.
 
   // [A-413 §4 / A-415-f] 알람 발화가 이번 진입에 실제로 붙었는지 — "파일링이 끝나면 같은
-  // 씬 안에서 곧장 지운다"는 규율을 여기서 적용한다. 체킹 발화(hadCheckLine/
-  // insertCheckLine, A-411-i~A-415)는 Owner 최종합의로 완전히 걷어냈다 — 수령 전/후
-  // 어느 쪽도 "checking..." 을 남기지 않는다(c81c05b 의 received-게이트 삽입 포함).
-  const hadAlarm = !!state.returnArrivalAlarm;
+  // 씬 안에서 곧장 지운다"는 규율. 체킹 발화(hadCheckLine/insertCheckLine, A-411-i~A-415)는
+  // Owner 최종합의로 완전히 걷어냈다 — 수령 전/후 어느 쪽도 "checking..." 을 남기지 않는다.
+  const hadAlarm = beginReturnArrivalAlarm(valid);
+
   let errored = false;
   const returnView = mountReturnView({
     isValid: valid,
@@ -3527,24 +3847,9 @@ function mountReturn() {
     onIdleEnter: () => { sceneTimeout(() => { if (valid()) setScene("filebox"); }, 0); },
   });
 
-  // [A-413 §4 / A-415-f] 파일링(File it) 완료는 return-view.js 소유(onFiled, 그 파일
-  // 재렌더 없이 DOM 만 직접 고친다)라 이 파일이 다시 그리지 않는다. 그 완료를 이 파일
-  // 쪽에서 알 방법은 mountReturnView() 가 돌려주는 `filed` 게터뿐이라, 씬 lifecycle 에
-  // 이미 있는 runSceneFrames() 로 매 프레임 한 번 확인해 알람만 지운다 — 새 폴링 장치를
-  // 만들지 않는다. 씬을 나가면(teardown) runSceneFrames 자신이 멈추고, 어차피 render() 의
-  // innerHTML 통째 교체가 이 span 을 포함해 전부 지운다(§401 주석). state 도 같이 비운다
-  // (그 뒤에는 "해당 상태가 끝났다"는 사실 자체가 없다, 새 상태 0).
-  if (hadAlarm && returnView) {
-    runSceneFrames(() => {
-      if (!valid()) return false;
-      if (returnView.filed) {
-        document.querySelector("#returnArrivalAlarm")?.remove();
-        state.returnArrivalAlarm = false;
-        return false;
-      }
-      return true;
-    });
-  }
+  // [A-421] 파일링 완료 시 알람 제거 — Second 와 같은 구현 하나
+  // (endReturnArrivalAlarmWhenFiled, §3669 이하). 동작 변화 0.
+  endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid);
 }
 
 // [A-383] filebox 는 First/Second Journey 의 귀환 직후 화면(mountReturn onOpenFilebox/
@@ -3859,7 +4164,7 @@ function render() {
   // 열림/목록/상세/닫힘을 전부 위임 클릭 하나로 배선한다(카드 내용은 render() 를 다시
   // 부르지 않고 renderRecordsCardBody() 가 innerHTML 만 바꾸므로, 매번 다시 부를 필요가
   // 없다 — 이 델리게이션은 이번 sendstay 마운트 동안 계속 유효하다).
-  document.querySelector("#homeRecordsButton")?.addEventListener("click", openRecordsCard);
+  // A-419: records clicks are delegated through the stable Home mount below.
   // [A-412 §1] Money/Piggy 상세 내부 전환 — `.homePaperMount` 는 render() 를 다시 부르지
   // 않는 내부 갱신(refreshHomePaperMount)에도 살아남는 안정된 노드라 위임 클릭 하나로
   // 충분하다(§recordsCard 와 같은 자리 규율, 바로 아래 리스너 참고).
@@ -3887,7 +4192,10 @@ function render() {
   }
   if (state.scene === "hatch") mountHatch();
   if (state.scene === "name") mountName();
-  if (state.scene === "sendstay") mountHome();
+  if (state.scene === "sendstay") {
+    mountHome();
+    mountSendCardWorkPose();
+  }
   if (state.scene === "away") mountAway();
   if (state.scene === "return") mountReturn();
   // [A-360] explore 는 mountHome() 을 카드 자리 고정(cardClaimed:true)으로 재사용한다
@@ -3922,6 +4230,8 @@ window.addEventListener("beforeunload", endActiveSession);
 // 확인할 방법이 달리 없다. 인증·저장·게이트는 건드리지 않는다 — 화면만 띄운다.
 // 프로덕션 번들에는 실리지 않는다(import.meta.env.DEV).
 if (import.meta.env.DEV) {
+  // [A-421] 졸기 검토용 — 1분 무입력을 기다리지 않고 바로 앉혀 졸기를 시작한다(chog-home previewSit, 수식 동일).
+  window.__arasoChogSit = () => homeChog?.previewSit?.();
   window.__arasoScene = (
     scene,
     { arrival = false, resumed = false, secondJourneyPreview = false, reason } = {},
@@ -3973,6 +4283,10 @@ if (import.meta.env.DEV) {
     // (§3441 이하), 이 경로로 들어오면 render() 가 만드는 첫 markup 자체에 알람이 없어
     // "마운트했는데 안 보인다"로 나타난다 — 실제 성공 경로와 parity 를 맞춘다.
     if (scene === "return") { state.returnArrival = arrival; state.returnArrivalAlarm = arrival; }
+    // [A-421] Second 귀환도 같은 parity — DEV 씬점프로 "secondReturn" 을 열면 실제 진입
+    // 경로(mountSecondAway advanceToReturn, §1716 근방)가 세우는 것과 같은 알람 표를
+    // 세운다. mountSecondReturn 은 play:true 고정이므로 returnArrival 은 건드리지 않는다.
+    if (scene === "secondReturn") state.returnArrivalAlarm = arrival;
     // [A-360 §7] "UI preview — no transaction" — 이 함수 자체가 이미 import.meta.env.DEV
     // 안에만 있다(production 진입 0). secondJourneyPreview:true 를 명시적으로 넘겼을 때만
     // recomputeSecondJourneyFlow()가 fixture evidence/overrides를 쓰게 된다(§devPreview

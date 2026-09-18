@@ -121,9 +121,9 @@ export function homePaperMarkup({
 // main.js 는 필드값을 이미 확정한 문자열로, 모르면 null/undefined 로, 해당없음이면 정확히
 // HOME_NOT_APPLICABLE_LABEL 을 넘긴다 — 여기서 데이터 원천을 판정하거나 잔액을 계산하지
 // 않는다(순수 렌더).
-export const HOME_UNKNOWN_LABEL = "미확인";
-export const HOME_NOT_APPLICABLE_LABEL = "해당없음";
-const HOME_CHECKING_LABEL = "확인중";
+export const HOME_UNKNOWN_LABEL = "unknown";
+export const HOME_NOT_APPLICABLE_LABEL = "—";
+const HOME_CHECKING_LABEL = "checking…";
 
 function homeMoneyValueMarkup(amount, unit) {
   if (amount === HOME_NOT_APPLICABLE_LABEL) {

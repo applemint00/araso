@@ -74,6 +74,61 @@ const NATIVE_OY = HOME_CHOG.floorY - NATIVE_INK.y1 * NATIVE_K;
 const NATIVE_STEP_DX = -41 * GROUP_SCALE;
 const NATIVE_STEP_DY = -8 * GROUP_SCALE;
 
+// --- 알람 종 (Owner 지시, 채팅 2026-09-18: "피기 올문 옆에헤 내가 보는 오른쪽
+// 옆에 집그림사이즈로") -------------------------------------------------
+// 자산: <private>
+// sha256 c3b220d862b7195ac9c1c5db9a54217af8572d3686e98f55a1b2f9118fb20b3b, 8785B
+// (대부분 C2PA metadata) — Owner 확인 "그게벨자산이야". 아래 마크업은 그 파일의
+// <metadata> 블록만 뺀 그림 내용 그대로다(재드로우 0, 좌표·색·필터 손대지 않음).
+// [주의] main.js:3554-3559 근처에 "별도 벨/링 그래픽은 canon 에 없다"는 A-413 당시
+// 주석이 남아 있다 — 이 주문(2026-09-18)이 그 뒤에 온 새 Owner 지시다. main.js 는
+// 이 dispatch 의 허용 파일이 아니라 그 주석은 고치지 못했다 — 다음에 main.js 를
+// 만지는 에이전트가 갱신해야 한다(PREMISE_CONFLICT 성격의 정보 전달, 이 파일 수정은
+// 아님).
+const BELL_KEY = "alarm-bell";
+const BELL_SVG_MARKUP = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<defs><filter id="crb" x="-25%" y="-25%" width="150%" height="150%">
+ <feTurbulence type="fractalNoise" baseFrequency="0.055" numOctaves="3" seed="13" result="n"/>
+ <feDisplacementMap in="SourceGraphic" in2="n" scale="3.2" xChannelSelector="R" yChannelSelector="G"/></filter></defs>
+<g filter="url(#crb)" fill="none" stroke="#E0B100" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"><path d="M50 16 C66 16 76 30 76 46 C76 62 80 70 86 78 L14 78 C20 70 24 62 24 46 C24 30 34 16 50 16 Z"/><path d="M50 10 L50 17"/><path d="M42 86 C44 93 56 93 58 86"/></g>
+<g filter="url(#crb)" fill="none" stroke="#E0B100" stroke-width="5.2" opacity=".45" stroke-linecap="round" stroke-linejoin="round" transform="translate(.7,.6)"><path d="M50 16 C66 16 76 30 76 46 C76 62 80 70 86 78 L14 78 C20 70 24 62 24 46 C24 30 34 16 50 16 Z"/><path d="M50 10 L50 17"/><path d="M42 86 C44 93 56 93 58 86"/></g>
+</svg>`;
+// data: URI + Image — Path2D 가 아니다: 캔버스 2D 는 feTurbulence/feDisplacementMap
+// 을 못 돌린다(SVG 래스터라이저가 Image onload 시 대신 돌려준다). Path2D 로 세 path 를
+// 다시 그리면 크레용 displacement 질감이 사라진다 — 그래서 이 경로를 택했다.
+const BELL_SRC = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(BELL_SVG_MARKUP)}`;
+
+// 위치 — [OWNER_INPUT_REQUIRED] "집그림사이즈"의 절대 px 기준이 앱에 없다: Home
+// paper stamp 는 `.homePaper__stamp{width:52px}` 이지만 종이 자체가 0.275~0.64 로
+// 화면에서 다시 축소되므로 52px 는 "종이 좌표계 안" 값이지 절대 화면 px 가 아니다 —
+// 그 52px 를 그대로 이 포털(전혀 다른 좌표계) 에 옮길 근거가 없다. 여기서는 포털 링
+// 상자(BOX.ring, 위 56-63행: x366.1 y221.75 w187.8 h286.5, 오른쪽 끝 x=553.9, 세로
+// 중심 y=365.0) 옆에 "작은 아이콘"으로 읽히는 크기를 이 파일 안에서 임의로 확정했다
+// — Owner 재확인 전까지 잠정: gap 24(box 단위) · bell 64×64(box 단위, viewBox 1:1
+// 유지, 비율 왜곡 0) · ring 세로 중심에 맞춤. board px 환산 ≈ 64×GROUP_SCALE(≈0.6881)
+// ≈ 44×44 board px(실제 CSS px 는 anchorCenter() 주석과 같은 이유로 뷰포트마다
+// 다르다 — sx()=canvas.clientWidth/BOARD_W).
+const BELL_GAP = 24;
+const BELL_SIZE = 64; // box 단위(BOX.ring 과 같은 좌표계)
+const BELL_BOX = {
+  x: BOX.ring.x + BOX.ring.w + BELL_GAP,           // 366.1+187.8+24 = 577.9
+  y: BOX.ring.y + BOX.ring.h / 2 - BELL_SIZE / 2,  // 221.75+143.25-32 = 333.0
+  w: BELL_SIZE, h: BELL_SIZE,
+};
+// 표시 구간 — 알람 시작(stateAt 의 리터럴 0.7, phase "Alarm" 시작과 동일) ~ Piggy
+// 등장 직전(stateAt 의 리터럴 3.15, piggyVisible 과 동일). Owner 지시 "알람 표시 →
+// 발화 → 등장" 순서를 그대로 따른다 — 종은 등장 신호가 아니라 등장 *전* 알림이라 Piggy
+// 가 보이기 시작하면(t>=3.15) 사라진다(hold 안 함 — "읽기 낫다"고 판단해 등장까지만
+// 든다, 이 판단은 이 파일 안에서 내렸다). 가장자리 0.15s 는 알파 페이드일 뿐 — stateAt/
+// nativeState 등 원본 시간 함수·기존 상수는 전혀 건드리지 않았다(추가만).
+const BELL_START_S = 0.7, BELL_END_S = 3.15, BELL_FADE_S = 0.15;
+function bellAlphaAt(t) {
+  return Math.min(
+    smooth((t - BELL_START_S) / BELL_FADE_S),
+    1 - smooth((t - (BELL_END_S - BELL_FADE_S)) / BELL_FADE_S)
+  );
+}
+
 const pad2 = (i) => String(i).padStart(2, "0");
 const WALK = Array.from({ length: 48 }, (_, i) => `piggy-walk-${pad2(i)}`);
 const TURN = Array.from({ length: 25 }, (_, i) => `piggy-turn-${pad2(i)}`);
@@ -89,12 +144,22 @@ const LOAD = [...WALK, ...TURN, ...REST_MORPH, ...REST_TURN, ...NATIVE, ...PALM,
 export async function loadReturnAssets() {
   const images = new Map();
   const missing = [];
-  await Promise.all(LOAD.map((name) => new Promise((resolve) => {
-    const im = new Image();
-    im.onload = () => { images.set(name, im); resolve(); };
-    im.onerror = () => { missing.push(name); resolve(); };
-    im.src = `${DIR}/${name}.png`;
-  })));
+  await Promise.all([
+    ...LOAD.map((name) => new Promise((resolve) => {
+      const im = new Image();
+      im.onload = () => { images.set(name, im); resolve(); };
+      im.onerror = () => { missing.push(name); resolve(); };
+      im.src = `${DIR}/${name}.png`;
+    })),
+    // 알람 종 — PNG 파일이 아니라 인라인 data: URI(위 BELL_SRC). 같은 실패 신호
+    // 통로(missing[])를 쓴다 — 조용히 사라지지 않는다.
+    new Promise((resolve) => {
+      const im = new Image();
+      im.onload = () => { images.set(BELL_KEY, im); resolve(); };
+      im.onerror = () => { missing.push(BELL_KEY); resolve(); };
+      im.src = BELL_SRC;
+    }),
+  ]);
   return { images, missing };
 }
 
@@ -302,6 +367,17 @@ export function createReturnRenderer(canvas, opts) {
       ctx.restore();
     }
 
+    // ①-b 알람 종 — 포털 옆(뷰어 오른쪽), Owner 지시(2026-09-18, 위 BELL_* 참고).
+    // 포털이 아직 안 열려도(scale===0, t<1.8) 뜬다 — 알람이 포털보다 먼저다.
+    // 링 자체의 opening scale 과는 독립이다(알파 페이드만 있다, 위 bellAlphaAt).
+    const bellAlpha = bellAlphaAt(t);
+    if (bellAlpha > 0 && img(BELL_KEY)) {
+      ctx.save(); enterGroup();
+      ctx.globalAlpha = bellAlpha;
+      blit(BELL_KEY, BELL_BOX);
+      ctx.restore();
+    }
+
     // ② Piggy — t<5.25 구간은 원본처럼 reveal mask 안에서만 보인다.
     if (s.piggyVisible) {
       const masked = t < 5.25 && img("portal-mask");
@@ -459,6 +535,7 @@ export function createReturnRenderer(canvas, opts) {
       hand,
       alertHop: t >= 0.7 && t < 2.8 ? -5 * Math.sin(Math.PI * clamp((t - 0.7) / 0.55)) : 0,
       nativeVisible: t >= 11.4 && t < RETURN_TOTAL_S,
+      bellAlpha,
       done: t >= RETURN_TOTAL_S,
     };
   }
@@ -474,6 +551,13 @@ export const RETURN_GEOMETRY = {
   gates: { receipt: RECEIPT_GATE_S, zoomDone: ZOOM_DONE_S, pickup: PICKUP_S, total: RETURN_TOTAL_S },
   loaded: LOAD.length,
   notLoaded: ["chog-rest"],
+  // [OWNER_INPUT_REQUIRED] "집그림사이즈" 절대 px 기준 미확정 — box 정의부 주석 참고.
+  alarmBell: {
+    key: BELL_KEY, box: BELL_BOX, gap: BELL_GAP, sizeBoxUnits: BELL_SIZE,
+    sizeBoardPxApprox: BELL_SIZE * GROUP_SCALE,
+    start: BELL_START_S, end: BELL_END_S, fade: BELL_FADE_S,
+    ownerInputRequired: "absolute on-screen size for '집그림사이즈' unresolved — chose 64 box units (~44 board px) beside BOX.ring; Owner has not confirmed",
+  },
 };
 
 // --- 실제 재생 controller ------------------------------------------------
