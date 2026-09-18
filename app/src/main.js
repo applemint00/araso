@@ -1568,7 +1568,16 @@ function mountSecondAway() {
     sceneListener(window, "resize", () => {
       fitHomeBoard();
     });
-    advanceToReturn();
+    // [A-407-g] render() 의 씬 분기(맨 아래 if (state.scene === ...) 사슬, 이 함수를
+    // 부른 그 자리)는 **하나의 render() 호출 안에서** 여러 if 를 차례로 검사한다 —
+    // 여기서 advanceToReturn() 을 바로 부르면 setScene()→render() 가 지금 이
+    // mountSecondAway() 를 부른 그 render() 호출 **안에서 재진입**해 버린다. 그러면
+    // secondReturn 으로 다 넘어간 뒤에도 바깥 render() 가 이어서 `if (state.scene ===
+    // "secondReturn") mountSecondReturn()` 을 한 번 더 실행해(state.scene 이 그 사이
+    // 바뀌었으므로) mountReturnView 가 두 번 붙는다. mountSecondReturn 의 onIdleEnter 가
+    // 이미 쓰는 것과 같은 방법(`sceneTimeout(fn, 0)`)으로 한 걸음 미뤄, 이 render() 가
+    // 완전히 끝난 **다음**에 전환하게 한다 — 게이트·문구·완료판정은 그대로다.
+    sceneTimeout(advanceToReturn, 0);
     return;
   }
   const fit = () => {
