@@ -1280,6 +1280,23 @@ h1 {
   overflow: visible;
 }
 
+/* [A-411] Owner: 기록 카드가 열려 두 카드가 함께 보일 때만 카드 묶음(홈 종이 + 기록 카드)을
+   왼쪽으로 옮긴다 — 감독 실측(A-410-a, 1335×717)에서 기록 카드 우하단이 Piggy 왼쪽 귀와
+   겹쳤다(산출: main.js HOME_TWO_CARD_SHIFT_VIEWPORT_PX 주석, 목표 46 뷰포트px). 이
+   요소(`.homePaperMount`)는 chog-home.js draw() 가 매 프레임 쓰는 `#chogHomePad`(부모)
+   transform 과 다른 요소라 상쇄되지 않는다 — 단 `.homePaperMount` 는 그 부모 pad 의
+   scale(finalScale) 안쪽이라, 여기 translateX 값은 뷰포트px 가 아니라 **로컬px**다.
+   docking 이 끝난 정지 상태에서 pad 의 finalScale × chogHome 의 HOME_SCALE × homeBoard 의
+   s 곱은 뷰포트 크기와 무관하게 정확히 finalPaperScale/PAPER_BASE_SCALE(=0.640845/0.275
+   ≈2.330346, chog-home.js CARD_ANCHOR_H/PAPER_H 등 정본 상수에서 나온다 — s 가 분모/분자에
+   각각 한 번씩 있어 상쇄된다)로 고정되므로, 목표 46px ÷ 2.330346 ≈ -19.74 로컬px 를 쓰면
+   화면에서 정확히 -46px 로 나온다(뷰포트 크기가 달라져도 이 정지 상태 비율 자체는
+   불변). 클래스는 main.js openRecordsCard/closeRecordsCard 만 붙였다 뗀다 — 닫으면 기존
+   Home 자리 그대로. 캐릭터(Chog/Piggy) 좌표·모습·모션은 이 규칙과 무관(건드리지 않는다). */
+.homePaperMount--twoCardShift {
+  transform: translateX(var(--twoCardShiftLocalPx, -19.74px));
+}
+
 .homePaper {
   position: absolute;
   left: 0;

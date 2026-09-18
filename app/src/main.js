@@ -1691,6 +1691,10 @@ function openRecordsCard() {
   if (!anchor) return;
   state.recordsCardVisible = true;
   state.recordsDetailIndex = null;
+  // [A-411] 두 카드 왼쪽 이동은 anchor.hidden 을 풀기 전, opening 클래스를 걸기 전에
+  // 먼저 건다 — 그래야 open transition 첫 프레임부터 이미 옮겨진 자리에서 시작해
+  // Piggy 귀와 겹치는 중간 프레임이 없다(§3 "opening transition 도 확인").
+  setHomeTwoCardShift(true);
   renderRecordsCardBody();
   alignRecordsCardToHomePaper();
   // [A-387-a] Owner 지시: 카드가 Home 옆으로 스르륵 열리는 짧은 open transition만(새
@@ -1720,6 +1724,8 @@ function closeRecordsCard() {
     anchor.hidden = true;
     anchor.classList.remove("recordsCardAnchor--opening");
   }
+  // [A-411] 기록 카드를 치우면 두 카드 이동도 즉시 되돌린다 — 기존 Home 위치 그대로.
+  setHomeTwoCardShift(false);
 }
 
 // 목록 → 상세, 상세 → 목록. 같은 카드 영역 안에서 내용만 바꾼다(§4 "선택한 영수증
@@ -3173,6 +3179,50 @@ function renderFileBox() {
 // h185), alignRecordsCardToHomePaper() 가 실제 `.homePaper` rect 를 그대로 물려받는다
 // (아래). 간격만 이 상수를 유지한다.
 const RECORDS_CARD_GAP = 24;
+
+// [A-411] Owner "두 카드 열릴 때 묶음 왼쪽 이동" — 감독 실측(1335×717, A-410-a)에서
+// 기록 카드 우하단이 Piggy 왼쪽 귀와 겹친다. 캐릭터 좌표는 그대로 두고(금지) 카드 두 장만
+// 옮긴다. 최소 이동량은 실측 + 코드 상수에서 역산했다(화면 실행으로 잰 값이 아니라 기하
+// 계산 — 이 회차 재검토는 브라우저를 새로 못 띄운다):
+//   · 기록 카드 우측단(실측) = 787.664 + 256.336 = 1044.000
+//   · Piggy 왼쪽 귀 bbox 는 seat.svg 원본 path(1056×1102 로컬)에서 좌상단 귀 조각만
+//     추출(minX 306.726/minY 17.815/maxX 468.426/maxY 253.008) → main.js layoutHomeCharacter()
+//     의 HOME_SEAT_W/HOME_SEAT_L/HOME_FLOOR·HOME_SEAT_FOOT로 Home 판(1256×772) 좌표로,
+//     다시 fitHomeBoard() 의 s(=717/772, 감독 뷰포트 1335×717 고정폭 가정)·boardLeft 로
+//     뷰포트 px 로 환산(같은 s·boardLeft 를 chog-home.js CORNER_TX/CORNER_TY·HOME_SCALE
+//     로 역산한 감독 Chog hit 실측(868.653/491.980/86.220/109.854)과 대조해 s=0.928752,
+//     boardLeft=84.24 로 교차검증 — 오차 <0.01px).
+//     → 귀 좌측단 ≈ x1022.010, 귀 하단 ≈ y490.094(귀 상단 y459.067) — 기록 카드 y구간
+//     (128.492–492.492) 안에 완전히 들어가 y는 항상 겹친다.
+//   · 최소 이동량 = 기록카드 우측단 − (귀 좌측단 − 안전간격24) = 1044.000 − (1022.010−24)
+//     = 45.99px → 46px 로 올림(반올림 여유로 24px 안전간격을 항상 채운다).
+// 이 46px 는 실제 화면(뷰포트) px 목표값이다 — RECORDS_CARD_GAP 과 같은 성격(고정 px).
+const HOME_TWO_CARD_SHIFT_VIEWPORT_PX = 46;
+
+// 카드 두 장(홈 종이+기록 카드)만 왼쪽으로 옮긴다 — 캐릭터(Chog/Piggy)는 손대지 않는다.
+// `.homePaperMount` 는 chog-home.js mount() 가 한 번 left/top/width/height 를 인라인으로
+// 앉히기만 하고 transform 은 건드리지 않는 요소라, 여기서 transform 을 얹어도 draw() 의
+// 매 프레임 pad.style.transform(부모 #chogHomePad) 과 겹치지 않는다(서로 다른 요소·다른
+// 자식 체인) — 단 `.homePaperMount` 자신은 그 부모 pad 의 scale(finalScale) **안쪽**이라
+// 여기 넣는 translateX 는 뷰포트px 가 아니라 로컬px 다. chog-home.js 의 도킹 완료 상태
+// (anchorBlend=1, sharedCardPadTarget().scale 그대로)에서는
+//   pad.finalScale × chogHome.HOME_SCALE × homeBoard.s
+//     = finalPaperScale / PAPER_BASE_SCALE  (s 가 분모·분자에 한 번씩 있어 상쇄, 뷰포트
+//       크기 무관하게 고정)
+// 이고, finalPaperScale = min(CARD_ANCHOR_W/PAPER_W, CARD_ANCHOR_H/PAPER_H) = min(285/400,
+// 364/568) = 364/568(세로 기준) — chog-home.js mountChogHome() 안의 그 상수들 그대로다
+// (정본값이라 여기서 다시 바꾸지 않는다 — 바뀌면 이 비율도 같이 바뀌어야 한다는 뜻).
+// 그래서 로컬px = −목표뷰포트px ÷ (finalPaperScale/PAPER_BASE_SCALE) 로 계산해 CSS 변수로
+// 넘긴다 — 매직넘버를 두 파일에 따로 박지 않는다.
+const HOME_PAPER_DOCK_RATIO = Math.min(285 / 400, 364 / 568) / 0.275; // ≈2.330346
+const HOME_TWO_CARD_SHIFT_LOCAL_PX = -(HOME_TWO_CARD_SHIFT_VIEWPORT_PX / HOME_PAPER_DOCK_RATIO); // ≈-19.74
+
+function setHomeTwoCardShift(active) {
+  const mount = document.querySelector(".homePaperMount");
+  if (!mount) return;
+  mount.style.setProperty("--twoCardShiftLocalPx", `${HOME_TWO_CARD_SHIFT_LOCAL_PX}px`);
+  mount.classList.toggle("homePaperMount--twoCardShift", Boolean(active));
+}
 
 function recordsCardListMarkup() {
   const name = displayPiggyName();
