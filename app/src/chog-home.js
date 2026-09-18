@@ -518,8 +518,15 @@ export function mountChogHome(root, opts) {
   function requestHover(value) {
     if (!ready || destroyed) return;
     if (dozePhase !== "awake") {
+      // [A-411-m] 이 졸기 분기는 원본 hover.js/sleep-motion.js 어디에도 없다(A-308이
+      // chog-home.js 안에서만 얹은 통합 코드) — 그래서 "확정 수식" 변경이 아니다.
+      // 기존에는 여기서 곧장 return 해 이 호출이 가진 value(특히 실제 tap 이 이미
+      // pinned=true 로 올린 여는 의도)를 그대로 버렸다: wake() 는 돌지만 progress/target
+      // 은 이전 값(대개 0)에 머물러, pinned 는 true인데 노트패드는 계속 닫힌 채(progress
+      // 0/padScale .18)로 남는다 — 감독 실측 .homePaper·.recordsCardAnchor 9.34×13.27
+      // (A-411-m 재현) 이 정확히 이 값이다. 깨우고 나서 같은 tap 의 값을 마저 적용한다 —
+      // 아래 정상 분기로 그대로 이어진다(좌표·이징·padScale 식 자체는 손대지 않는다).
       wake();
-      return;
     }
     if (reduced) {
       progress = value;
