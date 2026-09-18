@@ -910,7 +910,10 @@ function finishTrip(trip) {
 
 async function sendPiggy() {
   if (!isAllowedPiggyRpId()) {
-    setScene("sendstay", "Not this door.", `Send Piggy only at ${PRODUCTION_RP_ID}.`);
+    // [A-407-e] 사용자 화면에는 내부 origin/rpId 를 적지 않는다 — 지금 여기서는 보낼 수
+    // 없다는 사실만 짧게. 가드(isAllowedPiggyRpId)·서명·tx·버튼 disabled 는 그대로이고,
+    // 이 문구가 실행 가능성을 암시하지 않는다. 원인 원문은 OUTBOX 기록.
+    setScene("sendstay", "Not from here.", "Piggy can only go out from the real app.");
     return;
   }
 
@@ -2916,8 +2919,10 @@ function renderSendStay() {
     ? `<div class="cardAnchor" id="sendCardAnchor">
         <div class="cardAnchor__fit">
           ${sendCardMarkup({
-            message: blocked ? "Not this door." : state.message || "Piggy is home.",
-            detail: blocked ? `Send Piggy only at ${PRODUCTION_RP_ID}.` : state.detail,
+            // [A-407-e] 막힌 상태의 카드 문구도 같은 기준 — 내부 origin 노출 0, 실행 가능
+            // 한 것처럼 보이지 않게. blocked 자체(버튼 비활성)는 그대로 둔다.
+            message: blocked ? "Not from here." : state.message || "Piggy is home.",
+            detail: blocked ? "Piggy can only go out from the real app." : state.detail,
             address: state.address,
             terms: ["$5 limit", "Ask me every time", "One-time"],
             blocked,
