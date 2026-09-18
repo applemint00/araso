@@ -1809,13 +1809,22 @@ h1 {
    오른쪽·같은 top·같은 크기·24px 간격(gap)으로 즉시 덮어쓴다(열려 있는 동안 계속). 실제
    보이는 종이는 자식 .recordsCard 다 — .cardAnchor/.cardAnchor__fit 관례와 같은
    "자리판과 실물을 나눈다" 원칙(위 §A-359 주석)을 그대로 따른다. */
+/* [A-413-b] Owner 스크린샷 12:12 FAIL: 이 앵커가 z-index:5 라 `.homeBoard`(z-index:1,
+   1176행)보다 위였다 — `.stage` 의 같은 자식 레벨(renderSendStay(), main.js)에서 둘 다
+   position:absolute + 정수 z-index 라 각자 독립 stacking context 를 열고, 그 비교에서
+   기록 카드가 항상 이겨 Chog/Piggy/이름표(모두 homeBoard 안, chog-home.js 참조)를 덮었다
+   (열림 모션의 opacity/translateX 는 z-index 를 안 건드리므로 첫 프레임부터 계속). 카드
+   크기·재질·위치·오프닝 모션은 그대로 두고 이 한 줄만 homeBoard 보다 낮춘다 — 그러면
+   `.recordsCard`(종이)와 그 box-shadow(그림자) 는 안쪽 stacking context 에 갇혀 함께
+   내려간다. `.cardAnchor`(Send/Invite 카드, 776행, z-index 5)는 건드리지 않는다 — 전역
+   z-index 상향 금지, 이 앵커 하나만의 국소 교정. */
 .recordsCardAnchor {
   position: absolute;
   left: calc(50% + 110.5px + 24px);
   top: calc(50% - 230px);
   width: 256.338px;
   height: 364px;
-  z-index: 5;
+  z-index: 0;
   pointer-events: none;
   opacity: 1;
   transform: translateX(0);
