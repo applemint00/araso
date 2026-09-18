@@ -644,7 +644,10 @@ async function openPiggy() {
     // 그대로 보여준다. 인증 호출 자체를 하지 않는다(불가능한 auth 호출 0).
     state.authPhase = "idle";
     state.authCancelled = false;
-    setScene("birth", "Not this door.", `Open Piggy only at ${PRODUCTION_RP_ID}.`);
+    // [A-407-f] 사용자 화면에 도메인/rpId/디버그 문자열을 남기지 않는다 — 열 수 없다는
+    // 사실만 짧게. isAllowedPiggyRpId 판정·auth·금융 게이트·버튼 동작은 그대로이고,
+    // 실패 원인 원문은 OUTBOX/내부 debug 에만 남긴다.
+    setScene("birth", "Not from here.", "Piggy opens in the real app.");
     return;
   }
 
@@ -703,7 +706,8 @@ async function checkPiggy() {
   if (!isAllowedPiggyRpId()) {
     state.authPhase = "idle";
     state.authCancelled = false;
-    setScene("birth", "Not this door.", `Check Piggy only at ${PRODUCTION_RP_ID}.`);
+    // [A-407-f] 같은 기준 — 되찾기도 여기서는 불가능하다는 사실만.
+    setScene("birth", "Not from here.", "Piggy can only be found again in the real app.");
     return;
   }
 
@@ -3456,7 +3460,8 @@ if (import.meta.env.DEV) {
       const AUTH_FAIL_PREVIEWS = {
         cancelled: { cancelled: true, detail: "" },
         notfound: { cancelled: false, detail: "PASSKEY_OPERATION_FAILED: Passkey assertion failed (DEV preview — no real auth call)" },
-        unsupported: { cancelled: false, detail: `Open Piggy only at ${PRODUCTION_RP_ID}. (DEV preview — no real auth call)` },
+        // [A-407-f] DEV 재생용 detail 도 사용자 표시 규칙을 따른다(도메인 노출 0).
+        unsupported: { cancelled: false, detail: "Piggy opens in the real app. (DEV preview — no real auth call)" },
       };
       const preview = AUTH_FAIL_PREVIEWS[reason] || AUTH_FAIL_PREVIEWS.notfound;
       state.authPhase = "idle";
