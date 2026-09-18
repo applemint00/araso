@@ -5,8 +5,9 @@
 // 안의 내용은 현재 첫 Journey(main.js renderSendStay)의 **실제** message/detail/address/
 // terms(up to $5 등)로 채운다. 새 규칙·금액 칸·Permission UI는 만들지 않는다(A-336 §5).
 //
-// 제목("send")은 원본 `assets/t_send_cj.png`를 표시 30px 기준 2x(89×60)로 줄인 사본이다.
-// 웹폰트는 싣지 않는다 — 동적 텍스트(메시지·약관·날짜)는 시스템 serif 로 같은 자리에 쓴다.
+// [A-407] 제목은 원본 `assets/t_send_cj.png`(실제 렌더 확인: "send?", 소문자+물음표)였다 —
+// Delicious Handrawn 실텍스트로 옮긴다(SHA/@font-face 는 style.css 상단). 동적 텍스트
+// (메시지·약관·날짜)는 그대로 시스템 serif 로 같은 자리에 쓴다 — 바꾸지 않는다.
 //
 // Send/Stay 버튼은 기존 main.js 의 sendButton/stayButton id 를 그대로 쓴다 — 클릭 배선은
 // main.js render() 가 이미 하고 있고, 여기서는 마크업만 만든다. checkButton(하단 tiny 버튼)은
@@ -119,7 +120,7 @@ export function sendCardMarkup({
       </div>
       <div class="sendCard__dom" aria-hidden="true">${date.dom}</div>
       <div class="sendCard__title">
-        <img src="${CARD_DIR}/t_send_cj.png" alt="Send" />
+        <span class="sendCard__titleText">send?</span>
       </div>
       ${message ? `<p class="sendCard__message">${escapeHtml(message)}</p>` : ""}
       ${
@@ -145,7 +146,7 @@ export function sendCardMarkup({
               <span class="pkbtn__mid"></span>
               <img class="pkbtn__cap pkbtn__cap--r" src="${CARD_DIR}/btn_r.png" alt="" />
             </span>
-            <img class="pkbtn__word" src="${CARD_DIR}/w_81da636da2.png" alt="" aria-hidden="true" />
+            <span class="pkbtn__word pkbtn__cj" aria-hidden="true">send</span>
           </button>
         </div>
       </div>

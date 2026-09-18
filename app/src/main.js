@@ -1975,8 +1975,8 @@ function inviteHero(dir) {
         <img class="invite__stamp" src="${dir}/stamp@2x.png" alt="" />
         <img class="invite__underline" src="${dir}/underline@2x.png" alt="" />
         <div class="invite__hand">
-          <img class="invite__line1" src="/invite/line1@2x.png" alt="something small" />
-          <img class="invite__line2" src="/invite/line2@2x.png" alt="just for you" />
+          <span class="invite__line1">something small</span>
+          <span class="invite__line2">just for you</span>
         </div>
       </div>
     </div>

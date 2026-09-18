@@ -1,8 +1,13 @@
 // Name it 카드 — Owner 지정 정본 `AskNameIt.dc.html` (460×300 엽서, A-324).
 // 원본은 비교 시트(1560×700)에 세 장을 나란히 놓은 것이다. 앱은 카드 **한 장** 안에서
 // 도착(YOU'VE GOT) → 빈 Name it → 입력된 Name it 을 이어 간다. 새로 디자인하지 않는다.
-// 제목·버튼 낱말은 구워진 PNG(원본 assets/ 에서 최대 2x 로 줄인 사본)이고, 웹폰트는
-// 싣지 않는다. 날짜만 동적 텍스트라 시스템 serif 로 같은 자리에 쓴다.
+// [A-407] 제목·got·ok/save 낱말은 원래 구워진 CJ PNG였다 — 실제 렌더 확인
+// ("you've got"/"the one piggy !"/"name it?"/"ok"/"save", 모두 소문자) 결과 그대로
+// Delicious Handrawn 실텍스트로 옮겼다(SHA/@font-face 는 style.css 상단). 입력 필드에
+// 타이핑되는 이름 자체와 밑줄 path 는 Figma에 해당 노드가 없거나(입력 텍스트) 정확한
+// path/수치가 아직 UNKNOWN(밑줄 4:685, NAME_FIGMA_TYPOGRAPHY_20260918.md)이라 그대로
+// system-ui/기존 path 유지 — 추측 폰트로 바꾸지 않는다. 날짜만 동적 텍스트라 시스템
+// serif 로 같은 자리에 쓴다.
 // 이 파일은 앱(main.js)과 private 검토 하네스가 **같은 markup/mount** 를 쓰려고 분리했다.
 
 const CARD_DIR = "/card";
@@ -43,15 +48,18 @@ export function nameCardDate(now = new Date()) {
 }
 
 // ButtonKit 3조각 122×40 (cap23 · mid76 반복 · cap23), 낱말 높이 20.
-function cardButton({ cls, type, label, word, disabled = false }) {
+// [A-407] 낱말은 원래 구운 PNG(w_59c57b16a2.png="ok"/w_95e7321cc4.png="save")였다 —
+// 종이 껍질(btn_l/r/m.png)·비율·바깥 그림자·label/disabled/click 은 그대로 두고 낱말만
+// 실텍스트(.pkbtn__cj, Delicious Handrawn)로 바꾼다.
+function cardButton({ cls, type, label, disabled = false }) {
   return `
-    <button class="nameCard__btn pkbtn ${cls}" type="${type}" aria-label="${label}"${disabled ? " disabled" : ""}>
+    <button class="nameCard__btn pkbtn ${cls}" type="${type}" aria-label="${escapeAttr(label)}"${disabled ? " disabled" : ""}>
       <span class="pkbtn__shell" aria-hidden="true">
         <img class="pkbtn__cap pkbtn__cap--l" src="${CARD_DIR}/btn_l.png" alt="" />
         <span class="pkbtn__mid"></span>
         <img class="pkbtn__cap pkbtn__cap--r" src="${CARD_DIR}/btn_r.png" alt="" />
       </span>
-      <img class="pkbtn__word" src="${CARD_DIR}/${word}" alt="" aria-hidden="true" />
+      <span class="pkbtn__word pkbtn__cj" aria-hidden="true">${escapeAttr(label)}</span>
     </button>
   `;
 }
@@ -68,15 +76,15 @@ export function nameCardMarkup({ phase = "arrival", name = "", now = new Date() 
         <div class="nameCard__day">${date.day}</div>
         <div class="nameCard__weekday">${date.weekday}</div>
       </div>
-      <div class="nameCard__got" aria-label="You've got">
-        <img src="${CARD_DIR}/t_got_1_cj.png" alt="" />
-        <img src="${CARD_DIR}/t_got_2_cj.png" alt="" />
+      <div class="nameCard__got" aria-label="you've got">
+        <span class="nameCard__gotLine">you've got</span>
+        <span class="nameCard__gotLine">the one piggy !</span>
       </div>
       <div class="nameCard__title">
-        <img src="${CARD_DIR}/t_name_it_cj.png" alt="Name it" />
+        <span class="nameCard__titleText">name it?</span>
       </div>
       <div class="nameCard__ok">
-        ${cardButton({ cls: "nameCard__okBtn", type: "button", label: "ok", word: "w_59c57b16a2.png" })}
+        ${cardButton({ cls: "nameCard__okBtn", type: "button", label: "ok" })}
       </div>
       <form class="nameCard__form" id="nameForm">
         <label class="nameCard__field">
@@ -87,7 +95,7 @@ export function nameCardMarkup({ phase = "arrival", name = "", now = new Date() 
           </svg>
         </label>
         <div class="nameCard__save">
-          ${cardButton({ cls: "nameScene__save", type: "submit", label: "save", word: "w_95e7321cc4.png", disabled: !name.trim() })}
+          ${cardButton({ cls: "nameScene__save", type: "submit", label: "save", disabled: !name.trim() })}
         </div>
       </form>
     </div>

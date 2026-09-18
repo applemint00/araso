@@ -1,10 +1,23 @@
-/* 손글씨 자리 — 폰트 파일(Cherry Juice)은 `<private>` 에만 둔다.
-   웹폰트는 파일을 브라우저에 넘겨야 쓸 수 있어서, **웹 임베드 라이선스 확인 전에는 배선하지 않는다**
-   (Owner 판정 2026-09-03). 확인되기 전까지 시스템 폰트로 간다. 그 서체가 꼭 필요하면
-   해당 낱말을 이미지로 렌더해 넣는다 — 폰트 파일을 주지 않고 글씨만 쓰는 방법. */
+/* 손글씨 자리 — Cherry Juice 는 여전히 웹임베드 라이선스 미확인이라 이미지로만 쓴다
+   (Owner 판정 2026-09-03, 유지). [A-407] Delicious Handrawn 은 Owner 가 지정·보유를
+   확인한 폰트이고, 공식 Google Fonts OFL 배포본을 확보해 SHA256(5b78da9362d2018cab
+   40ba93565f7a0134723f6a5ee4e3432726d45473a51277) 대조 후 아래 @font-face 로 배선한다
+   — 지금까지 CJ 낱말 이미지로 쓰던 것만 이 폰트의 실제 텍스트로 바꾼다. 본문/날짜의
+   Georgia/Playfair 는 바꾸지 않는다. 정확한 Figma font-size/line-height/tracking 은
+   여전히 UNKNOWN — 아래 각 규칙의 수치는 기존 이미지 bbox 를 임시로 옮긴 DRAFT 값이고
+   정본 대조가 끝난 것이 아니다(OUTBOX A-407 보고 참고). */
+@font-face {
+  font-family: "Delicious Handrawn";
+  src: url("/card/DeliciousHandrawn-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   color-scheme: dark;
   --font-hand: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  --font-cj: "Delicious Handrawn", "Cherry Juice", cursive;
   --ink: #ede8dc;
   --paper: #161616;
   --gold: #e0b100;
@@ -437,19 +450,29 @@ h1 {
   top: 74px;
 }
 
-.nameCard__got img,
-.nameCard__title img {
+/* [A-407] t_got_1/2_cj.png · t_name_it_cj.png(모두 실제 렌더 확인: "you've got" /
+   "the one piggy !" / "name it?", 소문자) → Delicious Handrawn 실텍스트. 기존 이미지
+   높이(25px/30px)를 그대로 font-size 로 옮긴 DRAFT 값 — Figma 정확 크기/행간은
+   UNKNOWN(NAME_FIGMA_TYPOGRAPHY_20260918.md), 정본 대조 전까지 완료 선언 아님. */
+.nameCard__gotLine,
+.nameCard__titleText {
   display: block;
   width: auto;
   margin-bottom: 4px;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  color: #141210;
+  white-space: nowrap;
 }
 
-.nameCard__got img {
-  height: 25px;
+.nameCard__gotLine {
+  font-size: 25px;
+  line-height: 25px;
 }
 
-.nameCard__title img {
-  height: 30px;
+.nameCard__titleText {
+  font-size: 30px;
+  line-height: 30px;
 }
 
 .nameCard__field {
@@ -553,6 +576,26 @@ h1 {
   width: auto;
   filter: url(#btnink);
   pointer-events: none;
+}
+
+/* [A-407] CJ 낱말 PNG("ok"/"save"/"send") → Delicious Handrawn 실텍스트. 이미지 전용
+   필터(#btnink 잉크 왜곡)는 실텍스트에는 끈다 — 기존 동적라벨 버튼(.pkbtn__text,
+   Georgia, A-361)과는 다른 글꼴이라 그 클래스를 재사용하지 않고 새 클래스로 분리했다.
+   font-size 는 이 버튼들이 공통으로 쓰던 낱말 이미지 축소 높이(17.33px, .nameCard__btn/
+   .sendCard__btn .pkbtn__word 규칙 참고)를 옮긴 DRAFT 값 — Figma 정확 수치 UNKNOWN. */
+.pkbtn__cj {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 17.33px;
+  width: auto;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 17.33px;
+  line-height: 1;
+  color: #141210;
+  white-space: nowrap;
+  filter: none;
 }
 
 /* 누름 — 3조각을 눌린 판으로 바꾸고 3px 내려간다. */
@@ -825,10 +868,16 @@ h1 {
   transform-origin: 0 50%;
 }
 
-.sendCard__title img {
+/* [A-407] t_send_cj.png(실제 렌더 확인: "send?") → Delicious Handrawn 실텍스트.
+   이미지 bbox 30px 를 옮긴 DRAFT font-size — Figma 정확 수치 UNKNOWN. */
+.sendCard__titleText {
   display: block;
-  height: 30px;
-  width: auto;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 30px;
+  line-height: 30px;
+  color: #141210;
+  white-space: nowrap;
 }
 
 /* [A-377 §7] 원본 "설명" 13px/1.35 기준(NOTES_explore_page.md §15 Send 행). */
@@ -2040,7 +2089,10 @@ h1 {
   object-fit: contain;
 }
 
-/* 손글씨 두 줄 = 낱말을 그림으로 렌더한 것(폰트 파일은 배포하지 않는다, §C-2). */
+/* [A-407] 손글씨 두 줄 — line1/2@2x.png(실제 렌더 확인: "something small"/"just for you",
+   소문자) 는 CJ 낱말 이미지였다. Delicious Handrawn 실텍스트로 바꾼다(SHA/@font-face 는
+   style.css 상단). 이미지 표시 높이(약 25px, 442×50/180×50 @2x 비율 실측)를 옮긴 DRAFT
+   font-size — Figma 정확 수치 UNKNOWN. */
 .invite__hand {
   position: absolute;
   left: -2px;
@@ -2052,14 +2104,15 @@ h1 {
   gap: 6px;
 }
 
-.invite__line1 {
-  width: 221px;
-  height: auto;
-}
-
+.invite__line1,
 .invite__line2 {
-  width: 180px;
-  height: auto;
+  display: block;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 25px;
+  line-height: 25px;
+  color: #141210;
+  white-space: nowrap;
 }
 
 .invite__burst {
@@ -2620,7 +2673,18 @@ h1 {
   transform-origin: left center;
   filter: url(#a373-askink);
 }
-.secondJourney__heading--interests img { display: block; height: 26px; width: auto; }
+/* [A-407] 인라인 base64 CJ PNG(alt="explore?", 실제 렌더는 "place to" 뿐이던 불일치
+   자산) → Delicious Handrawn 실텍스트 "places to explore?"(A-405 Paper 발화 근거).
+   기존 이미지 bbox 26px 를 옮긴 DRAFT font-size — Figma 정확 수치 UNKNOWN. */
+.secondJourney__exploreText {
+  display: block;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 26px;
+  line-height: 26px;
+  color: #141210;
+  white-space: nowrap;
+}
 .secondJourney__inkDefs { position: absolute; width: 0; height: 0; overflow: hidden; }
 /* [A-405] 최대 5개(main.js computeExploreDisplayErrands)만 그려지므로 스크롤이
    필요 없다 — max-height/overflow-y:auto 를 없애 스크롤바0·클리핑으로 글자 숨김0을
