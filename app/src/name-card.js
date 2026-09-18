@@ -90,8 +90,31 @@ export function nameCardMarkup({ phase = "arrival", name = "", now = new Date() 
         <label class="nameCard__field">
           <span class="sr-only">Piggy name</span>
           <input id="piggyNameInput" name="piggyName" maxlength="24" autocomplete="off" value="${value}" />
-          <svg class="nameCard__line" width="224" height="6" viewBox="0 0 224 6" aria-hidden="true">
-            <path d="M1 3.4 Q 67 1.2 134 4 T 222 3" fill="none" stroke="#141210" stroke-width="2.0" stroke-linecap="round" filter="url(#cb)"></path>
+          <!-- [A-407-c] Owner 원본 Name 입력선 SVG, inline 이식.
+               출처: <local>
+                 scene-card-handoff/typography-20260918/name/assets/name-underline-original.svg
+               sha256: 5882fd1f24f138684e97c6451f72211b85ac97e265f9c8efaccabb32f264a950
+               색만 변경(color only changed) — stroke white → 카드 기존 잉크 #141210(위 line 94 이전
+               버전과 동일 표기). path/stroke-width6/round cap·join/drop-shadow filter/viewBox
+               "0 0 364 20"/종횡비는 원본 그대로 보존, 재유도 없음. 카드 외곽 460×300·field
+               224px 폭에 맞춰 width/height 속성으로 단 한 번만 비례 축소(224 : 224*20/364).
+               정확한 title font-size/line-height 는 이 교체와 별개로 여전히 UNKNOWN. -->
+          <svg class="nameCard__line" width="224" height="12.30769" viewBox="0 0 364 20" aria-hidden="true">
+            <g id="Vector 1" filter="url(#filter0_d_4_685)">
+              <path d="M7.00006 6.48663C7.12408 6.49001 9.61704 5.97081 41.3694 5.87377C70.6961 5.78414 126.837 7.68218 157.26 8.20797C190.679 8.78554 194.632 7.99598 196.464 7.96819C201.332 7.89436 206.524 7.55755 211.686 7.39265C227.139 6.89898 248.335 7.2937 252.022 7.16114C260.183 6.8677 277.488 6.16731 285.9 5.73406C295.371 5.24627 300.065 4.65218 313.909 4.76359C321.292 4.82302 327.986 3.77582 332.452 3.43589C336.973 3.12438 342.564 3.19519 347.142 3.13009C349.751 3.09286 352.939 3.04712 356.225 2.99998" stroke="#141210" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"></path>
+            </g>
+            <defs>
+              <filter id="filter0_d_4_685" x="0" y="0" width="363.225" height="19.4184" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+                <feFlood flood-opacity="0" result="BackgroundImageFix"></feFlood>
+                <feColorMatrix in="SourceAlpha" type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 127 0" result="hardAlpha"></feColorMatrix>
+                <feOffset dy="4"></feOffset>
+                <feGaussianBlur stdDeviation="2"></feGaussianBlur>
+                <feComposite in2="hardAlpha" operator="out"></feComposite>
+                <feColorMatrix type="matrix" values="0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.25 0"></feColorMatrix>
+                <feBlend mode="normal" in2="BackgroundImageFix" result="effect1_dropShadow_4_685"></feBlend>
+                <feBlend mode="normal" in="SourceGraphic" in2="effect1_dropShadow_4_685" result="shape"></feBlend>
+              </filter>
+            </defs>
           </svg>
         </label>
         <div class="nameCard__save">

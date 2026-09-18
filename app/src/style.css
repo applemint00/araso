@@ -465,9 +465,17 @@ h1 {
   white-space: nowrap;
 }
 
+/* [A-407-d DRAFT] Owner 위계 규칙: 도착 카드("you've got the one piggy !")가 그 카드에서
+   가장 큰 글자여야 한다. 실측(HEAD 145352b)에서 .nameCard__gotLine 25px/25px <
+   .nameCard__titleText 30px/30px 로 역전되어 있었다 — 여기서 got 만 25px→34px(line-height
+   동률)로 올려 30px title 보다 크게 만든다. 정확 Figma 수치 아님, Owner 위계 기준 적용한
+   DRAFT 값. 겹침 계산: .nameCard__got top:84px + 34 + 4(margin) + 34 ≈ bottom 156px,
+   버튼 top ≈ 300(card h) - 39(bottom) - 34(shell h) = 227px → 여유 71px, 버튼 침범 0.
+   가로: "the one piggy !" 폭 ≈ 4.717em × 34px ≈ 160px, left 46px 기준 카드 폭(460px) 내
+   여유. title(30px)은 그대로 둔다. */
 .nameCard__gotLine {
-  font-size: 25px;
-  line-height: 25px;
+  font-size: 34px;
+  line-height: 34px;
 }
 
 .nameCard__titleText {
