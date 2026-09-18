@@ -373,13 +373,9 @@ export function mountChogHome(root, opts) {
     if (legR) legR.style.transform = `translateX(${restX}px)`;
     if (legL) legL.style.transform = `translateX(${-restX}px)`;
 
-    const nextErrand = root.querySelector("#nextErrandButton");
-    if (nextErrand) {
-      const readable = !cardClaimed && progress >= 0.99;
-      nextErrand.disabled = !readable;
-      nextErrand.tabIndex = readable ? 0 : -1;
-      nextErrand.style.visibility = readable ? "visible" : "hidden";
-    }
+    // [A-411-p] Home "next errand" 버튼을 없앴다(main.js homePadMarkup) — #nextErrandButton
+    // 은 이제 DOM에 없으므로 그 가시성/tabIndex 배선도 함께 지운다. 카드 자리가 열렸는지는
+    // 여전히 onTap(pinned && !cardClaimed)만으로 판정한다(아래).
     const u = ease(progress);
     if (faceHover) faceHover.style.opacity = String(u);
     if (faceBase) faceBase.style.opacity = String(1 - u);

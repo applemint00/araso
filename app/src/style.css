@@ -2679,14 +2679,10 @@ h1 {
 
 /* [A-411-b/d/f 이전] A361 의 .sendCard__btn .pkbtn__text (Georgia 16px/1.2) override 는
    폐기됐다 — 위 .pkbtn__word 공유 토큰(--btnWordSize/--btnWordLine)이 Try again/Check
-   Piggy/Send/Stay/next errand/explore save/second Send 를 전부 Delicious Handrawn
+   Piggy/Send/Stay/explore save/second Send 를 전부 Delicious Handrawn
    20px/1 로 통일한다(Owner 10:03 스크린샷이 지적한 불일치의 원인이 이 override 였다). */
-.homePaper .homeNextErrand {
-  position: absolute; left: 50%; top: 330px;
-  transform: translateX(-50%); pointer-events: auto;
-}
-.homePaper .homeNextErrand:active { transform: translateX(-50%) translateY(2px); }
-.homePaper .homeNextErrand:disabled { pointer-events: none; }
+/* [A-411-p] .homeNextErrand(Home "next errand" 버튼) 룰 제거 — 버튼 자체가
+   main.js homePadMarkup 에서 없어졌다(Owner 확정: Home next errand 버튼 없음). */
 
 /* A373 Explore review patch: AskCard structure only; common card geometry stays inherited. */
 .secondJourney__masthead {

@@ -156,9 +156,12 @@ function computeInitialScene(hasCredential, hasClosedTrip, hasAddress) {
   // 기다리고 Save 로만 다시 나온다(A-288·A-290). 탄생 연출은 다시 돌지 않는다 —
   // 이미 한 번 처리됐기 때문이다(BIRTH_PLAYED_KEY).
   if (!readPiggyName()) return "name";
-  // 「보냈다」가 아니라 「바퀴가 닫혔다」로 판정한다. txHash 하나로 잠그면
-  // 실패한 바퀴도 filebox 에 갇힌다(2026-09-08 A-056 실측).
-  if (hasClosedTrip) return "filebox";
+  // [A-411-p] 옛 "hasClosedTrip → filebox" 분기를 없앤다. Owner 확정(A-411-n §1):
+  // First 가 끝난 뒤의 초기 재방문은 "정리된 서류철 화면"이 아니라 "Chog+Piggy 가 함께
+  // Home 에 정착한 조용한 상태"다 — filebox 는 이제 방금 File it 한 직후에만 지나가는
+  // 화면이고(mountReturn onOpenFilebox/onIdleEnter, 이 함수는 안 건드림), 새로고침/재방문의
+  // 착지점이 아니다. hasClosedTrip 자체(=state.tripClosed)는 여전히 참이고 다른 곳에서
+  // 그대로 쓰인다 — 여기서 scene 분기만 뺐다.
   return "sendstay";
 }
 
@@ -239,6 +242,17 @@ const state = {
   // scope 가 유효할 때 second-journey-state.js 저장소로도 남는다(§5) — 그 외 필드
   // (선택 후보·amount·permission 체크)는 새로고침에 남지 않는다.
   secondJourney: createEmptySecondJourney(),
+  // [A-411-p] Second Journey 를 이 세션에서 실제로 한 번 끝냈는가(finishSecondJourney()
+  // 에서만 선다). 저장소에 새 스키마를 만들지 않는다(§금지) — 세션 메모리 표 하나뿐이다.
+  // openSecondJourneyExplore() 의 candidates 직행 여부, settle() 의 자동 quiet→Paper
+  // 억제(Owner "Second 완료: Explore 자동재실행 0")에 쓴다.
+  secondJourneyCompletedOnce: false,
+  // [A-411-p] "First Receipt filed → 정착 → 잠깐 조용 → Paper" 1회용 표. goHomeFromFilebox()
+  // 와 아래 초기 scene 계산에서만 세우고, mountHome() 의 settle() 이 한 번 읽고 곧장 끈다
+  // (기존 homeArrival/returnArrival 과 같은 1회용 transient 플래그 패턴 재사용 — 새 상태
+  // 체계를 만들지 않는다). 이 값이 서 있어야만 자동으로 Explore 를 연다 — 그 밖의
+  // sendstay 재진입(Send 실패 메시지 등)에서는 서지 않으므로 반복 강제 표시 0.
+  homeQuietForExplore: false,
   // [A-389] birth 카드(구 renderBirth 자리 — 이제 renderAuthCard)의 표시 국면.
   // "checking"(진행 중, 버튼 없음) 이외에는 항상 "idle" — 문자열 파싱으로 국면을
   // 추측하지 않고 각 호출부가 명시적으로 세운다. authCancelled 는 직전 실패가
@@ -250,6 +264,11 @@ const state = {
 state.scene = computeInitialScene(!!state.credential, state.tripClosed, !!state.address);
 // 최초 진입이 곧장 Name it 이라는 것은 이름을 짓다 나갔다 왔다는 뜻이다.
 state.nameResumed = state.scene === "name";
+// [A-411-p] 초기 재방문도 실사용 흐름과 같은 정착→조용→Paper 를 타야 한다(Home next
+// errand 버튼이 없어졌으므로 이게 First 완료/Second 미완료 사용자의 유일한 자연 진입로다).
+// tripClosed 가 서 있고(First 끝남) 이 세션은 방금 시작했으니 secondJourneyCompletedOnce
+// 는 항상 false — 조건은 사실상 "First 끝났고 scene 이 sendstay로 떨어졌는가"뿐이다.
+state.homeQuietForExplore = state.scene === "sendstay" && state.tripClosed;
 
 const publicClient = createPublicClient({
   chain: MONAD_TESTNET,
@@ -1274,10 +1293,14 @@ function openSecondJourneyExplore() {
   sj.interestsNote = null;
   sj.note = null;
   sj.noteQueue = [];
-  // [A-405-a] 관심이 이미 있으면(=이미 뭔가 골라둔 재방문) 곧장 candidates 로 — 기존
-  // 회귀 동작 그대로. 관심이 비어 있을 때만 seedStage 를 다시 유추한다(최초 seed A/B
-  // 이어가기 또는 반복 방문 단일 세트).
-  sj.step = sj.selectedIds.length ? "candidates" : "interests";
+  // [A-411-p] 옛 A-405-a 회귀동작("관심 있으면 곧장 candidates")을 Owner 확정으로 대체한다:
+  // Second 를 이 세션에서 아직 한 번도 끝내지 않았으면 관심이 저장돼 있어도 항상 시작
+  // Paper(interests)로 돌아간다("Second 이탈은 항상 시작점", A-411-n §1/A-411-p 대조).
+  // Second 를 이미 한 번 끝낸 뒤의 다음 심부름 재진입만 candidates 로 곧장 간다.
+  // seedStage 는 그대로 — 관심이 비어 있을 때만 다시 유추한다(최초 seed A/B 이어가기
+  // 또는 반복 방문 단일 세트, A-405-a 로직 자체는 안 건드림).
+  const resumeAtCandidates = state.secondJourneyCompletedOnce === true && sj.selectedIds.length > 0;
+  sj.step = resumeAtCandidates ? "candidates" : "interests";
   sj.seedStage = sj.selectedIds.length ? "done" : inferSeedStage(domainState);
   recomputeSecondJourneyFlow();
   setScene("explore", "", "");
@@ -1632,6 +1655,10 @@ function mountSecondReturn() {
   const finishSecondJourney = () => {
     if (!valid()) return;
     const prior = state.secondJourney;
+    // [A-411-p] Second 를 이 세션에서 실제로 한 번 끝냈다는 표 — openSecondJourneyExplore()
+    // 의 candidates 직행 판정과 settle() 의 자동 quiet→Paper 억제("Second 완료: Explore
+    // 자동재실행 0")가 이 값을 읽는다. 세션 메모리일 뿐, 저장소 스키마를 늘리지 않는다.
+    state.secondJourneyCompletedOnce = true;
     state.secondJourney = createEmptySecondJourney();
     // Keep the in-memory interest/domain snapshot; clear only the transient run.
     state.secondJourney.domainState = prior.domainState;
@@ -1671,6 +1698,10 @@ function mountSecondReturn() {
 }
 
 function goHomeFromFilebox() {
+  // [A-411-p] 서류철 정리 뒤 Home 복귀 — "First Receipt filed → 정착 → 잠깐 조용 → Paper"
+  // 의 실제 진입점이다. Second 를 이 세션에서 이미 끝냈다면 세우지 않는다(Owner "Second
+  // 완료: 조용한 Home만, Explore 자동재실행 0").
+  state.homeQuietForExplore = !state.secondJourneyCompletedOnce;
   setScene("sendstay", "Piggy is home.", "");
 }
 
@@ -1789,6 +1820,10 @@ function resetLocalTest() {
   // (관심 목록)는 첫 Journey 사용자데이터초기화 범위가 아니다(§forbidden "사용자데이터초기화
   // 0" — 이건 애초에 이 함수가 원래 지우던 첫 Journey 키가 아니라 별개 이름공간이다).
   state.secondJourney = createEmptySecondJourney();
+  // [A-411-p] 세션 전용 표도 함께 되돌린다 — 안 지우면 리셋 뒤에도 "이미 한 번 Second를
+  // 끝냈다"는 판정이 남아 candidates 직행/자동 quiet→Paper 억제가 잘못 이어진다.
+  state.secondJourneyCompletedOnce = false;
+  state.homeQuietForExplore = false;
   noteRecoverSuccess(); // 실패 카운터도 초기화 — 리셋 후엔 복구를 다시 처음부터 시도한다
   // [A-389] authPhase/authCancelled 도 같이 되돌린다 — 아니면 리셋 직전 실패가 취소였을 때
   // 그 표시가 그대로 남아 "Local test memory cleared." 옆에 "Face ID was cancelled." 가 붙는다.
@@ -2613,22 +2648,21 @@ const HOME_FIRST_JOURNEY_CARD_MS = 1200;
 
 // 후버 노트패드에 넣을 실제 데이터 — Piggy 는 한 기기에 하나뿐이라 지금 어디 있는지는
 // scene 하나로 정해진다(home-paper.js homeStatusFromScene). 샘플 이름/시간을 쓰지 않는다.
+// [A-411-p] Owner 확정: Home 에는 "next errand" 버튼이 없다(A-411-n §1). 옛
+// canOpenSecondJourney/nextErrandButton 삽입을 없앤다 — Second Journey 진입은 이제
+// settle() 의 조용한-뒤-Paper 자동전개(아래)와 Chog 탭(onTap, mountHome() 참고)
+// 뿐이다. 버튼이 없어졌으므로 chog-home.js draw() 의 #nextErrandButton 참조도 함께 정리했다.
 function homePadMarkup(scene) {
   // [A-377 §2] 기록 보기 entry 는 Home 대시보드(scene "sendstay")에서만 실제로 채운다.
   // 다른 씬에서는 이 pad 자체가 opacity 0 이 되므로(chog-home.js cardClaimed) 빈 문자열을
   // 주고, Home 이 아닌 곳에서 자동으로 기록이 열리는 경로를 만들지 않는다(§5).
   const recordsEntryMarkup = scene === "sendstay" ? homePaperRecordsEntryMarkup(state.receipts.length) : "";
-  const markup = homePaperMarkup({
+  return homePaperMarkup({
     name: displayPiggyName(),
     time: homeTimeNow(),
     recordsEntryMarkup,
     ...homeStatusFromScene(scene),
   });
-  const hasRealReceipt = state.receipts.some((receipt) => receipt && (receipt.txHash || receipt.redeemTxHash));
-  const canOpenSecondJourney = scene === "sendstay" && (hasRealReceipt || (import.meta.env.DEV && state.secondJourney.devPreview === true));
-  if (!canOpenSecondJourney) return markup;
-  const button = sendCardButtonMarkup({ id: "nextErrandButton", label: "next errand", className: "homeNextErrand" });
-  return markup.replace('<div class="homePaper__mark"', `${button}<div class="homePaper__mark"`);
 }
 
 // [A-356 §1 → A-359 §1 교정] cardAnchorMarkup 은 이제 여기(#homeBoard 안)에 얹지
@@ -2746,6 +2780,13 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
       onFrame: (step) => runSceneFrames(step),
       onCleanup: (fn) => onSceneTeardown(fn),
       listen: (target, type, handler, options) => sceneListener(target, type, handler, options),
+      // [A-411-p] Home next errand 버튼을 없앤 뒤, Second Journey 로 들어가는 수동
+      // 진입로는 이 Chog 탭뿐이다 — chog-home.js 는 이미 A-360 §3 부터 이 자리
+      // (pinned && !cardClaimed 일 때만 호출)를 갖고 있었고, 지금까지 아무도 연결하지
+      // 않았을 뿐이다(§A-360 §3 주석 "Home 에 도착한 뒤 Chog 탭이 Explore 를 연다").
+      // cardClaimed 가 true 인 동안(첫 Journey 카드가 떠 있거나 이미 explore 안)은
+      // chog-home.js 자신이 이 콜백을 안 부른다 — 새 가드를 여기 추가하지 않는다.
+      onTap: openSecondJourneyExplore,
     });
     onSceneTeardown(() => {
       homeChog = null;
@@ -2788,6 +2829,28 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         render();
       };
       sceneTimeout(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS);
+    }
+    // [A-411-p] "First Receipt filed → 정착 → 잠깐 조용 → Paper" — Home next errand 버튼을
+    // 없앤 대신, 이 정착 신호(=settle 호출 그 자체, First 도착 걷기연출의 revealSendCard 와
+    // 같은 자리) 뒤에 기존 Second Journey 진입 함수(openSecondJourneyExplore)를 그대로
+    // 부른다. 새 대기 초수를 만들지 않는다 — 위 HOME_FIRST_JOURNEY_CARD_MS 를 그대로 쓴다
+    // (이미 EXPLORE_NOTE_MS 도 "새 타이밍 발명 0" 근거로 같은 1200ms 를 재사용한 값이다).
+    // state.homeQuietForExplore 는 1회용 표라 여기서 곧장 끈다 — goHomeFromFilebox()/초기
+    // scene 계산에서만 다시 서므로, Send 실패 메시지 등 다른 sendstay 재진입에서는 반복
+    // 강제 표시가 없다. 기록 카드가 열려 있으면 revealSendCard 와 같은 이유로 미룬다
+    // (자리 다툼, 위 A-411-g 주석 참고).
+    if (state.scene === "sendstay" && state.homeQuietForExplore) {
+      state.homeQuietForExplore = false;
+      const revealExplorePaper = () => {
+        if (state.recordsCardVisible) {
+          sceneTimeout(revealExplorePaper, HOME_FIRST_JOURNEY_CARD_MS);
+          return;
+        }
+        // [A-411-n §2] Second 를 이미 끝냈으면(=완료) 자동 재실행 0 — 조용한 Home 만 남긴다.
+        if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce) return;
+        openSecondJourneyExplore();
+      };
+      sceneTimeout(revealExplorePaper, HOME_FIRST_JOURNEY_CARD_MS);
     }
   };
 
@@ -3489,7 +3552,8 @@ function render() {
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);
   document.querySelector("#stayButton")?.addEventListener("click", stayHome);
   document.querySelector("#fileboxHomeButton")?.addEventListener("click", goHomeFromFilebox);
-  document.querySelector("#nextErrandButton")?.addEventListener("click", openSecondJourneyExplore);
+  // [A-411-p] "next errand" 버튼 제거 — Second Journey 진입은 settle() 자동전개와
+  // Chog 탭(onTap)만 남는다(위 homePadMarkup 주석).
   // [A-383 §1] Home 카드 오른쪽 기록 카드 — 별도 화면 전환 없이 같은 sendstay DOM 안에서
   // 열림/목록/상세/닫힘을 전부 위임 클릭 하나로 배선한다(카드 내용은 render() 를 다시
   // 부르지 않고 renderRecordsCardBody() 가 innerHTML 만 바꾸므로, 매번 다시 부를 필요가
