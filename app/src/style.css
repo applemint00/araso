@@ -18,6 +18,12 @@
   color-scheme: dark;
   --font-hand: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
   --font-cj: "Delicious Handrawn", "Cherry Juice", cursive;
+  /* [A-411-b/d/f] 공유 토큰 — 모든 pkbtn 낱말(.pkbtn__word, 이전엔 .pkbtn__cj 17.33px 와
+     .sendCard__btn .pkbtn__text 의 Georgia 16px/1.2 로 갈라져 있던 것)이 이 값 하나로
+     통일된다. 20px/1 은 감독 paper-button-20260918 시안 값(Owner d 문서의 옛 17.33px
+     지시는 e/f 로 대체됨) — Figma 정본 대조 전까지 DRAFT. */
+  --btnWordSize: 20px;
+  --btnWordLine: 1;
   --ink: #ede8dc;
   --paper: #161616;
   --gold: #e0b100;
@@ -530,10 +536,16 @@ h1 {
   display: none;
 }
 
-/* ButtonKit 버튼 — 구운 3조각 껍질 (ButtonKit.dc.html :24–50 · NOTES §14).
-   옛 `.pgsave` 종이칩은 ButtonKit 이 「superseded by this for all buttons」로 대체했다.
-   둥근 모서리(radius 29)와 종이 결은 PNG 안에 구워져 있다 — CSS radius·검은 외곽선을
-   새로 만들지 않고, paper_tex_ivory 를 버튼에 덧입히지도 않는다. */
+/* [A-411-d/e/f] ButtonKit 버튼 — 구운 3조각 PNG 껍질(ButtonKit.dc.html :24–50 · NOTES §14)을
+   CSS-native 종이 버튼으로 대체한다(Owner 새 형체 제작 승인, 감독 시안
+   scene-card-handoff/paper-button-20260918/index.html + README). PNG 3조각(.pkbtn__shell/
+   .pkbtn__cap/.pkbtn__mid)은 정본 삭제/덮어쓰기 없이 그대로 두되 display:none 으로 숨기고,
+   같은 paper_tex_ivory.png 타일(290px, 카드 배경과 동일)을 .pkbtn 자신에 직접 입힌다.
+   내부 음영/그라데이션 없음(표면 평평) — 높이 40 / radius 20(양끝 반원, 사각 아님) /
+   최소폭 122 / 좌우패딩 20 / 하단 2px 먹색계열 단면(#8b8475) + 바깥그림자 0 5px 7px
+   rgba(20,18,16,.19)(시안 #14121030 그대로). 이 한 벌이 .nameCard__btn/.sendCard__btn
+   패밀리 전체(Save/OK, Send/Stay, Try again/Check Piggy, next errand, explore save,
+   second Send) 공통 형체다 — 새 PNG 파일 없음. */
 .btnink-defs {
   position: absolute;
   width: 0;
@@ -543,80 +555,55 @@ h1 {
 
 .pkbtn {
   position: relative;
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  min-width: 122px;
+  padding: 0 20px;
   border: 0;
-  padding: 0;
-  background: none;
-  line-height: 0;
+  border-radius: 20px;
+  background: #ebe3d5 url("/card/paper_tex_ivory.png") center / 290px auto;
+  box-shadow: 0 2px 0 #8b8475, 0 5px 7px rgba(20, 18, 16, 0.19);
   cursor: pointer;
-  /* [A-401] 硬 입체턱(0 3px 0, 0 blur) 제거 — 버튼 밖 soft 그림자 하나로만 깊이를 낸다.
-     각 카드(.nameCard__btn/.sendCard__btn)는 자기 그림자로 이 값을 덮으므로 여기는
-     bare .pkbtn 를 쓸 미래 대비 기본값이다. */
-  filter: drop-shadow(0 6px 10px rgba(0, 0, 0, 0.35));
+  transition: box-shadow 120ms ease-out, transform 120ms ease-out;
 }
 
-.pkbtn__shell {
-  display: flex;
-  height: 51px;
+/* 눌림 — 시안 그대로 2px 내려가고 단면이 접힌다(3px 눌림/캡 이미지 교체 방식 폐기). */
+.pkbtn:not(:disabled):active {
+  transform: translateY(2px);
+  box-shadow: 0 0 0 #8b8475, 0 2px 4px rgba(20, 18, 16, 0.19);
 }
 
-/* 끝 조각은 기본 폭 30. 가운데만 늘어난다 — 최소 비 3.05:1 (156×51) 이상. */
-.pkbtn__cap {
-  display: block;
-  width: 30px;
-  height: 51px;
-}
-
+/* 옛 PNG 3조각 — 정본 삭제/덮어쓰기 없이 그대로 두되 새 CSS-native 종이 표면 뒤로 숨긴다. */
+.pkbtn__shell,
+.pkbtn__cap,
 .pkbtn__mid {
-  display: block;
-  width: 96px;
-  height: 51px;
-  background: url("/card/btn_m.png") repeat-x;
-  background-size: auto 51px;
+  display: none;
 }
 
+/* [A-411-b/d/f] 모든 버튼 낱말(.pkbtn__cj 정적 CJ 낱말 + .pkbtn__text 동적 라벨)이
+   여기 한 곳에서 공유 토큰(--btnWordSize 20px/--btnWordLine 1, :root)으로 통일된다.
+   전엔 .pkbtn__cj 가 17.33px, .sendCard__btn .pkbtn__text 가 Georgia 16px/1.2 로 갈라져
+   Try again/Check Piggy 만 다른 폰트로 보이던 것(Owner 10:03 스크린샷 지적)의 원인이었다. */
 .pkbtn__word {
   position: absolute;
   inset: 0;
   margin: auto;
-  display: block;
-  height: 26px;
-  width: auto;
-  filter: url(#btnink);
-  pointer-events: none;
-}
-
-/* [A-407] CJ 낱말 PNG("ok"/"save"/"send") → Delicious Handrawn 실텍스트. 이미지 전용
-   필터(#btnink 잉크 왜곡)는 실텍스트에는 끈다 — 기존 동적라벨 버튼(.pkbtn__text,
-   Georgia, A-361)과는 다른 글꼴이라 그 클래스를 재사용하지 않고 새 클래스로 분리했다.
-   font-size 는 이 버튼들이 공통으로 쓰던 낱말 이미지 축소 높이(17.33px, .nameCard__btn/
-   .sendCard__btn .pkbtn__word 규칙 참고)를 옮긴 DRAFT 값 — Figma 정확 수치 UNKNOWN. */
-.pkbtn__cj {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 17.33px;
-  width: auto;
+  height: 100%;
+  width: max-content;
+  max-width: calc(100% - 4px);
   font-family: var(--font-cj);
   font-weight: 400;
-  font-size: 17.33px;
-  line-height: 1;
+  font-size: var(--btnWordSize);
+  line-height: var(--btnWordLine);
   color: #141210;
   white-space: nowrap;
   filter: none;
-}
-
-/* 누름 — 3조각을 눌린 판으로 바꾸고 3px 내려간다. */
-.pkbtn:active .pkbtn__cap--l {
-  content: url("/card/btn_l_p.png");
-}
-
-.pkbtn:active .pkbtn__cap--r {
-  content: url("/card/btn_r_p.png");
-}
-
-.pkbtn:active .pkbtn__mid {
-  background-image: url("/card/btn_m_p.png");
+  pointer-events: none;
 }
 
 .pkbtn:focus-visible {
@@ -630,49 +617,17 @@ h1 {
 .pkbtn:disabled {
   cursor: default;
   opacity: 1;
-  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
 }
 
 .pkbtn:disabled .pkbtn__word {
   opacity: 0.34;
 }
 
-/* 카드 버튼 — AskNameIt 원본 122×40(cap23·mid76 반복·cap23, 낱말 높이 20) 이었으나
-   [A-401] "작게·균일비율" 요청으로 shell 높이를 34 로 한 번 더 줄인다(40→34, ×0.85).
-   cap 은 원본 자산 실측 비율(90:153 = btn_l/r.png 실치수, SHA 확인)대로
-   width = height*30/51 = height*10/17 을 지켜 가로세로를 따로 늘이지 않는다
-   (34*10/17=20 정확히 나눠떨어짐 — 반올림 오차 없음). mid 는 반복무늬라 늘어짐 자체가
-   없지만 같은 비율 96/51 을 써서 64(=34*96/51)로 맞춘다. word 낱말 이미지는 height 만
-   주면 width:auto 로 자기 원본 비율을 그대로 유지한다(결·손글씨 늘림 없음) — 26/51 비를
-   유지해 17.33(=34*26/51) 로 둔다. */
-.nameCard__btn .pkbtn__shell {
-  height: 34px;
-}
-
-.nameCard__btn .pkbtn__cap {
-  width: 20px;
-  height: 34px;
-}
-
-.nameCard__btn .pkbtn__mid {
-  width: 64px;
-  height: 34px;
-  background-size: auto 34px;
-}
-
-.nameCard__btn .pkbtn__word {
-  height: 17.33px;
-}
-
-.nameCard__btn:not(:disabled):active {
-  transform: translateY(3px);
-}
-
-/* Name 버튼 전용 그림자 — 원본 AskNameIt 은 drop-shadow(0 2px 5px rgba(0,0,0,.30)) 하나뿐이다(A-332).
-   공용 .pkbtn 의 2단 그림자(누름턱+확산, :400)는 다른 버튼에서 그대로 두고, Name 카드 버튼만 덮는다. */
-.nameCard__btn {
-  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
-}
+/* [A-411-e/f 이전] Name 카드 전용 34px 축소(0.85 비율)·독자 그림자는 CSS-native 종이
+   버튼(.pkbtn 기본값, 위)이 패밀리 전체에 height 40/box-shadow 를 통일 적용하며
+   폐기됐다 — Name 카드도 다른 카드와 같은 40px 높이·같은 그림자를 쓴다. 카드 위
+   버튼 자리(우측/하단 오프셋)·카드 대비 크기비는 그대로다. 개별 :active override 는
+   없다 — .pkbtn:not(:disabled):active(translateY(2px), 위)를 그대로 받는다. */
 
 /* [A-389] 승인된 인증실패 카드 — 옛 renderBirth() 의 egg-big/검정 .note 패널/Open·Check
    패널을 대체한다. 종이는 AskNameIt(.nameCard, 위 :293–314)의 바탕(ivory 텍스처)·비율
@@ -706,20 +661,44 @@ h1 {
   height: 168.19px;/* 139.9 * (2140/1780) */
 }
 
+/* [A-411-b/c] 원본 정렬선(canon AskNameIt.dc.html, base64 폰트 제거 후 실측) —
+   작은표식 left32/top30(5×5 dot) · 상단메타 right34/top26 · 제목 left46/top74 ·
+   내용 left48/top152 · 버튼 right40/bottom34·높이40. 460×300/종이재질은 그대로 두고
+   Owner 10:03 스크린샷이 지적한 "상단에 글/버튼 몰림"(padding 32 36 + margin-top:24
+   흐름배치)을 이 좌표계 절대배치로 바꾼다 — 새 padding 을 더 밀어넣는 방식이 아니다. */
 .authCard__paper {
   position: relative;
-  width: min(460px, 100%);
-  min-height: 300px;
+  width: 460px;
+  max-width: 100%;
+  height: 300px;
   box-sizing: border-box;
   background: #ebe3d5 url("/card/paper_tex_ivory.png") center / 290px auto;
   border-radius: 3px;
   box-shadow: 0 1px 0 rgba(0, 0, 0, 0.1), 0 3px 0 rgba(0, 0, 0, 0.06), 0 12px 22px rgba(0, 0, 0, 0.48);
-  padding: 32px 36px;
   color: #141210;
 }
 
+/* 작은 표식 — canon 왼쪽 상단 5×5 점(마크). 새 DOM 노드를 만들지 않고 ::before 로 그린다
+   (style.css 단독 범위 — markup 변경 없음). */
+.authCard__paper::before {
+  content: "";
+  position: absolute;
+  left: 32px;
+  top: 30px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #141210;
+}
+
+/* 상단 메타 자리 — canon 의 SEPTEMBER 16/TUESDAY 두 줄 자리에 기존 ARASO eyebrow 를
+   작게 얹는다(A-411-c "기존 ARASO 표식은 작게 상단메타영역"). 이 카드에 날짜를 새로
+   더하지 않는다(지시대로 0). */
 .authCard__eyebrow {
-  margin: 0 0 10px;
+  position: absolute;
+  right: 34px;
+  top: 26px;
+  margin: 0;
   font-family: Georgia, "Times New Roman", serif;
   font-weight: 700;
   font-size: 10px;
@@ -727,27 +706,57 @@ h1 {
   letter-spacing: 2px;
   text-transform: uppercase;
   color: rgba(20, 18, 16, 0.55);
+  text-align: right;
 }
 
+/* 제목 — Delicious Handrawn 30px/1.15 (A-411-c 명시값). right:40 으로 긴 문구도
+   버튼 영역 폭 안에서 줄바꿈하고 카드 밖으로 잘리지 않게 한다. */
 .authCard__title {
-  margin: 0 0 12px;
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 26px;
+  position: absolute;
+  left: 46px;
+  top: 74px;
+  right: 40px;
+  margin: 0;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: 30px;
   line-height: 1.15;
   color: #141210;
+  overflow-wrap: break-word;
 }
 
+/* 원인 본문 — Playfair 13px/1.35, 먹색 #141210(A-411-c 명시값 그대로, 오류 빨강/회색 0).
+   [DRAFT] 이탤릭 여부는 명세에 없다 — 같은 카드계열 .sendCard__message/.sm 관례(이탤릭)와
+   달리 여기선 정자로 둔다; 감독 스크린 검토 대상. right:40 은 하단 버튼 열과 같은 폭
+   경계를 써서 긴 문구가 버튼과 같은 줄에서 시각적으로 어긋나지 않게 한다 — 버튼 행
+   (bottom:34, height:40 → top 226px부터) 과 겹치는지는 실제 문구 길이에 달려 있어
+   화면 검토 필요(고정 300px 카드, JS 쪽 자동 축소 없음). */
 .authCard__body {
+  position: absolute;
+  left: 48px;
+  top: 152px;
+  right: 40px;
   margin: 0;
-  font: 600 15px/1.5 system-ui, sans-serif;
-  color: rgba(20, 18, 16, 0.78);
+  font-family: "Playfair Display", Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  font-style: normal;
+  font-size: 13px;
+  line-height: 1.35;
+  color: #141210;
+  overflow-wrap: break-word;
 }
 
+/* 버튼 — right40/bottom34, 높이40, 한 행, 사이 14px(A-411-c 명시값). */
 .authCard__actions {
+  position: absolute;
+  right: 40px;
+  bottom: 34px;
+  height: 40px;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  align-items: center;
   gap: 14px;
-  margin-top: 24px;
+  margin: 0;
 }
 
 /* [A-356 §1 → A-359 §1 교정] 공통 카드 자리 — 승인 Send 미리보기 숫자(중앙 기준
@@ -1005,35 +1014,10 @@ h1 {
   color: #141210;
 }
 
-/* 카드 버튼 — SendCard 원본 122×40(cap23·mid76 반복·cap23, 낱말 높이 20) 이었으나
-   [A-401] Name 카드 버튼과 같은 이유·같은 비율로 shell 높이 34 로 줄인다(계산 근거는
-   .nameCard__btn .pkbtn__shell 위 주석 참고 — 같은 ButtonKit 자산·같은 40→34 축소). */
-.sendCard__btn .pkbtn__shell {
-  height: 34px;
-}
-
-.sendCard__btn .pkbtn__cap {
-  width: 20px;
-  height: 34px;
-}
-
-.sendCard__btn .pkbtn__mid {
-  width: 64px;
-  height: 34px;
-  background-size: auto 34px;
-}
-
-.sendCard__btn .pkbtn__word {
-  height: 17.33px;
-}
-
-.sendCard__btn {
-  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
-}
-
-.sendCard__btn:not(:disabled):active {
-  transform: translateY(3px);
-}
+/* [A-411-e/f 이전] SendCard 전용 34px 축소·독자 그림자도 nameCard 와 같은 이유로
+   폐기됐다(위 .pkbtn 기본값 참고) — Send/Stay, Try again/Check Piggy, next errand,
+   explore save, second Send 모두 같은 40px CSS-native 종이 버튼을 쓴다. 개별 :active
+   override 없음 — .pkbtn:not(:disabled):active(translateY(2px))를 그대로 받는다. */
 
 /* [A-360] Second Journey 카드 — 새 카드/종이 자산 0. 위 `.sendCard`(438.461538×560,
    등축 .65 → 285×364, A-359 실측 그대로)를 그대로 재사용하고, 안쪽만 목록형 본문으로
@@ -2171,6 +2155,16 @@ h1 {
   transition: opacity 0.35s;
 }
 
+/* [A-411-e] Invite Face ID — Owner 정정: 노란 얼굴 SVG(stroke #E0B100)/버튼 형체/레이아웃은
+   전부 그대로 두고, 이 라벨("Face ID"/"checking…", 같은 span·main.js updateInviteFace())
+   폰트만 Delicious Handrawn 으로 바꾼다. 새 종이 버튼(.pkbtn) 형체로 바꾸지 않는다 —
+   크기/weight/색은 .invite__face 기존값(16px/600/#ede8dc)을 그대로 상속하되, 이 폰트가
+   400 만 배선돼 있어 font-weight 는 400 으로 눌러 synthetic bold 를 막는다. */
+.invite__faceLabel {
+  font-family: var(--font-cj);
+  font-weight: 400;
+}
+
 .invite[data-phase="checking"] .invite__face {
   animation: check-pulse 1s ease-in-out infinite;
 }
@@ -2660,17 +2654,15 @@ h1 {
 .returnChogHop { position: absolute; inset: 0; transform-origin: 0 0; }
 .returnChogHop[hidden] { display: none !important; }
 
-/* A361: reuse paper shells, with readable dynamic labels. */
-.sendCard__btn .pkbtn__text {
-  display: flex; align-items: center; justify-content: center;
-  height: 100%; font: 600 16px/1.2 Georgia, serif; color: #141210;
-  filter: none;
-}
+/* [A-411-b/d/f 이전] A361 의 .sendCard__btn .pkbtn__text (Georgia 16px/1.2) override 는
+   폐기됐다 — 위 .pkbtn__word 공유 토큰(--btnWordSize/--btnWordLine)이 Try again/Check
+   Piggy/Send/Stay/next errand/explore save/second Send 를 전부 Delicious Handrawn
+   20px/1 로 통일한다(Owner 10:03 스크린샷이 지적한 불일치의 원인이 이 override 였다). */
 .homePaper .homeNextErrand {
   position: absolute; left: 50%; top: 330px;
   transform: translateX(-50%); pointer-events: auto;
 }
-.homePaper .homeNextErrand:active { transform: translateX(-50%) translateY(3px); }
+.homePaper .homeNextErrand:active { transform: translateX(-50%) translateY(2px); }
 .homePaper .homeNextErrand:disabled { pointer-events: none; }
 
 /* A373 Explore review patch: AskCard structure only; common card geometry stays inherited. */

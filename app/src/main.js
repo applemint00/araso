@@ -2766,15 +2766,28 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     // 영영 안 열리던 것. 이 정착이 Save 직후 첫 도착일 때만, 잠깐(위 상수) 뒤 카드를 연다.
     // 재방문·Stay 재진입은 isFirstArrival 이 false 라 여기 오지 않는다. 씬을 떠나면(다음
     // render() 의 teardownScene()) sceneTimeout 이 예약을 스스로 지운다 — 반복 강제 표시 0.
+    // [A-411-g] 이 타이머가 기록 카드(records)가 열려 있는 동안 울리면, 아래 render() 가
+    // mountHome() 을 cardClaimed:true(=state.sendCardVisible) 로 다시 마운트해 Home
+    // 노트패드(.homePaper) 를 영구히 접어(chog-home.js draw() 의 cardClaimed 분기, progress
+    // 0 고정) 버린다 — 기록 카드는 alignRecordsCardToHomePaper() 로 그 접힌 .homePaper rect
+    // 를 그대로 물려받아 두 카드가 같이 손끝 크기(≈9×13)로 굳는다(감독 실측). 기록 카드는
+    // 별도 자리(.recordsCardAnchor)라 공통 카드 자리 다툼과 무관하니, 그 자리를 넘기는 이
+    // 타이머만 기록이 열려 있는 동안 미룬다 — 기록을 닫으면 바로 이어서 연다(반복 강제 표시
+    // 없이, 다음 render() 의 teardownScene() 이 여전히 예약을 지운다).
     if (isFirstArrival && !state.sendCardVisible) {
-      sceneTimeout(() => {
+      const revealSendCard = () => {
+        if (state.recordsCardVisible) {
+          sceneTimeout(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS);
+          return;
+        }
         // [A-359 §3] Send 카드가 공통 자리를 넘겨받기 직전, 아직 pinned 로 열려 있을 수
         // 있는 Home 노트패드를 먼저 닫는다 — render() 의 전체 다시그리기가 곧 이 인스턴스를
         // 치우지만, 그 사이 한 프레임이라도 두 카드가 같은 자리에서 겹치지 않게 한다.
         homeChog?.closeCard?.();
         state.sendCardVisible = true;
         render();
-      }, HOME_FIRST_JOURNEY_CARD_MS);
+      };
+      sceneTimeout(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS);
     }
   };
 
