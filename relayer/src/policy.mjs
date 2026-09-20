@@ -17,6 +17,25 @@ export const MAX_BODY_BYTES = 1024;
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 
+/** [A-439] 실행 한정 지급 정책 — 서버가 강제한다. 요청 body 로는 바꿀 수 없다.
+ *  허용 주소 목록이 비어 있거나 형식이 틀리면 정책 자체를 만들지 않는다(null = 전부 거부).
+ *  전체 상한 = 원장 전체 기준 최대 1건 · 0.1 MON(재시작해도 같은 원장이면 유지). */
+export const MAX_GRANTS_TOTAL = 1;
+export const TOTAL_CAP_WEI = GRANT_WEI;
+
+export function createGrantPolicy(allowlistRaw) {
+  if (typeof allowlistRaw !== "string" || allowlistRaw.trim() === "") return null;
+  const list = allowlistRaw.split(",").map((s) => s.trim()).filter(Boolean);
+  if (list.length === 0 || list.some((a) => !ADDR.test(a))) return null;
+  const allowed = new Set(list.map((a) => a.toLowerCase()));
+  return Object.freeze({
+    allows: (address) => allowed.has(address.toLowerCase()),
+    maxGrants: MAX_GRANTS_TOTAL,
+    totalCapWei: TOTAL_CAP_WEI,
+    size: allowed.size,
+  });
+}
+
 /** fail-closed 요청 검증 — 모르면 거부, 부분 수용·확장 필드 없음.
  *  chainId·금액 등은 서버 소유값이라 요청에 애초에 받지 않는다(address 하나뿐). */
 export function validateGrantRequest(body) {

@@ -14,6 +14,7 @@ import {
   MAX_BODY_BYTES,
   RELAYER_MIN_BALANCE_WEI,
   RPC_URL,
+  createGrantPolicy,
   validateGrantRequest,
 } from "./policy.mjs";
 import { createLock, openLedger } from "./ledger.mjs";
@@ -36,14 +37,18 @@ function respond(res, status, body) {
  * @param {ReturnType<typeof openLedger> | null} opts.ledger  null = 원장 로드 실패, /grant 전부 거부(fail-closed)
  * @param {string | null} opts.ledgerError  ledger 가 null 인 이유(응답에 담을 사유)
  * @param {(msg: string) => void} [opts.log]
+ * @param {number | null} [opts.chainId]  [A-439] RPC 로 **검증된** chainId 만. 없으면 health ok:false.
+ * @param {ReturnType<typeof createGrantPolicy>} [opts.policy]  [A-439] 실행 한정 지급 정책. null = /grant 전부 거부.
  */
-export function createRelayServer({ submitter, ledger, ledgerError = null, log = () => {} }) {
+export function createRelayServer({ submitter, ledger, ledgerError = null, log = () => {}, chainId = null, policy = null }) {
   const lock = createLock();
 
   return createHttpServer((req, res) => {
     if (req.url === "/health") {
       if (req.method !== "GET") return respond(res, 405, { ok: false, error: "method not allowed" });
-      return respond(res, 200, { ok: true });
+      // [A-439] 검증 전·다른 chain 값으로 준비 성공을 말하지 않는다.
+      const verified = chainId === CHAIN_ID;
+      return respond(res, 200, { ok: verified, chainId: verified ? chainId : null, grantPolicy: !!policy });
     }
 
     if (req.url !== "/grant") {
@@ -88,12 +93,26 @@ export function createRelayServer({ submitter, ledger, ledgerError = null, log =
           log(`grant rejected(ledger unavailable) address=${short}`);
           return respond(res, 500, { ok: false, error: `ledger unavailable: ${ledgerError ?? "unknown"}` });
         }
+        // [A-439] 정책 없음·허용 주소 밖 = 지급 거부(send 호출 0).
+        if (!policy) {
+          log(`grant rejected(no grant policy) address=${short}`);
+          return respond(res, 403, { ok: false, error: "no grant policy" });
+        }
+        if (!policy.allows(address)) {
+          log(`grant rejected(address not allowed) address=${short}`);
+          return respond(res, 403, { ok: false, error: "address not allowed" });
+        }
 
         // read → check → reserve → send 를 통째로 직렬화 — 동시 요청의 이중 지급 차단.
         await lock(async () => {
           if (ledger.has(address)) {
             log(`grant rejected(already granted) address=${short}`);
             return respond(res, 409, { ok: false, error: "already granted" });
+          }
+          // [A-439] 원장 전체 상한(건수·금액) — lock 안에서 보므로 동시 다른 주소도 1건만.
+          if (ledger.count() >= policy.maxGrants || ledger.totalWei() + GRANT_WEI > policy.totalCapWei) {
+            log(`grant rejected(total cap reached) address=${short}`);
+            return respond(res, 403, { ok: false, error: "total grant cap reached" });
           }
 
           let balance;
@@ -138,6 +157,18 @@ export function createRelayServer({ submitter, ledger, ledgerError = null, log =
   });
 }
 
+/** [A-439] 실험 relayer 는 루프백에만 bind 한다 — host override 없음. */
+export const BIND_HOST = "127.0.0.1";
+export function listenLocal(server, port) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(port, BIND_HOST, () => {
+      server.off("error", reject);
+      resolve(server.address());
+    });
+  });
+}
+
 /** 실제 viem 기반 submitter. server.mjs 를 직접 실행할 때만 만든다 — smoke 는 가짜 submitter 를 쓴다. */
 function createViemSubmitter({ walletClient, publicClient }) {
   return {
@@ -174,23 +205,37 @@ async function main() {
   try {
     ledger = openLedger(ledgerPath);
   } catch (e) {
+    // [A-439] 다른 writer 가 같은 원장을 잡고 있으면 기동 자체를 거부한다(fail-closed, lock 자동삭제 0).
+    if (String(e.message).startsWith("LEDGER_LOCKED")) throw e;
     // 원장이 손상돼 있어도 서버는 뜬다(health 는 살아있어야 운영자가 확인할 수 있다) —
     // 다만 /grant 는 전부 거부하고 사유를 응답에 담는다(fail-closed).
     ledgerError = e.message;
     console.error(`LEDGER_ERROR: ${e.message} — /grant will reject all requests`);
   }
 
+  // [A-439] 실행 한정 허용 주소(쉼표 구분). 없거나 틀리면 정책 null → /grant 전부 403.
+  const policy = createGrantPolicy(process.env.ARASO_GRANT_ALLOWLIST ?? "");
+  if (!policy) console.error("NO_GRANT_POLICY: ARASO_GRANT_ALLOWLIST missing/invalid — /grant will reject all requests");
+
   const submitter = createViemSubmitter({ walletClient, publicClient });
   const balance = await submitter.getBalance();
 
-  const server = createRelayServer({ submitter, ledger, ledgerError, log: console.log });
+  const server = createRelayServer({ submitter, ledger, ledgerError, log: console.log, chainId, policy });
   const port = Number(process.env.PORT ?? 8787);
-  server.listen(port, () => {
-    console.log(`araso relayer on :${port} (chain ${chainId}, ledger ${ledgerPath})`);
-    console.log(`relayer address = ${account.address}`);
-    console.log(`relayer balance = ${balance} wei`);
-    if (balance < RELAYER_MIN_BALANCE_WEI) console.log("WARNING: underfunded — /grant will answer 503");
-  });
+  const shutdown = () => {
+    server.close(() => {
+      ledger?.close(); // 자기 writer lock 만 푼다
+      process.exit(0);
+    });
+    server.closeAllConnections?.(); // keep-alive 연결 때문에 종료가 늦어지지 않게
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
+  await listenLocal(server, port);
+  console.log(`araso relayer on ${BIND_HOST}:${port} (chain ${chainId}, ledger ${ledgerPath}, allowlist ${policy ? policy.size : 0})`);
+  console.log(`relayer address = ${account.address}`);
+  console.log(`relayer balance = ${balance} wei`);
+  if (balance < RELAYER_MIN_BALANCE_WEI) console.log("WARNING: underfunded — /grant will answer 503");
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
