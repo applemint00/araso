@@ -690,6 +690,25 @@ export function createReturnPlayback(opts) {
     return status();                               // 세 번째부터는 아무 일도 없다
   }
 
+  // [A-466 Lane A] 사용자 skip — **화면만** 최종 filed 상태로 보낸다.
+  // 이 함수는 tx 확정·trip 결과·영수증 생성·권한을 만들지도 바꾸지도 않는다(그것들은 이 씬에
+  // 들어오기 전에 이미 끝났거나, 끝나지 않았다면 여기로 오지 않는다).
+  // 자산 실패(asset-missing/asset-error)에서는 **아무 일도 하지 않는다** — 실패를 filed 로
+  // 위장하지 않기 위해서다. reduced 경로의 정착 방식을 그대로 쓰되, 그것은 시스템 자동 정착이고
+  // 이쪽은 사용자 조작이라 호출 지점이 다르다(구분 유지).
+  function skip() {
+    if (!alive() || !renderer) return status();
+    if (phase === "asset-missing" || phase === "asset-error" || phase === "loading") return status();
+    if (filedFired) return status();
+    taps = 2;
+    t = RETURN_TOTAL_S;
+    paint();
+    filedFired = true;
+    settle("filed");
+    onFiled();
+    return status();
+  }
+
   function start() {
     if (stopped) return Promise.resolve(status());
     settle("loading");
@@ -724,5 +743,5 @@ export function createReturnPlayback(opts) {
     return status();
   }
 
-  return { start, stop, tap, redraw: paint, status, get phase() { return phase; } };
+  return { start, stop, tap, skip, redraw: paint, status, get phase() { return phase; } };
 }

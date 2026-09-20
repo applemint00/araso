@@ -94,11 +94,15 @@ const SHMON_ABI = [
 ];
 const RECEIPTS_KEY = "araso.receipts";
 const TRIP_CLOSED_KEY = "araso.tripClosed";
-// [A-377 §3] 보관은 전체 — 저장 cap 을 없앴다(옛 RECEIPT_KEEP=2). 화면 쪽 "최근 3장만"은
-// 저장 개수가 아니라 서류철 미리보기가 보여주는 장수일 뿐이다 — RECORDS_FOLDER_PREVIEW.
-// 그 뒤(4건째부터)도 Home 카드 오른쪽 기록 카드의 전체 목록에서는 그대로 열린다
-// (§A-383 recordsCardListMarkup()).
-const RECORDS_FOLDER_PREVIEW = 3;
+// [A-441] First Send 가 broadcast 한 뒤 결과가 확정되지 않은 동안의 최소 기록(민감정보 0 —
+// stage·address·tx hash 만). 있으면 재탭·새로고침에서 새 서명/재제출 0(fail-closed).
+const SEND_PENDING_KEY = "araso.sendPending";
+const SEND_PENDING_STAGES = ["deposit-sending", "deposit-broadcast", "redeem-sending", "redeem-broadcast"];
+// [A-377 §3] 보관은 전체 — 저장 cap 을 없앴다(옛 RECEIPT_KEEP=2).
+// [A-460] 화면 쪽 "최근 3장만"(RECORDS_FOLDER_PREVIEW)은 **서류철 그림의 미리보기 장수**였고,
+// HISTORY 가 텍스트 전용이 되면서 그 그림과 함께 사라졌다. 보관·열람은 전과 같이 전체다
+// (recordsCardListMarkup() 이 state.receipts 를 전부 그린다). 상수는 쓰이지 않으므로 지웠다 —
+// 값이 다시 필요해지면 그때 정본 근거와 함께 되살린다.
 
 // --- 탄생 한 바퀴의 세 가지 사실 (A-292 번호 8) -------------------------
 // 셋은 서로 다른 사실이라 각각 따로 기록한다. 하나로 묶으면 「이름은 아직인데
@@ -106,6 +110,15 @@ const RECORDS_FOLDER_PREVIEW = 3;
 // PASSKEY_STORAGE_KEY 는 이 셋과 무관하다 — 캐릭터 이름 저장소로 쓰지 않는다(§7).
 const PIGGY_RECEIVED_KEY = "araso.piggyReceived"; // Piggy 받음 (패스키가 생겼다)
 const PIGGY_NAME_KEY = "araso.piggyName"; // 이름 저장 완료 (빈 문자열 = 미완료)
+// [A-462 Owner] Second 까지 끝낸 사실은 **영속한다** — 재방문/새로고침이면 조용한 Home 으로
+// 돌아오고 Explore 자동재실행 0. 저장하는 것은 **완료 사실 boolean 하나뿐**이다: 선택/권한/금액
+// 같은 Second 의 일시 상태는 저장하지 않는다(A-411-p 의 "세션 메모리" 결정은 이 판정으로 대체).
+const SECOND_JOURNEY_CLOSED_KEY = "araso.secondJourneyClosed";
+// [A-466 Owner] 결과(귀환/영수증) 모션은 **첫 한 번만 전체 재생**하고, 그 뒤부터 skip 을 보여준다.
+// 단위는 Owner 문구 "결과 모션은 첫 번째만"의 최소 해석 — Journey 종류를 가리지 않고 이 저장소에서
+// **첫 성공 결과 1회**다(First/Second 를 각각 1회로 늘리지 않는다). 저장은 boolean 하나뿐이고,
+// Return 진입만으로는 서지 않는다 — File it 을 지나 Home 까지 정리한 뒤에 선다.
+const RESULT_MOTION_SEEN_KEY = "araso.resultMotionSeen"; // "한 바퀴가 닫혔다" = TRIP_CLOSED_KEY 와 같은 어휘
 const BIRTH_PLAYED_KEY = "araso.birthPlayed"; // 최초 연출 처리 (해치를 한 번 돌렸다)
 
 function hasReceivedPiggy() {
@@ -218,8 +231,13 @@ const state = {
   tripReason: "",
   // 「보냈다」(txHash)와 분리된 「이번 바퀴가 닫혔다」. 성공한 바퀴에서만 선다.
   // 옛 저장값에는 이 키가 없으므로 txHash 가 있으면 닫힌 것으로 본다(A-048 이관과 같은 다리).
-  tripClosed:
-    localStorage.getItem(TRIP_CLOSED_KEY) === "1" || !!localStorage.getItem("araso.txHash"),
+  // [A-441] 단 미확정 Send 기록(SEND_PENDING_KEY)이 있으면 그 다리를 쓰지 않는다 — 확정 전 txHash 가
+  // 닫힌 바퀴로 복구되지 않게(computeTripClosed).
+  tripClosed: computeTripClosed({
+    tripClosedFlag: localStorage.getItem(TRIP_CLOSED_KEY),
+    txHash: localStorage.getItem("araso.txHash"),
+    pending: readSendPending(),
+  }),
   // 이름을 짓다 나갔다가 돌아온 진입인가. 그렇다면 Piggy 는 숨은 상태로 기다리고
   // Save 로만 다시 나온다(A-288). 해치에서 곧장 온 진입은 숨기지 않는다.
   // 「일반 대기에서 언제 숨길지」(시간)는 아직 정해지지 않았다 — 여기 넣지 않는다.
@@ -281,7 +299,12 @@ const state = {
   // 에서만 선다). 저장소에 새 스키마를 만들지 않는다(§금지) — 세션 메모리 표 하나뿐이다.
   // openSecondJourneyExplore() 의 candidates 직행 여부, settle() 의 자동 quiet→Paper
   // 억제(Owner "Second 완료: Explore 자동재실행 0")에 쓴다.
-  secondJourneyCompletedOnce: false,
+  secondJourneyCompletedOnce: localStorage.getItem(SECOND_JOURNEY_CLOSED_KEY) === "1",
+  // [A-462] 위 값은 저장에서 복원되지만, **이번 세션에서 실제로 끝냈는가**는 따로 센다 —
+  // 화면의 Journey 번호(buildSecondJourneyViewModel)가 새로고침으로 달라지지 않게 하려는 것뿐이다.
+  secondCompletedThisSession: false,
+  // [A-466] 첫 결과 모션을 이미 봤는가(저장에서 복원). skip 표시 여부만 정한다 — 금융 0.
+  resultMotionSeen: localStorage.getItem(RESULT_MOTION_SEEN_KEY) === "1",
   // [A-411-p] "First Receipt filed → 정착 → 잠깐 조용 → Paper" 1회용 표. goHomeFromFilebox()
   // 와 아래 초기 scene 계산에서만 세우고, mountHome() 의 settle() 이 한 번 읽고 곧장 끈다
   // (기존 homeArrival/returnArrival 과 같은 1회용 transient 플래그 패턴 재사용 — 새 상태
@@ -303,7 +326,10 @@ state.nameResumed = state.scene === "name";
 // errand 버튼이 없어졌으므로 이게 First 완료/Second 미완료 사용자의 유일한 자연 진입로다).
 // tripClosed 가 서 있고(First 끝남) 이 세션은 방금 시작했으니 secondJourneyCompletedOnce
 // 는 항상 false — 조건은 사실상 "First 끝났고 scene 이 sendstay로 떨어졌는가"뿐이다.
-state.homeQuietForExplore = state.scene === "sendstay" && state.tripClosed;
+// [A-462 Owner 판정] Second 를 이미 끝낸 사용자는 재방문해도 **조용한 Home** 이다 — 자동
+// Explore 0. 이전에는 완료 표가 세션 메모리뿐이라 새로고침하면 항상 false 가 되어 정본
+// ("Second 완료는 quiet Home", A-411-n §2/A-421)을 어겼다(A-461 Lane B 재현 g).
+state.homeQuietForExplore = state.scene === "sendstay" && state.tripClosed && !state.secondJourneyCompletedOnce;
 
 const publicClient = createPublicClient({
   chain: MONAD_TESTNET,
@@ -383,12 +409,15 @@ function receiptIdentityKey(receipt) {
 
 // [A-377 §3] 전체 보관(cap 제거) + 반복 호출/탭이 같은 바퀴를 새 항목으로 또 쌓지 않게.
 // finishTrip 은 정상 경로에서 트랜잭션당 한 번만 부르지만, 방어적으로 여기서도 막는다 —
-// 실제 tx 식별자가 직전 0번과 같을 때만 중복으로 본다(값 없는 receipt 는 항상 새로 쌓는다,
-// 식별자가 없어 "같다"고 볼 근거가 없으므로).
+// 실제 tx 식별자가 전체 이력 중 하나와 같으면 중복으로 보고 기존 항목을 그대로 둔다(값 없는
+// receipt 는 항상 새로 쌓는다, 식별자가 없어 "같다"고 볼 근거가 없으므로).
 function rememberReceipt(receipt) {
   const key = receiptIdentityKey(receipt);
-  if (key && state.receipts[0] && receiptIdentityKey(state.receipts[0]) === key) {
-    state.receiptIndex = 0;
+  const existingIndex = key
+    ? state.receipts.findIndex((r) => receiptIdentityKey(r) === key)
+    : -1;
+  if (existingIndex >= 0) {
+    state.receiptIndex = existingIndex;
     return;
   }
   const kept = [receipt, ...state.receipts];
@@ -416,6 +445,49 @@ function isLocalDevRpId() {
 
 function isAllowedPiggyRpId() {
   return isProductionRpId() || isLocalDevRpId();
+}
+
+// --- LOCAL_ONLY WebAuthn hook (A-463) ---------------------------------
+// 하네스가 실제 Face ID 없이 create/get 한 바퀴를 돌려 보려면 Mera 의 `webAuthnClient`
+// 자리에 가짜 client 를 꽂아야 한다. 그 구멍을 앱 소스에 내되, **세 겹으로 잠가** 둔다.
+// 왜 이 경계인가:
+//   ① LOCAL_DEV_ENTRY(=a172-local 모드 + VITE_ARASO_LOCAL_DEV_ENTRY=1)가 아니면 아예 없다.
+//      production/default 번들에서는 전역이 있어도 무시되고 기존 browserWebAuthnClient 기본
+//      경로 그대로다 — 기본 경로의 salt 동작도 건드리지 않는다.
+//   ② rpId 가 격리 하네스 rpId 하나일 때만. 실제 사용자 도메인(PRODUCTION_RP_ID)은 물론
+//      LOCAL_DEV_RP_ID 로도 열리지 않는다. 판정은 기존 isLocalDevRpId() 를 재사용한다.
+//   ③ 모양이 Mera 의 WebAuthnClient 계약(createCredential/getCredential 둘 다 함수)에
+//      안 맞으면 무시(fail-closed) — 반쯤 맞는 객체로 실제 경로를 망가뜨리지 않는다.
+// secret 은 앱이 만지지 않는다. PRF/privateKey 는 하네스의 메모리 closure 안에만 있고,
+// 앱은 주입된 client 를 Mera 에 **전달만** 한다.
+const HARNESS_RP_ID = "araso-harness.local.test";
+const LOCAL_TEST_WEBAUTHN_HOOK = "__ARASO_LOCAL_TEST_WEBAUTHN_CLIENT__";
+
+function localTestWebAuthnClient() {
+  if (!isLocalDevRpId()) return null;
+  if (getRpId() !== HARNESS_RP_ID) return null;
+  const hook = globalThis[LOCAL_TEST_WEBAUTHN_HOOK];
+  if (!hook || typeof hook !== "object") return null;
+  if (typeof hook.createCredential !== "function") return null;
+  if (typeof hook.getCredential !== "function") return null;
+  return hook;
+}
+
+// Mera 호출부에 스프레드로 얹는다. 잠금 중 하나라도 걸리면 빈 객체 →
+// 옵션 자체가 없는 것과 같고, Mera 는 기본 browserWebAuthnClient 를 쓴다.
+function localTestWebAuthnOption() {
+  const client = localTestWebAuthnClient();
+  return client ? { webAuthnClient: client } : {};
+}
+
+// create 경로만: 하네스가 같은 salt 로 두 번 돌려 같은 주소가 나오는지 보려면 salt 가
+// 고정돼야 한다. 같은 hook 객체의 prfSalt 필드를, **32바이트일 때만** 쓴다. 없거나
+// 길이가 다르면 옵션을 얹지 않는다 → Mera 기본 salt 그대로(기본 경로 불변).
+function localTestPrfSaltOption() {
+  const client = localTestWebAuthnClient();
+  const salt = client?.prfSalt;
+  if (!(salt instanceof Uint8Array) || salt.length !== 32) return {};
+  return { prfSalt: salt };
 }
 
 function toHex(bytes) {
@@ -642,6 +714,29 @@ function isCancelledAuthError(error) {
   return !!cause && typeof cause === "object" && cause.name === "NotAllowedError";
 }
 
+// [A-451] 거래·인증 실패의 기술 상세(RPC URL·요청 인자·raw tx·주소·value/data·credential)는 화면에
+// 보내지 않는다(Owner "거래 관련은 모두 뒤에서, 카드에는 안 보여야"). 내부 증거는 이 한 건만 —
+// 시각·단계·안전한 분류/코드 allowlist. 원문 메시지·스택·주소는 저장·console 0.
+const LAST_SEND_ERROR_KEY = "araso.lastSendError";
+function safeErrorCategory(error) {
+  const name = error && typeof error.name === "string" ? error.name : "";
+  return /^[A-Za-z]{1,48}$/.test(name) ? name : "Error";
+}
+function safeErrorCode(error) {
+  const raw = error?.code ?? error?.cause?.code;
+  const code = raw === undefined || raw === null ? "" : String(raw);
+  return /^-?\d{1,6}$/.test(code) || /^[A-Z][A-Z0-9_]{0,39}$/.test(code) ? code : "";
+}
+function recordSafeError(phase, error) {
+  const entry = { at: Date.now(), phase, category: safeErrorCategory(error), code: safeErrorCode(error) };
+  try {
+    localStorage.setItem(LAST_SEND_ERROR_KEY, JSON.stringify(entry));
+  } catch {
+    /* 저장 불가여도 화면 흐름은 그대로 */
+  }
+  return entry;
+}
+
 function formatError(error) {
   if (isMeraError(error)) {
     return `${error.code}: ${error.message}`;
@@ -657,6 +752,8 @@ function requestPrf(credential) {
     rpId: getRpId(),
     ...(credential ? { credential } : {}),
     timeout: 120_000,
+    // LOCAL_ONLY. 잠금이 하나라도 걸리면 빈 객체다(위 localTestWebAuthnOption 주석).
+    ...localTestWebAuthnOption(),
   });
 }
 
@@ -719,6 +816,9 @@ async function openPiggy() {
       rp: { id: getRpId(), name: "Araso" },
       user: { name: "araso-owner", displayName: "Araso" },
       timeout: 120_000,
+      // LOCAL_ONLY. 둘 다 잠금이 걸리면 빈 객체 → 기존 경로·기본 salt 그대로.
+      ...localTestWebAuthnOption(),
+      ...localTestPrfSaltOption(),
     });
 
     const credential = {
@@ -745,7 +845,8 @@ async function openPiggy() {
   } catch (error) {
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
-    setScene("birth", "Piggy could not open here.", formatError(error));
+    recordSafeError("open", error);
+    setScene("birth", "Piggy could not open here.", "");
   }
 }
 
@@ -877,6 +978,22 @@ async function readShmonBalance(address) {
 }
 
 // broadcast 전에 잔액/가스와 deposit calldata 를 확인한다. 부족하거나 읽을 수 없으면 여기서 throw — 추측 진행 금지.
+// [A-451] 상한·간격은 INFERRED(정본 값 없음). 기존 funded 경로(grant 없음)는 부르지 않는다.
+const GRANT_VISIBLE_POLL_MS = 1000;
+const GRANT_VISIBLE_MAX_TRIES = 20;
+async function waitForGrantBalance(address) {
+  for (let i = 0; i < GRANT_VISIBLE_MAX_TRIES; i += 1) {
+    try {
+      const balance = await publicClient.getBalance({ address });
+      if (balance >= SEND_AMOUNT) return true;
+    } catch {
+      /* 읽기 실패는 다음 시도로 — 상한이 끝을 정한다 */
+    }
+    await new Promise((resolve) => setTimeout(resolve, GRANT_VISIBLE_POLL_MS));
+  }
+  return false;
+}
+
 async function simulateSend(account) {
   const before = await publicClient.getBalance({ address: account.address });
   const beforeShares = await readShmonBalance(account.address);
@@ -890,7 +1007,9 @@ async function simulateSend(account) {
   if (before < required) {
     throw new Error(`not enough to send: have ${formatEther(before)}, need ${formatEther(required)}`);
   }
-  return { before, beforeShares, depositTx };
+  // [A-451] 이미 계산한 준비 정보를 함수 경계에서 잃지 않게 남긴다(표시·저장 0). sendTransaction 인자는
+  // 바꾸지 않는다 — type/fee 강제는 새 증거 전까지 UNKNOWN.
+  return { before, beforeShares, depositTx, prepared: { chainId: MONAD_TESTNET.id, gas: gasEstimate, gasPrice, feeClass: "gasPrice" } };
 }
 
 // 바퀴의 결말은 둘이고(조건 불충족 nah. 은 아직 없다), 그 둘을 가르는 내부 사유는 넷이다.
@@ -985,7 +1104,87 @@ function finishTrip(trip) {
   setTimeout(() => setScene("filebox"), 1200);
 }
 
+// [A-441] First Send 단일 실행 · 확정 전 재진입 fail-closed ────────────────────────────
+// sendInFlight: 이 탭에서 sendPiggy 가 도는 동안 두 번째 호출은 grant/서명/sendTransaction 을
+// 시작하지 않고 돌아간다. SEND_PENDING_KEY: broadcast 가 시작된 뒤 결과가 확정되기 전까지 저장소에
+// 남는다 — 새로고침·재탭에서도 재제출 0. 성공(receipt 확인) 뒤에만 지우고, 실패·미확정은 지우지
+// 않는다(재시도 가능하다고 추정하지 않는다 — 수리는 별도 recovery).
+let sendInFlight = false;
+
+function readSendPending() {
+  let raw;
+  try {
+    raw = localStorage.getItem(SEND_PENDING_KEY);
+  } catch {
+    return null;
+  }
+  if (!raw) return null;
+  try {
+    const p = JSON.parse(raw);
+    if (p && typeof p === "object" && SEND_PENDING_STAGES.includes(p.stage)) return p;
+  } catch {
+    /* 아래 */
+  }
+  // 알아볼 수 없는 기록도 "없음"으로 보지 않는다 — 미확정으로 취급(fail-closed).
+  return { stage: "unknown" };
+}
+
+function writeSendPending(entry) {
+  localStorage.setItem(SEND_PENDING_KEY, JSON.stringify({ ...entry, at: Date.now() }));
+}
+
+function computeTripClosed({ tripClosedFlag, txHash, pending }) {
+  if (tripClosedFlag === "1") return true;
+  if (pending) return false;
+  return !!txHash; // 옛 txHash-only 사용자 다리(A-048) — 새 코드는 확정 전 txHash 를 쓰지 않는다.
+}
+
+function sendBusy() {
+  return sendInFlight || !!readSendPending();
+}
+
+// 확정 성공 뒤에만: txHash 확정값 저장 → 미확정 기록 제거. tripClosed 는 finishTrip 이 세운다.
+function commitSendSuccess(redeemTxHash) {
+  localStorage.setItem("araso.txHash", redeemTxHash);
+  state.txHash = redeemTxHash;
+  localStorage.removeItem(SEND_PENDING_KEY);
+}
+
+// [A-444] 실제 Send 버튼 상태는 이 한 곳에서 정한다 — origin 막힘·진행 중·미확정 기록 중 하나라도
+// 있으면 잠그고, 모두 없으면 푼다(broadcast 전 안전 실패 뒤 다시 쓸 수 있게). 새 렌더·문구 0.
+function syncSendButton() {
+  const btn = document.querySelector("#sendButton");
+  if (!btn) return;
+  const locked = !isAllowedPiggyRpId() || sendBusy();
+  btn.disabled = locked;
+  if (locked) btn.setAttribute("aria-disabled", "true");
+  else btn.removeAttribute("aria-disabled");
+}
+
 async function sendPiggy() {
+  // [A-441] 두 번째 호출·미확정 기록이 있으면 아무것도 시작하지 않는다.
+  if (sendInFlight) return;
+  if (readSendPending()) {
+    // 새 문구 0 — 기존 「확인 중」 표현을 그대로 쓴다(finishTrip 의 미확정 경로와 같은 말).
+    setScene("sendstay", "Piggy is home.", "Confirmation is still catching up.");
+    return;
+  }
+  sendInFlight = true;
+  syncSendButton();
+  let settling = false; // true 가 되면 잠금 해제는 settle 결말이 맡는다
+  try {
+    await sendPiggyOnce(() => {
+      settling = true;
+    });
+  } finally {
+    if (!settling) {
+      sendInFlight = false;
+      syncSendButton(); // 안전 실패(broadcast 전)면 풀리고, pending 이 남았으면 잠긴 채
+    }
+  }
+}
+
+async function sendPiggyOnce(markSettling) {
   if (!isAllowedPiggyRpId()) {
     // [A-407-e] 사용자 화면에는 내부 origin/rpId 를 적지 않는다 — 지금 여기서는 보낼 수
     // 없다는 사실만 짧게. 가드(isAllowedPiggyRpId)·서명·tx·버튼 disabled 는 그대로이고,
@@ -1004,7 +1203,8 @@ async function sendPiggy() {
       noteRecoverFailure();
       state.authPhase = "idle";
       state.authCancelled = isCancelledAuthError(error);
-      setScene("birth", "Chog could not wake Piggy.", formatError(error));
+      recordSafeError("recover", error);
+      setScene("birth", "Chog could not wake Piggy.", "");
       return;
     }
   }
@@ -1017,11 +1217,23 @@ async function sendPiggy() {
   } catch (error) {
     // fail-closed — relayer 가 안 떠 있거나 그 밖의 이유로 거절하면 여기서 멈춘다. 추측 진행 금지.
     // 통과하는 거절은 위의 "already funded" 하나뿐이다.
-    setScene("sendstay", "relayer unreachable", error instanceof Error ? error.message : String(error));
+    recordSafeError("grant", error);
+    setScene("sendstay", "relayer unreachable", "");
     return;
   }
   // 이미 가스가 있으면 grant tx 자체가 없다. 그대로 simulate 로 넘어간다.
   state.grantTxHash = grant.txHash;
+  // [A-451] 이번에 새 grant 가 나갔을 때만: 그 잔고가 RPC 에 실제로 보일 때까지 짧게 기다린다
+  // (A-448 은 grant 확정 ≈2.5s 뒤 deposit 이 거부됨 — 원인 UNKNOWN, 가시성 지연은 INFERRED 후보).
+  // 상한 안에 안 보이면 서명·전송 전에 멈춘다(pending 없음 → Send 다시 사용 가능).
+  if (grant.granted) {
+    const visible = await waitForGrantBalance(state.address);
+    if (!visible) {
+      recordSafeError("grant-visibility", { name: "GrantBalanceNotVisible" });
+      setScene("sendstay", "Piggy can't go out yet.", "");
+      return;
+    }
+  }
 
   const account = activeAccount;
   let plan;
@@ -1029,7 +1241,8 @@ async function sendPiggy() {
     plan = await simulateSend(account);
   } catch (error) {
     // fail-closed — broadcast 전에 멈춘다. 추측 진행 금지.
-    setScene("sendstay", "Piggy can't go out yet.", formatError(error));
+    recordSafeError("simulate", error);
+    setScene("sendstay", "Piggy can't go out yet.", "");
     return;
   }
 
@@ -1051,11 +1264,15 @@ async function sendPiggy() {
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
     const signature = await activeSession.signDigest(digest);
     const mark = `${toHex(signature.compact)}:${signature.recovery}`;
+    // [A-441] 여기부터 돈이 움직일 수 있다 — 보내기 직전에 미확정 기록을 남긴다(broadcast 여부를
+    // 모르는 예외도 재제출 0 쪽으로 접힌다).
+    writeSendPending({ stage: "deposit-sending", address: account.address });
     const depositTxHash = await walletClient.sendTransaction({
       account,
       chain: MONAD_TESTNET,
       ...plan.depositTx,
     });
+    writeSendPending({ stage: "deposit-broadcast", address: account.address, depositTxHash });
     const depositReceipt = await waitForSuccess(depositTxHash);
     if (!depositReceipt) throw new Error("deposit unconfirmed or reverted");
     const afterDepositShares = await readShmonBalance(account.address);
@@ -1065,16 +1282,18 @@ async function sendPiggy() {
       account: account.address,
       ...redeemTx,
     });
+    writeSendPending({ stage: "redeem-sending", address: account.address, depositTxHash });
     const redeemTxHash = await walletClient.sendTransaction({
       account,
       chain: MONAD_TESTNET,
       ...redeemTx,
     });
+    writeSendPending({ stage: "redeem-broadcast", address: account.address, depositTxHash, redeemTxHash });
     localStorage.setItem("araso.mark", mark);
-    localStorage.setItem("araso.txHash", redeemTxHash);
     state.mark = mark;
-    state.txHash = redeemTxHash;
+    // [A-441] araso.txHash·state.txHash 는 여기서 쓰지 않는다 — redeem receipt 성공 확인 뒤에만(commitSendSuccess).
 
+    markSettling();
     settleSend({
       before: plan.before,
       address: account.address,
@@ -1084,11 +1303,20 @@ async function sendPiggy() {
       redeemTxHash,
       shmonReceived,
     })
-      .then(finishTrip)
+      .then((trip) => {
+        // 성공(redeem receipt status success)일 때만 확정값 저장·미확정 기록 제거. 실패·미확정은 기록 유지.
+        if (trip.outcome === "done") commitSendSuccess(redeemTxHash);
+        finishTrip(trip);
+      })
       // settleSend 는 결말을 반환한다 — 여기로 오는 건 그 밖의 예외뿐이라 미확인으로 접는다.
-      .catch(() => finishTrip({ outcome: "failed", reason: "unconfirmed", receipt: null }));
+      .catch(() => finishTrip({ outcome: "failed", reason: "unconfirmed", receipt: null }))
+      .finally(() => {
+        sendInFlight = false;
+        syncSendButton(); // 성공 뒤 pending 없음 → 풀림 · 미확정 pending → 잠긴 채
+      });
   } catch (error) {
-    setScene("sendstay", "Piggy could not get ready.", formatError(error));
+    recordSafeError("send", error);
+    setScene("sendstay", "Piggy could not get ready.", "");
   }
 }
 
@@ -1125,6 +1353,12 @@ function createEmptySecondJourney() {
     // interestsNote: seed A none 뒤 같은 interests 화면 위에 얹는 Chog/Paper 한 줄 —
     // 목록은 세트B로 교체되고, 이 노트는 다음 저장/이탈까지 그대로 남는다(타이머 없음).
     interestsNote: null,
+    // chogSay: Explore 저장 직후 Chog 가 **자기 자리에서** 하는 반응 한 줄(카드 문구 아님).
+    // 정본 NOTES_explore_page §5:180 "all of them?" · §10:334 "these two?" 만 쓴다 — 다른
+    // 개수의 대사는 정본에 없어 비운다(UNKNOWN, 문구 발명 0). candidates 단계에서만 보인다.
+    chogSay: null,
+    // candidatesRevealed: 이번 저장 뒤 후보 행을 이미 보여줬는지 — 선택 재렌더 때 다시 숨기지 않는다.
+    candidatesRevealed: true,
     // note/noteQueue: 목록 없이 문구만 보여주고 Home 으로 닫는 종결 화면(seed B 소진,
     // 본편 반복 none). render() 가 이 큐를 sceneTimeout 으로 한 걸음씩 넘긴다.
     note: null,
@@ -1139,6 +1373,9 @@ const MAX_EXPLORE_VISIBLE = 5;
 // seed B 소진("okay./maybe later.") 및 본편 반복 none 종결 노트가 화면에 머무는 시간 —
 // 기존 filebox 자동전환(A-292, 1200ms)과 같은 값을 재사용한다(새 타이밍 발명 0).
 const EXPLORE_NOTE_MS = 1200;
+// [Owner 2026-09-19 "체킹 먼저, 두 옵션은 살짝 늦게 — 진짜 가능한 걸 보여줘야 하니 늦어도 된다"]
+// 저장 직후 candidates 카드는 checking… 만 먼저 보이고 후보 행은 이 뒤에 뜬다. 값 = INFERRED.
+const CANDIDATES_REVEAL_MS = 1500;
 
 // domainState 가 진짜 "한 번도 Explore 선택을 한 적 없는" 상태인지 본다. 새 persisted
 // 필드를 추가하지 않고 이미 있는 두 필드로만 유추한다:
@@ -1311,8 +1548,11 @@ function recomputeSecondJourneyFlow() {
 function buildSecondJourneyViewModel() {
   const sj = state.secondJourney;
   // [A-421 Owner] 몇 번째 Journey: 첫 Journey 닫힘(tripClosed) + 이번 세션 Second 완료 수 + 지금 것.
-  // Second 완료는 세션 메모리뿐(저장 스키마 신설 금지) — 새로고침 뒤엔 2 로 돌아간다.
-  const journeyNumber = 1 + (state.tripClosed ? 1 : 0) + (state.secondJourneyCompletedOnce ? 1 : 0);
+  // [A-462] Second 완료 **사실**은 이제 저장된다(SECOND_JOURNEY_CLOSED_KEY). 그러나 이 숫자는
+  // 화면에 그려지는 값이라 여기서는 **세션 카운트**(secondCompletedThisSession)를 계속 쓴다 —
+  // 저장값을 쓰면 새로고침 뒤 2 가 3 으로 바뀌어 사용자 화면이 달라진다(CLAUDE.md 3항: 실험 중
+  // 화면/문구 변경 금지). Owner 가 "새로고침 뒤에도 누적 표시"를 원하면 그때 바꾼다 — OUTBOX A-462 참고.
+  const journeyNumber = 1 + (state.tripClosed ? 1 : 0) + (state.secondCompletedThisSession ? 1 : 0);
   const flow = sj.flow;
   const chosen = (flow?.destinations || []).find((d) => d.id === sj.chosenDestinationId) || null;
   const amountCheck = validateSecondAmount(sj.amount);
@@ -1404,6 +1644,7 @@ function openSecondJourneyExplore() {
   sj.permission = false;
   sj.amount = "";
   sj.interestsNote = null;
+  sj.chogSay = null;
   sj.note = null;
   sj.noteQueue = [];
   // [A-411-p] 옛 A-405-a 회귀동작("관심 있으면 곧장 candidates")을 Owner 확정으로 대체한다:
@@ -1450,6 +1691,13 @@ function handleExploreSave(ids) {
   // 시퀀스를 벗어나 기존 bounded preference + checking 흐름으로 합류한다(§A-405-a 3).
   sj.seedStage = "done";
   sj.interestsNote = null;
+  sj.chogSay =
+    selectedErrands.length === displayed.length && displayed.length > 1
+      ? "all of them?"
+      : selectedErrands.length === 2
+        ? "these two?"
+        : null;
+  sj.candidatesRevealed = false;
   sj.step = "candidates";
   sj.chosenDestinationId = null;
   sj.pickedCandidateId = null;
@@ -1635,7 +1883,14 @@ function handleSecondSend() {
   const sj = state.secondJourney;
   const devPreview = import.meta.env.DEV && sj.devPreview === true;
   const preflight = sj.flow?.preflight;
-  const canSend = devPreview && preflight?.status === "JOB_READY" && preflight?.executionPermission === true;
+  // 버튼 disabled 에만 기대지 않고 실행 직전에 금액을 다시 검증한다.
+  const chosenForSend = (sj.flow?.destinations || []).find((d) => d.id === sj.chosenDestinationId) || null;
+  const needsAmount = readinessCardKind(chosenForSend) !== "collect";
+  const canSend =
+    devPreview &&
+    preflight?.status === "JOB_READY" &&
+    preflight?.executionPermission === true &&
+    (!needsAmount || validateSecondAmount(sj.amount).valid);
   if (!canSend) return;
   sj.mockReceipt = sj.flow.mockReceipt;
   // [A-419 Source evidence] 승인 발화표에 Away 설명문이 없다 — DRAFT 조합을 앱에 넣지
@@ -1688,6 +1943,7 @@ function renderExplore() {
     <section class="stage" data-scene="explore">
       ${buttonInkFilter()}
       ${corner("explore")}
+      <canvas class="departStage" id="secondWorkStage" aria-hidden="true"></canvas>
       ${homeCharacter(piggyName)}
       <div class="cardAnchor" id="sendCardAnchor">
         <div class="cardAnchor__fit">${cardMarkup}</div>
@@ -1831,8 +2087,20 @@ function mountSecondReturn() {
     stopped = true;
   });
   const valid = () => !stopped && token === sceneToken;
-  const finishSecondJourney = () => {
+  // [A-462] persist=false 는 "완료 사실로 저장하지 않는다"는 뜻이다. 메모리 표는 기존과 같이
+  // 세운다(이 세션의 동작 변경 0) — 저장만 갈라낸다.
+  const finishSecondJourney = ({ persist = false } = {}) => {
     if (!valid()) return;
+    state.secondCompletedThisSession = true;
+    if (persist) markResultMotionSeen(); // Second: 사용자가 Home 을 눌러 실제로 끝낸 자리
+    if (persist) {
+      try {
+        localStorage.setItem(SECOND_JOURNEY_CLOSED_KEY, "1");
+      } catch {
+        // 저장 실패는 조용히 넘긴다 — 완료 자체를 되돌리지 않는다(다음 재방문에 Explore 가
+        // 다시 열릴 뿐, 가짜 완료를 만들지는 않는다).
+      }
+    }
     const prior = state.secondJourney;
     // [A-411-p] Second 를 이 세션에서 실제로 한 번 끝냈다는 표 — openSecondJourneyExplore()
     // 의 candidates 직행 판정과 settle() 의 자동 quiet→Paper 억제("Second 완료: Explore
@@ -1844,6 +2112,9 @@ function mountSecondReturn() {
     state.secondJourney.persisted = prior.persisted;
     state.secondJourney.devPreview = prior.devPreview;
     state.secondJourney.selectedIds = [...prior.selectedIds];
+    // [A-447] Second 완료 = quiet Home. First Send 카드 표가 남아 있으면 sendstay 가 그 카드를 다시
+    // 그린다(A-446 a446-22) — 진입 전에 내린다. 정상·onError·onIdleEnter 가 모두 이 함수를 지난다.
+    state.sendCardVisible = false;
     setScene("sendstay", "Piggy is home.", "Second errand filed. (preview)");
   };
   // [A-421] First(mountReturn)와 같은 알람 생명주기 — 씬 이탈 정리 + 벨 뒤 한 박자
@@ -1870,18 +2141,39 @@ function mountSecondReturn() {
     },
     reduced: prefersReducedMotion(),
     play: true,
+    // [A-466] 첫 결과에서는 숨기고, 그 뒤 Return 부터 보인다.
+    allowSkip: state.resultMotionSeen === true,
     openFileLabel: "Home",
-    onOpenFilebox: finishSecondJourney,
-    onError: finishSecondJourney,
+    // [A-462] **영속 저장은 이 경로 하나뿐이다** — 사용자가 Home 을 눌러 실제로 끝낸 자리.
+    onOpenFilebox: () => finishSecondJourney({ persist: true }),
+    // onError 는 **자산 로딩 실패**(return-view.js: phase asset-missing/asset-error)이지 Second 를
+    // 끝냈다는 사실이 아니다. 지금은 Second 가 mock 이라 금융 실패 phase 가 없지만, 실제 tx 가
+    // 붙으면 이 자리에 금융 실패가 들어올 수 있다 — 그때 조용히 "실패인데 완료로 영속"이 되지
+    // 않도록 지금 갈라 둔다. 화면 동작(quiet Home)은 그대로다.
+    onError: () => finishSecondJourney({ persist: false }),
+    // onIdleEnter 는 재생 없는 진입이다. mountSecondReturn 은 play:true 고정이라 실사용에서는
+    // 도달하지 않고 **DEV 씬점프에서만** 온다 — 씬 점프로 완료 사실을 영구히 남기지 않는다.
     onIdleEnter: () => {
-      sceneTimeout(finishSecondJourney, 0);
+      sceneTimeout(() => finishSecondJourney({ persist: false }), 0);
     },
   });
   // [A-421] 파일링 완료 시 알람 제거 — First 와 같은 공용 구현.
   endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid);
 }
 
+// [A-466] 첫 결과를 **끝까지** 정리한 뒤에만 선다. 실패·중단·새로고침으로는 서지 않는다.
+function markResultMotionSeen() {
+  if (state.resultMotionSeen) return;
+  state.resultMotionSeen = true;
+  try {
+    localStorage.setItem(RESULT_MOTION_SEEN_KEY, "1");
+  } catch {
+    // 저장 실패는 조용히 넘긴다 — 다음 결과에서 전체 재생이 한 번 더 돌 뿐이다(가짜 상태 0).
+  }
+}
+
 function goHomeFromFilebox() {
+  markResultMotionSeen(); // First: File it → Filebox → Home 까지 온 자리
   // [A-411-p] 서류철 정리 뒤 Home 복귀 — "First Receipt filed → 정착 → 잠깐 조용 → Paper"
   // 의 실제 진입점이다. Second 를 이 세션에서 이미 끝냈다면 세우지 않는다(Owner "Second
   // 완료: 조용한 Home만, Explore 자동재실행 0").
@@ -1979,7 +2271,12 @@ function resetLocalTest() {
   localStorage.removeItem("araso.mark");
   localStorage.removeItem("araso.txHash");
   localStorage.removeItem(TRIP_CLOSED_KEY);
+  localStorage.removeItem(SEND_PENDING_KEY);
+  localStorage.removeItem(LAST_SEND_ERROR_KEY);
   localStorage.removeItem(RECEIPTS_KEY);
+  // [A-462] Second 완료 사실도 리셋에서만 지운다 — 일반 Home 이동·기록 열기·새로고침에서는 0.
+  localStorage.removeItem(SECOND_JOURNEY_CLOSED_KEY);
+  localStorage.removeItem(RESULT_MOTION_SEEN_KEY);
   // 탄생 한 바퀴의 세 가지 사실도 함께 지운다 — 안 지우면 리셋 뒤에도 Open 이 숨고
   // 해치가 다시 돌지 않는다.
   localStorage.removeItem(PIGGY_RECEIVED_KEY);
@@ -2007,6 +2304,8 @@ function resetLocalTest() {
   // [A-411-p] 세션 전용 표도 함께 되돌린다 — 안 지우면 리셋 뒤에도 "이미 한 번 Second를
   // 끝냈다"는 판정이 남아 candidates 직행/자동 quiet→Paper 억제가 잘못 이어진다.
   state.secondJourneyCompletedOnce = false;
+  state.secondCompletedThisSession = false;
+  state.resultMotionSeen = false;
   state.homeQuietForExplore = false;
   noteRecoverSuccess(); // 실패 카운터도 초기화 — 리셋 후엔 복구를 다시 처음부터 시도한다
   // [A-389] authPhase/authCancelled 도 같이 되돌린다 — 아니면 리셋 직전 실패가 취소였을 때
@@ -2420,6 +2719,9 @@ function loadWorkAssetsCached() {
 // 마다 이 값을 다시 잡으면 작은 perk 가 매번 처음부터 다시 튄다 — 카드가 실제로
 // 사라졌다 나타날 때(stayHome, 다음 Save)만 null 로 되돌린다.
 let sendWorkStartedAt = null;
+// [A-431] Second 카드 구간 work? 시계 — First(sendWorkStartedAt)와 분리. 같은 Explore 흐름
+// 재렌더(관심→checking→후보→금액…)에서는 되감지 않고, explore 씬을 떠나면 비운다.
+let secondWorkStartedAt = null;
 
 let motionCssLinked = false;
 function linkMotionCss() {
@@ -3014,19 +3316,22 @@ async function fetchHomeMoneyData() {
   refreshHomePaperMount();
   let nativeWei = null;
   let shmonWei = null;
-  let errorText = null;
+  let readFailed = false;
   try {
     [nativeWei, shmonWei] = await Promise.all([
       publicClient.getBalance({ address: state.address }),
       readShmonBalance(state.address),
     ]);
   } catch (error) {
-    errorText = error instanceof Error ? error.message : String(error);
+    // [A-454] error.message 원문(RPC URL·요청 등)을 화면에 쓰지 않는다 — 안전 기록 한 건만.
+    recordSafeError("home-money", error);
+    readFailed = true;
   }
   if (requestId !== homeMoneyRequestSeq) return; // 더 최신 요청이 이미 떴다.
-  if (errorText) {
+  if (readFailed) {
     state.homeMoneyStatus = "error";
-    state.homeMoneyErrorText = errorText;
+    // null → 렌더가 기존 비기술 문구 "couldn't read the balance." 를 쓴다(새 문구 0).
+    state.homeMoneyErrorText = null;
   } else {
     state.homeMoneyStatus = "ready";
     state.homeMoneyErrorText = null;
@@ -3121,9 +3426,22 @@ function homeCharacter(name) {
         <img class="homeChar__seat" id="homeSeat" src="${MOTION_DIR}/seat.svg" alt="" />
         <span class="homeChar__name" id="homeName">${name}</span>
       </div>
-      ${chogHomeMarkup({ padMarkup: homePadMarkup(state.scene) })}
+      ${chogHomeMarkupForExplore()}
     </div>
   `;
+}
+
+// [Owner 2026-09-19 "선택에 따라 초그 발화해야"] Explore 선택 반응은 카드가 아니라 Chog
+// 발화 — 귀환 알람과 같은 .chogCheckLine 자리·글꼴을 재사용한다(새 CSS 0).
+function chogHomeMarkupForExplore() {
+  const markup = chogHomeMarkup({ padMarkup: homePadMarkup(state.scene) });
+  const sj = state.secondJourney;
+  if (state.scene !== "explore" || sj?.step !== "candidates" || !sj.chogSay) return markup;
+  // [Owner 2026-09-19 "초그 발화 위치 머리 위에" · A-429] 머리 위 좌표는 이제 .chogCheckLine
+  // 한 곳(style.css)에 있다 — 귀환 알람과 같은 자리. 값 = INFERRED.
+  // [A-431] A-429 가 없앤 인라인 transform 만 되돌린다 — Explore 발화 글자 비율(scaleY 없음) 보존.
+  const say = `<span class="chogCheckLine" id="exploreChogSay" style="transform:translateX(-50%)">${escapeHtml(sj.chogSay)}</span>`;
+  return markup.replace('<div class="chogHome__hit"', `${say}<div class="chogHome__hit"`);
 }
 
 // [A-359 §1] .cardAnchor 는 이제 무대(#homeBoard) 밖, `.stage` 의 뷰포트 좌표계에 있어
@@ -3236,6 +3554,8 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
   // 지우면 4.6 초의 모습이 사라지고 한 번 튄다(A-306 지적 4).
   const settle = ({ keepPose = false } = {}) => {
     host.dataset.arrival = "0";
+    // [A-447 Owner "이름은 Piggy 가 Home 으로 이동·정착한 뒤"] 걷기 도중 숨긴 이름표를 정착에서 보인다.
+    host.querySelector("#homeName")?.style.removeProperty("visibility");
     if (!keepPose) {
       if (walk) walk.style.removeProperty("transform");
       if (seat) seat.style.removeProperty("transform");
@@ -3312,6 +3632,10 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     settle();
     return;
   }
+
+  // [A-447] 실제 첫 도착 걷기에서만 이름표를 숨긴다 — settle() 이 다시 보인다. reduced-motion·
+  // startRect 없음·재방문/Stay 는 위에서 곧장 settle() 하므로 처음부터 보인다.
+  host.querySelector("#homeName")?.style.setProperty("visibility", "hidden");
 
   // 미리 구워 둔다 — 걷는 도중에 프레임이 비면 발이 끊긴다.
   for (let i = 0; i < HOME_WALK_FRAMES; i += 1) {
@@ -3429,12 +3753,18 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
 // 쪽을 지켰고, 그 대가로 실제 반짝임(half/shut)은 지금 못 보여준다 — 눈 깜빡임을
 // 살리려면 app/src/piggy-depart.js:190,266-281 의 mode==="work" 분기를 원본 홀드식으로
 // 고쳐야 한다(내가 건드릴 파일 밖이라 고치지 않고 여기 보고한다).
-function mountSendCardWorkPose() {
-  if (!state.sendCardVisible) {
-    sendWorkStartedAt = null;
+// [A-431] canvasId/active/clock 만 주입 가능하게 넓혔다 — 기본 인자는 First Send 카드 그대로.
+function mountSendCardWorkPose({ canvasId = "sendCardWorkStage", active = state.sendCardVisible, clock = "send" } = {}) {
+  const getStart = () => (clock === "second" ? secondWorkStartedAt : sendWorkStartedAt);
+  const setStart = (v) => {
+    if (clock === "second") secondWorkStartedAt = v;
+    else sendWorkStartedAt = v;
+  };
+  if (!active) {
+    setStart(null);
     return;
   }
-  const canvas = document.querySelector("#sendCardWorkStage");
+  const canvas = document.querySelector(`#${canvasId}`);
   if (!canvas) return;
   const seatImg = document.querySelector("#homeSeat");
   const token = sceneToken;
@@ -3457,7 +3787,8 @@ function mountSendCardWorkPose() {
   // sendPiggy() 의 중간 메시지(setScene("sendstay", "Piggy is asking to go out.", …))가
   // 다시 render() 를 부르면 이 함수도 다시 불리지만, sendWorkStartedAt 이 이미 있으니
   // perk 를 처음부터 다시 재생하지 않는다(재렌더당 중복 준비모션 0).
-  if (sendWorkStartedAt === null) sendWorkStartedAt = performance.now();
+  if (getStart() === null) setStart(performance.now());
+  const workStartedAt = getStart();
   const reduced = prefersReducedMotion();
 
   loadWorkAssetsCached().then((res) => {
@@ -3485,7 +3816,7 @@ function mountSendCardWorkPose() {
     // 않고, 깜박임은 실제 시계로 3.6초 주기(1.65s·1.98s)로 계속 돈다.
     const draw = () => {
       if (!alive()) return false;
-      renderer.drawAt((performance.now() - sendWorkStartedAt) / 1000);
+      renderer.drawAt((performance.now() - workStartedAt) / 1000);
       return true; // 깜박임이 계속 돌아야 하므로 카드가 살아 있는 동안 계속 그린다.
     };
 
@@ -3547,9 +3878,12 @@ function renderSendStay() {
             // 한 것처럼 보이지 않게. blocked 자체(버튼 비활성)는 그대로 둔다.
             message: blocked ? "Not from here." : state.message || "Piggy is home.",
             detail: blocked ? "Piggy can only go out from the real app." : state.detail,
-            address: state.address,
+            // [A-454 Owner "자기 주소는 홈 기록 보기에서"] Send 카드(시각·접근성 DOM)에는 주소 0.
+            // 주소는 내부 state 에만 — auth/tx 동작 무변경.
+            address: "",
             terms: ["$5 limit", "Ask me every time", "One-time"],
             blocked,
+            busy: sendBusy(),
           })}
         </div>
       </div>`
@@ -3759,7 +4093,9 @@ function endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid) {
   if (!hadAlarm || !returnView) return;
   runSceneFrames(() => {
     if (!valid()) return false;
-    if (returnView.filed) {
+    // [A-429 Owner "Receipt 넘기는 순간 꺼짐"] Chog 가 Receipt 를 받는 순간(received)에 끈다 —
+    // filed 는 그 뒤라 받는 쪽이 먼저 온다. 둘 다 보는 것은 received 신호를 못 받은 경로 대비.
+    if (returnView.received || returnView.filed) {
       document.querySelector("#returnArrivalAlarm")?.remove();
       state.returnArrivalAlarm = false;
       return false;
@@ -3832,6 +4168,8 @@ function mountReturn() {
     },
     reduced: prefersReducedMotion(),
     play,
+    // [A-466] 첫 결과에서는 숨기고, 그 뒤 Return 부터 보인다.
+    allowSkip: state.resultMotionSeen === true,
     // 사용자가 명시적으로 눌렀을 때만 기존 파일함(실제 Receipt 읽기)으로 간다.
     // 파일 정리가 끝났다고 자동으로 옛 화면으로 넘어가지 않는다(A-322 교정 3).
     onOpenFilebox: () => { if (valid()) setScene("filebox"); },
@@ -3953,37 +4291,52 @@ function setHomeTwoCardShift(active) {
   mount.classList.toggle("homePaperMount--twoCardShift", Boolean(active));
 }
 
+// [A-459 Lane C] 오른쪽 HISTORY 종이 머리 — Explore(secondJourney) masthead 와 같은 paper
+// language 를 재사용한다. 날짜/요일 문자열 생성은 second-journey-view.js mastheadMarkup() 과
+// 같은 방식(en-US long month/day + weekday, 대문자)이고, 폰트/자간 수치는 style.css 에서
+// 기존 .secondJourney__masthead / .secondJourney__date 룰에 records 선택자를 덧붙여 **같은 값을
+// 공유**한다 — 새 수치 발명 0.
+// identity 는 목록 맨 위에 한 번만: Piggy 이름 + 자기 address. 새 라벨 copy 0(값만 조용히).
+// Job 행마다 주소를 반복하지 않는다. Send 카드 주소 0 은 그대로(A-454).
+function recordsMastheadMarkup() {
+  const today = new Date();
+  const dateLabel = today.toLocaleDateString("en-US", { month: "long", day: "numeric" }).toUpperCase();
+  const weekdayLabel = today.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
+  const name = displayPiggyName();
+  // 주소가 아직 없으면(무계정 DEV 등) 줄 자체를 비운다 — 가짜 값 0.
+  const address = typeof state.address === "string" ? state.address : "";
+  const identityMarkup = `
+        <p class="recordsCard__identity">
+          <span class="recordsCard__identityName">${escapeHtml(name)}</span>
+          ${address ? `<span class="recordsCard__identityAddress">${escapeHtml(address)}</span>` : ""}
+        </p>`;
+  return `
+      <div class="recordsCard__masthead">
+        <span class="recordsCard__dot" aria-hidden="true"></span>
+        <span class="recordsCard__date">${escapeHtml(dateLabel)}<small>${escapeHtml(weekdayLabel)}</small></span>
+        <span class="recordsCard__page" aria-hidden="true"></span>
+      </div>
+      <p class="recordsCard__tier">HISTORY</p>${identityMarkup}`;
+}
+
 function recordsCardListMarkup() {
   const name = displayPiggyName();
   const receipts = state.receipts;
-  const preview = receipts.slice(0, RECORDS_FOLDER_PREVIEW);
-  const rotations = [-2.2, 1.8, -1.0];
-  const tops = [8, 24, 40];
   if (!receipts.length) {
     // §4 "무기록은 같은 종이에 짧은 빈 상태만, 합성 Unknown receipt 생성 금지".
+    // [A-459] 기록이 없어도 같은 identity/masthead 껍데기는 보인다 — 가짜 receipt 0.
     return `
+      ${recordsMastheadMarkup()}
       <div class="recordsCard__panel recordsCard__panel--empty">
         <p class="recordsCard__empty">No records yet. They'll show up here after a real trip.</p>
       </div>
       <button class="recordsCard__close" id="recordsCardClose" type="button">close</button>
     `;
   }
-  const slipsMarkup = preview
-    .map((receipt, i) => {
-      const fields = receiptPaperFields({ receipt, name });
-      return `
-        <div class="recordsFolder__slip" style="top: ${tops[i] ?? 8}px; transform: translateX(-50%) rotate(${rotations[i] ?? 0}deg); z-index: ${2 + i};">
-          <div class="recordsFolder__slipRow">
-            <span>${escapeHtml(fields.name)}</span>
-            <span>${escapeHtml(fields.date)}</span>
-          </div>
-          <div class="recordsFolder__slipStatus">&gt; ${escapeHtml(fields.statusLabel)}</div>
-        </div>
-      `;
-    })
-    .join("");
-  // 전부 저장, 전부 열 수 있다(§4) — "최근 3장" 은 위 folder 미리보기(RECORDS_FOLDER_PREVIEW)
-  // 만의 표시 규칙이다.
+  // [A-460 Owner] 기록 보기는 **텍스트 전용**이다 — folder-back/front 그림과 recordsFolder slip
+  // 미리보기를 HISTORY 경로에서 걷어냈다(그 그림들은 piggy-return 캔버스 연출에만 남는다).
+  // 데이터는 전과 같이 **전부** 보관·열람 가능하고, 최근 기록이 위다. 미리보기 3장 규칙은
+  // folder 그림에 딸린 표시 규칙이었으므로 함께 사라진다 — 그래서 캡션도 보관 수만 말한다.
   const rowsMarkup = receipts
     .map((receipt, index) => {
       const fields = receiptPaperFields({ receipt, name });
@@ -3996,39 +4349,51 @@ function recordsCardListMarkup() {
     })
     .join("");
   return `
-    <div class="recordsCard__panel recordsCard__panel--folder">
-      <div class="recordsFolder" aria-hidden="true">
-        <img class="recordsFolder__back" src="/motion/piggy-return/folder-back.png" alt="" />
-        ${slipsMarkup}
-        <img class="recordsFolder__front" src="/motion/piggy-return/folder-front.png" alt="" />
-      </div>
-      <p class="recordsCard__caption">kept ${receipts.length} &middot; showing latest ${preview.length}</p>
-    </div>
+    ${recordsMastheadMarkup()}
     <div class="recordsCard__panel recordsCard__panel--list">
       <div class="recordsCard__list">${rowsMarkup}</div>
+      <p class="recordsCard__caption">kept ${receipts.length}</p>
     </div>
     <button class="recordsCard__close" id="recordsCardClose" type="button">close</button>
   `;
 }
 
 // 선택한 영수증 상세 — 같은 카드 영역에서 목록을 대체한다(§4). filebox 와 같은
-// receiptPaperMarkup/receiptRows/receiptCheck(실제 tx/block 상세)를 그대로 쓴다(재디자인 0).
+// [A-460 으로 갱신] 예전에는 filebox 와 같은 receiptPaperMarkup(종이 그림)을 함께 썼으나,
+// 이제 HISTORY 상세는 텍스트만 쓴다. receiptRows/receiptCheck 는 그대로다(재디자인 0).
 function recordsCardDetailMarkup(index) {
   const receipt = state.receipts[index] ?? null;
   if (!receipt) return recordsCardListMarkup();
   const name = displayPiggyName();
-  const paperMarkup = receiptPaperMarkup(receiptPaperFields({ receipt, name }));
-  const rows = receiptRows(receipt);
-  const rowsMarkup = rows
+  // [A-460 Owner] Receipt 종이(receiptPaperMarkup) 그림을 재사용하지 않는다 — 같은 오른쪽
+  // 종이 안에서 **텍스트 상세**로 교체한다. 보여주는 값은 이미 화면에 있던 것과 같다:
+  // receiptPaperFields 의 사람 말 요약 + 기존 receiptRows/receiptCheck. 내부 tx/raw 정보를
+  // 여기서 새로 넓히지 않는다(현재 user-facing 경계 유지).
+  const fields = receiptPaperFields({ receipt, name });
+  const summary = [
+    ["went out", fields.wentOut],
+    ["came back", fields.cameBack],
+    ["kept", fields.kept],
+  ]
+    .map(
+      ([label, value]) =>
+        `<p class="receipt-row"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(value)}</span></p>`,
+    )
+    .join("");
+  const rowsMarkup = receiptRows(receipt)
     .map(
       (row) =>
         `<p class="receipt-row"><span class="label">${row.label}</span><span class="value">${row.value}</span></p>`,
     )
     .join("");
   return `
+    ${recordsMastheadMarkup()}
     <div class="recordsCard__panel recordsCard__panel--detail">
-      <div class="recordsCard__detailPaper">${paperMarkup}</div>
-      <div class="recordsCard__detailRows">${rowsMarkup}${receiptCheck(receipt)}</div>
+      <p class="recordsCard__detailHead">
+        <span class="recordsCard__rowDate">${escapeHtml(fields.date)}</span>
+        <span class="recordsCard__rowStatus">&gt; ${escapeHtml(fields.statusLabel)}</span>
+      </p>
+      <div class="recordsCard__detailRows">${summary}${rowsMarkup}${receiptCheck(receipt)}</div>
     </div>
     <button class="recordsCard__back" id="recordsCardBack" type="button">back to list</button>
     <button class="recordsCard__close" id="recordsCardClose" type="button">close</button>
@@ -4155,6 +4520,8 @@ function render() {
   document.querySelector("#skipHatchButton")?.addEventListener("click", finishHatch, { once: true });
   document.querySelector("#nameForm")?.addEventListener("submit", savePiggyName);
   document.querySelector("#sendButton")?.addEventListener("click", sendPiggy);
+  // [A-441] 렌더마다 다시 붙는 버튼도 진행 중·미확정이면 잠긴 채로 그린다.
+  syncSendButton();
   document.querySelector("#stayButton")?.addEventListener("click", stayHome);
   document.querySelector("#fileboxHomeButton")?.addEventListener("click", goHomeFromFilebox);
   // [A-411-p] "next errand" 버튼 제거.
@@ -4203,13 +4570,25 @@ function render() {
   if (state.scene === "explore") {
     mountHome({ cardClaimed: true });
     wireExploreCard();
+    // [A-431 Owner "선택할 때까지 Piggy 는 올려다보며 웃음"] 카드가 떠 있는 Explore 전 구간에
+    // First Send 카드의 원본 work? 렌더러(올려다보기·웃는 입·실제 시계 눈 깜박임)를 재사용.
+    mountSendCardWorkPose({ canvasId: "secondWorkStage", active: true, clock: "second" });
     // [A-405-a] 종결 note("okay./maybe later." 류)만 씬에 묶인 타이머로 한 걸음
     // 넘긴다 — 다음 render()(카드 이탈·다른 클릭)가 오면 teardownScene() 이 이 예약을
     // 지워 뒤늦은 덮어쓰기를 막는다(기존 sceneTimeout 패턴, 새 타이머 체계 0).
     if (state.secondJourney.step === "note") {
       sceneTimeout(advanceExploreNote, EXPLORE_NOTE_MS);
     }
+    if (state.secondJourney.step === "candidates" && !state.secondJourney.candidatesRevealed) {
+      const picks = [...document.querySelectorAll(".secondJourney__pick")];
+      picks.forEach((btn) => { btn.hidden = true; });
+      sceneTimeout(() => {
+        state.secondJourney.candidatesRevealed = true;
+        picks.forEach((btn) => { btn.hidden = false; });
+      }, CANDIDATES_REVEAL_MS);
+    }
   }
+  if (state.scene !== "explore") secondWorkStartedAt = null;
   if (state.scene === "secondAway") mountSecondAway();
   if (state.scene === "secondReturn") mountSecondReturn();
 }

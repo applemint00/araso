@@ -17,7 +17,8 @@ function cut(startMarker, endMarker) {
 
 const waitForSuccessSrc = cut("async function waitForSuccess(", "\nasync function settleSend(");
 const settleSendSrc = cut("async function settleSend(", "// 결말 하나가 화면과 저장을 같이 정한다");
-const finishTripSrc = cut("function finishTrip(trip)", "\nasync function sendPiggy(");
+// [A-441] finishTrip 과 sendPiggy 사이에 단일 실행 helper 가 들어와 끝 표지를 그 절 머리로 옮김.
+const finishTripSrc = cut("function finishTrip(trip)", "\n// [A-441] First Send 단일 실행");
 
 let pass = 0;
 let fail = 0;

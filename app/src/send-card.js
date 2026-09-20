@@ -137,6 +137,8 @@ export function sendCardMarkup({
   address = "",
   terms = [],
   blocked = false,
+  // [A-441] First Send 진행 중·미확정 기록 있음 — 버튼만 잠근다(디자인·문구 변경 0).
+  busy = false,
   now = new Date(),
 } = {}) {
   const date = sendCardDate(now);
@@ -170,7 +172,7 @@ export function sendCardMarkup({
         <div class="sendCard__rule" aria-hidden="true"></div>
         <div class="sendCard__footerRow">
           <button class="sendCard__stay" id="stayButton" type="button">stay home</button>
-          <button class="sendCard__btn pkbtn sendCard__send" type="button" id="sendButton" aria-label="send"${blocked ? " disabled" : ""}>
+          <button class="sendCard__btn pkbtn sendCard__send" type="button" id="sendButton" aria-label="send"${blocked || busy ? " disabled" : ""}${busy ? ' aria-disabled="true"' : ""}>
             <span class="pkbtn__shell" aria-hidden="true">
               <img class="pkbtn__cap pkbtn__cap--l" src="${CARD_DIR}/btn_l.png" alt="" />
               <span class="pkbtn__mid"></span>

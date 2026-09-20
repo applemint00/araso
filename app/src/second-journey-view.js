@@ -93,6 +93,8 @@ function checkButtonMarkup(destinationId) {
 export function validateSecondAmount(value) {
   const trimmed = String(value ?? "").trim();
   if (trimmed === "") return { valid: false, amount: null, error: "" };
+  // 십진 표기만 받는다 — 0x10·1e3 같은 Number() 허용형 거부. 소수 2자리 = 달러 입력 기준(INFERRED).
+  if (!/^\d{1,9}(\.\d{1,2})?$/.test(trimmed)) return { valid: false, amount: null, error: "enter a positive amount" };
   const numeric = Number(trimmed);
   if (!Number.isFinite(numeric) || numeric <= 0) return { valid: false, amount: null, error: "enter a positive amount" };
   return { valid: true, amount: numeric, error: "" };

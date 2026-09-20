@@ -1717,8 +1717,10 @@ h1 {
    겹치지 않는다. */
 .chogCheckLine {
   position: absolute;
-  left: 560px;
-  top: 320px;
+  /* [A-429 Owner "Chog 발화는 전부 머리 위"] 560/320(Chog 옆) → Explore 발화와 같은 머리 위
+     기준(.chogHome 좌표 left450/top236, 가운데 정렬). 값 = INFERRED(Owner 원본 수치 아님). */
+  left: 450px;
+  top: 236px;
   max-width: 260px;
   color: var(--gold);
   /* [A-415] Owner: 체킹 발화는 우리 두 글꼴 중 **얇은 쪽**으로. 지금까지 글꼴 지정이 없어
@@ -1734,7 +1736,7 @@ h1 {
   /* [A-415] Owner: 글자를 살짝 위로 늘인다. 세로만 1.15배 — 획 두께는 그대로라 얇은 느낌을
      유지한다. 기준을 아래(left bottom)로 잡아 발밑에서 위로만 자라고, 초그 옆 자리(left 560/
      top 320)는 움직이지 않는다. */
-  transform: scaleY(1.15);
+  transform: translateX(-50%) scaleY(1.15);
   transform-origin: left bottom;
   white-space: nowrap;
   pointer-events: none;
@@ -2036,11 +2038,50 @@ h1 {
   color: rgba(20, 18, 16, 0.6);
 }
 
-.recordsCard__caption {
+/* 선택한 Piggy 의 정체 — 목록 맨 위 한 번. 라벨 문구 0(이름과 주소 값만).
+   주소는 종이 폭을 깨지 않게 줄바꿈시키되 DOM 문자열은 실제 주소 그대로다(자르기·치환 0). */
+.recordsCard__identity {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0 0 2px;
+  border-bottom: 1px solid rgba(20, 18, 16, 0.15);
+}
+
+/* 이름은 기존 통일값(Delicious Handrawn 20px/1 — Piggy/Send/Stay/explore save/second Send 와
+   같은 값, 위 A-411 주석 참고)을 그대로 쓴다. 새 수치 0. */
+.recordsCard__identityName {
+  font: 400 20px/1 "Delicious Handrawn", "Playfair Display", Georgia, serif;
+  color: #141210;
+}
+
+/* 주소 글자값은 아래 .recordsCard__caption 룰을 공유한다(같은 종이의 기존 보조글 값 — 새 수치 0).
+   여기서는 자리(왼쪽 정렬·여백)와 줄바꿈만 덮는다. */
+.recordsCard__identityAddress {
+  margin: 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.recordsCard__caption,
+.recordsCard__identityAddress {
   margin: 6px 0 0;
   text-align: center;
   font: italic 11px/1.3 Georgia, "Times New Roman", serif;
   color: rgba(20, 18, 16, 0.55);
+}
+
+/* [A-460] 텍스트 상세의 머리줄 — 목록 행(.recordsCard__row)과 같은 배치·같은 글자값을 쓴다.
+   새 타이포 수치·새 박스·새 그림자 0. */
+.recordsCard__detailHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 6px;
+  padding: 0 0 4px;
+  border-bottom: 1px solid rgba(20, 18, 16, 0.15);
 }
 
 .recordsCard__list {
@@ -2966,7 +3007,12 @@ h1 {
    main.js homePadMarkup 에서 없어졌다(Owner 확정: Home next errand 버튼 없음). */
 
 /* A373 Explore review patch: AskCard structure only; common card geometry stays inherited. */
-.secondJourney__masthead {
+/* [A-459 Lane C] 오른쪽 HISTORY 머리는 Explore masthead 와 **같은 값**을 쓴다. 폰트/자간/색을
+   새로 적지 않고 아래 기존 룰에 records 선택자를 덧붙여 공유한다(수치 발명 0). 자리만 다르다 —
+   Explore 는 카드 절대배치, records 는 종이 흐름 안 첫 줄이라 position/inset 만 따로 덮는다. */
+.secondJourney__masthead,
+.recordsCard__masthead,
+.recordsCard__tier {
   position: absolute;
   inset: 26px 32px auto 28px;
   display: grid;
@@ -2978,18 +3024,49 @@ h1 {
   letter-spacing: 2px;
   color: #141210;
 }
-.secondJourney__dot { width: 5px; height: 5px; margin-top: 1px; border-radius: 50%; background: #141210; }
-.secondJourney__page { text-align: right; letter-spacing: 0; }
+.secondJourney__dot,
+.recordsCard__dot { width: 5px; height: 5px; margin-top: 1px; border-radius: 50%; background: #141210; }
+.secondJourney__page,
+.recordsCard__page { text-align: right; letter-spacing: 0; }
 /* [A-415-k] Owner Figma exact — 날짜 15/10/2px, 요일 10/7.5/1.8px, 먹색 #141210(요일 60%,
    아래 .secondJourney__date small). masthead 공유 폰트(10px/1, Playfair Display Bold)는
    dot/page(—) 표식이 계속 쓰므로 그대로 두고, 실제 날짜 텍스트(.secondJourney__date)만
    여기서 개별 override 한다 — page/dot 크기·자리 변경 0. */
-.secondJourney__date {
+.secondJourney__date,
+.recordsCard__date {
   font-size: 15px;
   line-height: 10px;
   letter-spacing: 2px;
   color: #141210;
 }
+
+/* [A-460 교정] 아래 records 전용 배치는 **반드시 위 공유 룰 뒤**에 와야 한다. 같은 특정도(클래스 1개)
+   에서는 나중 규칙이 이기는데, 예전에는 이 블록이 파일 앞쪽(records 절)에 있어 공유 룰의
+   `position:absolute; inset:26px 32px auto 28px` 가 이겼다. 그 결과 masthead 와 HISTORY 가
+   카드 좌상단에 겹쳐 찍혔다(A-460 실화면에서 "HISTORY" 가 Piggy 이름 위에 겹침). 글자값은 그대로
+   공유하고 **자리만** 흐름 배치로 되돌린다 — 새 타이포 수치 0.
+/* [A-459 Lane C] records masthead 는 종이 안 첫 줄로 흐른다 — Explore 의 절대배치/inset 만 덮고
+   폰트·자간·색·격자 폭은 위 공유 룰 그대로 쓴다. HISTORY 계층 표식은 Explore 의 우상 page 자리를
+   그대로 쓰되 페이지 번호 대신 계층 이름이 들어가므로 폭만 auto 로 연다(새 폰트 수치 0). */
+.recordsCard__masthead {
+  position: static;
+  inset: auto;
+}
+
+/* HISTORY 계층 표식 — Explore 의 우상 page 칸(14px)은 좁아서 여기 넣으면 격자를 벌린다(A-459
+   실측: masthead scrollWidth +32px). 그래서 격자는 Explore 와 **완전히 동일하게** 두고 계층은
+   아래 제 줄로 내린다.
+   [A-460 교정] A-459 은 "글자값은 masthead 룰을 상속한다"고 보고했으나 **틀렸다** — 이 요소는
+   masthead 의 형제라 상속되지 않았고, 실측 결과 종이와 거의 같은 아이보리(rgb(237,232,220)) +
+   시스템 기본 16px 로 그려져 **글자가 보이지 않았다**. 그래서 위 공유 선택자에 직접 붙였다
+   (새 수치 0 — Explore masthead 와 같은 값). 아래는 자리(흐름·여백)만. */
+.recordsCard__tier {
+  position: static;
+  inset: auto;
+  display: block;
+  margin: 4px 0 0;
+}
+
 .secondJourneyCard .secondJourney__heading { margin: 0 0 8px; color: #141210; }
 .secondJourneyCard .secondJourney__heading--interests {
   display: grid;

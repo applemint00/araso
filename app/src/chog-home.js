@@ -527,7 +527,8 @@ export function mountChogHome(root, opts) {
   }
 
   function armIdle() {
-    if (destroyed || document.hidden || !ready) return;
+    // [A-427 Owner "카드 있을 때는 졸림 안 나오게"] 카드 자리가 점유 중이면 졸기 예약 0.
+    if (destroyed || document.hidden || !ready || cardClaimed) return;
     clearTimeout(idleTimer);
     idleTimer = setTimeout(sit, SLEEP_IDLE_MS);
   }

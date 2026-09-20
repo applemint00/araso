@@ -32,6 +32,9 @@ export function returnSceneMarkup(input) {
       </button>
       <span class="returnTap__hint" id="returnHint" hidden></span>
       <button class="tiny returnOpen" id="returnOpen" type="button" hidden>open the file</button>
+      <!-- [A-466 Lane A] 결과 모션 skip. 문구·클래스·자리 전부 hatch 의 승인된 skip 과 같은 것을
+           재사용한다(새 카피·새 수치 0). 첫 결과에서는 숨고, 그 뒤 Return 에서만 보인다. -->
+      <button class="tiny skip" id="returnSkip" type="button" hidden>skip</button>
       <article class="note note--quiet"><p class="line" id="returnLine">${line}</p></article>
       ${devExtra}
     </section>
@@ -70,6 +73,9 @@ export function mountReturnView(opts) {
     openFileLabel = "open the file",
     onError = () => {},
     onIdleEnter = () => {},
+    // [A-466] 이 진입에서 skip 을 보여도 되는가. 판단(첫 결과인지)은 바깥이 한다 — 이 파일은
+    // 금융도 저장소도 모른다(기존 경계 유지).
+    allowSkip = false,
     createPlayback = createReturnPlayback,
   } = opts;
 
@@ -79,6 +85,7 @@ export function mountReturnView(opts) {
   const tapBtn = $("returnTap");
   const hint = $("returnHint");
   const openBtn = $("returnOpen");
+  const skipBtn = $("returnSkip");
   if (openBtn) openBtn.textContent = openFileLabel;
   const nameTag = $("returnName");
   const chogRoot = root.querySelector("#chogHome");
@@ -207,13 +214,17 @@ export function mountReturnView(opts) {
         hint.textContent = st.phase === "await-first-tap" ? "Receipt"
           : st.phase === "await-second-tap" ? "File it" : "";
       }
-      if (st.phase === "asset-missing" || st.phase === "asset-error") onError(st);
+      if (st.phase === "asset-missing" || st.phase === "asset-error") {
+        if (skipBtn) skipBtn.hidden = true;   // [A-466] 실패에서는 skip 을 내린다
+        onError(st);
+      }
     },
     // [A-322 교정 3] 완료는 **정착**이다 — 화면을 갈아엎지 않는다.
     // Piggy 는 Home seat 에, Chog 는 파일 정리 끝자세에, 폴더와 함께 그대로 남는다.
     // 파일 열기는 사용자가 명시적으로 눌러야 일어난다.
     onFiled: () => {
       filed = true;
+      if (skipBtn) skipBtn.hidden = true;   // [A-466] 끝났으면 skip 도 내린다
       if (tapBtn) { tapBtn.hidden = true; tapBtn.disabled = true; }
       if (hint) hint.hidden = true;
       if (nameTag) {
@@ -245,6 +256,18 @@ export function mountReturnView(opts) {
     });
   }
   if (openBtn) listen(openBtn, "click", () => onOpenFilebox());
+  // [A-466] skip — 이미 들어온 Return 씬의 **재생만** 끝으로 보낸다. Away→Return 전환을
+  // 만들지 않고(여기는 이미 Return 이다), tx/영수증/권한도 건드리지 않는다.
+  // 자산 실패 phase 에서는 playback.skip() 자신이 아무 일도 하지 않는다(성공 위장 0).
+  if (skipBtn && allowSkip) {
+    skipBtn.hidden = false;
+    listen(skipBtn, "click", (e) => {
+      e.preventDefault();
+      if (filed) return;
+      skipBtn.hidden = true;
+      playback.skip();
+    });
+  }
 
   playback.start();
   // [A-414-e] `received` — main.js 가 기존 `filed` 폴링(§mountReturn, runSceneFrames)과

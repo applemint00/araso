@@ -153,5 +153,39 @@ function makeReceipt(i, overrides = {}) {
   check("txHash-only identity 도 보존", receiptIdentityKey(state.receipts[0]), "0xtx2");
 }
 
+// ── [A-425] 맨 앞이 아닌 기존 identity 재입력 -> 이력·순서·at 불변, 기존 index 를 가리킴 ──
+{
+  const { state, rememberReceipt, readReceipts, receiptIdentityKey } = makeSandbox();
+  rememberReceipt(makeReceipt(0)); // A
+  rememberReceipt(makeReceipt(1)); // B -> [B,A]
+  rememberReceipt(makeReceipt(0, { at: 9999999999999 })); // A 다시
+
+  check("[B,A]+A -> 개수 2", state.receipts.length, 2);
+  check("[B,A]+A -> 순서 B,A", state.receipts.map((r) => receiptIdentityKey(r)).join(","), "0xredeem1,0xredeem0");
+  check("[B,A]+A -> receiptIndex 1", state.receiptIndex, 1);
+  check("[B,A]+A -> 기존 A at 불변", state.receipts[1].at, 1700000000000);
+  const reread = readReceipts();
+  check("[B,A]+A -> 재읽기 중복 0", new Set(reread.map((r) => receiptIdentityKey(r))).size, reread.length);
+  check("[B,A]+A -> 재읽기 개수 2", reread.length, 2);
+}
+
+// ── [A-425] txHash-only identity 도 비인접 중복을 막는다 ──
+{
+  const { state, rememberReceipt } = makeSandbox();
+  rememberReceipt(makeReceipt(0, { redeemTxHash: "" }));
+  rememberReceipt(makeReceipt(1));
+  rememberReceipt(makeReceipt(0, { redeemTxHash: "" }));
+  check("txHash-only 비인접 재입력 -> 개수 2", state.receipts.length, 2);
+  check("txHash-only 비인접 재입력 -> index 1", state.receiptIndex, 1);
+}
+
+// ── [A-425] identity 없는 두 Receipt 는 합치지 않는다 ──
+{
+  const { state, rememberReceipt } = makeSandbox();
+  rememberReceipt(makeReceipt(0, { redeemTxHash: "", txHash: "" }));
+  rememberReceipt(makeReceipt(1, { redeemTxHash: "", txHash: "" }));
+  check("identity 없는 2건 -> 둘 다 보관", state.receipts.length, 2);
+}
+
 console.log(`\n${pass}/${pass + fail} PASS`);
 process.exit(fail === 0 ? 0 : 1);
