@@ -60,7 +60,7 @@ function makeSend({ grantGranted = false, balances = [], simThrows = false, send
     recoverPiggy: async () => {}, noteRecoverSuccess() {}, noteRecoverFailure() {}, isCancelledAuthError: () => false,
     requestGrant: async () => ({ granted: grantGranted, txHash: grantGranted ? "0xgrant" : "" }),
     simulateSend: async () => { calls.sim += 1; if (simThrows) throw leakyError(); return { depositTx: {}, before: 1n, beforeShares: 0n }; },
-    touchSession() {},
+    touchAppSession() {}, // [A-556] rename: touchSession -> touchAppSession (app-idle only, harness wiring)
     createWalletClient: () => ({ sendTransaction: async () => { calls.sendTx += 1; if (sendThrows) throw leakyError(); return "0xhash"; } }),
     MONAD_TESTNET: { id: 10143 }, MONAD_TESTNET_RPC: "", http: () => ({}),
     crypto: { subtle: { digest: async () => new ArrayBuffer(32) } },
@@ -74,6 +74,8 @@ function makeSend({ grantGranted = false, balances = [], simThrows = false, send
     formatError: (e) => String(e),
     SEND_AMOUNT: 1000000000000000n,
     setTimeout: (fn) => { fn(); return 0; }, // 대기 간격만 즉시로(시계 조작은 테스트 스텁 안에서만)
+    // [A-555 S4] 하네스 배선만 — sendPiggy wrapper finally 가 부르는 실제 세션 종료 함수의 스텁.
+    endActiveSession: () => { calls.endSession = (calls.endSession || 0) + 1; },
   };
   const names = Object.keys(env);
   const factory = new Function(...names, `${safeErrSrc}\n${waitSrc}\n${pendingConsts}\n${lockSrc}\n${onceSrc}\nreturn { sendPiggy, recordSafeError, waitForGrantBalance };`);

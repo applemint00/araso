@@ -1,0 +1,63 @@
+/* HOME PAPER — 여러 피기 (접힘/펼침/창 스크롤). Owner 확정 2026-09-23.
+   좌표 = .homePaper 로컬 400×568 px (scale 안쪽 — 뷰포트 환산 금지).
+   home-peek.css 와 같이 쓴다 (탭 모양·피크는 거기). */
+
+/* ── 창: 피기 카드들이 들어가는 칸. 기존 카드2 자리(left26 top214 w348)를 그대로 쓴다 ── */
+.homeResidents {
+  position: absolute; left: 26px; top: 214px; width: 348px;
+  z-index: 2;
+  overflow: hidden;                 /* 접힘: 1번 카드만 보임 */
+  height: var(--res-h, auto);
+  transition: height 420ms cubic-bezier(.2, .8, .2, 1);   /* 챠르륵 */
+}
+.homeResidents.isOpen { overflow-y: auto; scrollbar-width: none; overscroll-behavior: contain; }
+.homeResidents.isOpen::-webkit-scrollbar { display: none; }
+.homeResidents.isScroll { padding-bottom: 26px; box-sizing: border-box; }   /* 끝까지 올렸을 때 탭 아래 흐림 자리 */
+
+/* 창 안 카드: 원래 카드 그대로(크기·패딩·폰트·그림자 불변). 위치만 흐름으로 */
+.homeResidents .homePaper__card--piggy {
+  position: relative !important; left: 0 !important; top: 0 !important;
+  margin-bottom: 14px; z-index: 2;
+}
+
+/* ── 접힌 종이 끝 (2마리 1겹 · 3마리 이상 2겹) ── */
+.homeFlap {
+  position: absolute; z-index: 1; height: 24px; cursor: pointer; padding: 0; border: 0;
+  left: 34px; width: 332px;
+  background:
+    linear-gradient(to bottom, rgba(0,0,0,.10), rgba(0,0,0,0) 40%),
+    #EDE5D6 url("/card/paper_tex_ivory.png") center / 290px auto;
+  box-shadow: 0 2px 0 rgba(0,0,0,.06), 0 6px 10px rgba(0,0,0,.20);
+  border-radius: 0 0 2px 2px;
+  transition: opacity 120ms linear;
+}
+.homeFlap--2 { left: 42px; width: 316px; z-index: 0; }
+.homeFlap__label {
+  position: absolute; left: 0; right: 0; bottom: 4px; text-align: center;
+  font: 400 15px/1 "Delicious Handrawn", "Cherry Juice", cursive; color: rgba(20,18,16,.62);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px;
+}
+.homePaper.isResOpen .homeFlap { opacity: 0; pointer-events: none; }
+
+/* ── 창 밑단 흐림 ── */
+.homeResFade {
+  position: absolute; left: 26px; width: 348px; height: 22px; z-index: 2; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(235,227,213,0), rgba(235,227,213,.85));
+  display: none;
+}
+.homePaper.isResScroll .homeResFade { display: block; }
+
+/* ── + Piggy 탭: 창 안 목록 맨 끝(마지막 카드 밑)에 붙음 ── */
+.homeResidents .homePlusPiggyTab {
+  position: relative; display: block; right: auto; top: auto;
+  margin: -16px 14px 6px auto; z-index: 1;
+}
+
+/* ── 종이 길이 (펼칠 때 같이 챠르륵) ── */
+.homePaper.hasResidents { transition: height 420ms cubic-bezier(.2, .8, .2, 1); }
+
+/* ── 누르는 영역만 넓힘 (그림 불변, A-412 집도장 선례) ── */
+.homePaper__records { position: relative; }
+.homePaper__records::after, .homePlusPiggyTab::after, .homeFlap::after {
+  content: ""; position: absolute; inset: -10px -12px;   /* 화면 ≈ 0.64배 → 로컬 +20px */
+}

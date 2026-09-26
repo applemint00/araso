@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { ACTION } from "../src/rule-decision.js";
 import { buildDestinationFixtures } from "../src/job-feed.js";
 import {
@@ -8,15 +9,26 @@ import {
   calculateLpNetVsHodl,
   decideSecondJobPreflight,
   evaluateLpEvidenceAlert,
+  readDestinationReturnEvidence,
   summarizeReadOnlyCandidateEvidence,
 } from "../src/second-job-readiness.js";
+import { decideSemanticReturnRule, RESULT } from "../src/rule-decision.js";
+
+// [A-476] buildDestinationFixtures 는 이제 현재 Piggy context 를 **런타임에서** 받는다.
+// 제품 코드에 주소 상수가 없으므로 테스트가 주입한다 — 이 값은 테스트 전용이다.
+const TEST_RUNTIME_CONTEXT = { address: "0x00000000000000000000000000000000000000a1", chain: "monad-testnet" };
+
 
 let pass = 0;
 function check(label, fn) { fn(); console.log(`PASS  ${label}`); pass += 1; }
 
-const [aave, kintsu, swap, merkl] = buildDestinationFixtures();
+
+const [aave, kintsu, swap, merkl] = buildDestinationFixtures(TEST_RUNTIME_CONTEXT);
 const amountRule = { id: "amount", field: "amount", comparator: "lte", expected: 1, agreed: true };
-const readyFixture = { ...kintsu, capabilityStatus: "qualified" };
+// [A-579] Kintsu lives on monad-mainnet. These generic readiness checks need a fixture whose
+// runtime chain IS its Job chain; the testnet-runtime Kintsu is evidence only (checked below).
+const kintsuOnJobChain = buildDestinationFixtures({ ...TEST_RUNTIME_CONTEXT, chain: "monad-mainnet" })[1];
+const readyFixture = { ...kintsuOnJobChain, capabilityStatus: "qualified" };
 function completeEvidence(candidate = readyFixture) {
   return {
     eligibility: "known",
@@ -266,6 +278,96 @@ check("LP actions become non-executing Job plans with explicit state and Receipt
   }
   assert.equal(buildLpJobAdapter("lp_watch", { chain: "ethereum", poolId: "pool-1", exitMethod: "none", proofSource: "read" }).status, PREFLIGHT_STATUS.UNKNOWN);
   assert.equal(buildLpJobAdapter(LP_JOB_ACTION.ADD, {}).reason, "missing_lp_job_context");
+});
+
+// ── [A-576] return-evidence reader: the real kintsu-smon record, no clock constants ──
+const RIGHT_BACK = { id: "return_semantic", field: "returnSemantic", expected: "right_back", agreed: true };
+const KINTSU_OBS = { source: "test read-only observation (FIXTURE)", observedAt: "2026-09-24T12:00:00Z", chainId: 143, block: 107600000, codePresent: true, exitMode: "delayed" };
+
+check("A-576 kintsu-smon return evidence comes from the fork-proven record + recorded live read", () => {
+  const ev = readDestinationReturnEvidence("kintsu-smon");
+  assert.equal(ev.returnClass, "delayed");
+  assert.equal(ev.observedAt, "2026-09-24");
+  assert.equal(ev.block, 107556248);
+  assert.equal(ev.stale, false);
+  assert.equal(ev.conflict, false);
+  assert.equal(ev.provenance.contract, "0xA3227C5969757783154C60bF0bC1944180ed81B9");
+  assert.equal(ev.provenance.chainId, 143);
+  assert.equal(ev.provenance.forkEvidence.label, "PASS_FORK_SIM_WITH_PENDING");
+  assert.equal(ev.provenance.forkEvidence.block, 106616273);
+  assert.equal(ev.provenance.expectedDuration, null);
+  assert.match(ev.delay, /duration UNKNOWN/);
+  assert.equal(decideSemanticReturnRule(RIGHT_BACK, ev).result, RESULT.NAH);
+});
+
+check("A-576 unknown Job -> null evidence -> unknown (missing), never nah", () => {
+  const ev = readDestinationReturnEvidence("no-such-job");
+  assert.equal(ev, null);
+  const d = decideSemanticReturnRule(RIGHT_BACK, ev);
+  assert.equal(d.result, RESULT.UNKNOWN);
+  assert.equal(d.reason, "missing_evidence");
+  assert.equal(d.action, ACTION.NONE);
+});
+
+check("A-576 Job without a live read has observedAt null -> unknown, not nah", () => {
+  const ev = readDestinationReturnEvidence("aave-usdc");
+  assert.equal(ev.observedAt, null);
+  assert.equal(decideSemanticReturnRule(RIGHT_BACK, ev).reason, "missing_evidence");
+});
+
+check("A-576 fresh consistent observation stays delayed and carries its own provenance", () => {
+  const ev = readDestinationReturnEvidence("kintsu-smon", { observation: KINTSU_OBS, nowMs: Date.parse("2026-09-24T12:00:01Z") });
+  assert.equal(ev.evidenceMode, "live_observation");
+  assert.equal(ev.observedAt, KINTSU_OBS.observedAt);
+  assert.equal(ev.block, 107600000);
+  assert.match(ev.source, /observed test read-only observation/);
+  assert.equal(decideSemanticReturnRule(RIGHT_BACK, ev).result, RESULT.NAH);
+});
+
+check("A-576 stale signals (reader expiry / older than record / explicit) -> unknown", () => {
+  const now = Date.parse("2026-09-24T12:00:00Z");
+  for (const observation of [
+    { ...KINTSU_OBS, expiresAtMs: now },
+    { ...KINTSU_OBS, block: 107000000 },
+    { ...KINTSU_OBS, stale: true },
+  ]) {
+    const ev = readDestinationReturnEvidence("kintsu-smon", { observation, nowMs: now });
+    assert.equal(ev.stale, true);
+    const d = decideSemanticReturnRule(RIGHT_BACK, ev);
+    assert.equal(d.result, RESULT.UNKNOWN);
+    assert.equal(d.reason, "stale_evidence");
+  }
+});
+
+check("A-576 conflicting signals (chain / code gone / exit mode / explicit) -> unknown", () => {
+  for (const observation of [
+    { ...KINTSU_OBS, chainId: 10143 },
+    { ...KINTSU_OBS, codePresent: false },
+    { ...KINTSU_OBS, exitMode: "immediate" },
+    { ...KINTSU_OBS, sourceConflict: true },
+  ]) {
+    const ev = readDestinationReturnEvidence("kintsu-smon", { observation });
+    assert.equal(ev.conflict, true);
+    const d = decideSemanticReturnRule(RIGHT_BACK, ev);
+    assert.equal(d.result, RESULT.UNKNOWN);
+    assert.equal(d.reason, "source_conflict");
+  }
+});
+
+check("A-576 incomplete observation does not borrow record provenance -> missing -> unknown", () => {
+  const ev = readDestinationReturnEvidence("kintsu-smon", { observation: { chainId: 143 } });
+  assert.equal(ev.source, null);
+  assert.equal(ev.observedAt, null);
+  assert.equal(decideSemanticReturnRule(RIGHT_BACK, ev).reason, "missing_evidence");
+});
+
+check("A-576 no time-threshold / clock constant in the return-evidence reader", () => {
+  const src = readFileSync(new URL("../src/second-job-readiness.js", import.meta.url), "utf8");
+  const section = src.slice(src.indexOf("[A-576] Return-evidence reader"));
+  assert.ok(section.length > 100);
+  assert.doesNotMatch(section, /\d+\s*\*\s*60\b|\b(3600|86400|3600000|86400000)\b/);
+  assert.doesNotMatch(section, /(right_back|few_days|no_rush)[\s\S]{0,80}\d+\s*(h|hr|hours?|d|days?|ms)\b/i);
+  assert.doesNotMatch(section, /Date\.now\(/);
 });
 
 console.log(`\n${pass}/${pass} PASS`);

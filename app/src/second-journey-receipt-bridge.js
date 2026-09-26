@@ -1,0 +1,251 @@
+// [A-499 lane R] Second Journey Receipt — 제품 배선의 **문지기**.
+//
+// 왜 이 파일이 생겼나: `recordSecondJourneyReceipt()` (second-journey-state.js:225) 는
+// 있었지만 **제품 안에 부르는 자리가 없었다**(A-495 가 남긴 구멍). 그렇다고 아무 곳에서나
+// 부르면 안 된다 — 지금 Second 의 완료 경로는 **DEV mock/preview 뿐**이고(main.js
+// handleSecondSend:2013 은 `devPreview` 가 아니면 아예 `return` 한다), 그 mock 을 도메인
+// receipts 에 넣는 순간 **미리보기가 금융 기록으로 굳는다**.
+//
+// 그래서 이 파일은 "기록한다"가 아니라 **"기록해도 되는가"** 를 먼저 판정한다.
+// 통과하지 못한 것은 `persisted:false` 와 사유로 돌려보내고, state 는 **한 글자도** 바뀌지 않는다.
+//
+// 이 파일이 하지 않는 것 (계약):
+//   · 실행 · 서명 · 권한 부여 · 네트워크 · tx · 자동 다음 실행
+//   · KnowledgeState 승격 (Receipt 를 보는 것은 배운 것이 아니다)
+//   · permission/READY/preflight 부활 (draft 규율 second-journey-state.js:244 과 같은 금지표)
+//
+// **지금 상태 그대로라면 이 문은 항상 닫혀 있다.** DEV-only Second 흐름은 실제 실행으로
+// 영속되지 않는다 — J2-6(live/fork 실행) 이 붙어 evidenceClass 가 실려 오기 전까지는.
+
+import {
+  recordSecondJourneyReceipt,
+  saveSecondJourneyState,
+  validatePersistenceScope,
+} from "./second-journey-state.js";
+
+/** 영속 가능한 결과. `pending`/`unknown` 은 결과가 아니라 **아직 모름**이다. */
+export const TERMINAL_OUTCOMES = Object.freeze(["done", "failed"]);
+
+/**
+ * 영속 가능한 증거 등급. second-job-readiness.js EVIDENCE_LABEL 과 **같은 문자열**이다
+ * (그 모듈을 import 하지 않는 이유: 이 문지기는 판정 테이블이 아니라 계약만 안다).
+ * fork 는 실거래가 아니다 — 등급으로 **드러난 채** 저장되고, 승격 경로는 없다.
+ */
+export const PERSISTABLE_EVIDENCE_CLASSES = Object.freeze([
+  "PASS_FORK_SIM",
+  "PASS_FORK_SIM_WITH_PENDING",
+  "PASS_APP_FORK_E2E",
+  "PASS_MAINNET_TX",
+]);
+
+/** 이 등급/모양이 보이면 **즉시 거절**한다. 미리보기는 기록이 아니다. */
+export const DEV_EVIDENCE_CLASSES = Object.freeze([
+  "dev_preview", "devPreview", "mock", "mock_receipt", "ui_preview", "fixture", "preview", "demo", "sample",
+]);
+
+const MOCK_RECEIPT_KINDS = Object.freeze(["mock_second_journey_receipt"]);
+
+/** Receipt 에 실려 와도 **절대 저장하지 않는** 필드 — draft 금지표와 같은 규율. */
+export const FORBIDDEN_RECEIPT_FIELDS = Object.freeze([
+  "executionPermission", "permission", "permissionGranted", "agreedRule",
+  "preflight", "readiness", "ready", "signed", "approved", "signature",
+  "prfSalt", "credentialId", "privateKey", "secret",
+  "knowledgeState", "observedDemonstrations", "inferredFromPreference",
+]);
+
+export const REJECTION = Object.freeze({
+  NO_RECEIPT: "no_receipt",
+  DEV_MOCK: "dev_mock_receipt",
+  NOT_CONFIRMED: "outcome_not_confirmed",
+  MISSING_EVENT_ID: "missing_event_id",
+  MISSING_SCOPE: "missing_scope",
+  SCOPE_MISMATCH: "scope_mismatch",
+  MISSING_PIGGY: "missing_piggy",
+  MISSING_EVIDENCE_CLASS: "missing_evidence_class",
+  UNKNOWN_EVIDENCE_CLASS: "unknown_evidence_class",
+  EVIDENCE_MODE_MISMATCH: "evidence_mode_mismatch",
+  LIVE_EVIDENCE_WITHOUT_TX: "live_evidence_without_tx",
+  FORBIDDEN_FIELD: "forbidden_field_present",
+});
+
+const EXECUTION_MODES = Object.freeze({ FORK: "fork_simulation", LIVE: "live" });
+
+const str = (v) => (typeof v === "string" ? v.trim() : "");
+const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
+
+/**
+ * "이건 DEV 미리보기/mock 인가?" — 한 곳에서만 판정한다.
+ * job-feed.js makeMockReceipt() 출력(`receiptKind:"mock_second_journey_receipt"`,
+ * `txExecuted:false`, `realActionExecuted:false`, `proofPlaceholders`)을 정확히 잡는다.
+ */
+export function isDevMockReceipt(candidate = {}, context = {}) {
+  if (!candidate || typeof candidate !== "object") return true;
+  if (context.devPreview === true || candidate.devPreview === true) return true;
+  if (MOCK_RECEIPT_KINDS.includes(str(candidate.receiptKind))) return true;
+  if (Array.isArray(candidate.proofPlaceholders) && candidate.proofPlaceholders.length > 0) return true;
+  if (DEV_EVIDENCE_CLASSES.includes(str(candidate.evidenceClass))) return true;
+  if (str(candidate.cost?.source) === "mock_placeholder") return true;
+  if (candidate.realActionExecuted === false) return true;
+  if (str(candidate.stateChange) === "mock_state_change_only") return true;
+  return false;
+}
+
+/**
+ * **영속 가능한 Second Receipt 의 정확한 수용 경계.**
+ * 통과 시 저장될 형태(정제본)를 함께 돌려준다 — 입력 객체를 그대로 저장하지 않는다.
+ *
+ * @returns {{persistable:boolean, reason:string|null, receipt:object|null}}
+ */
+export function classifySecondReceipt(candidate, { scope = {}, context = {} } = {}) {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+    return { persistable: false, reason: REJECTION.NO_RECEIPT, receipt: null };
+  }
+
+  // ① DEV/mock 은 **다른 어떤 필드가 맞아도** 통과하지 못한다. 가장 먼저 닫는다.
+  if (isDevMockReceipt(candidate, context)) {
+    return { persistable: false, reason: REJECTION.DEV_MOCK, receipt: null };
+  }
+
+  // ② 확정된 결과만. pending/unknown/없음은 결과가 아니다.
+  const outcome = str(candidate.outcome);
+  if (!TERMINAL_OUTCOMES.includes(outcome)) {
+    return { persistable: false, reason: REJECTION.NOT_CONFIRMED, receipt: null };
+  }
+
+  // ③ 안정적인 event id — 멱등의 유일한 근거.
+  const eventId = str(candidate.eventId);
+  if (!eventId || eventId.length > 128) {
+    return { persistable: false, reason: REJECTION.MISSING_EVENT_ID, receipt: null };
+  }
+
+  // ④ 계정/체인 scope + 선택된 Piggy.
+  const validScope = validatePersistenceScope(scope);
+  if (validScope.error) return { persistable: false, reason: REJECTION.MISSING_SCOPE, receipt: null };
+  const rAccount = str(candidate.accountId);
+  const rChain = str(candidate.chainId);
+  if ((rAccount && rAccount !== validScope.accountId) || (rChain && rChain !== validScope.chainId)) {
+    return { persistable: false, reason: REJECTION.SCOPE_MISMATCH, receipt: null };
+  }
+  const piggyId = str(candidate.piggyId);
+  if (!piggyId) return { persistable: false, reason: REJECTION.MISSING_PIGGY, receipt: null };
+
+  // ⑤ 증거 등급이 **명시적으로** 실려야 한다. 없으면 "아마 진짜겠지" 로 넘기지 않는다.
+  const evidenceClass = str(candidate.evidenceClass);
+  if (!evidenceClass) return { persistable: false, reason: REJECTION.MISSING_EVIDENCE_CLASS, receipt: null };
+  if (!PERSISTABLE_EVIDENCE_CLASSES.includes(evidenceClass)) {
+    return { persistable: false, reason: REJECTION.UNKNOWN_EVIDENCE_CLASS, receipt: null };
+  }
+
+  // ⑥ 등급과 실행 모드가 서로 말이 맞아야 한다. fork 라벨이 live 로 새지 않는다.
+  const executionMode = str(candidate.executionMode);
+  const isLiveClass = evidenceClass === "PASS_MAINNET_TX";
+  if (isLiveClass && executionMode !== EXECUTION_MODES.LIVE) {
+    return { persistable: false, reason: REJECTION.EVIDENCE_MODE_MISMATCH, receipt: null };
+  }
+  if (!isLiveClass && executionMode !== EXECUTION_MODES.FORK) {
+    return { persistable: false, reason: REJECTION.EVIDENCE_MODE_MISMATCH, receipt: null };
+  }
+  // 실거래 등급은 **실제 tx 해시** 없이는 성립하지 않는다.
+  if (isLiveClass && outcome === "done" && !TX_HASH.test(str(candidate.txHash))) {
+    return { persistable: false, reason: REJECTION.LIVE_EVIDENCE_WITHOUT_TX, receipt: null };
+  }
+
+  // ⑦ 금지 필드가 실려 오면 **조용히 지우지 않고 거절한다** — 부른 쪽이 틀렸다는 뜻이기 때문.
+  for (const field of FORBIDDEN_RECEIPT_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(candidate, field)) {
+      return { persistable: false, reason: REJECTION.FORBIDDEN_FIELD, receipt: null };
+    }
+  }
+
+  // 정제본 — allow-list 다. 모르는 필드는 **들어오지 못한다**.
+  const receipt = {
+    schema: "second_journey_receipt_v1",
+    eventId,
+    outcome,
+    evidenceClass,
+    executionMode,
+    accountId: validScope.accountId,
+    chainId: validScope.chainId,
+    piggyId,
+    destinationId: str(candidate.destinationId) || null,
+    jobFamily: str(candidate.jobFamily) || null,
+    recordedAt: str(candidate.recordedAt) || str(context.now) || "UNKNOWN_TIME",
+    sourceTask: str(candidate.sourceTask) || null,
+  };
+  // 실제/fork 실행 증거는 **있을 때만** 싣는다. 없는 것을 지어내지 않는다.
+  if (TX_HASH.test(str(candidate.txHash))) receipt.txHash = str(candidate.txHash);
+  if (Number.isFinite(Number(candidate.blockNumber))) receipt.blockNumber = Number(candidate.blockNumber);
+  if (Number.isFinite(Number(candidate.forkBlock))) receipt.forkBlock = Number(candidate.forkBlock);
+  if (candidate.txExecuted === true) receipt.txExecuted = true;
+  if (str(candidate.measuredDelta)) receipt.measuredDelta = str(candidate.measuredDelta);
+  if (str(candidate.failureReason)) receipt.failureReason = str(candidate.failureReason);
+  if (candidate.evidencePointer && typeof candidate.evidencePointer === "object") {
+    receipt.evidencePointer = { ...candidate.evidencePointer };
+  }
+  return { persistable: true, reason: null, receipt };
+}
+
+/**
+ * **제품이 부르는 유일한 함수.** 완료 경계에서 한 번만 부른다.
+ *
+ * 통과하지 못하면 `state` 를 **입력 그대로** 돌려준다(부분 변경 0, 저장 0).
+ * 통과하면 recordSecondJourneyReceipt → saveSecondJourneyState 순으로 나간다.
+ * 같은 eventId 두 번째 호출은 `duplicate:true` 이고 state 는 늘지 않는다.
+ *
+ * @param {object} p
+ * @param {object} p.state   현재 second journey 도메인 state
+ * @param {object} p.receipt 후보 receipt (mock 이면 거절된다)
+ * @param {object} p.scope   { accountId, chainId }
+ * @param {object} [p.storage] localStorage 호환. 없으면 메모리 state 만 갱신한다.
+ * @param {object} [p.context] { devPreview, now }
+ */
+export function commitSecondJourneyReceipt({ state, receipt: candidate, scope = {}, storage = null, context = {} } = {}) {
+  if (!state || typeof state !== "object") {
+    return { state, persisted: false, duplicate: false, saved: false, reason: REJECTION.NO_RECEIPT, receipt: null };
+  }
+  const verdict = classifySecondReceipt(candidate, { scope, context });
+  if (!verdict.persistable) {
+    return { state, persisted: false, duplicate: false, saved: false, reason: verdict.reason, receipt: null };
+  }
+  // state 자신의 소유자와도 맞아야 한다 — 다른 Piggy/계정의 state 에 얹지 않는다.
+  if (state.accountId !== verdict.receipt.accountId || state.chainId !== verdict.receipt.chainId) {
+    return { state, persisted: false, duplicate: false, saved: false, reason: REJECTION.SCOPE_MISMATCH, receipt: null };
+  }
+
+  const applied = recordSecondJourneyReceipt(state, verdict.receipt, { eventId: verdict.receipt.eventId });
+  if (applied.duplicate) {
+    return { state: applied.state, persisted: false, duplicate: true, saved: false, reason: null, receipt: verdict.receipt };
+  }
+
+  let saved = false;
+  let saveError = null;
+  if (storage) {
+    const result = saveSecondJourneyState(storage, scope, applied.state);
+    saved = result.saved === true;
+    saveError = result.error || null;
+  }
+  return { state: applied.state, persisted: true, duplicate: false, saved, reason: saveError, receipt: verdict.receipt };
+}
+
+/**
+ * **보기만 하는 읽기.** 이 함수는 state 를 바꾸지 않는다 — 특히 KnowledgeState 를.
+ * `outcome` 은 저장된 값 그대로다: done/failed 가 서로 섞이지 않고, 없던 성공이 생기지 않는다.
+ */
+export function readSecondJourneyReceipts(state, { piggyId = null } = {}) {
+  const rows = Array.isArray(state?.receipts) ? state.receipts : [];
+  const scoped = rows.filter((r) => r && r.schema === "second_journey_receipt_v1"
+    && r.accountId === state.accountId && r.chainId === state.chainId
+    && (!piggyId || r.piggyId === piggyId));
+  return scoped.map((r) => ({ ...r }));
+}
+
+/**
+ * 저장물에서 되살린 receipt 의 결과 해석. **모르는 것은 끝까지 모르는 것이다.**
+ * 알려진 terminal 값이 아니면 `"unknown"` 이며, 어떤 경로로도 `"done"` 이 되지 않는다.
+ */
+export function resolveReceiptOutcome(receipt) {
+  const outcome = str(receipt?.outcome);
+  if (outcome === "done" || outcome === "failed") return outcome;
+  if (outcome === "pending") return "pending";
+  return "unknown";
+}

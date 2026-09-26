@@ -6,10 +6,16 @@ import {
   isMeraError,
 } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
-import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, parseEther } from "viem";
+import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, parseEther, recoverMessageAddress } from "viem";
 import { chogHomeMarkup, mountChogHome, CHOG_HOME_GEOMETRY } from "./chog-home.js";
 import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-invite.js";
 import { createDepartPlayback, createDepartRenderer, loadDepartAssets } from "./piggy-depart.js";
+import {
+  buildPiggyMotionStateMap,
+  PIGGY_MOTION_STATE,
+  piggyMotionStateFromMap,
+  resolvePiggyMotionState,
+} from "./piggy-motion-state.js";
 import { nameCardMarkup, mountNameCard } from "./name-card.js";
 import { returnSceneMarkup, mountReturnView, RETURN_VIEW_GEOMETRY } from "./return-view.js";
 import {
@@ -18,18 +24,71 @@ import {
   homeStatusFromScene,
   homeTimeNow,
   homeMoneyMarkup,
+  homeMoneyPiggyRows,
+  homeMoneyTotalsNote,
+  fundingMethodsMarkup,
+  amountChoices,
+  amountChoiceMarkup,
+  confirmButtonMarkup,
   homePiggyDetailMarkup,
   HOME_NOT_APPLICABLE_LABEL,
 } from "./home-paper.js";
+import { createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry } from "./piggy-registry.js";
+import { CLAIM_RESULT, claimStatement } from "./gift-piggy-claim-link.js";
+import {
+  beginGiftClaim,
+  bindGiftToNewPiggy,
+  createGiftClaimSubmitter,
+  GIFT_ENTRY_STATUS,
+  isGiftBinding,
+  readClaimFragment,
+  settleGiftClaim,
+} from "./gift-claim-entry.js";
+import { giftValueLabel } from "./gift-value-spec.js";
+import { createGiftRecordSource } from "./gift-record-source.js";
+import { filterHistory, historyIdentityLabel, resolveHistorySelection } from "./history-filter.js";
+import { issuePermission, authorize, consume, permissionNonce, cancel as cancelPermission, PERMISSION_STATE } from "./permission-envelope.js";
+import {
+  authRequestForPiggy,
+  bindSigner,
+  fundingTargetChallenge,
+  prfSaltFromHex,
+  selectionContext,
+  switchSelection,
+  verifyFundingTargetProof,
+} from "./piggy-session.js";
+import { admitModelAPiggy, loadMyPiggiesIndex, registerControlledPiggy, renameIndexedPiggy } from "./piggy-index.js";
+import { recoverProductList } from "./gate-b-recovery.js";
+import { listFundingMethods, startFunding, applyFundingResult, FUNDING_STATE } from "./funding-entry.js";
+import { checkIntentFunding, fundingRequestForShortfall, resumeAfterFunding } from "./funding-intent-bridge.js";
+import { buildFundingContext, validateFundingContext, scopeForChainId } from "./funding-context.js";
+import { reconcileConfirmedFunding } from "./funding-reconcile.js";
+import {
+  decodeReceiptRow,
+  encodeReceiptRow,
+  receiptIdentityKey as codecReceiptIdentityKey,
+  RECEIPT_KIND,
+} from "./receipt-codec.js";
 import { sendCardButtonMarkup, sendCardMarkup } from "./send-card.js";
 import { receiptPaperMarkup, receiptPaperFields } from "./receipt-paper.js";
 import { buildVisibleLaneChoices, runSecondJourney } from "./job-feed.js";
+// [A-579] decision-time read-only observation seam (inactive while RETURN_EVIDENCE_READ_CONFIG is null).
+import { readReturnObservation } from "./second-job-readiness.js";
+import { commitSecondJourneyReceipt } from "./second-journey-receipt-bridge.js";
+// [A-472] 개인화 학습은 **기존** updatePreference 를 그대로 쓴다 — 새 engine 0.
+import { updatePreference } from "./job-selector.js";
 import {
   applyExploreSelection,
   createSecondJourneyState,
   loadSecondJourneyState,
   saveSecondJourneyState,
   validatePersistenceScope,
+  // [A-475] Send 전 이어쓰기 — 최소 draft 만.
+  loadSecondJourneyDraft,
+  saveSecondJourneyDraft,
+  clearSecondJourneyDraft,
+  // [A-579] action-0 decision Receipt → same Second Journey storage key / receipts array.
+  recordSecondJourneyDecisionReceipt,
 } from "./second-journey-state.js";
 import {
   paperStatusCopy,
@@ -42,6 +101,12 @@ import {
   secondActionTitle,
 } from "./second-journey-view.js";
 import "./style.css";
+// [A-540] confirmed HOME peek/+Piggy + multi-Piggy fold/expand packages — dropped in verbatim
+// (<private>, <private>). CSS is
+// imported here so vite bundles it with the rest of the app (no style.css value transplant).
+import "./home-peek.css";
+import "./home-paper-multi.css";
+import { mountResidentPaper } from "./home-paper-multi.js";
 
 const PASSKEY_STORAGE_KEY = "araso.passkey";
 // rpId 이력: arasoapp.vercel.app (9/2 낮, 폐기) → arasoo.vercel.app (9/2 밤 재생성, 현재).
@@ -225,6 +290,8 @@ const state = {
   awayLine: "I'll check it.",
   // 복구 연속 실패 횟수. 2회면 이 기기엔 되찾을 Piggy 가 없다고 본다.
   recoverFailures: 0,
+  // [A-533 R1] 이 세션에서 새 기기 되찾기를 이미 한 번 시도했나(저장하지 않음).
+  freshRecoveryTried: false,
   noPiggy: false,
   // 바퀴의 결말. "" = 아직 안 났다 · "done" · "failed". 사유는 tripReason 에 남긴다.
   tripOutcome: "",
@@ -276,6 +343,21 @@ const state = {
   // sendstay 렌더 안의 표시 상태다. recordsCardVisible 은 열림/닫힘, recordsDetailIndex
   // 는 null(목록) 또는 실제 state.receipts 인덱스(상세). 둘 다 메모리 값이다(저장 0).
   recordsCardVisible: false,
+  // [A-484 Lane C] 오른쪽 HISTORY 가 보고 있는 Piggy. null = 기존 전체 기록 동작.
+  historyPiggyId: null,
+  // [A-486 Lane B] 돈 동작의 **의도(intent)** 상태. 여기 값이 있다고 실행된 게 아니다 —
+  // 실제 실행은 권한 경계(Face ID/passkey) 뒤에 있고, 이 칸에서는 fork/하네스에서만 일어난다.
+  moneyIntent: null, // { piggyId, action, amount, status: "choosing" | "awaiting_permission" }
+  // [A-512 Gate C] 돈 동작의 **정본 선택** — { id, address } 하나. historyPiggyId 는 기록 보기 필터일 뿐이다.
+  selectedPiggy: null,
+  // [A-512] 지금 살아 있는 서명자 주소. state.address(한 마리 경로의 저장 scope)와 **다른 칸**이다.
+  activeSignerAddress: "",
+  // [A-522 B2a] `+ Piggy` 흐름 상태. 인증 제공자가 없으면 { status: "credential_model_required" } 에서 멈춘다.
+  addPiggy: null,
+  // [A-522] 방금 통제 증명과 함께 색인에 들어온 **추가** Piggy — Name it 저장이 이 id 를 이름 짓는다.
+  pendingNamePiggyId: null,
+  // [A-495 Lane B] 충전 흐름. 부족분에서 시작했으면 **원래 의도가 여기 실려 있다.**
+  funding: null, // { state, intent, resumeAfter, shortfall }
   recordsDetailIndex: null,
   // [A-412 §1] 왼쪽 NOW 종이 내부 모드 — "home" | "money" | "piggyDetail". 세션 메모리
   // 값이라 저장소에 남기지 않는다(§forbidden "새 storage 스키마 0"). sendstay 가 아닌
@@ -338,7 +420,8 @@ const publicClient = createPublicClient({
 
 let activeSession = null;
 let activeAccount = null;
-let idleTimer = null;
+let idleTimer = null; // [A-556] app-idle 만의 타이머 (10분) — 서명자 5분 절대 만료와 분리
+let signerExpiryTimer = null; // [A-556] 서명자 5분 절대 만료 — activateSigningSession 이후로만 다시 잰다
 
 function readCredential() {
   try {
@@ -349,62 +432,43 @@ function readCredential() {
 }
 
 // receipt 의 금액은 BigInt 라 JSON 이 그대로 담지 못한다. 넣을 때 문자열로 눕히고 읽을 때 되세운다.
-// 한 건이라도 모양이 어긋나면 통째로 버린다 — 반쯤 읽힌 영수증으로 숫자를 그리지 않는다.
 // [A-377 §3] 더 이상 slice 하지 않는다 — 전체를 읽는다(저장 cap 제거, RECEIPT_KEEP 폐기).
+// [A-553 Lane B] 모양 판정·인코딩/디코딩은 receipt-codec.js 로 옮겼다(legacy shMON 줄은
+// byte/의미 동일, add_money 줄은 `kind` 로 구분). 예전엔 이 map() 전체가 **하나의** try/catch
+// 였다 — 한 줄이라도 깨지면(BigInt("undefined") 등) 이력 전체가 [] 로 사라졌다. legacy 줄은
+// **그 안전장치를 그대로 지킨다**(반쯤 읽힌 목록에서 숫자를 그리지 않는다) — legacy 줄 decode 실패는
+// 바깥 catch 로 올라가 전체 [] 다. **add_money 줄만** 따로 감싼다: add_money 줄 하나가 깨져도
+// legacy 이력은 지워지지 않는다(§lane_b/AUDIT.md 버그 2 · A-553 리뷰 결함 1 수리).
 function readReceipts() {
   try {
     const stored = JSON.parse(localStorage.getItem(RECEIPTS_KEY) || "[]");
     if (!Array.isArray(stored)) return [];
-    return stored.map((row) => ({
-      before: BigInt(row.before),
-      after: BigInt(row.after),
-      gas: BigInt(row.gas),
-      sent: BigInt(row.sent),
-      txHash: row.txHash || "",
-      depositTxHash: row.depositTxHash || "",
-      redeemTxHash: row.redeemTxHash || "",
-      grantTxHash: row.grantTxHash || "",
-      depositBlockNumber: row.depositBlockNumber ? BigInt(row.depositBlockNumber) : 0n,
-      redeemBlockNumber: row.redeemBlockNumber ? BigInt(row.redeemBlockNumber) : 0n,
-      depositGasUsed: row.depositGasUsed ? BigInt(row.depositGasUsed) : 0n,
-      redeemGasUsed: row.redeemGasUsed ? BigInt(row.redeemGasUsed) : 0n,
-      shmonReceived: row.shmonReceived ? BigInt(row.shmonReceived) : 0n,
-      shmonAfterRedeem: row.shmonAfterRedeem ? BigInt(row.shmonAfterRedeem) : 0n,
-      // 옛 영수증에는 status 가 없다. 없으면 빈 값으로 두고 성공이라 넘겨짚지 않는다.
-      status: row.status || "",
-      at: row.at || 0,
-    }));
+    const rows = [];
+    for (const row of stored) {
+      if (row && row.kind === RECEIPT_KIND.ADD_MONEY) {
+        try {
+          rows.push(decodeReceiptRow(row));
+        } catch {
+          // 깨진 add_money 줄 하나만 건너뛴다 — legacy 이력은 지킨다.
+        }
+      } else {
+        rows.push(decodeReceiptRow(row));
+      }
+    }
+    return rows;
   } catch {
     return [];
   }
 }
 
 function serializeReceiptRow(row) {
-  return {
-    before: String(row.before),
-    after: String(row.after),
-    gas: String(row.gas),
-    sent: String(row.sent),
-    txHash: row.txHash,
-    depositTxHash: row.depositTxHash || "",
-    redeemTxHash: row.redeemTxHash || "",
-    grantTxHash: row.grantTxHash || "",
-    depositBlockNumber: String(row.depositBlockNumber || 0n),
-    redeemBlockNumber: String(row.redeemBlockNumber || 0n),
-    depositGasUsed: String(row.depositGasUsed || 0n),
-    redeemGasUsed: String(row.redeemGasUsed || 0n),
-    shmonReceived: String(row.shmonReceived || 0n),
-    shmonAfterRedeem: String(row.shmonAfterRedeem || 0n),
-    status: row.status || "",
-    at: row.at,
-  };
+  return encodeReceiptRow(row);
 }
 
-// 실제 tx 증거(redeemTxHash 우선, 없으면 txHash)로만 "같은 바퀴"를 판정한다 — 추측으로
-// 서로 다른 바퀴를 합치지 않는다(§4 receiptIdentity 지시와 같은 원칙, 방향만 반대: 여기는
-// 이미 저장된 것과 **완전히 같은** tx 가 다시 들어왔을 때만 중복을 막는다).
+// 실제 tx 증거로만 "같은 바퀴"를 판정한다 — 추측으로 서로 다른 바퀴를 합치지 않는다(legacy:
+// redeemTxHash 우선, 없으면 txHash; add_money: 체인까지 포함 — receipt-codec.js 참조).
 function receiptIdentityKey(receipt) {
-  return (receipt && (receipt.redeemTxHash || receipt.txHash)) || "";
+  return codecReceiptIdentityKey(receipt);
 }
 
 // [A-377 §3] 전체 보관(cap 제거) + 반복 호출/탭이 같은 바퀴를 새 항목으로 또 쌓지 않게.
@@ -494,15 +558,36 @@ function toHex(bytes) {
   return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function endActiveSession() {
+// [A-556 Owner bank-style session policy — supersedes A-533/A-555 S4 "행동마다 즉시 종료"]
+// 서명자 상태 + 서명자 전용 5분 절대 타이머만 지운다. pending/영수증/history/scene 은 건드리지
+// 않는다(카드 PHASE 1) — app-idle 타이머(idleTimer)도 여기서 손대지 않는다. "서명자만 끝내는
+// 것"과 "앱을 잠그는 것"은 이제 서로 다른 사건이라서다.
+function endSignerSession() {
   activeSession?.end();
   activeSession = null;
   activeAccount = null;
+  state.activeSignerAddress = "";
+  clearTimeout(signerExpiryTimer);
+  signerExpiryTimer = null;
+}
+
+// [A-556] 앱을 실제로 잠그거나(app-idle 만료·beforeunload·dev reset) 지금 살아 있는 서명자가
+// 더는 어느 것에도 속하지 않을 때(Piggy 전환, +Piggy/충전-통제 증명 파생 세션 정리, Gate C
+// 선택-불일치)만 부른다 — endSignerSession() 에 app-idle 타이머까지 함께 지운다. 이 이름·계약은
+// A-555 이전부터 이 호출자들이 기대해 온 그대로다 — 바뀐 건 sendPiggy 성공/실패마다 무조건
+// 부르던 A-555 S4 호출 2곳이 없어졌고(PHASE 0), consumeMoneyPermission 이 더는 이걸 부르지
+// 않는다는 것(PHASE 2) 뿐이다.
+function endActiveSession() {
+  endSignerSession();
   clearTimeout(idleTimer);
   idleTimer = null;
 }
 
-function touchSession() {
+// [A-556] app-idle(10분)만 다시 잰다 — 서명자 5분 절대 만료(armSignerExpiry)는 여기서 늘리지
+// 않는다(카드 PHASE 1: "normal action activity may refresh app idle, but MUST NOT extend
+// signer absolute expiry"). 만료되면 여전히 서명자까지 정리하고(endActiveSession) 기존
+// resting 문구로 돌아간다 — 옛 touchSession() 콜백과 동일, 새 문구 0.
+function touchAppSession() {
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
     endActiveSession();
@@ -512,15 +597,64 @@ function touchSession() {
   }, 10 * 60 * 1000);
 }
 
-function activateSigningSession(prfOutput) {
+// [A-556] 서명자 5분 **절대** 만료 — activateSigningSession 이 새 인증을 세울 때만 다시 잰다.
+// 그 사이 어떤 송금/활동도 이 타이머를 늘리지 않는다(카드 §2: "5 minutes is an absolute
+// signer-session cap from successful auth; sending another transaction does NOT extend that
+// cap"). 만료 콜백은 서명자만 끝낸다 — scene 전환·영수증·pending·history 는 그대로다.
+function armSignerExpiry() {
+  clearTimeout(signerExpiryTimer);
+  signerExpiryTimer = setTimeout(() => {
+    endSignerSession();
+  }, 5 * 60 * 1000);
+}
+
+// [A-512] `persistAddress:false` = 서명자만 세우고 한 마리 경로의 저장 scope(state.address)는 건드리지 않는다.
+// 기본값 true — First/Second 경로는 지금까지와 같다.
+// [A-556] 성공한 인증 한 번 = 서명자 5분 절대 타이머를 다시 세우고(armSignerExpiry), app-idle
+// 10분도 함께 새로 잰다(touchAppSession) — 카드 PHASE 1 "activateSigningSession() starts/
+// replaces signer expiry and refreshes app idle".
+function activateSigningSession(prfOutput, { persistAddress = true } = {}) {
   endActiveSession();
   activeSession = createSecp256k1SigningSession({ privateKey: prfOutput });
   activeAccount = toViemAccount(activeSession);
   const address = getEvmAddress(activeSession.publicKey);
-  localStorage.setItem("araso.address", address);
-  state.address = address;
-  touchSession();
+  state.activeSignerAddress = address;
+  if (persistAddress) {
+    localStorage.setItem("araso.address", address);
+    state.address = address;
+  }
+  armSignerExpiry();
+  touchAppSession();
   return { account: activeAccount, address };
+}
+
+// [A-565 Owner 2026-09-24] "신뢰된 in-app tap/key 활동은 app-idle(10분) 창만 늘린다" — Continue
+// 버튼·모달 0, 새 인증 0. 서명자 5분 절대 만료는 activateSigningSession/armSignerExpiry 로만
+// 세워지고 여기서는 절대 부르지 않는다(카드 FORBIDDEN: "extending signer expiry from activity").
+//
+// "앱 세션이 살아 있다"의 기준 = activeSession/activeAccount(서명자) 가 아니라 **idleTimer 그
+// 자체**다. endSignerSession() 은 signerExpiryTimer 만 지우고 idleTimer 는 그대로 둔다(위 주석) —
+// 즉 서명자가 5분 만에 죽어도 app-idle 10분은 아직 안 끝났을 수 있고, 그 구간의 신뢰된 활동도
+// 여전히 app-idle 을 늘려야 한다(Owner 결정: app 세션 잠금은 서명자와 별개 사건). activeSession
+// 을 기준으로 게이트하면 서명자가 죽는 순간부터 활동이 더 이상 app-idle 을 늘리지 못해 이
+// 결정과 어긋난다.
+//
+// 문턱(throttle): 10분 타이머를 tap/keydown 마다 다시 세우는 건 낭비고(clearTimeout+setTimeout
+// 쌍이 매번 돎) 의미상 필요도 없다 — "10분 무입력" 판정은 마지막 재무장 이후 경과로만 정해지므로
+// 문턱 안의 재무장을 건너뛰어도 idle 판정은 그대로다(카드: "semantics remain idle-based"). 숫자
+// 자체는 정책이 아니라 여유값이며 10분/5분처럼 카드가 고정한 숫자가 아니다 — 15초로 잡는다(사람이
+// 실제로 타이핑/스크롤하는 리듬보다 훨씬 짧아 "계속 쓰는데 안 늘어난다"는 체감은 없고, 초당 여러
+// 번 오는 pointerdown/keydown 스트림을 그대로 재무장으로 옮기지 않는다).
+const TRUSTED_APP_ACTIVITY_THROTTLE_MS = 15 * 1000;
+let lastTrustedAppActivityAt = -Infinity; // 아직 한 번도 안 늘렸다 — 첫 활동은 절대 문턱에 걸리지 않는다
+
+function handleTrustedAppActivity(event) {
+  if (!event || event.isTrusted !== true) return; // 합성/스크립트 dispatch 는 무시
+  if (idleTimer === null) return; // app-idle 이 지금 돌고 있지 않다(인증 전이거나 이미 잠김) — 아무것도 하지 않는다
+  const now = Date.now();
+  if (now - lastTrustedAppActivityAt < TRUSTED_APP_ACTIVITY_THROTTLE_MS) return;
+  lastTrustedAppActivityAt = now;
+  touchAppSession(); // app-idle(10분)만 다시 잰다 — armSignerExpiry/activateSigningSession/인증 호출 없음
 }
 
 // --- 씬 정리 (A-292 번호 9) --------------------------------------------
@@ -633,8 +767,21 @@ function savePiggyName(event) {
   nameSaveToken = sceneToken;
   const form = document.querySelector("#nameForm");
   if (form) form.querySelectorAll("input, button").forEach((el) => (el.disabled = true));
+  // [A-522 B2a] **추가** Piggy 의 이름 — 첫 Piggy 이름(PIGGY_NAME_KEY)·legacy id 를 건드리지 않는다.
+  // Hatch/Birth 연출 없이 Home 으로 돌아가 새 주민 카드가 보인다.
+  if (state.pendingNamePiggyId) {
+    const id = state.pendingNamePiggyId;
+    state.pendingNamePiggyId = null;
+    try { renameIndexedPiggy(safeLocalStorage(), secondJourneyScope().chainId, { id, name }); } catch {}
+    setScene("sendstay", "", "");
+    return;
+  }
   // 「이름 저장 완료」= 이 한 줄. Piggy 받음·최초 연출 처리와 별개로 기록한다(번호 8).
   localStorage.setItem(PIGGY_NAME_KEY, name);
+  // [A-520] 이미 색인에 있는 그 Piggy 의 이름만 바꾼다(없으면 아무것도 등록하지 않는다).
+  if (state.address) {
+    try { renameIndexedPiggy(safeLocalStorage(), secondJourneyScope().chainId, { id: indexedPiggyId(state.address), name }); } catch {}
+  }
 
   // Save 가 숨은 Piggy 를 꺼낸다(A-290). 현재 빌드는 hello 를 생략하고 바로 첫 Home 으로
   // 간다 — hello 자산은 보관본에 그대로 있고 지우지 않았다. 대기 시간을 재서 자동
@@ -747,28 +894,64 @@ function formatError(error) {
 // credential 을 넘기면 그 패스키 하나로 제한된다. 넘기지 않으면
 // "WebAuthn may choose any discoverable credential for the relying party."
 // (@category-labs/mera passkey.d.ts) → 브라우저가 이 rpId 의 기존 패스키를 고르게 한다.
-function requestPrf(credential) {
+// [A-512] `prfSalt` 가 있으면 **그 salt 로** 묻는다(기본 salt 로 조용히 바꾸지 않는다). 없으면 Mera 기본 salt.
+function requestPrf(credential, { prfSalt = null } = {}) {
   return getPasskeyPrfOutput({
     rpId: getRpId(),
     ...(credential ? { credential } : {}),
+    ...(prfSalt instanceof Uint8Array && prfSalt.length === 32 ? { prfSalt } : {}),
     timeout: 120_000,
     // LOCAL_ONLY. 잠금이 하나라도 걸리면 빈 객체다(위 localTestWebAuthnOption 주석).
     ...localTestWebAuthnOption(),
   });
 }
 
+// [A-512 N1] 태어날 때 저장한 salt 를 **다시 읽어** 같은 주소를 연다. 기본 salt 로 태어났다면
+// 저장값이 곧 기본 salt 라서 결과가 같다(Mera: 기본 salt = sha256("mera.prf.salt.v1"), 버전 불변).
+function storedPrfSalt() {
+  try { return prfSaltFromHex(localStorage.getItem("araso.prfSalt") || ""); } catch { return null; }
+}
+
+// [A-520 Stream B1] 실제 인증이 **성공한 뒤에만** MY PIGGIES 비금융 색인에 적는다.
+// 통제 증명 = 이번 인증으로 파생된 서명자 주소(state.activeSignerAddress) == 그 Piggy 주소.
+// 추가 Face ID 0 · 서명 세션/권한/잔액을 만들지 않는다 · 실패해도 First 흐름을 막지 않는다.
+// id 는 레지스트리의 한 마리 이주 id(`legacy-<주소>`)와 같게 둔다 — 같은 Piggy 를 두 이름으로 부르지 않기 위해서다.
+function indexedPiggyId(address) {
+  return `legacy-${String(address).toLowerCase()}`;
+}
+
+function indexControlledPiggy({ address, credentialId, transports = null, prfSaltHex = null }) {
+  try {
+    return registerControlledPiggy(safeLocalStorage(), secondJourneyScope().chainId, {
+      id: indexedPiggyId(address),
+      name: readPiggyName() || null,
+      address,
+      signerAddress: state.activeSignerAddress,
+      locator: {
+        credentialId,
+        ...(Array.isArray(transports) && transports.length ? { transports } : {}),
+        ...(prfSaltHex ? { prfSalt: prfSaltHex } : {}),
+      },
+      at: new Date().toISOString(),
+    });
+  } catch {
+    return { ok: false, reason: "index_write_failed" };
+  }
+}
+
 async function recoverPiggy() {
   const pinned = state.credential;
+  const prfSalt = storedPrfSalt();
   let result;
   try {
-    result = await requestPrf(pinned);
+    result = await requestPrf(pinned, { prfSalt });
   } catch (error) {
     // 저장된 credential 하나만 지정했다가 실패했다면 그 패스키가 이 기기에서 사라졌을 수 있다.
     // 지정을 빼고 딱 한 번 다시 묻는다. 둘 다 실패해야 throw —
     // 어느 경우에도 새 패스키를 만들지 않는다. localStorage 가 비어도 마찬가지다.
     const mayBeGone = isMeraError(error) && error.code === "PASSKEY_OPERATION_FAILED";
     if (!pinned || !mayBeGone) throw error;
-    result = await requestPrf(null);
+    result = await requestPrf(null, { prfSalt });
   }
   // 어떤 패스키가 선택됐는지 기억해 둔다. 다음부터는 그 하나로 고정된다.
   // transports 는 assertion 결과에 없으므로(Result = credentialId + prfOutput)
@@ -779,6 +962,13 @@ async function recoverPiggy() {
     ...(sameAsPinned && pinned.transports ? { transports: pinned.transports } : {}),
   });
   const { account, address } = activateSigningSession(result.prfOutput);
+  // 저장 salt 로 열었으면 그 salt, 아니면 Mera 기본 salt(= locator 에 salt 필드 없음).
+  indexControlledPiggy({
+    address,
+    credentialId: result.credentialId,
+    transports: sameAsPinned ? pinned?.transports ?? null : null,
+    prfSaltHex: prfSalt ? toHex(prfSalt) : null,
+  });
   return { ...result, account, address };
 }
 
@@ -811,6 +1001,13 @@ async function openPiggy() {
   state.authCancelled = false;
   setScene("birth", "The egg is checking this device.", "Face ID may appear once.");
 
+  // [A-579 Lane G] Gift 은 **시작 시점에** 이 생성 흐름에 묶인다 — 흐름이 도는 동안 다른 경로(checkPiggy 등)가
+  // 같은 pending 을 가져가지 못한다. 묶일 수 있는 것은 **이 흐름이 방금 만든** Piggy 뿐이다(시작 전 주소 목록에
+  // 없던 주소 + 그 주소의 살아 있는 서명자). 생성이 안 되면(취소·실패) pending 을 되돌려 놓는다.
+  const giftIntent = takePendingGiftClaim();
+  const giftPreExisting = giftIntent ? knownPiggyAddresses() : null;
+  let giftAttempted = false;
+
   try {
     const result = await createPasskeyWithPrfOutput({
       rp: { id: getRpId(), name: "Araso" },
@@ -830,7 +1027,27 @@ async function openPiggy() {
     writeCredential(credential);
     localStorage.setItem("araso.prfSalt", toHex(result.prfSalt));
     localStorage.setItem(PIGGY_RECEIVED_KEY, "1");
+    indexControlledPiggy({ address, credentialId: result.credentialId, transports: result.transports, prfSaltHex: toHex(result.prfSalt) });
     noteRecoverSuccess();
+    // [A-559 PHASE S1 → A-579 Lane G] 방금 **새로 만든** Piggy 가 받는 사람의 Gift Piggy 다 — 시작 때 잡아 둔
+    // intent 가 있을 때만 그 새 주소에 묶고(bindGiftToNewPiggy) 그 묶음으로만 claim 을 시도한다. 실패해도
+    // 위의 First 흐름(탄생)을 되돌리지 않는다. scene 은 아래 분기가 그대로 정한다.
+    if (giftIntent) {
+      const bound = bindGiftToNewPiggy({ intent: giftIntent, piggy: { address }, preExistingAddresses: giftPreExisting, signerAddress: state.activeSignerAddress, requireSequence: false });
+      if (bound.ok) {
+        giftAttempted = true;
+        // [A-579 repair N-1] beginGiftPiggy 와 같은 모양 — Gift settle 이 던져도 방금 만든 Piggy 를
+        // "could not open" 으로 바꾸지 않는다. 실패는 기록만 한다(시도한 intent 는 되돌리지 않는다: 리뷰 N-2).
+        try {
+          lastGiftClaimSettlement = await settleBoundGiftClaim(bound.binding, giftIntent);
+        } catch {
+          lastGiftClaimSettlement = { status: "claim_settle_failed" };
+        }
+      } else {
+        lastGiftClaimSettlement = { status: GIFT_ENTRY_STATUS.REFUSED, reason: bound.reason };
+        restorePendingGiftClaim(giftIntent);
+      }
+    }
     state.authPhase = "idle";
 
     // 실제 인증이 성공한 뒤에만 탄생 연출이 돈다(A-292 번호 2). 연출은 성공 사실을
@@ -843,6 +1060,8 @@ async function openPiggy() {
       setScene("hatch");
     }
   } catch (error) {
+    // [A-579 Lane G] 새 Piggy 에 claim 을 시도하기 전에 끝났다 — Gift intent 는 사라지지 않는다.
+    if (giftIntent && !giftAttempted) restorePendingGiftClaim(giftIntent);
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
     recordSafeError("open", error);
@@ -854,12 +1073,214 @@ async function openPiggy() {
 // 옛 renderBirth() 는 이 조건일 때 Open 버튼 자체를 숨겨서 막았다(2026-09-02 주소 3개
 // 사고). 그 버튼 껍질은 지웠지만 판정 로직은 그대로 여기로 옮긴다 — Try again 이 이
 // 조건에 걸리면 새로 만들지 않고 기존 Check Piggy 복구로 대신한다.
-function startPiggyOpen() {
-  if (readCredential() || hasReceivedPiggy() || state.address) {
-    checkPiggy();
-  } else {
-    openPiggy();
+// [A-533 Lane A · R1] **새 기기에서는 만들기 전에 먼저 찾는다.**
+// 로컬 표시(credential·받음·주소)가 하나도 없으면 첫 시도는 되찾기(checkPiggy — 생성 폴백 0)다.
+// 되찾기가 실패하면(취소 포함 — iOS 는 "없음"과 "취소"를 같은 NotAllowedError 로 준다) 기존
+// "Couldn't find your Piggy." 화면으로 가고, 사용자가 **다시 여는 것**이 새 Piggy 를 만드는 명시적 선택이다.
+// 모호한 실패 뒤 자동 생성 0. 같은 기기 반복 동작(A-389)은 그대로. 이것이 기기 간 동기화를 풀지는 않는다.
+// 비용: 완전 신규 사용자도 만들기 전에 시스템 패스키 시트를 한 번 본다 — Owner 결정 항목(A-533 gate).
+const FRESH_DEVICE_RECOVERY_FIRST = true;
+
+// [A-554] Gate B 추가 Piggy 순번 목록 복원 — **제품 기본값은 없음**. 원격 저장소 위치/조회
+// 키/프라이버시/인증(rate-limit)은 진짜 OWNER_GATE 다 — 여기서 고르지 않는다. adapter 가
+// null 인 한 checkPiggy 는 오늘과 정확히 같다(추가 requestPrf 0, 전역 debug hook 0).
+// 실제 원격 어댑터를 연결하는 것은 이 상수 값을 바꾸는 별도의 명시적 빌드 결정이다.
+const INDEX_BACKUP_ADAPTER = null;
+
+// [A-559 PHASE S1 / A-562 LANE C] Gift claim 진입 seam. **제품 기본값은 여전히 없음(unavailable)**.
+// A-562 는 A-559 의 durable-record blocker를 "레코드 원천 아키텍처 없음"에서 "검증된 배포/설정
+// 없음"으로 좁히려고 읽기 전용 온체인 adapter(`gift-record-source.js`)를 새로 추가했지만, 그
+// adapter 를 실제로 켜려면 **검증된 chain scope + 검증된(배포된) GiftPiggyUSDC contract address**
+// 가 둘 다 있어야 한다 — 둘 다 아직 없다(GiftPiggyUSDC.sol 은 로컬 forge 증명일 뿐, 어디에도
+// 배포되지 않았다). `GIFT_RECORD_CONFIG` 가 그 자리다: 지금은 `null` 이고, 값이 채워지기 전까지는
+// 아래 `GIFT_RECORD_SOURCE` 는 오늘과 똑같이 `null` 이다. 값을 채우는 것은 A-554
+// `INDEX_BACKUP_ADAPTER`/이 파일의 기존 `GIFT_RECORD_SOURCE = null` 과 같은 패턴의, 별도의 명시적
+// 빌드 결정이다(실제 배포 주소가 생긴 뒤에만). 전역 debug hook 은 만들지 않는다(예:
+// window.__arasoGiftRecordSource 같은 것 0) — 값을 바꾸려면 이 줄 자체를 고친다.
+const GIFT_RECORD_CONFIG = null; // e.g. { chainScope: "monad-testnet", contractAddress: "0x..." } — 검증된 값이 생기기 전까지 null.
+
+// `publicClient` 는 이 파일이 이미 만들어 쓰는 그 하나뿐이다(§397) — 이 seam 을 위해 새 client/
+// RPC/provider 를 고르지 않는다. 체인이 실제로 맞는지는 adapter 자신이 매 호출마다
+// `scopeForChainId(client.chain.id)` 로 다시 확인한다(main.js 의 다른 fail-closed 체인 바인딩과
+// 같은 패턴, §3821) — 여기서는 설정값의 모양만 본다.
+const GIFT_RECORD_SOURCE = GIFT_RECORD_CONFIG
+  ? createGiftRecordSource({
+      client: publicClient,
+      chainScope: GIFT_RECORD_CONFIG.chainScope,
+      contractAddress: GIFT_RECORD_CONFIG.contractAddress,
+    })
+  : null;
+
+// [A-579 Lane G] Gift commit→claim **제출** seam — 제품 기본값은 없음(null). 켜려면 검증된 chain transport
+// (읽기 + 서명된 raw tx 전달) 와 **별도의** 보내는 쪽 gas allowance(deliver 만) 와 배포된 escrow 주소, 측정된
+// gas units 가 모두 있어야 한다 — 아무것도 아직 없다(GiftPiggyUSDC 미배포, A-577 은 로컬 fork 증거). 레코드
+// 원천(GIFT_RECORD_CONFIG)이 없으면 이것도 만들지 않는다. debug hook 0 — 값을 바꾸려면 이 줄 자체를 고친다.
+const GIFT_CLAIM_SUBMIT_CONFIG = null; // e.g. { chain, gasDelivery, chainScope, escrowAddress, gasUnits, safety, readFeeInputs } — 검증된 값이 생기기 전까지 null.
+const GIFT_CLAIM_SUBMITTER = GIFT_CLAIM_SUBMIT_CONFIG && GIFT_RECORD_CONFIG
+  ? createGiftClaimSubmitter(GIFT_CLAIM_SUBMIT_CONFIG)
+  : null;
+
+// 부팅 시 fragment 를 한 번 읽어 두는 자리(아래 boot 코드, 첫 render() 앞)만 채우는 순수 메모리
+// 값 — state 도 아니고 저장도 하지 않는다(새로고침/재부팅에 남지 않는다). 실제 claim 시도는
+// [A-579] 새 Gift Piggy 를 만드는 흐름(openPiggy·beginGiftPiggy)이 시작에서 꺼내(takePendingGiftClaim) 그 새
+// Piggy 에 묶은 뒤에만 settleBoundGiftClaim() 이 한다 — 이 선언 자체는 아무 것도 하지 않는다.
+let pendingGiftClaim = null;
+// 테스트 관찰용(렌더되지 않는다) — settleBoundGiftClaim() 이 마지막으로 낸 결과.
+let lastGiftClaimSettlement = null;
+
+// [A-579 Lane G] Gift intent 는 **새 Piggy 를 만드는 흐름의 시작**에서 꺼낸다(메모리만 — 저장 0). 흐름이
+// 끝까지 가서 그 새 Piggy 에 묶이면 소비되고, 못 가면 restorePendingGiftClaim 으로 되돌린다.
+// 되찾기(checkPiggy)·평범한 +Piggy(beginAddPiggy) 는 이것을 꺼내지 않는다 — 기존 Piggy 에 Gift 가 붙는 길 0.
+function takePendingGiftClaim() {
+  const claim = pendingGiftClaim;
+  pendingGiftClaim = null;
+  return claim;
+}
+function restorePendingGiftClaim(claim) {
+  if (claim && !pendingGiftClaim) pendingGiftClaim = claim;
+}
+// 흐름 시작 **전에** 이 기기가 이미 아는 Piggy 주소들 — 여기 있던 주소에는 Gift 가 묶이지 않는다.
+function knownPiggyAddresses() {
+  const out = new Set();
+  if (state.address) out.add(String(state.address).toLowerCase());
+  for (const p of indexedResidents()) if (p?.address) out.add(String(p.address).toLowerCase());
+  try {
+    for (const p of loadRegistry(safeLocalStorage(), secondJourneyScope()).registry.piggies) if (p?.address) out.add(String(p.address).toLowerCase());
+  } catch {
+    /* 레지스트리 읽기 실패 — 색인·state 만으로 판단 */
   }
+  return out;
+}
+
+// [A-559 PHASE S1 / A-563 LANE B] fragment 의 토큰이 브라우저 히스토리·주소창에 남지 않게 한다.
+// `history`/`location` 이 없으면(예: DOM 없는 하네스) 조용히 건너뛴다 — 실패해도 claim 시도 자체를
+// 막지 않는다. [A-563] 부팅 시 pendingGiftClaim 을 메모리에 채우는 그 즉시(아래 boot 코드) 딱 한 번
+// 불린다 — 인증 성공을 기다리지 않는다: 인증 전까지 원문 토큰이 주소창에 그대로 떠 있는 잔여
+// 노출 구간을 없애는 것이 이 레인의 목적이다. pendingGiftClaim 자체(메모리 값)는 이 호출로 지워지지
+// 않는다 — 새 Gift Piggy 흐름(settleBoundGiftClaim)이 인증 성공 뒤 여전히 그 값을 쓴다.
+function stripClaimFragmentFromUrl() {
+  try {
+    if (typeof history !== "undefined" && typeof location !== "undefined") {
+      history.replaceState(null, "", location.pathname + location.search);
+    }
+  } catch {
+    /* no-op */
+  }
+}
+
+// [A-559 PHASE S1 → A-579 Lane G] **새로 만든 Gift Piggy 에 묶인(binding) 뒤에만** 부른다 — openPiggy(첫 탄생)
+// 와 beginGiftPiggy(모델 A 새 Piggy) 두 곳뿐이다. checkPiggy(되찾기)·beginAddPiggy(평범한 +Piggy)는 부르지 않는다
+// (A-566 오배정 수리). binding 은 gift-claim-entry.js 가 만든 것이어야 하고(isGiftBinding), 받는 주소는
+// 호출자가 넘기는 값이 아니라 **binding 의 주소**다. record source 가
+// 없으면(제품 기본값 — GIFT_RECORD_SOURCE = null) beginGiftClaim() 자신이 정확히
+// `record_source_unavailable` 을 돌려준다 — 여기서 그 경우를 앞질러 삼키지 않는다, 그래야
+// "어떤 정확한 이유로 멈췄는지"가 호출자/테스트에 그대로 보인다. 어느 경우든 Piggy 생성/인증은
+// 이미 호출자가 끝냈고, 이 함수는 그 위에 claim 만 덧붙인다. 실패해도 방금 만든 Piggy 를
+// 되돌리지 않는다(claim 은 부가 행동이다).
+//
+// 이 함수는 **새 서명자를 세우지 않는다** — 방금 그 인증이 이미 활성화한 서명자(activeAccount)를
+// 그대로 쓴다. `proveFundingTargetControl`(위, §3780)은 그 helper **전용으로** 짧은 서명자를 열고
+// 끝내지만, 여기는 그 패턴이 아니다: 이미 살아 있는, 사용자의 "정상" 서명자를 대신 쓰는 것이므로
+// 그 세션을 여기서 끝내면(endSignerSession) 이 claim 시도 하나가 사용자의 방금 성공한 인증을
+// 조용히 무효화하는 부작용이 생긴다 — 필요 없이 죽이지 않는다(카드 지시, 결정 문서화). 그 서명자의
+// 수명은 여전히 A-556 정책(5분 절대 만료·app-idle·Piggy 전환·beforeunload)이 그대로 관리한다.
+async function settleBoundGiftClaim(binding, claim) {
+  // [A-579 Lane G] 이 모듈이 만든 binding 만, 그 binding 의 giftId 와 같은 intent 만.
+  if (!isGiftBinding(binding) || !claim || claim.giftId !== binding.giftId) return { status: "binding_invalid" };
+  const recipientAddress = binding.recipientAddress;
+  // [A-563 LANE B] 여기서 다시 stripClaimFragmentFromUrl() 을 부르지 않는다 — pendingGiftClaim 은
+  // 오직 부팅 코드(아래, readClaimFragment 직후) 한 곳에서만 채워지고, 그 코드가 채우는 그 자리에서
+  // 이미 한 번 불렀다(이 함수가 호출되는 시점엔 주소창이 이미 지워져 있다). 여기서 또 부르면
+  // replaceState 가 같은 부팅에 필요 없이 두 번 실행된다 — 그래서 뺀다(카드 지시: "twice needlessly"
+  // 금지). malformed/no-fragment 경로는 pendingGiftClaim 이 애초에 null 이라 이 함수가 끝까지
+  // 오지도 않는다 — strip 자체가 없다(변경 없음).
+  const opened = await beginGiftClaim({
+    pending: { status: GIFT_ENTRY_STATUS.READY, giftId: claim.giftId, token: claim.token },
+    recordSource: GIFT_RECORD_SOURCE,
+    now: new Date().toISOString(),
+  });
+  if (opened.status !== GIFT_ENTRY_STATUS.READY) {
+    // openClaimLink (inside beginGiftClaim) cannot yet tell "the same recipient reopening
+    // their own already-claimed link" from "a stranger replaying it" — it doesn't know who
+    // is asking. Now that a real recipient identity exists, make exactly that one further
+    // distinction against the record it already fetched, reusing settleClaim's own
+    // ALREADY_CLAIMED_BY_SAME constant (no new status invented).
+    if (opened.status === GIFT_ENTRY_STATUS.REFUSED
+      && opened.reason === CLAIM_RESULT.ALREADY_CLAIMED_BY_OTHER
+      && opened.record
+      && String(opened.record.recipientAddress || "").toLowerCase() === String(recipientAddress || "").toLowerCase()) {
+      return { status: GIFT_ENTRY_STATUS.REFUSED, reason: CLAIM_RESULT.ALREADY_CLAIMED_BY_SAME, giftId: opened.giftId };
+    }
+    return opened;
+  }
+  if (!activeAccount) return { status: "no_active_signer" };
+  // [A-579 Lane G] 살아 있는 서명자가 바로 그 새 Gift Piggy 여야 한다 — 다른 Piggy 의 서명자로 대신 받지 않는다.
+  if (String(activeAccount.address || "").toLowerCase() !== String(recipientAddress).toLowerCase()) return { status: "signer_not_bound" };
+  const claimedAt = new Date().toISOString();
+  let signature;
+  try {
+    // [A-560 PHASE 4] 값 필드는 opened.record.value(레코드 자신, `openClaimLink`가 이미 검증해
+    // 돌려준 것)에서만 온다 — 화면/URL/다른 어떤 입력도 여기서 금액을 대신하지 못한다. 레거시
+    // identity-only Gift는 opened.record.value === null 이라 문장이 A-495/A-499 와 그대로 같다.
+    signature = await activeAccount.signMessage({
+      message: claimStatement({
+        giftId: opened.record.giftId,
+        chainId: opened.record.chainId,
+        senderAddress: opened.record.senderAddress,
+        recipientAddress,
+        claimTokenHash: opened.record.claimTokenHash,
+        claimedAt,
+        tokenAddress: opened.record.value?.tokenAddress ?? null,
+        decimals: opened.record.value?.decimals ?? null,
+        amountAtomic: opened.record.value?.amountAtomic ?? null,
+      }),
+    });
+  } catch {
+    return { status: "sign_failed" };
+  }
+  const settled = await settleGiftClaim({
+    record: opened.record,
+    token: claim.token,
+    recipientAddress,
+    signature,
+    recover: ({ message, signature: sig }) => recoverMessageAddress({ message, signature: sig }),
+    claimedAt,
+  });
+  // [A-560 PHASE 4] 영수증/테스트가 identity_claimed_no_value_moved 와 value_transferred(그리고
+  // 이 카드가 더한 legacy/pending)를 섞지 않도록, 진짜 트랜스퍼 영수증이 없으면 절대
+  // value_transferred 라 말하지 않는 라벨을 결과에 얹는다(`giftValueLabel`은 record.transfer의
+  // 실제 상태만 본다 — 여기서 지어내지 않는다).
+  if (!settled || !settled.record) return settled;
+  if (settled.result !== CLAIM_RESULT.OK) return { ...settled, valueLabel: giftValueLabel(settled.record) };
+  // [A-579 Lane G] 온체인 commit→claim 제출. 제품 기본값(GIFT_CLAIM_SUBMITTER = null)은 정확한 이유로 멈춘다 —
+  // value_pending 그대로(가짜 transfer 0). 제출기가 있으면 그 새 Gift Piggy 서명자로만, binding 주소로만 낸다.
+  if (!GIFT_CLAIM_SUBMITTER) {
+    return { ...settled, valueLabel: giftValueLabel(settled.record), valueSubmission: { status: "claim_transport_unavailable" } };
+  }
+  let submission;
+  try {
+    submission = await GIFT_CLAIM_SUBMITTER.submit({ binding, record: settled.record, token: claim.token, account: activeAccount });
+  } catch {
+    submission = { status: "claim_submit_failed" };
+  }
+  const record = submission?.record || settled.record;
+  return {
+    ...settled,
+    record,
+    valueLabel: giftValueLabel(record),
+    valueSubmission: { status: submission?.status || "claim_submit_failed", ...(submission?.txHashes ? { txHashes: submission.txHashes } : {}) },
+  };
+}
+
+async function startPiggyOpen() {
+  if (readCredential() || hasReceivedPiggy() || state.address) {
+    return checkPiggy();
+  }
+  if (FRESH_DEVICE_RECOVERY_FIRST && !state.freshRecoveryTried) {
+    state.freshRecoveryTried = true;          // 세션 메모리만 — 저장하지 않는다
+    return checkPiggy();
+  }
+  return openPiggy();
 }
 
 async function checkPiggy() {
@@ -868,7 +1289,7 @@ async function checkPiggy() {
     state.authCancelled = false;
     // [A-407-f] 같은 기준 — 되찾기도 여기서는 불가능하다는 사실만.
     setScene("birth", "Not from here.", "Piggy can only be found again in the real app.");
-    return;
+    return { ok: false, cancelled: false, reason: "rp_not_allowed" };
   }
 
   // 생성 폴백 없음 — 이 버튼은 절대 새 패스키를 만들지 않는다.
@@ -878,6 +1299,36 @@ async function checkPiggy() {
 
   try {
     await recoverPiggy();
+    // [A-579 Lane G] 되찾은 Piggy 는 **이미 있던** Piggy 다 — Gift 는 새 Gift Piggy 에만 묶인다(A-567 canon).
+    // 그래서 여기서는 claim 을 시도하지 않고 pendingGiftClaim 을 건드리지도 않는다(메모리에 그대로 남는다).
+    // [A-554] R1(위 recoverPiggy) 이 이미 성공했다 — 그 위에서만, adapter 가 실제로 설정된
+    // 경우에만 추가 Piggy 순번 목록 복원을 시도한다. adapter 가 없으면(제품 기본값) 이 블록은
+    // 통째로 건너뛴다 — 오늘까지의 정확한 동작, 추가 requestPrf 0. 실패해도 위의 root 복구
+    // 성공을 무효로 만들지 않는다(best-effort, 조용히 삼킨다 — 사용자 화면·씬은 그대로).
+    if (INDEX_BACKUP_ADAPTER) {
+      try {
+        await recoverProductList({
+          adapter: INDEX_BACKUP_ADAPTER,
+          storage: safeLocalStorage(),
+          chainId: secondJourneyScope().chainId,
+          rootCredential: state.credential,
+          requestPrf: (credential, prfSalt) => requestPrf(credential, { prfSalt }),
+          // beginAddPiggy 와 같은 유일한 raw-signer 경로(activateSigningSession)를 그대로
+          // 쓴다 — main.js 에 새 createSecp256k1SigningSession 호출부를 만들지 않는다
+          // (local-test-hook-guard.mjs 의 "raw private-key signer 신설 0" 불변식).
+          deriveAddress: (prfOutput) => activateSigningSession(prfOutput, { persistAddress: false }).address,
+          locks: webLocks(),
+        });
+      } catch {
+        /* best-effort — 루트 Piggy 는 이미 되찾았다 */
+      } finally {
+        // 후보마다 activateSigningSession 을 거치므로 방금 recoverPiggy() 가 세운 루트 활성
+        // 세션이 마지막 후보의 것으로 바뀌어 있을 수 있다 — beginAddPiggy 와 같은 이유로
+        // (통제 증명 뒤 세션은 쓸 데가 없다) 여기서 통째로 정리한다. Gate C 는 활성 세션이
+        // 없으면 다음 money 동작에서 새로 Face ID 를 묻는다 — 틀린 서명자로 조용히 남는 것보다 안전하다.
+        endActiveSession();
+      }
+    }
     noteRecoverSuccess();
     localStorage.setItem(PIGGY_RECEIVED_KEY, "1");
     state.authPhase = "idle";
@@ -888,6 +1339,7 @@ async function checkPiggy() {
     } else {
       setScene("sendstay", "Piggy is home.", "Same place, same Piggy.");
     }
+    return { ok: true };
   } catch (error) {
     noteRecoverFailure();
     state.authPhase = "idle";
@@ -897,6 +1349,7 @@ async function checkPiggy() {
     // 기술 에러 문자열(formatError) 대신 이 짧은 문구를 쓴다. 두 버튼 다시 보이는 것은
     // authPhase="idle" 복귀만으로 충분(§actions checking 게이트, 새로 disabled 걸지 않음).
     setScene("birth", "Chog could not find Piggy here.", "Couldn't find your Piggy.");
+    return { ok: false, cancelled: state.authCancelled };
   }
 }
 
@@ -1029,7 +1482,7 @@ async function waitForSuccess(hash) {
   return receipt.status === "success" ? receipt : null;
 }
 
-async function settleSend({ before, address, grantTxHash = "", depositTxHash, depositReceipt, redeemTxHash, shmonReceived }) {
+async function settleSend({ before, address, piggyId = "", grantTxHash = "", depositTxHash, depositReceipt, redeemTxHash, shmonReceived }) {
   const redeemReceipt = await waitForSuccess(redeemTxHash);
   if (!redeemReceipt) {
     return { outcome: "failed", reason: "redeem-unconfirmed-or-reverted", receipt: null };
@@ -1066,6 +1519,9 @@ async function settleSend({ before, address, grantTxHash = "", depositTxHash, de
       shmonAfterRedeem,
       status: redeemReceipt.status,
       at: Date.now(),
+      // [A-544] settle 안에서 UI 상태를 다시 읽지 않는다 — 호출자가 이미 넘긴 값만, 그리고
+      // 그 값이 빈칸 아닌 문자열일 때만 receipt 에 적는다.
+      ...(typeof piggyId === "string" && piggyId.trim() !== "" ? { piggyId: piggyId.trim() } : {}),
     },
   };
 }
@@ -1166,6 +1622,8 @@ async function sendPiggy() {
   if (sendInFlight) return;
   if (readSendPending()) {
     // 새 문구 0 — 기존 「확인 중」 표현을 그대로 쓴다(finishTrip 의 미확정 경로와 같은 말).
+    // [A-556] A-555 S4 가 여기 넣었던 fail-safe endActiveSession() 호출은 없앴다 — Owner
+    // 정책 위반(행동마다 즉시 세션 종료)이었다. 서명자는 자기 5분 절대 타이머로만 끝난다.
     setScene("sendstay", "Piggy is home.", "Confirmation is still catching up.");
     return;
   }
@@ -1177,6 +1635,11 @@ async function sendPiggy() {
       settling = true;
     });
   } finally {
+    // [A-556] A-555 S4 가 여기 넣었던 무조건 endActiveSession() 호출은 없앴다 — Owner
+    // 은행앱식 정책(같은 Piggy 5분 안 재송금은 Face ID 재요구 0)이 "행동마다 즉시 종료"를
+    // 대체한다. 서명자는 이제 activateSigningSession 이 세운 5분 절대 타이머
+    // (armSignerExpiry)로만 끝나고, sendPiggyOnce 안의 touchAppSession() 은 app-idle 만
+    // 새로 잰다 — 서명자 만료를 늘리지 않는다.
     if (!settling) {
       sendInFlight = false;
       syncSendButton(); // 안전 실패(broadcast 전)면 풀리고, pending 이 남았으면 잠긴 채
@@ -1236,6 +1699,13 @@ async function sendPiggyOnce(markSettling) {
   }
 
   const account = activeAccount;
+  // [A-544] 이 실행이 어느 Piggy 것인지 **여기서, 비동기 tx/settle 체인 전에** 한 번만
+  // 고정한다 — historyPiggyId/현재 HISTORY 선택/나중 UI 상태를 owner 로 쓰지 않는다
+  // (§receipt owner 계약). `typeof` 가드는 이 함수 소스를 텍스트로 잘라 격리 스텁 위에서
+  // 도는 기존 테스트(send-lock.mjs/send-error-boundary.mjs — indexedPiggyId 를 주입하지
+  // 않는다, A-544 allowed_files 밖이라 고칠 수 없다)를 깨지 않기 위해서다. 실제 앱에서는
+  // indexedPiggyId 가 이 파일 안에 항상 선언돼 있어 분기 없이 매번 잡힌다.
+  const executingPiggyId = typeof indexedPiggyId === "function" ? indexedPiggyId(account.address) : "";
   let plan;
   try {
     plan = await simulateSend(account);
@@ -1254,7 +1724,9 @@ async function sendPiggyOnce(markSettling) {
   setScene("away", "Piggy went out.", "Can go out once, up to $5.");
 
   try {
-    touchSession();
+    // [A-556] 송금이라는 "평범한 인앱 활동" 은 app-idle 만 새로 잰다 — 서명자 5분 절대
+    // 만료(armSignerExpiry)는 여기서 늘어나지 않는다(카드 §2 절대 캡).
+    touchAppSession();
     const walletClient = createWalletClient({
       account,
       chain: MONAD_TESTNET,
@@ -1297,6 +1769,7 @@ async function sendPiggyOnce(markSettling) {
     settleSend({
       before: plan.before,
       address: account.address,
+      piggyId: executingPiggyId,
       grantTxHash: state.grantTxHash,
       depositTxHash,
       depositReceipt,
@@ -1341,6 +1814,11 @@ function createEmptySecondJourney() {
     devPreview: false, // [A-360 §7] DEV 전용 — production 진입 0(아래 window.__arasoScene)
     flow: null, // 마지막 runSecondJourney() 결과
     mockReceipt: null, // makeMockReceipt() 출력 — 메모리만, 실제 receipts 에 안 감
+  // [A-472] **애니메이션 완료 ≠ 실행 확정.** 재생이 끝났다는 것과 이번 심부름이 끝났다는 것은
+  // 다른 사실이다. First 가 trip.outcome 으로 그 둘을 가르는 것과 같은 개념을 메모리에만 둔다
+  // (저장 스키마 증가 0 · First 의 SEND_PENDING_KEY/TRIP_CLOSED_KEY 는 건드리지 않는다).
+  //   null = 아직 나가지도 않음 · "pending" = 나갔고 미확정 · "done" · "failed"
+  outcome: null,
     awayLine: "",
     // [A-405/A-405-a] seedStage: "A" | "B" | "done" — 최초 seed(관심0/이벤트0)만 A→B
     // 두 세트를 거친다. 반복 방문·edit interests 는 항상 "done"(단일 bounded 세트).
@@ -1363,6 +1841,11 @@ function createEmptySecondJourney() {
     // 본편 반복 none). render() 가 이 큐를 sceneTimeout 으로 한 걸음씩 넘긴다.
     note: null,
     noteQueue: [],
+    // [A-579] 메모리만(draft 에 안 감). decisionEventId = 이번 check 한 번의 판정 이벤트 id.
+    // returnRead = 그 이벤트를 위해 읽은 read-only 관측 — 다른 이벤트에 재사용하지 않는다.
+    decisionEventId: null,
+    decisionEventSeq: 0,
+    returnRead: null,
   };
 }
 
@@ -1376,6 +1859,11 @@ const EXPLORE_NOTE_MS = 1200;
 // [Owner 2026-09-19 "체킹 먼저, 두 옵션은 살짝 늦게 — 진짜 가능한 걸 보여줘야 하니 늦어도 된다"]
 // 저장 직후 candidates 카드는 checking… 만 먼저 보이고 후보 행은 이 뒤에 뜬다. 값 = INFERRED.
 const CANDIDATES_REVEAL_MS = 1500;
+// [A-579] 판정 Receipt 의 selection.source — 코드 경로 이름이다(사람이 골랐다는 주장이 아니다).
+const SECOND_DECISION_SELECTION_SOURCE = "app_ui_jit_answer";
+// [A-579] 판정 시점 read-only 관측 설정. null = 읽지 않는다 → 판정은 unknown(never nah).
+// 켜려면 { rpcUrl } 과 CSP connect-src 가 함께 필요하다 — RELEASE/HUMAN 게이트, 이 카드 밖.
+const RETURN_EVIDENCE_READ_CONFIG = null;
 
 // domainState 가 진짜 "한 번도 Explore 선택을 한 적 없는" 상태인지 본다. 새 persisted
 // 필드를 추가하지 않고 이미 있는 두 필드로만 유추한다:
@@ -1433,6 +1921,40 @@ function computeExploreDisplayErrands(sj) {
 function secondJourneyScope() {
   return { accountId: state.address || "", chainId: "monad-testnet" };
 }
+// [A-475] 사용자가 **쓰다 만 것**만 남긴다. 배운 것(관심·선호)은 위 도메인 상태 몫이다.
+// 권한·READY·판정 캐시·금융 결과는 저장하지 않는다 — 복귀 후 항상 새로 계산한다.
+function currentSecondDraft() {
+  const sj = state.secondJourney;
+  return {
+    step: sj.step,
+    seedStage: sj.seedStage,
+    selectedIds: sj.selectedIds,
+    pickedCandidateId: sj.pickedCandidateId,
+    chosenDestinationId: sj.chosenDestinationId,
+    jitAnswer: typeof sj.jitAnswer === "string" ? sj.jitAnswer : null,
+    amount: typeof sj.amount === "string" ? sj.amount : "",
+    savedAt: new Date().toISOString(),
+  };
+}
+
+// 입력·선택이 바뀔 때마다 바로 쓴다 — beforeunload 하나에 기대지 않는다(그 이벤트는 놓칠 수 있다).
+// Send 를 누른 뒤에는 저장하지 않는다: 그때부터는 draft 가 아니라 실행 lifecycle 이다.
+function persistSecondDraft() {
+  const sj = state.secondJourney;
+  if (sj.outcome) return;                        // 이미 보냈다 → draft 아님
+  if (import.meta.env.DEV && sj.devPreview === true) return;  // fixture 는 남기지 않는다
+  saveSecondJourneyDraft(safeLocalStorage(), secondJourneyScope(), currentSecondDraft());
+}
+
+// Send 로 들어간 순간·완료·리셋에서 draft 를 닫는다. 이후 reload 가 draft 로 되돌리지 않는다.
+function dropSecondDraft() {
+  clearSecondJourneyDraft(safeLocalStorage(), secondJourneyScope());
+}
+
+function safeLocalStorage() {
+  try { return window.localStorage; } catch { return null; }
+}
+
 
 function ensureSecondJourneyDomainState() {
   const sj = state.secondJourney;
@@ -1442,6 +1964,27 @@ function ensureSecondJourneyDomainState() {
   sj.domainState = validScope.error ? createSecondJourneyState(scope) : loadSecondJourneyState(localStorage, scope).state;
   sj.persisted = !validScope.error;
   return sj.domainState;
+}
+
+// [A-499 Lane R] 실제 실행 증거가 붙은 영수증만 영속된다.
+// 판정은 전부 bridge 가 한다 — 여기서 조건을 다시 쓰면 두 개의 진실이 생긴다.
+function commitSecondReceiptIfReal() {
+  const sj = state.secondJourney;
+  // `executionReceipt` 는 **실행 어댑터가 채울 자리**다. 오늘은 비어 있다.
+  // `mockReceipt` 는 여기 절대 들어오지 않는다.
+  const candidate = sj?.executionReceipt;
+  if (!candidate) return;
+  const scope = secondJourneyScope();
+  if (validatePersistenceScope(scope).error) return;   // 미인증 — 저장하지 않는다
+  const out = commitSecondJourneyReceipt({
+    state: sj.domainState,
+    receipt: candidate,
+    scope,
+    storage: safeLocalStorage(),
+    context: { devPreview: sj.devPreview === true || import.meta.env.DEV },
+  });
+  // 거절되면 bridge 가 **같은 state 객체를 그대로** 돌려준다 — 부분 변이 0.
+  sj.domainState = out.state;
 }
 
 function persistSecondJourneyDomainState() {
@@ -1517,6 +2060,8 @@ function recomputeSecondJourneyFlow() {
   const devPreview = import.meta.env.DEV && sj.devPreview === true;
   const chosenId = sj.chosenDestinationId;
   const amountCheck = validateSecondAmount(sj.amount);
+  // [A-579] 이번 판정 이벤트(같은 check · 같은 답)를 위해 읽은 관측만 쓴다. 다른 이벤트의 읽기는 버린다.
+  const read = sj.returnRead && sj.decisionEventId && sj.returnRead.eventId === sj.decisionEventId && sj.returnRead.answer === sj.jitAnswer ? sj.returnRead : null;
   sj.flow = runSecondJourney({
     selectionKind,
     selectedErrandIds: ids,
@@ -1542,6 +2087,13 @@ function recomputeSecondJourneyFlow() {
       },
     },
     nowMs: Date.now(),
+    // [A-579] 판정은 판정 시점 관측으로만 한다(기록된 A-571 읽기는 provenance 일 뿐).
+    requireFreshReturnObservation: true,
+    decisionEventId: sj.decisionEventId || undefined,
+    selectionSource: SECOND_DECISION_SELECTION_SOURCE,
+    returnObservations: read?.observation ? { [read.jobId]: read.observation } : undefined,
+    returnReadStatus: read ? read.status : "not_read",
+    decisionAt: read?.at,
   });
 }
 
@@ -1647,6 +2199,8 @@ function openSecondJourneyExplore() {
   sj.chogSay = null;
   sj.note = null;
   sj.noteQueue = [];
+  sj.decisionEventId = null;   // [A-579] 이전 판정 이벤트/읽기를 이어받지 않는다
+  sj.returnRead = null;
   // [A-411-p] 옛 A-405-a 회귀동작("관심 있으면 곧장 candidates")을 Owner 확정으로 대체한다:
   // Second 를 이 세션에서 아직 한 번도 끝내지 않았으면 관심이 저장돼 있어도 항상 시작
   // Paper(interests)로 돌아간다("Second 이탈은 항상 시작점", A-411-n §1/A-411-p 대조).
@@ -1656,14 +2210,55 @@ function openSecondJourneyExplore() {
   const resumeAtCandidates = state.secondJourneyCompletedOnce === true && sj.selectedIds.length > 0;
   sj.step = resumeAtCandidates ? "candidates" : "interests";
   sj.seedStage = sj.selectedIds.length ? "done" : inferSeedStage(domainState);
+  // [A-475] 여기까지가 "처음부터" 이고, 아래가 "쓰다 만 자리로". Send 전에 나갔던 흔적이 있으면
+  // 그 카드로 돌려준다 — 다시 입력하게 만들지 않는다. 단 **권한과 READY 는 복원하지 않는다**:
+  // 아래 recomputeSecondJourneyFlow() 가 지금 조건으로 새로 계산한다(저장된 draft 가 문을 열지 않는다).
+  applySecondDraftIfAny(sj, domainState);
   recomputeSecondJourneyFlow();
   setScene("explore", "", "");
+}
+
+// 저장해 둔 draft 를 지금 화면에 되살린다. 되살릴 수 없으면 **조용히 버리고 처음부터** —
+// 빈 카드나 무한 복귀보다 낫다(stale destination·옛 버전·다른 계정 전부 여기서 걸러진다).
+function applySecondDraftIfAny(sj, domainState) {
+  if (import.meta.env.DEV && sj.devPreview === true) return null;
+  const { draft } = loadSecondJourneyDraft(safeLocalStorage(), secondJourneyScope());
+  if (!draft) return null;
+  const displayedIds = computeExploreDisplayErrands({ ...sj, seedStage: draft.seedStage, selectedIds: draft.selectedIds })
+    .map((errand) => errand.id);
+  const known = new Set(buildVisibleLaneChoices().map((choice) => choice.id));
+  const selected = (draft.selectedIds || []).filter((id) => known.has(id));
+
+  sj.seedStage = draft.seedStage || sj.seedStage;
+  if (selected.length) sj.selectedIds = selected;
+  sj.amount = draft.amount || "";
+  sj.jitAnswer = draft.jitAnswer;
+
+  // destination 이 더 이상 유효하지 않으면 그 값만 버리고 후보 단계로 안전하게 내린다.
+  const destinations = (sj.flow?.destinations || []).map((d) => d.id);
+  const destOk = (id) => !id || destinations.length === 0 || destinations.includes(id);
+  sj.pickedCandidateId = destOk(draft.pickedCandidateId) ? draft.pickedCandidateId : null;
+  sj.chosenDestinationId = destOk(draft.chosenDestinationId) ? draft.chosenDestinationId : null;
+
+  let step = draft.step;
+  if (step === "readiness" && !sj.chosenDestinationId) step = "candidates";
+  if (step === "jit" && !sj.pickedCandidateId) step = "candidates";
+  if (step === "candidates" && !sj.selectedIds.length) step = "interests";
+  if (step === "interests" && !displayedIds.length) step = "interests";
+  sj.step = step;
+  return step;
 }
 
 // [A-405] "표시 id == 선택가능 id" 를 여기서도 다시 지킨다 — DOM 에서 온 ids 를 그대로
 // 믿지 않고, 지금 실제로 그려졌어야 할 bounded 세트(computeExploreDisplayErrands)에
 // 없는 id 는 버린다. 빠르게 두 번 저장을 눌러도(예: 재렌더 전에 큐잉된 옛 클릭) 화면에
 // 없던 항목이 섞여 들어가지 않는다.
+// [A-472] 같은 화면에서 같은 선택을 두 번 저장해도 한 번만 학습되게 하는 멱등 키.
+// 랜덤 키였을 때는 중복 가드가 통과돼 preference 가 재강화되고 seed 유추까지 어긋났다.
+function exploreEventId(action, seedStage, ids) {
+  return `explore-${action}-${seedStage || "a"}-${[...ids].sort().join(",")}`;
+}
+
 function handleExploreSave(ids) {
   const sj = state.secondJourney;
   const domainState = ensureSecondJourneyDomainState();
@@ -1679,14 +2274,26 @@ function handleExploreSave(ids) {
 
   const kind = selectedErrands.length === 1 ? "one" : "multi";
   const selection = { kind, errandIds: selectedErrands.map((errand) => errand.id), errands: selectedErrands };
-  const preferenceUpdate = { preference: domainState.preference, delta: {}, signal: kind, fixedPersonalityLabel: null };
+  // [A-472] 여기까지 오던 preferenceUpdate 는 `preference: domainState.preference` 로 **기존 값을 그대로
+  // 되먹이고** 있었다 — 계산(job-selector)과 저장(second-journey-state)이 만나지 않는 이중 배관이었다.
+  // 이제 실제 학습을 통과시킨다. evidence 는 **지금 화면에 실제로 보여준 세트(displayed)** 뿐이다.
+  const preferenceUpdate = updatePreference(domainState.preference, {
+    kind,
+    selectedJobs: selectedErrands,
+    offeredJobs: displayed,
+    offeredCount: displayed.length,
+    setIndex: sj.seedStage === "b" ? 2 : 1,
+  });
   const stateUpdate = applyExploreSelection(domainState, selection, preferenceUpdate, {
-    eventId: `explore-save-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    // [A-472] 멱등 키 — 랜덤이면 second-journey-state 의 중복 가드가 무력해지고
+    // processedEventIds 오염이 inferSeedStage 까지 번진다(같은 저장 두 번 = seed 단계 어긋남).
+    eventId: exploreEventId("save", sj.seedStage, safeIds),
     now: new Date().toISOString(),
   });
   sj.domainState = stateUpdate.state;
   persistSecondJourneyDomainState();
   sj.selectedIds = selection.errandIds;
+  persistSecondDraft();   // [A-475] 고른 즉시 남긴다
   // one/multi(= 지금 보여준 세트 전체를 골랐으면 그게 곧 "all") 선택은 A 든 B 든 seed
   // 시퀀스를 벗어나 기존 bounded preference + checking 흐름으로 합류한다(§A-405-a 3).
   sj.seedStage = "done";
@@ -1719,9 +2326,17 @@ function handleExploreNone() {
   const sj = state.secondJourney;
   const domainState = ensureSecondJourneyDomainState();
   const selection = { kind: "none", errandIds: [], errands: [] };
-  const preferenceUpdate = { preference: domainState.preference, delta: {}, signal: "none", fixedPersonalityLabel: null };
+  // [A-472] none 도 같은 규율 — 보여준 세트만 dislike evidence 로 쓴다(안 보여준 항목 0).
+  const displayedNone = computeExploreDisplayErrands(sj);
+  const preferenceUpdate = updatePreference(domainState.preference, {
+    kind: "none",
+    selectedJobs: [],
+    offeredJobs: displayedNone,
+    offeredCount: displayedNone.length,
+    setIndex: sj.seedStage === "b" ? 2 : 1,
+  });
   const stateUpdate = applyExploreSelection(domainState, selection, preferenceUpdate, {
-    eventId: `explore-none-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    eventId: exploreEventId("none", sj.seedStage, displayedNone.map((e) => e.id)),
     now: new Date().toISOString(),
   });
   sj.domainState = stateUpdate.state;
@@ -1794,6 +2409,7 @@ function recordSecondPick(event, destinationId) {
 function handleCandidatePick(destinationId) {
   const sj = state.secondJourney;
   sj.pickedCandidateId = destinationId;
+  persistSecondDraft();   // [A-475] 후보 선택 즉시
   recordSecondPick("pick", destinationId);
   render();
 }
@@ -1809,15 +2425,58 @@ function handleCandidateCheck(destinationId) {
   const sj = state.secondJourney;
   sj.chosenDestinationId = destinationId;
   sj.jitAnswer = null;
+  sj.decisionEventSeq += 1;   // [A-579] 판정 이벤트 하나 — 같은 ms 안의 두 check 도 서로 다른 이벤트다
+  sj.decisionEventId = `check:${destinationId}:${new Date().toISOString()}:${sj.decisionEventSeq}`;
+  sj.returnRead = null;
   sj.step = "readiness";
+  persistSecondDraft();   // [A-475] 금액 카드로 넘어온 자리
   recomputeSecondJourneyFlow();
   render();
 }
 
 function handleJitAnswer(value) {
   state.secondJourney.jitAnswer = value;
+  persistSecondDraft();   // [A-475] 사용자가 실제로 답한 입력만 남긴다
   recomputeSecondJourneyFlow();
   render();
+  recordSecondJourneyDecisionForAnswer().catch(() => {});   // [A-579] 화면 변화 0 — 기록 실패가 화면을 막지 않는다
+}
+
+// [A-579] 답 하나 = 판정 하나. 이 이벤트를 위해 read-only 로 읽고(설정이 없으면 읽지 않고
+// unknown), 그 판정의 action-0 Receipt 를 기존 Second Journey 저장소(같은 키 · receipts 배열)에
+// 남긴다. render() 를 부르지 않는다 — 보이는 것은 바뀌지 않는다. 권한·READY 를 만들지 않는다.
+async function recordSecondJourneyDecisionForAnswer() {
+  const sj = state.secondJourney;
+  if (import.meta.env.DEV && sj.devPreview === true) return;   // fixture 는 남기지 않는다
+  if (!sj.jitAnswer || !sj.chosenDestinationId || sj.outcome) return;
+  // draft 로 되돌아온 readiness 에서 다시 답한 경우 — check 이벤트 id 가 없으면 이 답이 이벤트다.
+  if (!sj.decisionEventId) {
+    sj.decisionEventSeq += 1;
+    sj.decisionEventId = `answer:${sj.chosenDestinationId}:${new Date().toISOString()}:${sj.decisionEventSeq}`;
+  }
+  const eventId = sj.decisionEventId;
+  const answer = sj.jitAnswer;
+  const destinationId = sj.chosenDestinationId;
+  const chosen = (sj.flow?.destinations || []).find((d) => d.id === destinationId) || null;
+  const jobId = chosen?.boundJobId || null;
+  if (!jobId) return;   // 실제 Job 에 묶인 목적지만 판정 Receipt 를 낸다
+  const read = RETURN_EVIDENCE_READ_CONFIG
+    ? await readReturnObservation(jobId, {
+      rpcUrl: RETURN_EVIDENCE_READ_CONFIG.rpcUrl,
+      fetchImpl: (...args) => fetch(...args),
+      now: () => new Date().toISOString(),
+    })
+    : { observation: null, status: "reader_unconfigured" };
+  // 읽는 동안 사용자가 다른 곳으로 갔으면 이 판정은 버린다(늦게 온 읽기가 새 이벤트에 붙지 않는다).
+  if (state.secondJourney !== sj || sj.decisionEventId !== eventId || sj.jitAnswer !== answer || sj.chosenDestinationId !== destinationId) return;
+  sj.returnRead = { eventId, answer, jobId, observation: read.observation || null, status: read.status, at: new Date().toISOString() };
+  recomputeSecondJourneyFlow();
+  const receipt = sj.flow?.decisionReceipt;
+  if (!receipt) return;
+  const out = recordSecondJourneyDecisionReceipt(ensureSecondJourneyDomainState(), receipt);
+  if (!out.recorded) return;
+  sj.domainState = out.state;
+  persistSecondJourneyDomainState();
 }
 
 // [A-377 §6] 한 걸음만 되돌린다, 선택은 보존한다 — readiness 단계 안에는 실제로 두
@@ -1827,6 +2486,7 @@ function handleJitAnswer(value) {
 function handleReadinessBack() {
   const sj = state.secondJourney;
   const hasJitQuestion = (sj.flow?.jitQuestions?.length || 0) > 0;
+  sj.returnRead = null;   // [A-579] 다음 답은 새로 읽는다
   if (hasJitQuestion && sj.jitAnswer) {
     sj.jitAnswer = null;
     recomputeSecondJourneyFlow();
@@ -1837,6 +2497,7 @@ function handleReadinessBack() {
   sj.chosenDestinationId = null;
   sj.pickedCandidateId = null;
   sj.jitAnswer = null;
+  sj.decisionEventId = null;   // [A-579] check 이벤트가 끝났다
   recomputeSecondJourneyFlow();
   render();
 }
@@ -1893,6 +2554,11 @@ function handleSecondSend() {
     (!needsAmount || validateSecondAmount(sj.amount).valid);
   if (!canSend) return;
   sj.mockReceipt = sj.flow.mockReceipt;
+  // [A-472] 여기가 First 의 writeSendPending 에 대응하는 자리다 — 게이트를 통과한 유일한 지점.
+  // 아직 확정이 아니다. 확정은 아래 Away 에서 결과를 읽은 뒤에만 선다.
+  sj.outcome = "pending";
+  // [A-475] 여기서부터는 draft 가 아니라 실행 lifecycle 이다. 되돌아가 재전송시키지 않는다.
+  dropSecondDraft();
   // [A-419 Source evidence] 승인 발화표에 Away 설명문이 없다 — DRAFT 조합을 앱에 넣지
   // 않는다(위 secondAway 렌더 주석 참고). 문구는 비우고 표시 자체를 없앤다. 승인된
   // 문장이 오면 여기서 세운다.
@@ -1930,6 +2596,7 @@ function wireExploreCard() {
   const amountInput = document.querySelector("#secondAmount");
   amountInput?.addEventListener("input", () => {
     sj.amount = amountInput.value;
+    persistSecondDraft();   // [A-475] 타이핑 즉시 — beforeunload 에 기대지 않는다
     recomputeSecondJourneyFlow();
     updateSecondJourneyReadinessUI();
   });
@@ -1983,6 +2650,20 @@ function renderSecondAway() {
   `;
 }
 
+// [A-472] Second 의 결과 확정. **재생이 아니라 결과가 이 값을 정한다.**
+// 지금 Second 는 실제 체인 실행이 없으므로(J2-6 미개시) 확정 근거는 DEV mock 뿐이다 —
+// mock 이 실행됐다고 말하지 않는 한 done 이 되지 않는다(fail-closed).
+// 실제 adapter 가 붙으면 이 함수 하나에 실 결과를 물리면 된다.
+function settleSecondOutcome(forced = null) {
+  const sj = state.secondJourney;
+  if (forced) { sj.outcome = forced; return sj.outcome; }
+  if (sj.outcome === "done" || sj.outcome === "failed") return sj.outcome;
+  const receipt = sj.mockReceipt;
+  const confirmed = !!receipt && receipt.attempted === true && receipt.decidedStatus === "JOB_READY";
+  sj.outcome = confirmed ? "done" : "failed";
+  return sj.outcome;
+}
+
 function mountSecondAway() {
   const chogRoot = document.querySelector("#chogHome");
   const boardFit = fitHomeBoard();
@@ -2009,6 +2690,9 @@ function mountSecondAway() {
   });
   const advanceToReturn = () => {
     if (advanced || stopped || token !== sceneToken) return;
+    // [A-472] 재생이 끝났다는 이유만으로 귀환하지 않는다. 확정된 결과일 때만 통과시킨다 —
+    // 세 호출 지점(자산 실패·재생 완료·캔버스 없음)을 여기 한 곳에서 막는다.
+    if (state.secondJourney.outcome !== "done") return;
     advanced = true;
     // [A-421] Second 단수 귀환도 First 성공 경로(finishTrip §974-978)와 같은 표를 세운다 —
     // chogHomeMarkupForReturn() 이 이 표만 보고 알람 발화 span 을 붙이고,
@@ -2051,11 +2735,18 @@ function mountSecondAway() {
     schedule: (step) => runSceneFrames(step),
     reduced,
     onStatus: (st) => {
+      // [A-472] 자산 로딩 실패는 **그림을 못 불렀다**는 뜻이지 심부름이 끝났다는 뜻이 아니다.
+      // 예전에는 성공 완료와 같은 함수로 전진해 Return 을 열었고, 거기서 Home 을 누르면
+      // 완료가 영속됐다 — 실패가 성공으로 굳는 경로였다. 이제 조용한 Home 으로 접는다
+      // (First 의 finishTrip 실패 분기와 같은 모양).
       if (st.phase === "asset-missing" || st.phase === "asset-error") {
-        advanceToReturn();
+        settleSecondOutcome("failed");
         return;
       }
-      if (st.phase === "complete" || st.phase === "reduced-final") advanceToReturn();
+      if (st.phase === "complete" || st.phase === "reduced-final") {
+        settleSecondOutcome();      // 재생 끝 → 그제서야 결과를 읽는다
+        advanceToReturn();          // 확정(done)일 때만 통과한다
+      }
     },
   });
   onSceneTeardown(() => playback.stop());
@@ -2091,9 +2782,20 @@ function mountSecondReturn() {
   // 세운다(이 세션의 동작 변경 0) — 저장만 갈라낸다.
   const finishSecondJourney = ({ persist = false } = {}) => {
     if (!valid()) return;
+    // [A-472] 성공했을 때만 바퀴가 닫힌다(First finishTrip 과 같은 원칙).
+    // 실패로 들어온 Return 에서 Home 을 눌러도 완료가 영속되지 않는다.
+    const confirmed = state.secondJourney.outcome === "done";
+    const persistNow = persist && confirmed;
+    // [A-499 Lane R] 결과가 실제로 정해진 자리에서만 영수증을 넘긴다.
+    // 이 훅은 **문을 열어 두는 것**이지 J2-6 이 끝났다는 뜻이 아니다 — 오늘 second 흐름의
+    // 유일한 영수증은 DEV mock 이고, bridge 의 첫 관문이 그걸 거절한다(동작 변경 0).
+    // 문은 실행 어댑터가 evidenceClass/executionMode(live 면 txHash)를 채울 때 비로소 열린다.
+    // 원시 recordSecondJourneyReceipt 를 직접 부르지 않는다 — 게이트를 건너뛰게 된다.
+    commitSecondReceiptIfReal();
     state.secondCompletedThisSession = true;
-    if (persist) markResultMotionSeen(); // Second: 사용자가 Home 을 눌러 실제로 끝낸 자리
-    if (persist) {
+    if (persistNow) markResultMotionSeen();
+    dropSecondDraft();   // [A-475] 끝난 바퀴의 draft 는 남기지 않는다 // Second: 사용자가 Home 을 눌러 실제로 끝낸 자리
+    if (persistNow) {
       try {
         localStorage.setItem(SECOND_JOURNEY_CLOSED_KEY, "1");
       } catch {
@@ -2285,6 +2987,9 @@ function resetLocalTest() {
   endActiveSession();
   state.credential = null;
   state.address = "";
+  state.selectedPiggy = null;
+  state.addPiggy = null;
+  state.pendingNamePiggyId = null;
   state.mark = "";
   state.txHash = "";
   state.grantTxHash = "";
@@ -2305,6 +3010,8 @@ function resetLocalTest() {
   // 끝냈다"는 판정이 남아 candidates 직행/자동 quiet→Paper 억제가 잘못 이어진다.
   state.secondJourneyCompletedOnce = false;
   state.secondCompletedThisSession = false;
+  state.secondJourney.outcome = null;
+  dropSecondDraft();
   state.resultMotionSeen = false;
   state.homeQuietForExplore = false;
   noteRecoverSuccess(); // 실패 카운터도 초기화 — 리셋 후엔 복구를 다시 처음부터 시도한다
@@ -2336,8 +3043,17 @@ function formatMoney(wei) {
 }
 
 // File Box 3칸: settle() receipt 위에서만 그린다. 화면은 숫자를 따로 계산하지 않는다.
+// [A-553 Lane B] add_money 영수증은 BigInt sent/gas/after 필드가 아예 없다 — 옛 필드로
+// formatEther()를 부르면 던진다(§lane_b/AUDIT.md 버그 3). **기존에 있던 라벨만** 보수적으로
+// 쓴다(Tx/Block) — 새 문구·새 라벨 0.
 function receiptRows(receipt) {
   if (!receipt) return [];
+  if (receipt.kind === "add_money") {
+    return [
+      { label: "Tx", value: shortHash(receipt.txHash) },
+      { label: "Block", value: receipt.blockNumber ? String(receipt.blockNumber) : "Unknown" },
+    ];
+  }
   return [
     { label: "Sent", value: formatMoney(receipt.sent) },
     { label: "Cost", value: formatMoney(receipt.gas) },
@@ -2349,8 +3065,10 @@ function receiptRows(receipt) {
 
 // 숫자 대조 한 줄 — 화면이 그린 숫자가 실제로 남은 것과 맞는지 사용자가 직접 본다.
 // expected = 나가기 전 − 보낸 것 − 든 비용. 이것과 실제 잔고가 다르면 그 자체가 알림이다.
+// add_money 영수증에는 이 계산에 쓰는 before/sent/gas/after 자체가 없다 — 빈 줄로 닫는다.
 function receiptCheck(receipt) {
   if (!receipt) return "";
+  if (receipt.kind === "add_money") return "";
   const expected = receipt.before - receipt.sent - receipt.gas;
   const off = receipt.after - expected;
   // 실제로 남은 값은 위 Left 칸에 이미 있다 — 여기서는 기대값과, 그것과 어긋난 만큼만 말한다.
@@ -3190,6 +3908,380 @@ function homeMoneyAwayNow() {
 // 두 줄만 켠다(같은 shMON 잔액을 소유(엔트러스트)와 상태(지금 밖) 양쪽으로 중복합산하지
 // 않는다, canon "with 와 away 가 같은 돈이면 중복합산행 0"). 클릭 가능한 한 줄만
 // #homePaperMoneyRow 로 Piggy 상세를 연다.
+// [A-484 Lane C] Third Journey 임시 UI — 레지스트리에서 **읽기만** 한다.
+// 돈을 쓰지 않는다. 레지스트리가 비어 있으면 기존 한 마리 화면이 **그대로** 나간다.
+function secondPiggyRegistrySnapshot() {
+  const scope = secondJourneyScope();
+  if (!scope.accountId) return { piggies: [], totals: null };
+  const { registry } = loadRegistry(safeLocalStorage(), scope);
+  let piggies = registry.piggies;
+  if (piggies.length === 0) {
+    // 한 마리 시절 사용자를 잃지 않는다 — 저장된 정체성이 있으면 그것 하나로 읽는다.
+    const { piggy } = migrateSinglePiggy({ address: state.address || "", name: state.piggyName || "" });
+    piggies = piggy ? [piggy] : [];
+  }
+  return { piggies, totals: projectRegistryTotals({ piggies }) };
+}
+
+// 지금 오른쪽 HISTORY 가 어느 Piggy 의 기록을 보고 있나. null 이면 기존(전체) 동작이다.
+function selectedHistoryPiggyId() {
+  return state.historyPiggyId || null;
+}
+
+// [A-495 Lane B] 지금 실제로 쓸 수 있는 충전 어댑터.
+// **비어 있다** — 제공자가 정해지기 전까지 어떤 방법도 available 이 아니다(A-494 조사).
+// 제공자가 생기면 **여기에만** 한 줄 추가하면 된다. 화면은 이 상태를 그대로 읽는다.
+const FUNDING_ADAPTERS = [];
+
+function fundingMethods() {
+  return listFundingMethods({ adapters: FUNDING_ADAPTERS });
+}
+
+// [A-510 Stream D-core] 어떤 Piggy 가 하려던 일에 **그 Piggy 자기 가용 돈(at home)** 이 모자랄 때,
+// 쫓아내지 않고 그 자리에서 **바로 그 Piggy 를 받는 곳으로** 같은 충전을 연다.
+// 받는 Piggy 는 **호출자가 넘긴다** — 여기서 두 번째 선택 상태를 만들지 않는다(여럿일 때는 Stream B 의 selectedPiggy).
+// 이력: A-495 의 `beginFundingForShortfall` 은 **Home 부족분**(give some)을 기준으로 했다 — A-508 에서 제거.
+// 지금 이 함수를 부르는 제품 UI 는 아직 없다(충전 진입 화면은 WAIT_DESIGN_MERGE) — 이 runtime
+// seam 자체는 callable/testable 이다(funding-runtime-core.mjs).
+function pieceHeld(piggy, asset) {
+  return (piggy?.assets || []).find((a) => a && a.symbol === asset) || null;
+}
+
+// [A-555 S2] 이 충전 목적지가 **살아 있는 서명자가 실제로 증명한** Piggy 주소인지 검사하는
+// 단일 nonce 소비 집합. 재생(같은 proof 두 번) 은 여기서 막힌다 — funding-runtime-core.mjs 가 이
+// 계약을 잰다. 지금 이 함수의 제품 호출자는 없다(충전 진입 화면은 WAIT_DESIGN_MERGE) — 하지만
+// state.activeSignerAddress 같은 주변 상태를 이 목적으로 읽지 않는다(S4 가 매 행동 끝에 세션을
+// 닫으므로 그 값은 보통 비어 있다 — 여기 게이트는 그것과 무관하게 자기 proof 만 본다).
+const consumedFundingProofNonces = new Set();
+
+// [A-553 Lane A] 도착 체인은 더 이상 숨은 monad-mainnet 리터럴이 아니다 — **지금 이 세션의
+// 실제 실행 체인**(secondJourneyScope().chainId)으로 FundingContext 를 만들고, 그 chainId 를
+// 그대로 fundingRequestForShortfall 에 넘긴다. 체인이 런타임과 다르거나 자산이 allowlist 에
+// 없으면(chain_scope_mismatch/asset_id_chain_mismatch) 여기서 열리지 않는다 — ack 로 넘어갈 수
+// 있는 문이 아니다.
+// [A-555 S2] `controlProof` 없이는 열리지 않는다 — 캐스팅 전에 verifyFundingTargetProof 로
+// **서명으로 증명된** 목적지인지부터 본다. 호출자가 넘긴 signerAddress 문자열이나 로컬
+// 인덱스 주소는 그 자체로 증명이 아니다(lane_b coordinator 교정) — 통과 못 하면 항상 같은
+// 이유(funding_target_unproven) 하나로 닫힌다.
+async function beginFundingForPiggy(piggy, { action = null, amount, asset = "USDC", controlProof = null } = {}) {
+  if (!piggy || typeof piggy.id !== "string") return { opened: false, reason: "missing_piggy" };
+  if (typeof piggy.address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(piggy.address)) return { opened: false, reason: "missing_piggy_address" };
+  const runtimeChainId = secondJourneyScope().chainId;
+  const proofCheck = await verifyFundingTargetProof(controlProof, {
+    piggy,
+    chainId: runtimeChainId,
+    now: Date.now,
+    recover: ({ message, signature }) => recoverMessageAddress({ message, signature }),
+    consumedNonces: consumedFundingProofNonces,
+  });
+  if (!proofCheck.ok) return { opened: false, reason: "funding_target_unproven" };
+  const { context, error: contextError } = buildFundingContext({
+    chainId: runtimeChainId,
+    runtimeChainId,
+    assetSymbol: asset,
+    targetPiggyId: piggy.id,
+    targetAddress: piggy.address,
+  });
+  if (contextError) return { opened: false, reason: contextError };
+  // 그 Piggy 가 가진 것 중 **밖에 안 나간** 부분만 쓸 수 있다.
+  const available = piggy.location === "home" ? (pieceHeld(piggy, asset)?.quantity ?? "0") : "0";
+  const check = checkIntentFunding({ piggyId: piggy.id, action, amount, asset, decimals: context.decimals, available });
+  if (check.error) return { opened: false, reason: check.error };
+  if (check.sufficient) return { opened: false, reason: "sufficient" };
+  const request = fundingRequestForShortfall(check, { target: piggy.address, chain: context.chainId });
+  if (!request) return { opened: false, reason: "shortfall_request_failed" };
+  state.funding = {
+    state: FUNDING_STATE.CHOOSING,
+    shortfall: check.shortfall,
+    asset,
+    targetPiggyId: piggy.id,
+    context,
+    // **원래 의도를 통째로 들고 간다.**
+    resumeAfter: request.resumeAfter,
+    request,
+  };
+  return { opened: true, shortfall: check.shortfall };
+}
+
+// [A-553 Lane C] 확인된 충전 하나가 재생(replay)돼도 재조정을 두 번 세지 않게 하는 세션 내
+// 중복-방지 집합 — funding-reconcile.js reconcileConfirmedFunding() 의 seenEvidenceKeys.
+const fundingReconcileSeenKeys = new Set();
+
+// 확인-이후 절반을 따로 뺀 이유: settleFunding 자체는 항상 동기적인 계약(resumeAfterFunding)을
+// 지키고, 이 함수만 비동기 읽기/저장을 한다 — 테스트가 이 부분만 잘라 재조정 계약을 잰다.
+// **이 함수는 실제 잰 잔액만큼만** 레지스트리를 바꾼다. 절대 권한을 만들지 않는다(호출부 없음).
+async function settleConfirmedFundingEvidence({ applied, context, client, storage, now, priceQuote }) {
+  if (!context) return { ok: false, reason: "missing_funding_context" };
+  const runtimeChainId = secondJourneyScope().chainId;
+  const { ok: contextOk, error: contextError } = validateFundingContext(context, { runtimeChainId });
+  if (!contextOk) return { ok: false, reason: contextError };
+
+  const receipt = applied.receipt;
+  const nowValue = typeof now === "function" ? now() : now;
+  const typedReceipt = {
+    kind: "add_money",
+    chainId: context.chainId,
+    token: context.assetId,
+    amount: receipt.resolvedAmount,
+    txHash: receipt.txHash,
+    at: receipt.at || nowValue,
+    ...(context.targetPiggyId ? { piggyId: context.targetPiggyId } : {}),
+  };
+  // 증거(영수증)는 잔액 재조정의 성패와 무관하게 항상 남긴다. 같은 tx 재생은
+  // receipt-codec.js receiptIdentityKey 를 쓰는 rememberReceipt 의 dedupe 가 그대로 막는다 —
+  // 여기서 새 판정을 만들지 않는다.
+  rememberReceipt(typedReceipt);
+
+  // **client 의 체인이 이 충전의 체인과 같을 때만** 재조정한다 — 다르면 fail-closed UNKNOWN.
+  const clientScope = scopeForChainId(client?.chain?.id);
+  if (clientScope !== context.chainId) {
+    return { ok: false, reason: "client_chain_mismatch", state: FUNDING_STATE.UNKNOWN, receiptPersisted: true };
+  }
+  const scope = secondJourneyScope();
+  if (!scope.accountId) return { ok: false, reason: "no_account_scope", receiptPersisted: true };
+
+  const { registry } = loadRegistry(storage, scope);
+  const evidence = {
+    chainId: context.chainId,
+    tokenAddress: context.assetId,
+    targetAddress: context.targetAddress,
+    targetPiggyId: context.targetPiggyId,
+    txHash: receipt.txHash,
+    decimals: context.decimals,
+    assetSymbol: context.assetSymbol,
+  };
+  const outcome = await reconcileConfirmedFunding({
+    evidence,
+    piggies: registry.piggies,
+    client,
+    runtimeChainId: context.chainId,
+    priceQuote,
+    now: nowValue,
+    seenEvidenceKeys: fundingReconcileSeenKeys,
+  });
+  if (!outcome.ok) return { ok: false, reason: outcome.reason, receiptPersisted: true };
+
+  // **측정된 값으로만** 저장한다 — 요청/도착 금액을 더해 쓰지 않는다.
+  const saved = saveRegistry(storage, scope, { ...registry, piggies: outcome.piggies });
+  return {
+    ok: saved.saved,
+    reason: saved.saved ? null : saved.error,
+    receiptPersisted: true,
+    valuationKnown: outcome.valuationKnown,
+  };
+}
+
+// 충전 결과 반영 → 원래 의도로 복귀. **권한은 주지 않는다.**
+// [A-553 Lane C] 확인된(CONFIRMED + creditsTarget) 결과가 오면 typed 영수증을 남기고, 주입된
+// 읽기전용 client 로 재조정한다(settleConfirmedFundingEvidence). 기본 client/storage 는 이 앱의
+// 실제 publicClient/localStorage 다 — 테스트는 둘 다 주입해서 바꾼다(프로덕션 디버그 훅 0).
+async function settleFunding(result, {
+  available,
+  client = publicClient,
+  storage = safeLocalStorage(),
+  now = () => new Date().toISOString(),
+  priceQuote = null,
+} = {}) {
+  const f = state.funding;
+  if (!f) return null;
+  const applied = f.intent ? applyFundingResult(f.intent, result) : { state: result?.status ?? FUNDING_STATE.FAILED, creditsTarget: false };
+  const resumed = resumeAfterFunding(applied, f.resumeAfter, {
+    available,
+    decimals: f.resumeAfter?.decimals,
+  });
+  let reconcile = null;
+  if (applied.state === FUNDING_STATE.CONFIRMED && applied.creditsTarget === true && applied.receipt) {
+    reconcile = await settleConfirmedFundingEvidence({ applied, context: f.context, client, storage, now, priceQuote });
+  }
+  // 충전이 끝나도 **원래 행동은 자기 권한을 새로 받아야 한다** — 여기서 권한을 만들지 않는다.
+  state.funding = { ...f, state: applied.state, lastResult: applied, resumed, reconcile };
+  return resumed;
+}
+
+// [A-492 Lane A] 실제 승인 경계. **기존 Mera/passkey 경로를 그대로 쓴다** — 두 번째 인증 스택 0.
+// 성공하면 **이 행동 하나에만 묶인 봉투**가 생기고, 실패/취소는 아무것도 바꾸지 않는다.
+const consumedPermissionNonces = new Set();
+
+// [A-555 S2] `beginFundingForPiggy` 가 요구하는 controlProof 를 **실제로 만드는** 유일한 자리.
+// 지금 이 함수를 부르는 제품 UI/캐시는 없다(충전 진입 화면 자체가 WAIT_DESIGN_MERGE) — 이
+// helper 는 그 문이 열릴 때를 위한 callable/testable seam이다. authRequestForPiggy 로 이
+// Piggy 자신의 locator 만 묻고, 파생된 서명자로 짧게 살아있는 세션을 하나 만들어 challenge 에
+// 서명한 뒤 **바로** 그 세션을 끝낸다 — 이 함수가 끝나면 어떤 살아있는 서명 세션도 남기지 않는다.
+async function proveFundingTargetControl(piggy) {
+  const { request, error: authError } = authRequestForPiggy(piggy);
+  if (authError) return { proof: null, error: authError };
+  let address;
+  try {
+    const result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
+    ({ address } = activateSigningSession(result.prfOutput, { persistAddress: false }));
+  } catch (error) {
+    return { proof: null, error: "passkey_declined" };
+  }
+  try {
+    // [A-558 Lane B] 파생된 서명자 주소가 **이 Piggy 주소와 같을 때만** 서명한다 — 이미
+    // requestMoneyPermission 이 쓰는 것과 같은 Gate C 결합(bindSigner)이다. 다르면 challenge에
+    // 서명조차 하지 않고 그 자리에서 멈춘다(신호=signer_mismatch 등 bindSigner 의 안정된
+    // reason 하나 — 새 오라클을 만들지 않는다). downstream verifyFundingTargetProof 의 서명
+    // 복구 검사는 그대로 남는다(방어의 두 번째 층, 대체가 아니라 심층방어).
+    const bound = bindSigner(piggy, address);
+    if (!bound.ok) return { proof: null, error: bound.reason };
+    const chainId = secondJourneyScope().chainId;
+    const issuedAt = Date.now();
+    const nonce = toHex(crypto.getRandomValues(new Uint8Array(16)));
+    const { challenge, error: challengeError } = fundingTargetChallenge({ chainId, piggyId: piggy.id, address, issuedAt, nonce });
+    if (challengeError) return { proof: null, error: challengeError };
+    const signature = await activeAccount.signMessage({ message: challenge });
+    return { proof: { chainId, piggyId: piggy.id, address, issuedAt, nonce, signature }, error: null };
+  } catch (error) {
+    return { proof: null, error: "sign_failed" };
+  } finally {
+    // [A-558 Lane B 교정] 증명이 나왔든 실패했든 이 짧은 서명자는 여기서 끝낸다 — 하지만
+    // **서명자만** 끝낸다(endSignerSession), 앱 전체(endActiveSession = 서명자 + 10분 app-idle
+    // 타이머)를 끝내지 않는다. A-556 정책의 결이 그렇다: "충전 목적지 증명 하나"는 앱을
+    // 잠그는 사건(Piggy 전환·app-idle 만료·beforeunload·dev reset)이 아니다 — 다른 이유로
+    // 이미 살아 있던 앱-idle 카운트를 이 증명 호출이 조용히 리셋/정지시키면 안 된다. (이전:
+    // A-555 가 만들 때부터 A-556 PHASE 2 가 이 자리를 검토했지만 그때는 "바꾸지 않는다"였다 —
+    // A-558 카드가 그 판단을 다시 열어 여기서 뒤집는다.) 이 함수 자신이 부르는
+    // activateSigningSession() 은 항상 먼저 endActiveSession() 을 불러 **이전에 살아 있던
+    // 서명자**(다른 Piggy/행동 것일 수 있다)를 이미 갈아치운다 — 그건 이 helper 가 아니라
+    // activateSigningSession 의 기존 계약이고 A-558 범위 밖이다. 즉 "선택된 Piggy에 이미 살아
+    // 있던 서명자가 있었다면 이 helper 호출이 그것을 대체한다"는 그대로 남는다 — 받아들일 수
+    // 있는 fail-safe다(다음 돈 행동은 다시 인증하면 된다).
+    endSignerSession();
+  }
+}
+
+// [A-512 Gate C] 고른 Piggy 의 locator 로만 묻고, 파생된 서명자가 **그 Piggy 주소와 같을 때만** 봉투를 만든다.
+// 전역 `state.credential` 로 떨어지지 않는다. 한 마리 경로의 저장 scope(state.address)도 바꾸지 않는다.
+function selectedRegistryPiggy() {
+  const sel = state.selectedPiggy;
+  if (!sel) return null;
+  return moneyPiggiesSnapshot().piggies.find((p) => p.id === sel.id) || null;
+}
+
+async function requestMoneyPermission() {
+  const intent = state.moneyIntent;
+  if (!intent || intent.status !== PERMISSION_STATE.AWAITING) return;
+  const fail = (reason) => {
+    state.moneyIntent = { ...intent, status: PERMISSION_STATE.FAILED, permissionError: reason, permission: null };
+    render();
+  };
+  const sel = state.selectedPiggy;
+  if (!sel || sel.id !== intent.piggyId) return fail("selected_piggy_mismatch");
+  const { request, error: authError } = authRequestForPiggy(selectedRegistryPiggy());
+  if (authError) return fail(authError);   // locator 없음 → 묻지 않는다(전역 credential 대체 0)
+
+  let verifiedAt = null;
+  let signerAddress = null;
+  try {
+    // 여기서 실제로 Face ID/passkey 가 뜬다. 이 호출 없이는 봉투가 만들어지지 않는다.
+    const result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
+    ({ address: signerAddress } = activateSigningSession(result.prfOutput, { persistAddress: false }));
+    verifiedAt = Date.now();
+  } catch {
+    // 취소/실패 — **돈도 투영도 건드리지 않는다.**
+    const cancelled = cancelPermission("passkey_declined");
+    state.moneyIntent = { ...intent, status: cancelled.state, permission: null };
+    render();
+    return;
+  }
+  // 기다리는 동안 선택이 바뀌었거나, 파생된 서명자가 고른 Piggy 가 아니면 **그 서명자를 버린다.**
+  const bound = state.selectedPiggy === sel ? bindSigner(sel, signerAddress) : { ok: false, reason: "selection_changed" };
+  if (!bound.ok) {
+    endActiveSession();
+    return fail(bound.reason);
+  }
+  const at = new Date(verifiedAt).toISOString();
+  const base = {
+    piggyId: intent.piggyId,
+    signerAddress: bound.signerAddress,
+    action: intent.action,
+    asset: intent.asset || "USDC",
+    amount: intent.amount,
+    chain: secondJourneyScope().chainId,
+    destination: intent.destination || null,
+    destinationRequired: Boolean(intent.destination),
+  };
+  const { envelope, error } = issuePermission({
+    intent: base,
+    auth: { method: "passkey", verified: true, verifiedAt, credentialId: request.credential.credentialId },
+    nonce: permissionNonce({ ...base, at }),
+    nowMs: verifiedAt,
+  });
+  // 봉투를 만들어 **보관만** 한다. 실행은 별도 단계이며 이 칸에서는 fork 하네스가 증명했다.
+  state.moneyIntent = envelope
+    ? { ...intent, status: PERMISSION_STATE.PERMITTED, permission: envelope }
+    : { ...intent, status: PERMISSION_STATE.FAILED, permissionError: error, permission: null };
+  render();
+}
+
+// 실행 직전 대조. 봉투가 지금 하려는 일과 정확히 같을 때만 통과한다.
+function authorizeMoneyAction(request) {
+  return authorize(state.moneyIntent?.permission ?? null, request, {
+    nowMs: Date.now(),
+    consumedNonces: consumedPermissionNonces,
+    // [A-512] 지금 고른 Piggy 와 살아 있는 서명자 — 봉투와 전부 같아야 한다.
+    context: selectionContext(state.selectedPiggy, activeAccount?.address ?? state.activeSignerAddress),
+  });
+}
+
+// [A-512 Gate C] 고른 Piggy 바꾸기. **다른 Piggy 로 가면 이전 권한이 먼저 죽는다**:
+// 세션 종료 · 쓰지 않은 봉투 폐기(nonce 소비 처리) · 의도/충전 초기화. 그 뒤에야 새 선택이 선다.
+function applyPiggySelection(piggy) {
+  const out = switchSelection(state.selectedPiggy, piggy, { heldEnvelope: state.moneyIntent?.permission ?? null });
+  if (out.error) {
+    // 주소가 없는 Piggy 는 돈 동작의 선택이 될 수 없다 — 이전 권한도 남기지 않는다.
+    endActiveSession();
+    if (state.moneyIntent?.permission?.nonce) consumedPermissionNonces.add(state.moneyIntent.permission.nonce);
+    state.moneyIntent = null;
+    state.funding = null;
+    state.selectedPiggy = null;
+    return out;
+  }
+  if (out.invalidate) {
+    endActiveSession();
+    if (out.revokeNonce) consumedPermissionNonces.add(out.revokeNonce);
+    state.moneyIntent = null;
+    state.funding = null;
+  }
+  state.selectedPiggy = out.selection;
+  return out;
+}
+
+// [A-556 Owner bank-style session policy — supersedes A-533 Lane C · S4] 봉투는 한 번 쓰면
+// 끝이지만(nonce 소비, 재사용 불가), **서명자는 여기서 끝나지 않는다** — 살아 있는 서명자
+// 세션이 남는다고 옛 권한이 되살아나는 건 아니다(카드 §3). 같은 Piggy 로 5분 절대 창 안의
+// 다음 송금은 서명자를 재사용할 수 있고, 그 행동은 여전히 자기 몫의 새 확인/권한을 거친다.
+function consumeMoneyPermission() {
+  return consume(state.moneyIntent?.permission ?? null, consumedPermissionNonces);
+}
+
+// [A-486 Lane B] 지금 고르고 있는 금액/대기 중인 권한 요청을 같은 종이에 그린다.
+// **이 화면 어디에서도 실행 권한이 생기지 않는다** — 최종 승인은 Face ID/passkey 다.
+function moneyIntentMarkup(piggy) {
+  const intent = state.moneyIntent;
+  if (!intent || intent.piggyId !== piggy.id) return "";
+  const held = (piggy.assets || [])[0] || null;
+  // 얼마까지 고를 수 있나 — **그 Piggy 가 든 돈**뿐이다. Home 잔액은 없다(A-510 Stream A).
+  const availability = held?.quantity ?? null;
+  if (availability === null) return "";
+  const choices = amountChoices(availability);
+  const valid = intent.amount !== null && intent.amount !== undefined && intent.amount !== "custom" && Number(intent.amount) > 0;
+  const permissionLine = intent.status === PERMISSION_STATE.AWAITING
+    ? `<p class="homePaper__note">확인이 필요해 — 아직 아무것도 보내지 않았어.</p>
+       <button class="homePaper__records" id="homePermissionApprove" type="button">&gt; Face ID 로 확인</button>`
+    : intent.status === PERMISSION_STATE.PERMITTED
+      ? `<p class="homePaper__note">확인됐어. 이 한 번에만 쓸 수 있어.</p>`
+      : intent.status === PERMISSION_STATE.CANCELLED
+        ? `<p class="homePaper__note">확인을 멈췄어 — 아무것도 바뀌지 않았어.</p>`
+        : "";
+  return `<div class="homePaper__intent">
+    ${amountChoiceMarkup(choices, { selected: intent.amount })}
+    ${confirmButtonMarkup({ enabled: valid && intent.status !== "awaiting_permission" })}
+    ${permissionLine}
+  </div>`;
+}
+
 function homeMoneyBodyMarkup(name) {
   const time = homeTimeNow();
   if (state.homeMoneyStatus === "idle" || state.homeMoneyStatus === "loading") {
@@ -3215,6 +4307,25 @@ function homeMoneyBodyMarkup(name) {
   const awayNow = homeMoneyAwayNow();
   const nativeAmount = formatHomeMoneyAmount(state.homeMoneyNativeWei);
   const shmonAmount = formatHomeMoneyAmount(state.homeMoneyShmonWei);
+
+  // [A-484 Lane C] Piggy 가 둘 이상일 때만 레지스트리 행으로 바꾼다.
+  // 한 마리일 때는 **기존 화면 그대로** 둔다(First/Second 회귀 0).
+  const snapshot = moneyPiggiesSnapshot();
+  if (snapshot.piggies.length > 1) {
+    // [A-510 Stream A] 별도 `at home` 합계 행 0 — `at home` 은 각 Piggy 안의 상태다(A-508).
+    const rows = homeMoneyPiggyRows({
+      totals: snapshot.totals,
+      piggies: snapshot.piggies,
+      selectedPiggyId: selectedHistoryPiggyId(),
+    });
+    // [A-510 Stream A] 고른 Piggy 아래의 give/bring 인라인 동작은 걷어냈다(A-486 이력).
+    const selected = snapshot.piggies.find((p) => p.id === state.selectedPiggy?.id) || null;
+    const intentMarkup = selected ? moneyIntentMarkup(selected) : "";
+    // [A-495 Lane B] 충전이 열려 있으면 그 자리에서 방법을 보여준다(새 종이 0). 받는 곳은 그 Piggy 다.
+    const fundingMarkup = state.funding ? fundingMethodsMarkup(fundingMethods()) : "";
+    return homeMoneyMarkup({ title: "MY MONEY", time, rows, note: homeMoneyTotalsNote(snapshot.totals) }) + intentMarkup + fundingMarkup;
+  }
+
   return homeMoneyMarkup({
     title: "MY MONEY",
     time,
@@ -3276,6 +4387,238 @@ function homePiggyDetailBodyMarkup(name) {
   });
 }
 
+// [A-522 B2a] MY PIGGIES 색인 = **제품 읽기 원천**. 읽어도 서명 세션·권한·잔액·충전·Job·복구 증명이 생기지 않는다.
+// 손상/미증명 줄은 A-520 규칙대로 이미 버려져 온다.
+function indexedResidents() {
+  try { return loadMyPiggiesIndex(safeLocalStorage(), secondJourneyScope().chainId).index.piggies; } catch { return []; }
+}
+
+// Visual projection only. The existing First/Second route still belongs to state.address;
+// HISTORY selection and MY MONEY intent must never silently choose the animated Piggy.
+function currentScenePiggyId() {
+  const address = String(state.address || "").toLowerCase();
+  if (!address) return null;
+  return indexedResidents().find((piggy) => String(piggy.address || "").toLowerCase() === address)?.id
+    || indexedPiggyId(address);
+}
+
+function applyHomeResidentMotionStates(paper) {
+  const residents = indexedResidents();
+  const affectedPiggyId = state.scene === "sendstay" && state.sendCardVisible ? currentScenePiggyId() : null;
+  const states = buildPiggyMotionStateMap(residents, {
+    affectedPiggyId,
+    cue: affectedPiggyId ? PIGGY_MOTION_STATE.WORK : PIGGY_MOTION_STATE.IDLE,
+  });
+  paper.querySelectorAll(".homePaper__card--piggy[data-piggy-id]").forEach((card) => {
+    const projected = piggyMotionStateFromMap(states, card.dataset.piggyId);
+    card.dataset.motionState = projected.state;
+    card.toggleAttribute("data-motion-active", projected.active);
+  });
+}
+
+// MY MONEY 행 = 레지스트리 투영(돈) + 색인(정체성·locator). **돈은 색인에서 오지 않는다** —
+// 색인에만 있는 Piggy 는 평가 없음 = 모름(가짜 $0 0). 순서는 색인 순서.
+function moneyPiggiesSnapshot() {
+  const snap = secondPiggyRegistrySnapshot();
+  const rows = indexedResidents();
+  if (rows.length === 0) return snap;
+  const byId = new Map(snap.piggies.map((p) => [p.id, p]));
+  const merged = [];
+  for (const row of rows) {
+    const base = byId.get(row.id);
+    if (base) {
+      merged.push({ ...base, name: base.name || row.name, address: base.address || row.address, locator: row.locator });
+      byId.delete(row.id);
+    } else {
+      const { piggy } = normalizePiggy({ id: row.id, name: row.name, address: row.address, locator: row.locator, location: "unknown" });
+      if (piggy) merged.push(piggy);
+    }
+  }
+  for (const rest of byId.values()) merged.push(rest);
+  return { piggies: merged, totals: projectRegistryTotals({ piggies: merged }) };
+}
+
+// HOME 주민 카드 — 색인에 둘 이상일 때만. 지금 이 기기의 Piggy(state.address) 만 scene 에서 온 상태를 갖고,
+// 나머지는 **상태를 지어내지 않는다**(빈 줄).
+// [A-540] `recordsEnabled` 일 때만(Home 대시보드, scene sendstay) 카드마다 자기 records
+// entry 를 채운다 — away/explore/secondAway/secondReturn 은 지금까지처럼 records 자체가
+// 없다(§homePadMarkup 아래). count 는 그 Piggy 것만(filterHistory), 다른 Piggy·주인 없는
+// 옛 기록은 절대 섞이지 않는다(A-485 계약 그대로).
+function homeResidents(currentLabel, recordsEnabled) {
+  const rows = indexedResidents();
+  if (rows.length < 2) return null;
+  const here = String(state.address || "").toLowerCase();
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name || "Piggy",
+    label: String(r.address).toLowerCase() === here ? currentLabel : "",
+    recordsEntryMarkup: recordsEnabled
+      ? homePaperRecordsEntryMarkup(filterHistory(state.receipts, r.id).rows.length, r.id)
+      : "",
+  }));
+}
+
+// [A-522] `+ Piggy` 는 Second Journey 가 닫힌 뒤, Home 대시보드의 home 모드에서만.
+function showAddPiggyTab(scene, mode) {
+  return scene === "sendstay" && mode === "home" && state.secondJourneyCompletedOnce === true;
+}
+
+// [A-531 · 모델 A] 추가 Piggy 의 루트 = **첫 Piggy 가 이미 쓰는 그 패스키 하나**.
+// 색인의 첫 Piggy 행 locator 와 저장된 credential 이 **둘 다 있으면 같아야 한다** — 다르면 루트가 모호하므로 멈춘다.
+// 어느 것도 없으면 멈춘다(새 패스키를 만들지 않는다 · "아무 패스키나" 로 떨어지지 않는다).
+// (이력: A-522 에서는 이 자리가 `ADD_PIGGY_AUTH_PROVIDER = null` — 모델 결정 전 비워 둔 자리였다.)
+function modelARootCredential() {
+  if (!state.address) return { credential: null, reason: "missing_root_credential" };
+  const here = String(state.address).toLowerCase();
+  const row = indexedResidents().find((r) => String(r.address).toLowerCase() === here && !r.sequence) || null;
+  const saved = readCredential();
+  const fromIndex = row?.locator?.credentialId ? { credentialId: row.locator.credentialId, ...(row.locator.transports?.length ? { transports: row.locator.transports } : {}) } : null;
+  const fromSaved = saved?.credentialId ? { credentialId: saved.credentialId, ...(Array.isArray(saved.transports) && saved.transports.length ? { transports: saved.transports } : {}) } : null;
+  if (fromIndex && fromSaved && fromIndex.credentialId !== fromSaved.credentialId) return { credential: null, reason: "root_credential_ambiguous" };
+  const credential = fromIndex || fromSaved;
+  return credential ? { credential, reason: null } : { credential: null, reason: "missing_root_credential" };
+}
+
+function webLocks() {
+  try { return globalThis.navigator?.locks ?? null; } catch { return null; }
+}
+
+async function beginAddPiggy() {
+  if (!state.secondJourneyCompletedOnce) return { started: false, reason: "second_journey_not_closed" };
+  if (state.addPiggy?.status === "authenticating") return { started: false, reason: "already_running" };
+  const root = modelARootCredential();
+  if (!root.credential) {
+    state.addPiggy = { status: "failed", reason: root.reason };
+    return { started: false, reason: root.reason };
+  }
+  state.addPiggy = { status: "authenticating" };
+  // [A-579 Lane G] 평범한 +Piggy 는 Gift 를 받지 않는다(A-566 오배정 수리) — pendingGiftClaim 은 그대로 남는다.
+  const out = await runModelAAdmission(root.credential);
+  if (!out.ok) {
+    state.addPiggy = { status: "failed", reason: out.reason };
+    return { started: false, reason: out.reason };
+  }
+  return admitAddedPiggy(out.piggy);
+}
+
+// [A-531 → A-579 Lane G] 모델 A 새 Piggy 입장 — beginAddPiggy 와 beginGiftPiggy 가 함께 쓰는 **하나의** 경로.
+// `onAdmitted(piggy)` 는 입장이 성공했을 때, 탄생용 세션(= 방금 그 새 Piggy 의 서명자)이 끝나기 **전에** 한 번
+// 불린다(Gift 전용 — 평범한 +Piggy 는 넘기지 않는다).
+async function runModelAAdmission(rootCredential, { onAdmitted = null } = {}) {
+  let out;
+  try {
+    out = await admitModelAPiggy({
+      storage: safeLocalStorage(),
+      chainId: secondJourneyScope().chainId,
+      locks: webLocks(),
+      rootCredential,
+      // 고정된 기존 패스키로 **assertion 한 번**. 생성 경로(createPasskeyWithPrfOutput) 를 부르지 않는다.
+      requestPrf: (credential, prfSalt) => requestPrf(credential, { prfSalt }),
+      // 서명자만 세운다 — 첫 Piggy 의 저장 scope(state.address)는 바꾸지 않는다.
+      deriveAddress: (prfOutput) => activateSigningSession(prfOutput, { persistAddress: false }).address,
+    });
+    if (out.ok && typeof onAdmitted === "function") await onAdmitted(out.piggy);
+  } finally {
+    // 탄생용 세션은 통제 증명 뒤 쓸 데가 없다 — 성공이든 실패든 여기서 끝낸다(S4 돈 동작 정책과는 별개).
+    endActiveSession();
+  }
+  return out;
+}
+
+// [A-531] 통제 증명과 함께 색인에 **이미 들어온** 추가 Piggy 를 $0 탄생으로 투영하고 Name it 으로 보낸다.
+// 순서: 소유(색인) 먼저 → 그다음 $0 투영. 투영 저장이 실패하면 돈을 지어내지 않는다 —
+// 색인 행만 남아 MY MONEY 에서 "모름" 으로 보인다(수리 가능한 상태). Hatch 반복 0 · 충전 0.
+function projectBirthUnfunded(piggy) {
+  try {
+    const storage = safeLocalStorage();
+    const scope = secondJourneyScope();
+    const { registry } = loadRegistry(storage, scope);
+    let rows = registry.piggies;
+    if (rows.length === 0) {
+      // 한 마리 시절 사용자를 잃지 않는다 — 첫 Piggy 를 함께 적어 둔다(돈은 모름 그대로).
+      const { piggy: legacy } = migrateSinglePiggy({ address: state.address || "", name: state.piggyName || "" });
+      rows = legacy ? [legacy] : [];
+    }
+    if (rows.some((p) => p.id === piggy.id)) return { saved: true, reason: "already_projected" };
+    const born = createPiggy({ piggies: rows, newPiggy: { id: piggy.id, address: piggy.address, locator: piggy.locator }, at: piggy.createdAt || new Date().toISOString() });
+    if (!born.ok) return { saved: false, reason: born.reason };
+    return saveRegistry(storage, scope, { piggies: born.piggies });
+  } catch {
+    return { saved: false, reason: "projection_failed" };
+  }
+}
+
+function admitAddedPiggy(piggy) {
+  if (!piggy || typeof piggy.id !== "string") {
+    state.addPiggy = { status: "failed", reason: "missing_piggy" };
+    return { started: false, reason: "missing_piggy" };
+  }
+  const projection = projectBirthUnfunded(piggy);
+  state.addPiggy = projection.saved ? null : { status: "projection_failed", reason: projection.reason || projection.error || "unknown" };
+  state.pendingNamePiggyId = piggy.id;
+  setScene("name", "", "");
+  return { started: true, reason: null, piggyId: piggy.id, projected: !!projection.saved };
+}
+
+// [A-579 Lane G] **Gift 을 받을 새 Gift Piggy** — 이미 Piggy 가 있는 기기에서 받는 사람이 Gift 를 받는 유일한 길.
+// 기존 Piggy(되찾기·평범한 +Piggy)에는 Gift 가 붙지 않는다. 흐름: pending 없음 → 인증 0 · 아무것도 안 함.
+// 있으면 **시작에서** intent 를 꺼내고(다른 경로가 못 가져간다) 시작 전 주소 목록을 적어 둔 뒤, 모델 A 로 새 Piggy
+// 하나를 입장시키고, 그 입장 직후(탄생 세션이 살아 있는 동안) 그 새 주소에만 묶어 claim 을 시도한다. 입장이
+// 안 되면 intent 를 되돌린다. Second Journey 완료를 요구하지 않는다(A-567: Gift 수령은 Journey 와 독립 — OWNER Q2).
+// **UI 진입점 0** — 어떤 버튼도 이것을 부르지 않는다(DESIGN gate: Open 탭 배치). 새 문구·씬 0(admitAddedPiggy 그대로).
+async function beginGiftPiggy() {
+  if (!pendingGiftClaim) return { started: false, reason: "no_gift_intent" };
+  if (state.addPiggy?.status === "authenticating") return { started: false, reason: "already_running" };
+  const root = modelARootCredential();
+  if (!root.credential) return { started: false, reason: root.reason };
+  // 인증·생성 **전에** 레코드를 읽기 전용으로 먼저 연다 — 열 수 없는 링크(원천 없음·모름·만료·폐기·토큰 불일치·
+  // 이미 받음)는 새 Piggy 를 0 개 만들고 인증 0 으로 멈춘다(intent 는 메모리에 그대로). 이미 이 기기의 Piggy 가
+  // 받은 링크면 그 사실(already_claimed_by_same)만 알린다 — 새 Piggy 로 다시 받지 않는다.
+  const preExisting = knownPiggyAddresses();
+  const preflight = await beginGiftClaim({
+    pending: { status: GIFT_ENTRY_STATUS.READY, giftId: pendingGiftClaim.giftId, token: pendingGiftClaim.token },
+    recordSource: GIFT_RECORD_SOURCE,
+    now: new Date().toISOString(),
+  });
+  if (preflight.status !== GIFT_ENTRY_STATUS.READY) {
+    const mine = preflight.reason === CLAIM_RESULT.ALREADY_CLAIMED_BY_OTHER
+      && preExisting.has(String(preflight.record?.recipientAddress || "").toLowerCase());
+    lastGiftClaimSettlement = mine
+      ? { status: GIFT_ENTRY_STATUS.REFUSED, reason: CLAIM_RESULT.ALREADY_CLAIMED_BY_SAME, giftId: preflight.giftId }
+      : { status: preflight.status, ...(preflight.reason ? { reason: preflight.reason } : {}), giftId: preflight.giftId };
+    return { started: false, reason: lastGiftClaimSettlement.reason || preflight.status };
+  }
+  if (!pendingGiftClaim) return { started: false, reason: "no_gift_intent" }; // 읽는 사이 다른 흐름이 가져갔다
+  const intent = takePendingGiftClaim();
+  let attempted = false;
+  let out;
+  state.addPiggy = { status: "authenticating" };
+  try {
+    out = await runModelAAdmission(root.credential, {
+      onAdmitted: async (piggy) => {
+        const bound = bindGiftToNewPiggy({ intent, piggy, preExistingAddresses: preExisting, signerAddress: state.activeSignerAddress, requireSequence: true });
+        if (!bound.ok) {
+          lastGiftClaimSettlement = { status: GIFT_ENTRY_STATUS.REFUSED, reason: bound.reason };
+          return;
+        }
+        attempted = true;
+        try {
+          lastGiftClaimSettlement = await settleBoundGiftClaim(bound.binding, intent);
+        } catch {
+          lastGiftClaimSettlement = { status: "claim_settle_failed" };
+        }
+      },
+    });
+  } finally {
+    if (!attempted) restorePendingGiftClaim(intent);
+  }
+  if (!out.ok) {
+    state.addPiggy = { status: "failed", reason: out.reason };
+    return { started: false, reason: out.reason };
+  }
+  return { ...admitAddedPiggy(out.piggy), giftAttempted: attempted };
+}
+
 function homePadMarkup(scene) {
   const mode = homePaperEffectiveMode(scene);
   const name = displayPiggyName();
@@ -3284,7 +4627,8 @@ function homePadMarkup(scene) {
   // cardClaimed) Money/Piggy 상세 본문이 대신 그 자리를 쓰므로(§home-paper.js
   // homePaperMarkup mode!=="home" 분기) 빈 문자열을 주고, 자동으로 기록이 열리는 경로를
   // 만들지 않는다(§5).
-  const recordsEntryMarkup = mode === "home" && scene === "sendstay" ? homePaperRecordsEntryMarkup(state.receipts.length) : "";
+  const recordsEnabled = mode === "home" && scene === "sendstay";
+  const recordsEntryMarkup = recordsEnabled ? homePaperRecordsEntryMarkup(state.receipts.length, null) : "";
   const base = {
     name,
     time: homeTimeNow(),
@@ -3292,7 +4636,8 @@ function homePadMarkup(scene) {
     ...homeStatusFromScene(scene),
   };
   if (mode === "home") {
-    return homePaperMarkup({ mode: "home", ...base });
+    const residents = homeResidents(base.label, recordsEnabled);
+    return homePaperMarkup({ mode: "home", ...base, residents });
   }
   const bodyMarkup = mode === "money" ? homeMoneyBodyMarkup(name) : homePiggyDetailBodyMarkup(name);
   return homePaperMarkup({ mode, ...base, bodyMarkup });
@@ -3353,11 +4698,113 @@ function extractHomePaperInner(markup) {
   return temp.querySelector("#homePaper")?.outerHTML || "";
 }
 
+// [A-540] home-peek.js(피크 + 1마리 `+ Piggy`) / home-paper-multi.js(2+ 접힘·펼침·창
+// 스크롤 + `+ Piggy`) 를 실제 `.homePaper` DOM 위에 얹는다 — Home 모드(mode "home")에서만,
+// 렌더될 때마다(최초 render() 와 refreshHomePaperMount() 둘 다) 다시 붙인다. 두 모듈 다
+// `.homePaper` 자식을 옮기거나 감싸므로(창으로 wrap, peek svg 형제 삽입) `mount.innerHTML =`
+// 교체(refreshHomePaperMount, 위)가 그 DOM 을 통째로 지운다 — 그래서 교체 **전** 반드시
+// teardown 하고, 새 markup 이 붙은 **뒤** 다시 mount 한다(패키지가 원래 om으로 열어 둔
+// `off()` 계약 그대로, 새 되감기 로직 0).
+let homeResidentModule = null;
+let homeResidentModuleSeq = 0;
+let homeResidentPaperEl = null;
+let homeResidentClickHandler = null;
+let homeResidentKeyHandler = null;
+
+// parent decision 3 이 고른 fold 트리거: 펼쳐진 상태에서 카드/records/+Piggy/플랩/집도장
+// 같은 인터랙티브 자손 **밖**의 빈 Home 종이를 누르면 접힌다. 이 셀렉터가 "인터랙티브
+// 자손"의 전부다 — 늘어나면 여기만 고친다.
+const HOME_RESIDENT_INTERACTIVE_SELECTOR =
+  ".homePaper__card--piggy, .homePaper__records, .homePlusPiggyTab, .homeFlap, .homePaper__mark, .homePaper__markButton, button, a, input, textarea, select";
+
+function teardownHomeResidentModule() {
+  homeResidentModuleSeq += 1; // 진행 중인 비동기 mount(있다면)를 stale 로 만든다.
+  if (homeResidentPaperEl && homeResidentClickHandler) {
+    homeResidentPaperEl.removeEventListener("click", homeResidentClickHandler);
+  }
+  if (homeResidentKeyHandler) {
+    window.removeEventListener("keydown", homeResidentKeyHandler);
+  }
+  homeResidentPaperEl = null;
+  homeResidentClickHandler = null;
+  homeResidentKeyHandler = null;
+  if (homeResidentModule) {
+    try {
+      homeResidentModule.off();
+    } catch {
+      // 되돌리기는 최선 노력이다 — 다음 markup 교체가 어차피 DOM 을 지운다.
+    }
+    homeResidentModule = null;
+  }
+}
+
+function mountHomeResidentModule() {
+  teardownHomeResidentModule();
+  // 다음 render() 의 teardownScene() 이(=씬이 통째로 바뀔 때) 이 mount 도 함께 정리한다.
+  // refreshHomePaperMount() 같은 씬-내부 갱신은 스스로 teardownHomeResidentModule() 을
+  // 직접 부른다(위) — 여기 등록은 "씬이 바뀌는데 다음 mount 가 없는" 경로(예: sendstay ->
+  // away)만을 위한 안전망이다. 이미 정리됐으면 no-op(idempotent).
+  onSceneTeardown(teardownHomeResidentModule);
+  const paper = document.querySelector('.homePaper[data-paper-mode="home"]');
+  if (!paper) return; // Money/Piggy 상세 모드 — 이 회차 모듈은 Home 모드에서만(§integrate).
+  applyHomeResidentMotionStates(paper);
+  const seq = homeResidentModuleSeq;
+  mountResidentPaper(paper, {
+    onAdd: () => {
+      // [A-531] 그대로 재사용 — 새 인증/탄생 경로 0.
+      beginAddPiggy().then(() => render()).catch(() => render());
+    },
+  })
+    .then((api) => {
+      if (seq !== homeResidentModuleSeq || !api) return; // 그 사이 teardown/다른 mount 가 먼저 왔다.
+      homeResidentModule = api;
+      // [A-540 §7 records] 종이 길이가 펼침/스크롤로 바뀔 때마다 열려 있는 HISTORY 를 같은
+      // 크기로 다시 맞춘다 — alignRecordsCardToHomePaper() 는 이미 RAF 루프로도 따라가지만
+      // (열려 있는 동안), 리사이즈 이벤트 한 번으로도 즉시 반응하게 한다(모듈이 쏘는 신호).
+      paper.addEventListener("homepaper:resize", () => {
+        if (state.recordsCardVisible) alignRecordsCardToHomePaper();
+      });
+      // [A-540 parent decision 3] 인터랙티브 자손 밖의 빈 종이를 누르면 접힌다.
+      homeResidentClickHandler = (event) => {
+        if (!paper.classList.contains("isResOpen")) return;
+        if (event.target.closest(HOME_RESIDENT_INTERACTIVE_SELECTOR)) return;
+        api.fold();
+      };
+      paper.addEventListener("click", homeResidentClickHandler);
+      // Escape 도 같은 규율: Home 종이가 펼쳐져 있을 때만, 다른 입력을 가로채지 않는다.
+      homeResidentKeyHandler = (event) => {
+        if (event.key !== "Escape") return;
+        if (!paper.isConnected || !paper.classList.contains("isResOpen")) return;
+        api.fold();
+      };
+      window.addEventListener("keydown", homeResidentKeyHandler);
+      homeResidentPaperEl = paper;
+      // [A-522 flag semantics, A-540/A-543/A-544 완료] `+ Piggy` 탭과 그것에 딸린 peek(빼꼼)은
+      // 패키지 안에서 항상 mount 된다 — 옛 addPiggyTab 마크업 플래그가 하던 product 게이트
+      // (showAddPiggyTab)를 그대로 지키려면 조건이 거짓일 때 mount 된 탭/peek DOM 을 전부
+      // 뗀다. 1마리 경로(mountHomePeek+mountPlusPiggyTab)와 2+ 경로(접힘용 clone + 펼침용
+      // tab, peek 은 win 전체에 붙는다) 모두 이 셀렉터로 찾긴다. [A-544 Repair B] `+ Piggy`
+      // 탭만 떼고 peek(.homePeekBody/.homePeekHandClip)을 남겨 두면 A-515 §11/A-543 이
+      // 요구하는 "Second 완료 전엔 +Piggy 도 peek 도 없다"를 어긴다 — 둘 다 뗀다. `.hasPeek`
+      // 는 순수 z-index 표시라 남아도 시각적으로 무해하지만(그 위에 그릴 게 없다), 스펙이
+      // "stale .hasPeek 제거"를 명시하므로 같이 지운다.
+      if (!showAddPiggyTab(state.scene, "home")) {
+        paper.querySelectorAll(".homePlusPiggyTab, .homePeekBody, .homePeekHandClip").forEach((el) => el.remove());
+        paper.querySelectorAll(".hasPeek").forEach((el) => el.classList.remove("hasPeek"));
+      }
+    })
+    .catch(() => {
+      // 피크 svg fetch 실패 등 — 모듈 없이도 카드 자체는 이미 정상 마크업으로 그려져 있다.
+    });
+}
+
 function refreshHomePaperMount() {
   const mount = document.querySelector(".homePaperMount");
   if (!mount) return;
+  teardownHomeResidentModule();
   const inner = extractHomePaperInner(homePadMarkup(state.scene));
   if (inner) mount.innerHTML = inner;
+  mountHomeResidentModule();
 }
 
 // [A-412 §1] 집도장 클릭 — HOME 이면 Money 를 열고(그리고 아직 안 읽었으면/실패했으면
@@ -3382,8 +4829,64 @@ function toggleHomePaperMoneyMode() {
 // render() 의 #recordsCard 리스너 참고).
 function handleHomePaperMountClick(event) {
   if (state.scene !== "sendstay") return;
-  if (event.target.closest("#homeRecordsButton")) {
+  // [A-510 Stream A] A-486 의 `homePiggyAction--` (give/bring) 분기는 걷어냈다 — 그 버튼을 그리는 곳이 없다.
+  const choiceButton = event.target.closest('[id^="homeAmountChoice--"]');
+  if (choiceButton && state.moneyIntent) {
+    state.moneyIntent = { ...state.moneyIntent, amount: choiceButton.id.split("--")[1] };
+    render();
+    return;
+  }
+  if (event.target.closest("#homeActionOk") && state.moneyIntent) {
+    const intent = state.moneyIntent;
+    // **여기서 돈이 움직이지 않는다.** 권한 대기 상태로만 넘어간다.
+    state.moneyIntent = { ...intent, status: PERMISSION_STATE.AWAITING };
+    render();
+    return;
+  }
+  // [A-492 Lane A] `awaiting_permission` → `permitted` 로 가는 **유일한 통로**.
+  // 실제 Face ID/passkey 를 부른다. 취소·실패는 아무것도 바꾸지 않는다.
+  if (event.target.closest("#homePermissionApprove") && state.moneyIntent?.status === PERMISSION_STATE.AWAITING) {
+    requestMoneyPermission();
+    return;
+  }
+
+  // [A-484 Lane C] MY MONEY 의 Piggy 행 → **오른쪽 HISTORY 의 정체성만** 바꾼다.
+  // 새 종이를 만들지 않는다. 다른 행을 고르면 정체성이 교체될 뿐이다.
+  const moneyPiggyRow = event.target.closest('[id^="homeMoneyPiggyRow--"]');
+  if (moneyPiggyRow) {
+    state.historyPiggyId = moneyPiggyRow.id.slice("homeMoneyPiggyRow--".length) || null;
+    // [A-512] 행을 고르면 그 Piggy 가 돈 동작의 선택이 된다 — 바뀌면 이전 권한부터 죽인다.
+    applyPiggySelection(moneyPiggiesSnapshot().piggies.find((p) => p.id === state.historyPiggyId) || null);
     openRecordsCard();
+    return;
+  }
+  if (event.target.closest("#homeRecordsButton")) {
+    // HOME 의 records 는 지금까지처럼 전체 기록을 연다 — 정체성 필터를 걸지 않는다(A-483 §7).
+    state.historyPiggyId = null;
+    openRecordsCard();
+    return;
+  }
+  // [A-540] 둘 이상의 Piggy 카드가 있으면 카드마다 자기 것 하나 — `.homePaper__records`
+  // 클래스는 Money/Piggy 상세의 다른 버튼(ok/retry/back/funding/amount 선택)에도
+  // 재사용되므로, 그 버튼들은 각각 자기 고유 id 로 이미 위에서 걸러지고 `return` 됐다(§순서
+  // — moneyIntent/homeActionOk/homePermissionApprove 는 이 체크보다 먼저다). 여기서는 정확히
+  // `data-piggy-id` 가 있는 resident records 버튼만 본다 — **historyPiggyId 만** 바꾼다.
+  // applyPiggySelection()/서명자/세션/권한/moneyIntent 는 절대 건드리지 않는다(§records contract).
+  const residentRecordsButton = event.target.closest(".homePaper__records[data-piggy-id]");
+  if (residentRecordsButton) {
+    state.historyPiggyId = residentRecordsButton.dataset.piggyId || null;
+    openRecordsCard();
+    return;
+  }
+  // [A-531] `+ Piggy` 탭 — 모델 A: 기존 패스키 고정 assertion 1회 → 통제 증명 → 색인 → Name it. 새 패스키 생성 0.
+  // [A-540] `+ Piggy` 탭은 더 이상 여기(homePadMarkup 고정 마크업)에 없다 — home-peek.js /
+  // home-paper-multi.js 가 렌더 뒤 DOM 에 button 을 직접 붙이고, `onClick`/`onAdd` 콜백을
+  // mountHomeResidentModule() 에서 이 함수와 똑같이 `beginAddPiggy().then(render)` 로
+  // 배선한다(아래). 그 버튼 자신의 리스너가 이미 처리하므로 여기서 `.homePlusPiggyTab` 를
+  // 다시 델리게이션으로 잡으면 버블링으로 **두 번** 불린다 — 그래서 잡지 않는다. 이 id 체크는
+  // 옛 정적 마크업이 남아 있던 시절의 안전망으로만 남긴다(지금은 절대 매치되지 않는다).
+  if (event.target.closest("#homeAddPiggy")) {
+    beginAddPiggy().then(() => render()).catch(() => render());
     return;
   }
   if (event.target.closest("#homePaperMoneyToggle")) {
@@ -3754,7 +5257,13 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
 // 살리려면 app/src/piggy-depart.js:190,266-281 의 mode==="work" 분기를 원본 홀드식으로
 // 고쳐야 한다(내가 건드릴 파일 밖이라 고치지 않고 여기 보고한다).
 // [A-431] canvasId/active/clock 만 주입 가능하게 넓혔다 — 기본 인자는 First Send 카드 그대로.
-function mountSendCardWorkPose({ canvasId = "sendCardWorkStage", active = state.sendCardVisible, clock = "send" } = {}) {
+function mountSendCardWorkPose({
+  canvasId = "sendCardWorkStage",
+  active = state.sendCardVisible,
+  clock = "send",
+  piggyId = currentScenePiggyId(),
+  affectedPiggyId = piggyId,
+} = {}) {
   const getStart = () => (clock === "second" ? secondWorkStartedAt : sendWorkStartedAt);
   const setStart = (v) => {
     if (clock === "second") secondWorkStartedAt = v;
@@ -3766,6 +5275,12 @@ function mountSendCardWorkPose({ canvasId = "sendCardWorkStage", active = state.
   }
   const canvas = document.querySelector(`#${canvasId}`);
   if (!canvas) return;
+  const projected = resolvePiggyMotionState({ piggyId, affectedPiggyId, cue: PIGGY_MOTION_STATE.WORK });
+  // Existing one-Piggy recovery/DEV paths can lack an indexed id; preserve their current visual.
+  // With an id present, a non-affected Piggy never receives the work renderer.
+  if (projected.piggyId && !projected.active) return;
+  if (projected.piggyId) canvas.dataset.piggyId = projected.piggyId;
+  canvas.dataset.motionState = projected.piggyId ? projected.state : PIGGY_MOTION_STATE.WORK;
   const seatImg = document.querySelector("#homeSeat");
   const token = sceneToken;
   let stopped = false;
@@ -4302,9 +5817,12 @@ function recordsMastheadMarkup() {
   const today = new Date();
   const dateLabel = today.toLocaleDateString("en-US", { month: "long", day: "numeric" }).toUpperCase();
   const weekdayLabel = today.toLocaleDateString("en-US", { weekday: "long" }).toUpperCase();
-  const name = displayPiggyName();
+  // [A-485 Lane A] 머리글의 이름은 **지금 보고 있는 기록의 주인**이다.
+  // 전체 경로면 지금까지처럼 현재 Piggy 이름이 나온다.
+  const name = historyIdentityName();
   // 주소가 아직 없으면(무계정 DEV 등) 줄 자체를 비운다 — 가짜 값 0.
-  const address = typeof state.address === "string" ? state.address : "";
+  // 특정 Piggy 를 보고 있을 때는 **그 Piggy 가 아닌 주소를 빌려 쓰지 않는다**.
+  const address = state.historyPiggyId ? "" : (typeof state.address === "string" ? state.address : "");
   const identityMarkup = `
         <p class="recordsCard__identity">
           <span class="recordsCard__identityName">${escapeHtml(name)}</span>
@@ -4319,9 +5837,33 @@ function recordsMastheadMarkup() {
       <p class="recordsCard__tier">HISTORY</p>${identityMarkup}`;
 }
 
+// [A-485 Lane A] 지금 오른쪽 종이가 보여줄 기록 줄들. 고른 Piggy 가 레지스트리에서
+// 사라졌으면 **다른 Piggy 를 대신 보여주지 않고** 전체 경로로 되돌린다.
+function historyRows() {
+  // 전체 경로는 **새 코드에 전혀 기대지 않는다** — 레지스트리도 필터도 부르지 않는다.
+  // 그래야 First/Second 의 기존 동작이 바뀌지 않았음이 증명 가능하다.
+  if (!state.historyPiggyId) return state.receipts.map((receipt, index) => ({ receipt, index }));
+  const piggies = secondPiggyRegistrySnapshot().piggies;
+  const resolved = resolveHistorySelection(state.historyPiggyId, piggies);
+  if (resolved !== state.historyPiggyId) state.historyPiggyId = resolved;
+  return filterHistory(state.receipts, resolved).rows;
+}
+
+// 오른쪽 종이 머리글의 정체성 — 이름을 모르면 지어내지 않는다.
+function historyIdentityName() {
+  if (!state.historyPiggyId) return displayPiggyName();
+  // [A-551] 재정 레지스트리(secondPiggyRegistrySnapshot)만으로는 이름을 못 찾는다 — 추가
+  // Piggy 는 createPiggy() 가 name 을 절대 안 받기 때문이다(이름은 renameIndexedPiggy() 로
+  // MY PIGGIES 색인에만 쓰인다). moneyPiggiesSnapshot() 은 그 색인을 **정확히 같은 id** 로
+  // 병합해 이미 MY MONEY 행 선택(applyPiggySelection 호출부)이 쓰는 것과 같은 이름을 준다 —
+  // 다른 매칭 방식(자리·주소 유사)을 새로 만들지 않는다. 못 찾으면 여전히 id 그대로(폴백).
+  const piggies = moneyPiggiesSnapshot().piggies;
+  return historyIdentityLabel({ piggyId: state.historyPiggyId, piggies, fallbackName: displayPiggyName() });
+}
+
 function recordsCardListMarkup() {
   const name = displayPiggyName();
-  const receipts = state.receipts;
+  const receipts = historyRows();
   if (!receipts.length) {
     // §4 "무기록은 같은 종이에 짧은 빈 상태만, 합성 Unknown receipt 생성 금지".
     // [A-459] 기록이 없어도 같은 identity/masthead 껍데기는 보인다 — 가짜 receipt 0.
@@ -4337,8 +5879,10 @@ function recordsCardListMarkup() {
   // 미리보기를 HISTORY 경로에서 걷어냈다(그 그림들은 piggy-return 캔버스 연출에만 남는다).
   // 데이터는 전과 같이 **전부** 보관·열람 가능하고, 최근 기록이 위다. 미리보기 3장 규칙은
   // folder 그림에 딸린 표시 규칙이었으므로 함께 사라진다 — 그래서 캡션도 보관 수만 말한다.
-  const rowsMarkup = receipts
-    .map((receipt, index) => {
+  // [A-485 Lane A] 고른 Piggy 가 있으면 그 기록만. 없으면 지금까지의 전체 동작 그대로.
+  // 원래 인덱스를 그대로 실어 보내 상세 보기가 어긋나지 않게 한다.
+  const rowsMarkup = historyRows()
+    .map(({ receipt, index }) => {
       const fields = receiptPaperFields({ receipt, name });
       return `
         <button class="recordsCard__row" type="button" data-receipt-index="${index}">
@@ -4591,6 +6135,9 @@ function render() {
   if (state.scene !== "explore") secondWorkStartedAt = null;
   if (state.scene === "secondAway") mountSecondAway();
   if (state.scene === "secondReturn") mountSecondReturn();
+  // [A-540] `.homePaper` 는 위 분기들이 이미 DOM 에 올린 뒤다(homePadMarkup 이 모든
+  // Home-pad 씬에서 공유하는 셸) — mode "home" 일 때만 실제로 mount 된다(함수 내부 가드).
+  mountHomeResidentModule();
 }
 
 // 돌아온 사용자는 Received 에 갇히지 않는다 — 이미 credential 이나 주소가 있으면 Birth 로 연다.
@@ -4599,10 +6146,34 @@ if (state.scene === "received" && (readCredential() || state.address)) {
   state.scene = "birth";
 }
 
+// [A-559 PHASE S1] Gift 링크 fragment 를 부팅 시 **한 번만** 읽어 둔다. scene 전환 0 · Piggy
+// 생성 0 · 인증 호출 0 — readClaimFragment()는 파싱만 한다(parseClaimUrl, A-495). 링크가 없거나
+// 형식이 깨졌으면 pendingGiftClaim 은 null 로 남는다(다음 아래 코드 경로들과 동일하게 0 Piggies),
+// 그리고 주소창은 손대지 않는다(변경 없음, malformed/no-fragment 는 그대로).
+// 실제 claim 시도는 이 아래 어디서도 일어나지 않는다 — 새 Gift Piggy 흐름(settleBoundGiftClaim)이 인증이
+// 성공한 뒤(openPiggy 첫 탄생 · beginGiftPiggy 새 Gift Piggy 경계 — 되찾기·평범한 +Piggy 는 아님)에만 한다.
+// [A-563 LANE B] 원문 토큰은 그래도 이 READY 분기에서 메모리에 들어오는 즉시 주소창에서
+// 지운다(stripClaimFragmentFromUrl(), 바로 아래) — 인증까지 기다리지 않는다. 인증 전까지 토큰이
+// 그대로 노출돼 있던 잔여 구간(A-559 review residual)을 닫는 것이 이 레인의 목적이다.
+// pendingGiftClaim(메모리)은 그대로 남아 나중의 새 Gift Piggy 흐름(openPiggy·beginGiftPiggy 시작점)이 쓴다 —
+// 저장소·로그에는 어디에도 쓰지 않는다.
+if (typeof location !== "undefined") {
+  const pendingRead = readClaimFragment(location.href);
+  if (pendingRead.status === GIFT_ENTRY_STATUS.READY) {
+    pendingGiftClaim = { giftId: pendingRead.giftId, token: pendingRead.token };
+    stripClaimFragmentFromUrl();
+  }
+}
+
 render();
 
 window.addEventListener("resize", fitInvite);
 window.addEventListener("beforeunload", endActiveSession);
+// [A-565] 한 번만 붙는 module-scope 캡처 리스너 — render() 안 리스너처럼 씬마다 다시 붙지 않는다.
+// capture:true 는 앱 안 아무 화면에서 눌러도(하위 요소가 stopPropagation 해도) 잡히게 하려는
+// 것뿐이고, passive:true 는 activity 훅이 스크롤/탭을 막을 이유가 없어서다(preventDefault 0).
+window.addEventListener("pointerdown", handleTrustedAppActivity, { capture: true, passive: true });
+window.addEventListener("keydown", handleTrustedAppActivity, { capture: true, passive: true });
 
 // @DEV_ONLY — 로컬 검토용 씬 점프. localhost 는 rpId 가 허용 목록 밖이라 실제 패스키를
 // 탈 수 없고(isAllowedPiggyRpId), 그래서 해치·Name it·첫 Home 을 실제 앱에서 눈으로

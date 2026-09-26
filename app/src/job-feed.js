@@ -1,7 +1,7 @@
 import { explainRejected, selectThreeJobs, updatePreference } from "./job-selector.js";
-import { ACTION, RESULT, decideRules } from "./rule-decision.js";
-import { applyExploreSelection, createSecondJourneyState, normalizeSecondJourneyState } from "./second-journey-state.js";
-import { decideSecondJobPreflight, summarizeReadOnlyCandidateEvidence } from "./second-job-readiness.js";
+import { ACTION, RESULT, decideRules, decideSemanticReturnRule } from "./rule-decision.js";
+import { DECISION_RECEIPT_SCHEMA, applyExploreSelection, createSecondJourneyState, normalizeSecondJourneyState } from "./second-journey-state.js";
+import { decideSecondJobPreflight, readDestinationReturnEvidence, summarizeReadOnlyCandidateEvidence } from "./second-job-readiness.js";
 
 export const STATUS = Object.freeze({
   JOB_READY: "JOB_READY",
@@ -142,14 +142,50 @@ export const SHMON_CURRENT_EVIDENCE = Object.freeze({
   role: "first_job_receipt_evidence_only",
 });
 
-const CURRENT_PIGGY_CONTEXT = Object.freeze({
-  piggyId: "a174-local-piggy",
-  chain: "monad-mainnet-fixture",
-  address: FIRST_JOB_RECEIPT.address,
-  gas: "NEEDS_FUNDING",
-  assets: { mon: "0", usdc: "0", kintsuPosition: "0", merklClaimable: "0" },
-  evidenceMode: "fixture_not_live",
+// [A-476] 예전에는 여기에 mainnet 성격의 고정 chain 라벨 + A-174 시절 dev 주소가 상수로
+// 박혀 있었다. 그 고정값이 J2-3 READY 0 의 **구조적 원인**이었다(A-466): 현재 account/chain 이
+// 무엇이든 후보의 target chain/address 는 낡은 fixture 를 가리켜 readiness 가 항상
+// target_chain_mismatch / target_address_mismatch 로 떨어졌다.
+//
+// 이제 현재 Piggy context 는 **런타임에서 들어온다**(scope = 인증된 address + chainId).
+// 제품 코드에는 어떤 특정 주소도 새로 박지 않는다 — Harness Piggy 주소 역시 test/harness
+// 에서만 주입한다. context 가 없거나 불완전하면 mainnet fixture 로 되돌아가지 않고
+// **UNRESOLVED 로 fail-closed** 한다(readiness 가 UNKNOWN/NOT_READY 를 낸다).
+export const UNRESOLVED_PIGGY_CONTEXT = Object.freeze({
+  piggyId: "UNKNOWN",
+  chain: "UNKNOWN",
+  address: "UNKNOWN",
+  gas: "UNKNOWN",
+  assets: Object.freeze({ mon: "UNKNOWN", usdc: "UNKNOWN", kintsuPosition: "UNKNOWN", merklClaimable: "UNKNOWN" }),
+  evidenceMode: "no_runtime_context",
 });
+
+function isAddressLike(value) {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{40}$/.test(value.trim());
+}
+
+// 런타임 scope/context → 후보에 실릴 현재 Piggy context. 주소나 chain 이 하나라도
+// 불완전하면 통째로 UNRESOLVED 다(부분 승격 금지).
+export function resolveCurrentPiggyContext(runtime = {}) {
+  const address = runtime.address ?? runtime.accountId;
+  const chain = runtime.chain ?? runtime.chainId;
+  if (!isAddressLike(address) || typeof chain !== "string" || chain.trim() === "" || chain.trim() === "UNKNOWN") {
+    return UNRESOLVED_PIGGY_CONTEXT;
+  }
+  return Object.freeze({
+    piggyId: "current-runtime-piggy",
+    chain: chain.trim(),
+    address: address.trim(),
+    gas: typeof runtime.gas === "string" ? runtime.gas : "UNKNOWN",
+    assets: Object.freeze({
+      mon: runtime.assets?.mon ?? "UNKNOWN",
+      usdc: runtime.assets?.usdc ?? "UNKNOWN",
+      kintsuPosition: runtime.assets?.kintsuPosition ?? "UNKNOWN",
+      merklClaimable: runtime.assets?.merklClaimable ?? "UNKNOWN",
+    }),
+    evidenceMode: typeof runtime.evidenceMode === "string" ? runtime.evidenceMode : "runtime_context_read_only",
+  });
+}
 
 const JIT_QUESTION = Object.freeze({
   id: "return_tolerance",
@@ -165,7 +201,54 @@ export function buildVisibleLaneChoices() {
   return EXPLORE_ERRANDS.map((errand) => ({ ...errand, visibleAs: "Explore-visible", destinationId: null }));
 }
 
-export function buildDestinationFixtures() {
+// [A-576] Evidence seam for a destination bound to a real Job record. The address,
+// exit path and provenance come from second-job-readiness.js FORK_PROVEN_DESTINATIONS
+// by import. This file pins no protocol address (kintsu-capability-gate guard).
+// `returnObservations` is an injection point for a read-only read. No product caller
+// passes one today, so the recorded read (A-571) is the evidence.
+function boundEvidenceState(jobId, returnEvidence, sourceTasks) {
+  const p = returnEvidence?.provenance || null;
+  return {
+    sourceTasks,
+    boundJobId: jobId,
+    evidenceLabel: p?.forkEvidence?.label || "UNKNOWN",
+    evidence: p ? [
+      `exit path: ${p.exitPath}`,
+      `expected duration: ${p.expectedDuration ?? "UNKNOWN"}${p.expectedDurationUnknownReason ? ` (${p.expectedDurationUnknownReason})` : ""}`,
+      `fork: ${p.forkEvidence.label} @${p.forkEvidence.block}`,
+      p.liveRead ? `live read-only re-check @${p.liveRead.block} (${p.liveRead.sourceTask}, ${p.liveRead.observedAt})` : "live read-only re-check: none",
+    ] : ["UNKNOWN: bound Job record missing"],
+    conditions: ["user return tolerance required"],
+  };
+}
+
+// [A-579] The chain a bound Job lives on vs the chain this runtime runs on. When they differ
+// the Job is evidence only here: it can be cited in a decision Receipt but never executed.
+// Even on the same chain this path does not execute (capability stays open, action 0).
+function boundExecutionContext(runtimeChain, jobChain) {
+  const runtime = typeof runtimeChain === "string" && runtimeChain.trim() ? runtimeChain.trim() : "UNKNOWN";
+  const job = typeof jobChain === "string" && jobChain.trim() ? jobChain.trim() : "UNKNOWN";
+  return {
+    runtimeChain: runtime,
+    jobChain: job,
+    executable: false,
+    role: runtime !== "UNKNOWN" && runtime === job ? "same_chain_not_executed" : "evidence_only_other_chain",
+  };
+}
+
+const KINTSU_DESTINATION_ID = "kintsu-like-grow-delayed-return";
+
+export function buildDestinationFixtures(runtimeContext = {}, evidenceOptions = {}) {
+  const CURRENT_PIGGY_CONTEXT = resolveCurrentPiggyContext(runtimeContext);
+  // [A-579] Decision-time mode applies to the destination of the current decision event only.
+  // In that mode the recorded A-571 read is provenance, not evidence: without a read-only
+  // observation made for this event the decision is `unknown`.
+  const kintsuReturnEvidence = readDestinationReturnEvidence("kintsu-smon", {
+    observation: evidenceOptions.returnObservations?.["kintsu-smon"] ?? null,
+    nowMs: evidenceOptions.nowMs,
+    requireObservation: evidenceOptions.freshReturnDestinationId === KINTSU_DESTINATION_ID,
+  });
+  const kintsuJobChain = kintsuReturnEvidence?.provenance?.chain || "UNKNOWN";
   return [
     {
       id: "aave-like-grow-supply",
@@ -198,7 +281,7 @@ export function buildDestinationFixtures() {
       },
     },
     {
-      id: "kintsu-like-grow-delayed-return",
+      id: KINTSU_DESTINATION_ID,
       laneId: "grow",
       errandIds: ["grow"],
       destinationKind: "destination_job_fixture",
@@ -212,7 +295,9 @@ export function buildDestinationFixtures() {
         exitReturnPath: "delayed return path modeled",
         cooldownLockQueue: "known trackable waiting state",
         receiptReopenProofShape: "stake receipt + queue/claim proof placeholder",
-        returnModel: { type: "delayed", known: true, trackable: true, maxWait: "few_days" },
+        // [A-576] was maxWait:"few_days", an upper bound the real evidence does not support.
+        // The duration is not published (A-477), so the bound stays UNKNOWN.
+        returnModel: { type: "delayed", known: true, trackable: true, maxWait: null, upperBound: "UNKNOWN" },
       },
       currentPiggyStatus: "CONTEXT_READY",
       currentPiggyContext: {
@@ -221,11 +306,16 @@ export function buildDestinationFixtures() {
         missingNow: [],
         jobLevelNah: false,
       },
-      evidenceState: {
-        sourceTasks: ["A-216", "A-217", "A-217-post-discussion"],
-        evidence: ["cooldown/read state is evidence", "return queue proof placeholder"],
-        conditions: ["user return tolerance required"],
-      },
+      // [A-576] was the placeholder ["cooldown/read state is evidence", "return queue proof
+      // placeholder"]. Now bound to the real kintsu-smon record. capabilityStatus stays
+      // JOB_OPEN, so this destination remains Explore-visible and is never Send-visible.
+      boundJobId: "kintsu-smon",
+      // [A-579] Kintsu is proven on monad-mainnet. The Second Journey runtime is scoped to
+      // its own chain (monad-testnet today), so here it is evidence only at the Send gate.
+      jobChain: kintsuJobChain,
+      executionContext: boundExecutionContext(CURRENT_PIGGY_CONTEXT.chain, kintsuJobChain),
+      returnEvidence: kintsuReturnEvidence,
+      evidenceState: boundEvidenceState("kintsu-smon", kintsuReturnEvidence, ["A-216", "A-217", "A-477", "A-480", "A-571", "A-576"]),
     },
     {
       id: "monad-swap-like-trade",
@@ -338,12 +428,21 @@ export function deriveDestinationStatus(destination, context = {}) {
     return { status: STATUS.JOB_OPEN, reasonCode: "capability_open", action: ACTION.NONE };
   }
 
+  // [A-576] A destination bound to a real Job record decides the JIT answer from that Job's
+  // evidence through decideSemanticReturnRule, not from the fixture returnModel.
+  // The JIT answer is the agreed meaning for THIS selection event only: it is not stored
+  // as a rule and it creates no permission. A preference hint never enters here.
+  // [A-579] every answer (right_back / few_days / no_rush) goes through the Job's evidence.
+  if (destination.boundJobId && returnAnswer) {
+    return deriveSemanticReturnStatus(destination, returnAnswer);
+  }
+
   if (returnModel.type === "delayed") {
-    if (returnAnswer === "right_back") {
-      return { status: STATUS.NAH, reasonCode: "rule_nah", action: ACTION.NONE };
-    }
-    if (returnAnswer === "few_days" || returnAnswer === "no_rush") {
-      return { status: STATUS.JOB_WAITING_RETURN, reasonCode: "return_waiting_accepted", action: ACTION.NONE };
+    // [A-579] The old placeholder path (unbound delayed: right_back -> nah, few_days/no_rush
+    // -> waiting accepted) decided from a fixture label, not from any Job's evidence. It is
+    // gone. An unbound delayed destination is capability-open and decides nothing.
+    if (!destination.boundJobId) {
+      return { status: STATUS.JOB_OPEN, reasonCode: "return_evidence_unbound", action: ACTION.NONE };
     }
     return { status: STATUS.JOB_OPEN, reasonCode: "return_tolerance_unknown", action: ACTION.ASK };
   }
@@ -357,6 +456,92 @@ export function deriveDestinationStatus(destination, context = {}) {
   }
 
   return { status: STATUS.JOB_READY, reasonCode: "ready_fixture", action: ACTION.EXECUTE };
+}
+
+function deriveSemanticReturnStatus(destination, returnAnswer) {
+  const semantic = decideSemanticReturnRule(
+    { id: "return_semantic", field: "returnSemantic", expected: returnAnswer, agreed: true },
+    destination.returnEvidence || null,
+  );
+  const semanticOut = {
+    result: semantic.result,
+    reason: semantic.reason,
+    evidence: semantic.evidence,
+    jobId: destination.boundJobId,
+    evidenceMode: destination.returnEvidence?.evidenceMode || "missing",
+    block: destination.returnEvidence?.block ?? null,
+    provenance: destination.returnEvidence?.provenance || null,
+    agreedScope: "this_selection_event_only",
+  };
+  // `rule_nah` is the same category the fixture path used: a rule mismatch, not a dislike.
+  if (semantic.result === RESULT.NAH) return { status: STATUS.NAH, reasonCode: "rule_nah", action: ACTION.NONE, semantic: semanticOut };
+  if (semantic.result === RESULT.ASK) return { status: STATUS.JOB_OPEN, reasonCode: "return_semantic_ask", action: ACTION.ASK, semantic: semanticOut };
+  // A match is still not execution. Capability stays open and the action stays 0 on this path.
+  if (semantic.result === RESULT.DO_IT) return { status: STATUS.JOB_OPEN, reasonCode: "return_semantic_match_capability_open", action: ACTION.NONE, semantic: semanticOut };
+  if (semantic.reason === "return_duration_unknown") return { status: STATUS.JOB_OPEN, reasonCode: "return_duration_unknown", action: ACTION.NONE, semantic: semanticOut };
+  return { status: STATUS.JOB_OPEN, reasonCode: "return_evidence_unknown", action: ACTION.NONE, semantic: semanticOut };
+}
+
+const SEMANTIC_DECISION = Object.freeze({ [RESULT.NAH]: "nah", [RESULT.ASK]: "ask", [RESULT.UNKNOWN]: "unknown" });
+
+/**
+ * [A-576] Action-0 decision Receipt for the destination the user actually checked.
+ * It is persisted by second-journey-state.js recordSecondJourneyDecisionReceipt,
+ * which writes to the same storage as every other Second Journey record.
+ * It is built only when the semantic path produced nah/ask/unknown. A match or a
+ * non-semantic decision yields null. `selectionSource` is the caller's label and is
+ * never inferred. Without one it reads UNKNOWN_SELECTION_SOURCE.
+ */
+export function makeDecisionReceipt(destination, derived, context = {}) {
+  const semantic = derived?.semantic;
+  if (!destination || !semantic) return null;
+  const decision = SEMANTIC_DECISION[semantic.result];
+  if (!decision || derived.action === ACTION.EXECUTE) return null;
+  const ev = semantic.evidence || {};
+  const scope = context.scope || {};
+  const selectionEventId = context.selectionEventId || "UNKNOWN_EVENT";
+  return {
+    schema: DECISION_RECEIPT_SCHEMA,
+    eventId: `decision:${selectionEventId}:${destination.id}:${ev.expected}`,
+    accountId: scope.accountId || null,
+    chainId: scope.chainId || null,
+    destinationId: destination.id,
+    jobId: semantic.jobId || null,
+    decision,
+    reason: semantic.reason,
+    category: derived.reasonCode,
+    expected: ev.expected,
+    found: ev.found,
+    did: "nothing",
+    why: ev.why,
+    delay: ev.delay ?? null,
+    action: ACTION.NONE,
+    actionCount: 0,
+    txExecuted: false,
+    evidence: {
+      source: ev.source && ev.source !== "unknown" ? ev.source : null,
+      observedAt: ev.observedAt ?? null,
+      block: semantic.block ?? null,
+      evidenceMode: semantic.evidenceMode,
+      // [A-579] What the decision-time reader reported for this event (e.g. "ok",
+      // "reader_unconfigured"). UNKNOWN when the caller did not say.
+      readStatus: typeof context.returnReadStatus === "string" && context.returnReadStatus ? context.returnReadStatus : "UNKNOWN",
+      provenance: semantic.provenance ? JSON.parse(JSON.stringify(semantic.provenance)) : null,
+    },
+    // [A-579] The runtime chain this decision ran in vs the chain the Job lives on.
+    // A decision Receipt is never executable.
+    executionContext: boundExecutionContext(scope.chainId, destination.jobChain),
+    selection: {
+      source: context.selectionSource || "UNKNOWN_SELECTION_SOURCE",
+      errandIds: [...(context.errandIds || [])],
+      jitQuestionId: JIT_QUESTION.id,
+      jitAnswer: ev.expected,
+      semanticScope: semantic.agreedScope,
+      ownerFinancialChoice: false,
+      createsPermission: false,
+    },
+    recordedAt: context.now || "UNKNOWN_TIME",
+  };
 }
 
 export function makeMockReceipt(destination, derived, preferenceUpdate) {
@@ -439,7 +624,13 @@ export function runSecondJourney(options = {}) {
   const jitQuestions = buildJitQuestions(selection);
   const agreedRule = options.jitAnswer ? { returnTolerance: options.jitAnswer } : null;
   const destinationOverrides = options.destinationOverrides || {};
-  const destinations = buildDestinationFixtures()
+  // [A-476] 후보의 현재 Piggy context = **런타임 scope**(인증된 address + chainId).
+  // options.piggyContext 는 test/harness 전용 주입구다(제품 코드에는 주소 상수 0).
+  const runtimeContext = options.piggyContext || { address: scope?.accountId, chain: scope?.chainId };
+  // [A-579] `requireFreshReturnObservation` = decision-time mode for the destination the user
+  // checked. Default false keeps the recorded-read behaviour for every other caller.
+  const freshReturnDestinationId = options.requireFreshReturnObservation === true ? options.preferredDestinationId || null : null;
+  const destinations = buildDestinationFixtures(runtimeContext, { returnObservations: options.returnObservations, nowMs: options.nowMs, freshReturnDestinationId })
     .filter((destination) => destination.errandIds?.some((id) => selection.errandIds.includes(id)))
     .map((destination) => ({ ...destination, ...(destinationOverrides[destination.id] || {}) }));
   const derivedDestinations = destinations.map((destination) => {
@@ -448,6 +639,19 @@ export function runSecondJourney(options = {}) {
   });
   const preferred = derivedDestinations.find((destination) => destination.id === options.preferredDestinationId) || derivedDestinations.find((destination) => destination.derivedStatus !== STATUS.NAH) || derivedDestinations[0] || null;
   const receipt = makeMockReceipt(preferred, preferred?.decision || { status: STATUS.NOT_JOB, reasonCode: "no_destination" }, preferenceUpdate);
+  // [A-576] Action-0 decision Receipt, only for the destination the user actually checked.
+  // It is not persisted here: the caller hands it to second-journey-state.js.
+  const checked = options.preferredDestinationId ? derivedDestinations.find((destination) => destination.id === options.preferredDestinationId) || null : null;
+  // [A-579] A live caller passes its own decisionEventId; without it every live Receipt would
+  // share the fixture id and be dropped as a duplicate.
+  const decisionReceipt = checked ? makeDecisionReceipt(checked, checked.decision, {
+    scope,
+    selectionEventId: options.decisionEventId || options.eventId || "fixture-selection-1",
+    selectionSource: options.selectionSource,
+    errandIds: selection.errandIds,
+    returnReadStatus: options.returnReadStatus,
+    now: options.decisionAt || options.now,
+  }) : null;
   const stateUpdate = applyExploreSelection(seededState, selection, preferenceUpdate, { eventId: options.eventId || "fixture-selection-1", now: options.now || "2026-09-11T00:00:00Z" });
   const effectivePreferenceAfter = stateUpdate.duplicate ? stateUpdate.state.preference : preferenceUpdate.preference;
   const effectiveDelta = stateUpdate.duplicate ? {} : preferenceUpdate.delta;
@@ -490,6 +694,7 @@ export function runSecondJourney(options = {}) {
     preflight,
     readOnlyCandidateEvidence: summarizeReadOnlyCandidateEvidence(derivedDestinations, { ...(options.readOnlyContext || {}), nowMs: options.nowMs ?? options.readOnlyContext?.nowMs }),
     mockReceipt: receipt,
+    decisionReceipt,
     txExecuted: false,
     uiImplemented: false,
   };

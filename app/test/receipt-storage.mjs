@@ -12,6 +12,7 @@
 // 테스트는 지금부터의 저장/재읽기/중복-방지 계약만 잰다.
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
+import { decodeReceiptRow, encodeReceiptRow, receiptIdentityKey as codecReceiptIdentityKey, RECEIPT_KIND } from "../src/receipt-codec.js";
 
 const SRC = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 
@@ -48,7 +49,13 @@ function makeSandbox() {
   const localStorage = createMockStorage();
   const state = { receipts: [], receiptIndex: 0 };
   const RECEIPTS_KEY = "araso.receipts";
-  const sandbox = { localStorage, state, RECEIPTS_KEY, JSON, String, BigInt, Array };
+  // [A-553 HARNESS] readReceipts/serializeReceiptRow/receiptIdentityKey 는 이제 main.js 안에서
+  // receipt-codec.js 를 부른다 — 그 import 는 잘라낸 텍스트 밖(모듈 top)에 있으므로 여기서
+  // **진짜 receipt-codec.js export** 를 컨텍스트에 주입한다(로직 재구현 0).
+  const sandbox = {
+    localStorage, state, RECEIPTS_KEY, JSON, String, BigInt, Array,
+    decodeReceiptRow, encodeReceiptRow, codecReceiptIdentityKey, RECEIPT_KIND,
+  };
   vm.createContext(sandbox);
   vm.runInContext(receiptFnsSrc, sandbox, { filename: "receipt-fns-from-main.js" });
   return sandbox;

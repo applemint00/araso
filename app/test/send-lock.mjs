@@ -34,7 +34,7 @@ function mockStorage(init = {}) {
 
 // 전체 sendPiggy + sendPiggyOnce 를 스텁 위에서 만든다. settleOutcome 으로 결말을 고른다.
 function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows = false, simThrows = false, allowed = true }) {
-  const calls = { grant: 0, sign: 0, sendTx: 0, scenes: [], finished: [] };
+  const calls = { grant: 0, sign: 0, sendTx: 0, scenes: [], finished: [], endSession: 0 };
   const btn = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   const env = {
     localStorage: storage,
@@ -48,7 +48,7 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
     recoverPiggy: async () => {}, noteRecoverSuccess() {}, noteRecoverFailure() {}, isCancelledAuthError: () => false,
     requestGrant: async () => { calls.grant += 1; if (gate) await gate; return { txHash: "0xgrant" }; },
     simulateSend: async () => { if (simThrows) throw new Error("sim reverted"); return { depositTx: {}, before: 1n, beforeShares: 0n }; },
-    touchSession() {},
+    touchAppSession() {}, // [A-556] rename: touchSession -> touchAppSession (app-idle only, harness wiring)
     createWalletClient: () => ({ sendTransaction: async () => { calls.sendTx += 1; if (depositThrows && calls.sendTx === 1) throw new Error("rpc"); return calls.sendTx === 1 ? "0xdeposit" : "0xredeem"; } }),
     MONAD_TESTNET: {}, MONAD_TESTNET_RPC: "", http: () => ({}),
     crypto: { subtle: { digest: async () => new ArrayBuffer(32) } },
@@ -64,6 +64,9 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
     // [A-451] 새 helper 스텁 — 기록만(원문 0), 새 grant 없음 경로라 대기 0.
     recordSafeError: () => {},
     waitForGrantBalance: async () => true,
+    // [A-555 S4] 하네스 배선만 — sendPiggy wrapper finally 가 부르는 실제 세션 종료 함수의 스파이.
+    // 이 파일은 session/activeAccount 전역을 흉내내지 않는다(그건 s4-send-session-end.mjs 몫).
+    endActiveSession: () => { calls.endSession += 1; },
   };
   const names = Object.keys(env);
   const factory = new Function(...names, `${constsSrc}\n${lockSrc}\n${onceSrc}\nreturn { sendPiggy, computeTripClosed, readSendPending, sendBusy, isInFlight: () => sendInFlight };`);

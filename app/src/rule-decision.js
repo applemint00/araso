@@ -105,4 +105,188 @@ export const RULE_EXAMPLES = Object.freeze({
   rewardExpiry: { id: "reward", field: "rewardExpiryHours", comparator: "gte", expected: 24, agreed: true, materialityPct: 0.25 },
 });
 
-export { RESULT, ACTION };
+// ── semantic evidence extension (A-571 Phase C) ──────────────────────────────
+//
+// Narrow, additive extension for rules the user agreed to in MEANING, not a number
+// (e.g. "I want it right back"). `decideRule`/`decideRules`/`compare` above are
+// untouched — this is a separate function with its own evidence shape, so the
+// existing numeric API cannot regress by construction.
+//
+// The evidence input (`returnClass`) is a classification of a Job's OWN live/protocol
+// return mechanics ("immediate" / "same_session" / "delayed"), produced upstream by
+// whatever reads that Job's real evidence. This module never converts a duration into
+// that class itself: there is no hour/day constant, arithmetic, or mapping anywhere in
+// this file. A specific Job's delay value (if present) rides along in `evidence.delay`
+// as a free-text field for the receipt — it is never compared numerically here and it
+// never becomes a global definition of any meaning.
+
+const RETURN_CLASS = Object.freeze({
+  IMMEDIATE: "immediate",
+  SAME_SESSION: "same_session",
+  DELAYED: "delayed",
+});
+
+// Only meanings explicitly listed here are understood. An expected meaning not in this
+// table is unknown evidence, not a guess — see `decideSemanticReturnRule`.
+//
+// [A-579] `needsDuration`: classes where the meaning can only be judged against the Job's
+// OWN stated duration. The meaning is never turned into a number here. If the Job does not
+// state its duration (`value.durationKnown !== true`) the answer is `unknown`. If it does,
+// the answer is `ask`: the user confirms the Job's own duration, and nothing is guessed.
+const SEMANTIC_RETURN_MEANING = Object.freeze({
+  right_back: Object.freeze({
+    match: Object.freeze([RETURN_CLASS.IMMEDIATE]),
+    ambiguous: Object.freeze([RETURN_CLASS.SAME_SESSION]),
+    mismatch: Object.freeze([RETURN_CLASS.DELAYED]),
+    needsDuration: Object.freeze([]),
+  }),
+  few_days: Object.freeze({
+    match: Object.freeze([RETURN_CLASS.IMMEDIATE, RETURN_CLASS.SAME_SESSION]),
+    ambiguous: Object.freeze([]),
+    mismatch: Object.freeze([]),
+    needsDuration: Object.freeze([RETURN_CLASS.DELAYED]),
+  }),
+  no_rush: Object.freeze({
+    match: Object.freeze([RETURN_CLASS.IMMEDIATE, RETURN_CLASS.SAME_SESSION]),
+    ambiguous: Object.freeze([]),
+    mismatch: Object.freeze([]),
+    needsDuration: Object.freeze([RETURN_CLASS.DELAYED]),
+  }),
+});
+
+function semanticEvidenceShape(rule, value, why) {
+  return {
+    ruleId: rule?.id ?? "unknown",
+    field: rule?.field ?? "returnSemantic",
+    comparator: "semantic_return_match",
+    expected: rule?.expected ?? "UNKNOWN",
+    found: value?.returnClass ?? "UNKNOWN",
+    did: "nothing",
+    why,
+    delay: value?.delay ?? null,
+    source: value?.source || "unknown",
+    observedAt: value?.observedAt ?? null,
+    block: null,
+  };
+}
+
+function semanticMissingEvidence(value) {
+  if (!value) return "missing_evidence";
+  if (value.returnClass === undefined || value.returnClass === null || value.returnClass === "") return "missing_evidence";
+  if (!value.source) return "missing_evidence";
+  if (value.observedAt === undefined || value.observedAt === null) return "missing_evidence";
+  if (value.conflict === true || value.sourceConflict === true) return "source_conflict";
+  if (value.stale === true) return "stale_evidence";
+  return "";
+}
+
+// Decides a single agreed rule whose expected value is a user-agreed MEANING
+// (e.g. "right_back"), not a number. Mirrors `decideRule`'s outcome/action shape
+// (`unknown`/`nah`/`ask`/`do_it`, action always `none` except a confirmed match).
+//
+// Distinct reason strings on purpose (`semantic_return_mismatch`,
+// `semantic_return_ambiguous`, `rule_not_agreed`, `missing_evidence`, ...): a
+// safety/eligibility rejection elsewhere in the system (e.g. `RULE_EXAMPLES.exitAvailability`
+// failing with reason `hard_rule_breach`) never shares a reason string with this
+// function's outcomes, so nothing downstream can fold "safety said no" and "the Job's
+// return timing didn't match what the user meant" into one preference-dislike signal.
+// Likewise a bare preference hint is never fed in here as an agreed rule — this function
+// still requires `rule.agreed === true`, same gate as `decideRule`, so a preference alone
+// can never reach `nah` or `do_it` through this path either.
+export function decideSemanticReturnRule(rule, value) {
+  if (!rule?.agreed) {
+    return {
+      result: RESULT.UNKNOWN,
+      action: ACTION.NONE,
+      reason: "rule_not_agreed",
+      evidence: semanticEvidenceShape(rule, value, "no agreed rule to check evidence against"),
+    };
+  }
+  const meaning = SEMANTIC_RETURN_MEANING[rule.expected];
+  if (!meaning) {
+    return {
+      result: RESULT.UNKNOWN,
+      action: ACTION.NONE,
+      reason: "unknown_meaning",
+      evidence: semanticEvidenceShape(rule, value, `"${rule.expected}" is not an understood agreed-rule meaning`),
+    };
+  }
+  const missing = semanticMissingEvidence(value);
+  if (missing) {
+    return {
+      result: RESULT.UNKNOWN,
+      action: ACTION.NONE,
+      reason: missing,
+      evidence: semanticEvidenceShape(rule, value, "evidence missing, stale, or conflicting — not guessed"),
+    };
+  }
+  const returnClass = value.returnClass;
+  if (meaning.mismatch.includes(returnClass)) {
+    return {
+      result: RESULT.NAH,
+      action: ACTION.NONE,
+      reason: "semantic_return_mismatch",
+      evidence: semanticEvidenceShape(
+        rule,
+        value,
+        `return doesn't match: expected "${rule.expected}", found "${returnClass}"${value.delay ? ` (${value.delay})` : ""}`,
+      ),
+    };
+  }
+  if (meaning.ambiguous.includes(returnClass)) {
+    return {
+      result: RESULT.ASK,
+      action: ACTION.ASK,
+      reason: "semantic_return_ambiguous",
+      evidence: semanticEvidenceShape(
+        rule,
+        value,
+        `boundary unclear: expected "${rule.expected}", found "${returnClass}" — ask rather than guess`,
+      ),
+    };
+  }
+  if (meaning.needsDuration.includes(returnClass)) {
+    if (value.durationKnown !== true) {
+      return {
+        result: RESULT.UNKNOWN,
+        action: ACTION.NONE,
+        reason: "return_duration_unknown",
+        evidence: semanticEvidenceShape(
+          rule,
+          value,
+          `the Job does not state how long "${returnClass}" takes, so "${rule.expected}" cannot be checked — not guessed`,
+        ),
+      };
+    }
+    return {
+      result: RESULT.ASK,
+      action: ACTION.ASK,
+      reason: "semantic_return_duration_confirm",
+      evidence: semanticEvidenceShape(
+        rule,
+        value,
+        `the Job states its own duration; confirm it against "${rule.expected}" rather than guess`,
+      ),
+    };
+  }
+  if (meaning.match.includes(returnClass)) {
+    return {
+      result: RESULT.DO_IT,
+      action: ACTION.EXECUTE,
+      reason: "semantic_return_match",
+      evidence: semanticEvidenceShape(rule, value, `return matches: expected "${rule.expected}", found "${returnClass}"`),
+    };
+  }
+  return {
+    result: RESULT.UNKNOWN,
+    action: ACTION.NONE,
+    reason: "unclassified_return",
+    evidence: semanticEvidenceShape(rule, value, `"${returnClass}" is not a classified return class`),
+  };
+}
+
+export const SEMANTIC_RULE_EXAMPLES = Object.freeze({
+  rightBackReturn: { id: "return_semantic", field: "returnSemantic", expected: "right_back", agreed: true },
+});
+
+export { RESULT, ACTION, RETURN_CLASS, SEMANTIC_RETURN_MEANING };

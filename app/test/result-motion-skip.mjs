@@ -26,7 +26,10 @@ const ok = (label, cond, detail = "") => {
 
   // Return 진입만으로는 서지 않는다 — 호출 지점이 끝(Home 정리)인지 확인
   ok("First 는 goHomeFromFilebox 에서 표시", /function goHomeFromFilebox\(\) \{\s*\n\s*markResultMotionSeen\(\);/.test(MAIN));
-  ok("Second 는 실제 완료(persist) 자리에서만 표시", /if \(persist\) markResultMotionSeen\(\);/.test(MAIN));
+  // [A-472] 계약이 더 엄격해졌다 — persist 만으로는 부족하고 **결과가 done 일 때만** 표시한다.
+  ok("Second 는 실제 완료(persist+outcome done)에서만 표시", /if \(persistNow\) markResultMotionSeen\(\);/.test(MAIN));
+  ok("  persistNow 는 persist && outcome==='done'", /const persistNow = persist && confirmed;/.test(MAIN)
+    && /const confirmed = state\.secondJourney\.outcome === "done";/.test(MAIN));
   ok("  mountReturn/mountSecondReturn 진입부에서 표시하지 않는다",
     !/function mountReturn\(\)[\s\S]{0,600}markResultMotionSeen/.test(MAIN));
   const marks = (MAIN.match(/markResultMotionSeen\(\)/g) || []).length;

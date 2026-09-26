@@ -3,11 +3,17 @@ import { ACTION, RESULT, decideRules } from "../src/rule-decision.js";
 import { STATUS, buildDestinationFixtures, runInternalPreflight, runSecondJourney } from "../src/job-feed.js";
 import { createSecondJourneyState } from "../src/second-journey-state.js";
 
+// [A-476] buildDestinationFixtures 는 이제 현재 Piggy context 를 **런타임에서** 받는다.
+// 제품 코드에 주소 상수가 없으므로 테스트가 주입한다 — 이 값은 테스트 전용이다.
+const TEST_RUNTIME_CONTEXT = { address: "0x00000000000000000000000000000000000000a1", chain: "monad-testnet" };
+
+
 let pass = 0;
 function check(label, fn) { fn(); console.log(`PASS  ${label}`); pass += 1; }
 
 check("1 visible second Journey starts only after A-174 first Receipt reference", () => {
-  const flow = runSecondJourney();
+
+const flow = runSecondJourney();
   assert.equal(flow.visibleFlow[0], "First shMON Receipt");
   assert.equal(flow.firstReceipt.sourceTask, "A-174");
   assert.equal(flow.firstReceipt.receiptClosed, true);
@@ -65,12 +71,17 @@ check("7 no-funding current Piggy does not become Job-level NAH", () => {
   assert.equal(aave.derivedStatus, STATUS.JOB_ELIGIBLE_NEEDS_FUNDING);
 });
 
-check("8 delayed return can remain WAITING when known+trackable+accepted", () => {
+// [A-579] was "8 delayed return can remain WAITING when known+trackable+accepted" (JOB_WAITING_RETURN).
+// Kintsu does not publish its return duration (A-477), so few_days cannot be checked against it:
+// the decision is unknown / action 0, not an accepted wait.
+check("8 delayed return with unpublished duration: few_days is unknown, not accepted", () => {
   const flow = runSecondJourney({ selectedErrandIds: ["grow"], jitAnswer: "few_days" });
   const kintsu = flow.destinations.find((destination) => destination.id === "kintsu-like-grow-delayed-return");
   assert.equal(kintsu.capabilityContext.returnModel.known, true);
   assert.equal(kintsu.capabilityContext.returnModel.trackable, true);
-  assert.equal(kintsu.derivedStatus, STATUS.JOB_WAITING_RETURN);
+  assert.equal(kintsu.derivedStatus, STATUS.JOB_OPEN);
+  assert.equal(kintsu.decision.reasonCode, "return_duration_unknown");
+  assert.equal(kintsu.decision.action, ACTION.NONE);
 });
 
 check("9 delayed return becomes rule_nah when user explicitly requires right-back", () => {
@@ -122,7 +133,7 @@ check("14 hard safety fail-closed semantics from existing selector/rule core rem
 });
 
 check("destination fixtures cover Aave/Kintsu/swap/Merkl semantics", () => {
-  assert.deepEqual(buildDestinationFixtures().map((destination) => destination.id), [
+  assert.deepEqual(buildDestinationFixtures(TEST_RUNTIME_CONTEXT).map((destination) => destination.id), [
     "aave-like-grow-supply",
     "kintsu-like-grow-delayed-return",
     "monad-swap-like-trade",
@@ -182,8 +193,11 @@ check("16c restored state scope/version admission fails closed before preflight"
   }
 });
 
+// [A-579] re-proved with a monad-mainnet runtime: Kintsu's Job chain. On the testnet runtime the
+// Kintsu destination is evidence only and never READY (second-journey-decision-wiring.mjs).
 check("16d runSecondJourney readiness uses trusted nowMs, not evidence nowMs", () => {
-  const kintsu = { ...buildDestinationFixtures()[1], capabilityStatus: "qualified" };
+  const TEST_RUNTIME_CONTEXT = { address: "0x00000000000000000000000000000000000000a1", chain: "monad-mainnet" };
+  const kintsu = { ...buildDestinationFixtures(TEST_RUNTIME_CONTEXT)[1], capabilityStatus: "qualified" };
   const readinessEvidence = {
     eligibility: "known",
     exit: "known",
@@ -202,8 +216,8 @@ check("16d runSecondJourney readiness uses trusted nowMs, not evidence nowMs", (
     block: 1,
   };
   const destinationOverrides = { [kintsu.id]: { capabilityStatus: "qualified" } };
-  const blocked = runSecondJourney({ selectedErrandIds: ["grow"], preferredDestinationId: kintsu.id, destinationOverrides, readinessEvidence, ruleAgreed: true, permission: true, evidenceBlock: 1, jitAnswer: "few_days" });
-  const ready = runSecondJourney({ selectedErrandIds: ["grow"], preferredDestinationId: kintsu.id, destinationOverrides, readinessEvidence, nowMs: 1000, ruleAgreed: true, permission: true, evidenceBlock: 1, jitAnswer: "few_days" });
+  const blocked = runSecondJourney({ piggyContext: TEST_RUNTIME_CONTEXT, selectedErrandIds: ["grow"], preferredDestinationId: kintsu.id, destinationOverrides, readinessEvidence, ruleAgreed: true, permission: true, evidenceBlock: 1, jitAnswer: "few_days" });
+  const ready = runSecondJourney({ piggyContext: TEST_RUNTIME_CONTEXT, selectedErrandIds: ["grow"], preferredDestinationId: kintsu.id, destinationOverrides, readinessEvidence, nowMs: 1000, ruleAgreed: true, permission: true, evidenceBlock: 1, jitAnswer: "few_days" });
   assert.equal(blocked.preflight.status, "UNKNOWN");
   assert.equal(blocked.preflight.action, ACTION.NONE);
   assert.equal(ready.preflight.status, "JOB_READY");

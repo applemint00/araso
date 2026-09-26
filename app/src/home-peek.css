@@ -1,0 +1,98 @@
+/* HOME PEEK — 1번 피기 카드 뒤 빼꼼 (2026-09-23 Owner 확정값)
+   좌표 = .homePaper 로컬 400×568 (앱에서 scale(.275) 안쪽이라 px 그대로).
+   위치는 JS 가 카드 실측으로 --peek-edge / --peek-top 을 넣는다(기본값 = 정본 374 / 214). */
+.homePaper { --peek-edge: 374px; --peek-top: 214px; }
+.homePaper__card--piggy.hasPeek { z-index: 2; }
+
+.homePeekBody {
+  position: absolute; z-index: 1; pointer-events: none; overflow: visible;
+  width: 78px; height: 81.28px;
+  left: calc(var(--peek-edge) - 39px); top: var(--peek-top);
+  transform-origin: 50% 90%;
+  transform: translate(-26px, -10px);
+  animation: homePeekGo 6s infinite;
+}
+.homePeekHandClip {
+  position: absolute; z-index: 3; pointer-events: none; overflow: hidden;
+  left: 0; top: 0; width: var(--peek-edge); height: 100%;
+}
+.homePeekHand {
+  position: absolute; width: 34.32px; height: 34.32px;
+  left: calc(var(--peek-edge) + 1px - 17.16px); top: calc(var(--peek-top) + 19px - 17.16px);
+  transform-origin: 16.16px 50%;
+  transform: scale(0); opacity: 0;
+  animation: homePeekPop 6s infinite;
+}
+.homePeekHand svg { width: 100%; height: 100%; overflow: visible; transform: rotate(67deg); }
+.homePeekEyes { transform-box: fill-box; transform-origin: 50% 50%; animation: homePeekBlink 6s infinite; }
+.homePeekLegR { transform-box: fill-box; transform-origin: 30% 5%; animation: homePeekStep 6s infinite; }
+
+@keyframes homePeekGo {
+  0%, 22%  { transform: translate(-26px, -10px) rotate(0deg); animation-timing-function: cubic-bezier(.3, 0, .2, 1); }
+  34%      { transform: translate(1px, -7px) rotate(25.76deg); }
+  38%, 76% { transform: translate(-1px, -7px) rotate(23deg); animation-timing-function: cubic-bezier(.6, 0, .9, .4); }
+  82%      { transform: translate(-30px, -10px) rotate(-5.75deg); }
+  87%, 100%{ transform: translate(-26px, -10px) rotate(0deg); }
+}
+@keyframes homePeekPop {
+  0%, 9%   { transform: scale(0); opacity: 0; }
+  10%      { opacity: 1; }
+  13%      { transform: scale(1.18); opacity: 1; }
+  16%, 76% { transform: scale(1); opacity: 1; }
+  78%, 100%{ transform: scale(0); opacity: 0; }
+}
+@keyframes homePeekStep {
+  0%, 44% { transform: rotate(0); }
+  49%     { transform: rotate(-22deg) translateY(-18px); }
+  54%, 100% { transform: rotate(0); }
+}
+@keyframes homePeekBlink {
+  0%, 57% { transform: scaleY(1); } 59% { transform: scaleY(.08); }
+  61%, 65% { transform: scaleY(1); } 67% { transform: scaleY(.08); }
+  69%, 100% { transform: scaleY(1); }
+}
+/* 미정(Owner 판정): prefers-reduced-motion 처리 — 지금은 아무것도 안 건다 */
+
+/* ===== + Piggy 탭 — 마지막 피기 카드 발아래, 카드와 같은 종이. 모양 \____/ =====
+   위치는 JS 가 카드 실측으로 --tab-right / --tab-top 을 넣는다. */
+.homePlusPiggyTab {
+  position: absolute; z-index: 1;           /* 카드(2) 아래 — 윗변이 카드 밑에 살짝 물림 */
+  right: var(--tab-right, 40px); top: var(--tab-top, 293px);
+  width: 104px; height: 30px; padding: 0; border: 0; background: none; cursor: pointer;
+  filter: drop-shadow(0 3px 0 rgba(0,0,0,.06)) drop-shadow(0 6px 8px rgba(0,0,0,.22));
+}
+.homePlusPiggyTab__paper {
+  position: absolute; inset: 0;
+  background: #F6F0E4 url("/card/paper_tex_ivory.png") center / 290px auto;   /* 카드와 같은 재질 */
+  clip-path: polygon(0 0, 100% 0, 88% 100%, 12% 100%);
+}
+.homePlusPiggyTab__label {
+  position: relative; display: block; padding-top: 5px; text-align: center;
+  font: 400 19px/1 "Delicious Handrawn", "Cherry Juice", cursive; color: #141210;
+}
+.homePlusPiggyTab:focus-visible { outline: 2px solid #141210; outline-offset: 2px; }
+
+/* [A-540 parent decision 7, 2026-09-23] reduced-motion: 루프 없이 "정착 빼꼼" 자세 한 장만.
+   패키지 원문(위)은 손대지 않는다 — 이 블록은 파일 끝에 순수 추가다(§deviation). 전부 위
+   homePeekGo/homePeekPop/homePeekBlink/homePeekStep 키프레임의 38%/76% 정착값을 그대로
+   정지시킨 것이다 — 새 자세·새 수치 0. 손은 보이는 크기(scale 1)로 고정하고, 눈은 뜬 채
+   (scaleY 1), 다리는 중립(rotate 0)이다. */
+@media (prefers-reduced-motion: reduce) {
+  .homePeekBody {
+    animation: none;
+    transform: translate(-1px, -7px) rotate(23deg); /* homePeekGo 38%/76% 정착값 */
+  }
+  .homePeekHand {
+    animation: none;
+    transform: scale(1);
+    opacity: 1; /* homePeekPop 16%/76% 정착값 */
+  }
+  .homePeekEyes {
+    animation: none;
+    transform: scaleY(1); /* homePeekBlink 0%/57%/61%/65%/69% — 뜬 눈 */
+  }
+  .homePeekLegR {
+    animation: none;
+    transform: rotate(0); /* homePeekStep 0%/44%/54% — 중립 다리(한 발 들지 않음) */
+  }
+}
