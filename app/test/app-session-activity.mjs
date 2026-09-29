@@ -11,15 +11,16 @@
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { getEvmAddress, createSecp256k1SigningSession } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
-const PRE = readFileSync(
+// Public checkout: the pre-change snapshot is local-only. Without it, §9/§10 print SKIP (not PASS).
+const PRE = existsSync(new URL("../../_private", import.meta.url)) ? readFileSync(
   new URL("../../_private/ops/receipts/A565_app_idle_activity/pre/main.js.pre", import.meta.url),
   "utf8",
-);
+) : null;
 
 function cut(src, startMarker, endMarker) {
   const start = src.indexOf(startMarker);
@@ -156,6 +157,10 @@ function buildApp() {
 
 let pass = 0;
 function check(label, fn) {
+  if (PRE === null && /pre-A-565 snapshot/.test(label)) {
+    console.log(`SKIP  ${label} — local snapshot absent (public checkout)`);
+    return;
+  }
   fn();
   console.log(`PASS  ${label}`);
   pass += 1;

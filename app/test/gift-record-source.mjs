@@ -6,7 +6,7 @@
 //   node app/test/gift-record-source.mjs
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { recoverMessageAddress } from "viem";
 import { createSecp256k1SigningSession, getEvmAddress } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
@@ -35,15 +35,19 @@ const ZERO_BYTES32 = `0x${"0".repeat(64)}`;
 // `gifts(bytes32)` output shape the module's own minimal ABI must match — verified against the
 // real compiled artifact. [A-575] = the ADOPTED A commit-reveal contract (byte-identical A-568
 // candidate_a copy, built by `forge build` in `_private/ops/harness/gift-mainnet-fork/`).
-const ARTIFACT = JSON.parse(
+// Public checkout: the artifact is local-only. Without it this control prints SKIP (not PASS) and the
+// adapter checks below compare against the same pinned shape the control asserts.
+const PINNED_OUTPUT_SHAPE = ["sender:address", "token:address", "amount:uint256", "expiry:uint64", "claimed:bool", "claimTokenHash:bytes32"];
+const ARTIFACT = existsSync(new URL("../../_private", import.meta.url)) ? JSON.parse(
   readFileSync(new URL("../../_private/ops/harness/gift-mainnet-fork/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json", import.meta.url)),
-);
-const GIFTS_ABI_ENTRY = ARTIFACT.abi.find((item) => item.type === "function" && item.name === "gifts");
-assert.ok(GIFTS_ABI_ENTRY, "control: real forge artifact must expose a gifts() getter — if this fails, the artifact path/name is wrong, not that the getter is absent");
-const REAL_OUTPUT_SHAPE = GIFTS_ABI_ENTRY.outputs.map((o) => `${o.name}:${o.type}`);
+) : null;
+if (ARTIFACT === null) console.log("SKIP  control: real forge artifact gifts() shape — local artifact absent (public checkout)");
+const GIFTS_ABI_ENTRY = ARTIFACT === null ? null : ARTIFACT.abi.find((item) => item.type === "function" && item.name === "gifts");
+if (ARTIFACT !== null) assert.ok(GIFTS_ABI_ENTRY, "control: real forge artifact must expose a gifts() getter — if this fails, the artifact path/name is wrong, not that the getter is absent");
+const REAL_OUTPUT_SHAPE = ARTIFACT === null ? PINNED_OUTPUT_SHAPE : GIFTS_ABI_ENTRY.outputs.map((o) => `${o.name}:${o.type}`);
 assert.deepEqual(
   REAL_OUTPUT_SHAPE,
-  ["sender:address", "token:address", "amount:uint256", "expiry:uint64", "claimed:bool", "claimTokenHash:bytes32"],
+  PINNED_OUTPUT_SHAPE,
   "real artifact gifts() getter shape changed — gift-record-source.js's tuple mapping must be updated to match",
 );
 

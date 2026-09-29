@@ -15,7 +15,7 @@
 //   block 107,577,653), re-derived here with the app's own code. Not a live/mainnet run.
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { createSecp256k1SigningSession, getEvmAddress } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
 import {
@@ -41,7 +41,12 @@ import { CLAIM_STATUS, TRANSFER_STATUS, attachGiftValue, createClaimLink, sealCl
 import { GIFT_GAS_POLICY, buildGiftValueBinding, giftGasBudget } from "../src/gift-value-spec.js";
 
 const REPO = new URL("../../", import.meta.url);
-const FIX = JSON.parse(readFileSync(new URL("_private/ops/harness/gift-mainnet-fork-native/fixtures/proof-input.json", REPO), "utf8"));
+// Public checkout: every check here is built on the local-only fork vector. Without it, SKIP (not PASS).
+if (!existsSync(new URL("_private", REPO))) {
+  console.log("SKIP  gift-claim-submit — local fork vector absent (public checkout); 0 checks run");
+  process.exit(0);
+}
+const FIX =JSON.parse(readFileSync(new URL("_private/ops/harness/gift-mainnet-fork-native/fixtures/proof-input.json", REPO), "utf8"));
 const ARTIFACT = JSON.parse(readFileSync(new URL("_private/ops/harness/gift-mainnet-fork-native/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json", REPO), "utf8"));
 const ENTRY_SRC = readFileSync(new URL("../src/gift-claim-entry.js", import.meta.url), "utf8");
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");

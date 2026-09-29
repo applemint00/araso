@@ -3,8 +3,13 @@
 // 하네스 스크립트를 **그대로 실행**해 결과를 검사한다(로직 재작성 0).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
+// Public checkout: every check here runs the local-only isolated harness. Without it, SKIP (not PASS).
+if (!existsSync(new URL("../../_private", import.meta.url))) {
+  console.log("SKIP  piggy-wallet-birth — local isolated harness absent (public checkout); 0 checks run");
+  process.exit(0);
+}
 const SCRIPT = new URL("../../_private/ops/harness/piggy-wallet-birth.mjs", import.meta.url).pathname;
 const SRC = readFileSync(SCRIPT, "utf8");
 const raw = execFileSync("node", [SCRIPT], { encoding: "utf8", timeout: 120000 });

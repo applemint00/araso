@@ -50,6 +50,9 @@ if (!existsSync(distDir)) {
     HOOK, HARNESS_RP, "com.araso.harness.test-identity", "araso-harness.prf.salt.v1",
     "araso-harness/credential-id", "mera-harness-keychain", "mera-local-stable", "araso.harness.public-dummy", "DO-NOT-FUND",
     "0xB23Fa3Ede41eCdc6546F834fcc24558448d52A77",
+    // [A-642 EG2 / E-8] A-629 LOCAL_ONLY hook 이름 + mainnet read RPC 가 prod 번들에 없다.
+    //   local_test_reader 는 넣지 않는다 — prod 번들에 도달 불가 dead branch 로 남는 게 정상(A-629).
+    "__ARASO_LOCAL_TEST_RETURN_READ__", "__ARASO_LOCAL_TEST_JOB_BINDINGS__", "https://rpc.monad.xyz",
   ];
   const text = files.filter((f) => /\.(js|css|html|json|map)$/.test(f)).map((f) => readFileSync(f, "utf8")).join("\n");
   for (const n of needles) ok(`dist 에 "${n}" 0건`, !text.includes(n));

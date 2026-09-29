@@ -10,7 +10,8 @@
 //
 // 하지 않는 일: 온램프/브리지 제공자 선택(이 칸 범위 밖) · 가스 후원을 충전으로 취급.
 
-import { FUNDING_KIND, NOT_ADD_MONEY } from "./add-money.js";
+import { FUNDING_KIND, NOT_ADD_MONEY, checkPlanApproval } from "./add-money.js";
+import { unitsToQuantity } from "./piggy-registry.js";
 
 // 사용자에게 보이는 말. 내부 레일 이름을 사용자에게 들이대지 않는다.
 export const FUNDING_METHOD = Object.freeze({
@@ -208,6 +209,41 @@ export function applyFundingResult(intent, result = {}) {
 /** 같은 충전이 두 번 반영되지 않게 하는 키. */
 export function fundingEvidenceKey(result) {
   return [result?.chain || "", result?.asset || "", result?.target || "", result?.txHash || ""].join("|");
+}
+
+/**
+ * [A-646 phase A] 나눔 계획의 다리 하나 → **보통의 단일 목적지 `startFunding` 의도 하나**.
+ * 받는 곳 = 그 다리의 `targetPiggyId` + 계획을 만들 때 레지스트리에서 풀어 둔 그 Piggy 의 `target`.
+ * 라우터 · 묶음 계약 · 중간 주소 없음. 승인(planId + planHash)이 지금 계획과 맞지 않으면 열지 않는다.
+ * 레일이 0 이면 `startFunding` 이 정직하게 unavailable 을 돌려준다 — 아무것도 보내지 않는다.
+ */
+export function planLegIntent(plan, leg, { approval, method, adapters = [], assetChangeAcknowledged = false } = {}) {
+  const check = checkPlanApproval(plan, approval);
+  if (!check.ok) return fail(FUNDING_STATE.FAILED, check.reason, { piggyId: leg?.piggyId ?? null });
+  const own = (plan.legs || []).find((l) => l.piggyId === leg?.piggyId);
+  if (!own || own.target !== leg.target || own.amount !== leg.amount) return fail(FUNDING_STATE.FAILED, "leg_not_in_plan", { piggyId: leg?.piggyId ?? null });
+  let amount;
+  try {
+    amount = unitsToQuantity(BigInt(own.amount), plan.asset.decimals);
+  } catch {
+    return fail(FUNDING_STATE.FAILED, "invalid_amount", { piggyId: own.piggyId });
+  }
+  const started = startFunding({
+    method,
+    amount,
+    arrival: { chain: plan.chainId, asset: plan.asset.symbol },
+    target: own.target,
+    targetPiggyId: own.piggyId,
+    adapters,
+    assetChangeAcknowledged,
+    expectedChain: plan.chainId,
+  });
+  return { ...started, piggyId: own.piggyId, idempotencyKey: own.idempotencyKey };
+}
+
+/** 계획 전체 → 다리마다 단일 목적지 의도 하나(계획 순서 = piggyId 순). 보내는 것은 호출자가 한 번에 하나씩. */
+export function expandPlanToLegIntents(plan, opts = {}) {
+  return (plan?.legs || []).map((leg) => planLegIntent(plan, leg, opts));
 }
 
 /** 가스 후원을 충전 방법으로 올리려는 시도를 막는다. */

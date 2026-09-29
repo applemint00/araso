@@ -4087,3 +4087,91 @@ h1 {
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
 }
+
+/* [A-640/A-642 Lane V] LOGIN_CHECKING 대기 모습 = `<private>` §1
+   「제안 (모바일 390)」 값 그대로(check_390.png): 얼굴 상자 left 94.5 / top 132.5 / 202.4×243.2 · Araso top 340 16px ·
+   Checking… top 380 28px · Face ID may appear once. top 420 12px — 전부 가운데 정렬, 줄높이 1.5(프리뷰 body 값).
+   얼굴·글자 모두 화면 위쪽 절반(≤ y438)이라 iOS 패스키 시트(아래 약 380px)를 피한다. 가로는 390 의 left 94.5 를
+   `50% - 100.5px` 로 적어 430 에서도 같은 가운데 축을 쓴다(세로 px 는 그대로). 새 그림 0: 파츠는 기존
+   chogInviteMarkup()(/motion/chog-invite) 이고 깜박임은 mountChogInvite() 의 기존 BLINK_KEYS 다. 프리뷰가 머리와
+   두 눈만 쓰므로 몸·팔 파츠는 여기서만 숨긴다. 이 클래스들은 잠금(≤640 에서만 생김) 마크업에만 있다 — 웹 0. */
+.stage--loginCheck .loginCheck__face {
+  position: absolute;
+  left: calc(50% - 100.5px);
+  top: 132.5px;
+  width: 202.4px;
+  height: 243.2px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.stage--loginCheck .loginCheck__face .chogInvite {
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.stage--loginCheck .loginCheck__face [data-part="body"],
+.stage--loginCheck .loginCheck__face [data-part="arm"] {
+  display: none;
+}
+
+.stage--loginCheck .arasoBrand {
+  left: 0;
+  right: 0;
+  top: 340px;
+  transform: none;
+  font-size: 16px;
+  line-height: 1.5;
+  letter-spacing: 0.08em;
+  text-align: center;
+}
+
+.stage--loginCheck .loginCheck__title,
+.stage--loginCheck .loginCheck__body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0;
+  line-height: 1.5;
+  text-align: center;
+  pointer-events: none;
+}
+
+.stage--loginCheck .loginCheck__title {
+  top: 380px;
+  font-family: var(--font-cj);
+  font-size: 28px;
+  font-weight: 400;
+  color: var(--ink);
+}
+
+.stage--loginCheck .loginCheck__body {
+  top: 420px;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 12px;
+  color: rgba(237, 232, 220, 0.5);
+}
+
+/* [A-640/A-642 Lane V] Away 복귀 확인 줄 — reentry_preview.html §3 의 줄 크기(18px 손글씨, --gold, 같은 그림자·
+   scaleY 1.15)가 모바일에서 실제로 그 크기로 보이게 한다. 이 줄은 `.chogHome` 안(place(…, HOME_SCALE) × 판 fit
+   축척)에 있어 24px 가 390 에서 ≈3.5px 로 줄어 있었다(A-633 실측 15.4×4.8). 캐릭터·판 축척(전역 Home 스케일)은
+   건드리지 않고 이 한 줄의 로컬 글자 크기만 키운다: 390 의 합성 축척 = (390/1256)×0.47124 = 0.14633 → 18px 는
+   로컬 123px(430 에서는 같은 비율로 ≈19.8px). 자리는 기존 가로축(left 450 = Chog 잉크 가운데 449.5)을 그대로 쓰고,
+   세로는 발밑 기준으로 머리 위에 뜨게 bottom 으로 고정한다. 그림자도 같은 축척으로 되돌린다(2/6px → 14/41px).
+   max-width 260 은 큰 글자에서 translateX(-50%) 가운데 맞춤을 깨므로 이 줄에서만 푼다. #awayRestoreLine 만 —
+   귀환 알람(#returnArrivalAlarm)·Explore 발화·웹(641+)은 그대로다. 페이드/점 애니메이션 없음(승인 타이밍 값 없음). */
+@media (max-width: 640px) {
+  #awayRestoreLine {
+    top: auto;
+    bottom: 628px;
+    max-width: none;
+    font-size: 123px;
+    text-shadow: 0 14px 41px rgba(0, 0, 0, 0.55);
+  }
+}

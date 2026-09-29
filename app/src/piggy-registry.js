@@ -46,7 +46,8 @@ export function piggyRegistryKey(scope = {}) {
 }
 
 // 비밀값 탐지는 **깊이 전체**를 본다 — 중첩 객체에 숨겨도 걸린다.
-function findSecretLikeKey(value, depth = 0) {
+// [A-644] piggy-control-mode.js 도 같은 거부 규칙을 쓴다(export 만 추가, 규칙 변경 0).
+export function findSecretLikeKey(value, depth = 0) {
   if (depth > 6 || !isPlainObject(value)) return null;
   for (const [key, child] of Object.entries(value)) {
     if (SECRET_LIKE.includes(key.toLowerCase().replace(/[^a-z_]/g, ""))) return key;

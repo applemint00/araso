@@ -72,6 +72,8 @@ test("a real mined receipt, and only that, reaches value_transferred", async () 
 });
 
 // ── 2. 하네스 실행 기록 ───────────────────────────────────────────────────────
+// Public checkout (no local harness workspace): §2 is SKIP, never PASS. Locally, an absent run still fails.
+const SECTION_2_START = cases.length;
 test("the fork run evidence exists — an absent run is not a pass", () => {
   assert.equal(existsSync(RUN_PATH), true,
     `no harness run at ${RUN_PATH} — run: node _private/ops/harness/gift-value-loop.mjs`);
@@ -161,4 +163,8 @@ test("the verdict is the fork label and every required check holds", () => need(
   assert.equal(r.verdict, "PASS_FORK_GIFT_VALUE_LOOP");
 }));
 
+if (!existsSync(fileURLToPath(new URL("../../_private", import.meta.url)))) {
+  const skipped = cases.splice(SECTION_2_START);
+  console.log(`SKIP  ${skipped.length} harness-run checks (§2) — local harness workspace absent (public checkout)`);
+}
 await run();

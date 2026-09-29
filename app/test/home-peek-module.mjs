@@ -11,28 +11,31 @@
 //     needed for this half of the module — mountHomePeek's SVG-fetch half is proven verbatim by
 //     the byte-identical check above + the real headless-Chrome render in this card's receipt).
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mountPlusPiggyTab } from "../src/home-peek.js";
 
 let pass = 0;
 function check(label, fn) { fn(); console.log(`PASS  ${label}`); pass += 1; }
 
 // ── 1. verbatim copy ────────────────────────────────────────────────────────────────────
-const PKG_JS = readFileSync(new URL("../../_private/design/home_peek_20260923/home-peek.js", import.meta.url), "utf8");
+// Public checkout: the design package is local-only. Without it the package-based checks print SKIP (not PASS).
+const HAS_PKG = existsSync(new URL("../../_private", import.meta.url));
+const PKG_JS = HAS_PKG ? readFileSync(new URL("../../_private/design/home_peek_20260923/home-peek.js", import.meta.url), "utf8") : null;
 const APP_JS = readFileSync(new URL("../src/home-peek.js", import.meta.url), "utf8");
-const PKG_CSS = readFileSync(new URL("../../_private/design/home_peek_20260923/home-peek.css", import.meta.url), "utf8");
+const PKG_CSS = HAS_PKG ? readFileSync(new URL("../../_private/design/home_peek_20260923/home-peek.css", import.meta.url), "utf8") : null;
 const APP_CSS = readFileSync(new URL("../src/home-peek.css", import.meta.url), "utf8");
+const pkgCheck = (label, fn) => (HAS_PKG ? check(label, fn) : console.log(`SKIP  ${label} — design package absent (public checkout)`));
 
-check("home-peek.js is byte-identical to the confirmed design package", () => {
+pkgCheck("home-peek.js is byte-identical to the confirmed design package", () => {
   assert.equal(APP_JS, PKG_JS);
 });
 
-check("home-peek.css keeps the confirmed package content byte-identical (only an additive block after it)", () => {
+pkgCheck("home-peek.css keeps the confirmed package content byte-identical (only an additive block after it)", () => {
   assert.ok(APP_CSS.startsWith(PKG_CSS), "app CSS must contain the whole package CSS unchanged, as a prefix");
 });
 
 // ── 2. parent decision 7 — reduced-motion static settled peek, no invented pose ────────────
-check("reduced-motion turns off all 4 loops and freezes each layer at its own confirmed settled value", () => {
+pkgCheck("reduced-motion turns off all 4 loops and freezes each layer at its own confirmed settled value", () => {
   const added = APP_CSS.slice(PKG_CSS.length);
   assert.match(added, /@media \(prefers-reduced-motion: reduce\)/);
   const media = added.slice(added.indexOf("@media (prefers-reduced-motion: reduce)"));
@@ -45,13 +48,13 @@ check("reduced-motion turns off all 4 loops and freezes each layer at its own co
   assert.match(media, /\.homePeekLegR\s*\{\s*animation:\s*none;\s*transform:\s*rotate\(0\);/);
 });
 
-check("outside the reduced-motion query, the original infinite 6s loops are untouched", () => {
+pkgCheck("outside the reduced-motion query, the original infinite 6s loops are untouched", () => {
   assert.match(PKG_CSS, /animation: homePeekGo 6s infinite;/);
   assert.match(PKG_CSS, /animation: homePeekPop 6s infinite;/);
   assert.match(APP_CSS.slice(0, PKG_CSS.length), /animation: homePeekGo 6s infinite;/);
 });
 
-check("no new pose/art was invented — every reduced-motion value is a keyframe value already in the confirmed CSS", () => {
+pkgCheck("no new pose/art was invented — every reduced-motion value is a keyframe value already in the confirmed CSS", () => {
   for (const value of ["translate(-1px, -7px) rotate(23deg)", "scale(1)", "scaleY(1)"]) {
     assert.ok(PKG_CSS.includes(value), `${value} must already exist in the confirmed keyframes`);
   }

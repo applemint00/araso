@@ -16,7 +16,7 @@
 // The +Piggy tab is only hit-tested, never activated (activation = passkey assertion).
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -109,6 +109,8 @@ check("all widths: folded flap + every +Piggy tab pointer-events:auto (style.css
     /state\.secondJourneyCompletedOnce === true/.test(fnBody(code, "showAddPiggyTab")) && /if \(!state\.secondJourneyCompletedOnce\) return \{ started: false, reason: "second_journey_not_closed" \}/.test(code), true);
 }
 for (const [app, pkg] of [["home-paper-multi.js", "home_paper_multi_20260923/home-paper-multi.js"], ["home-paper-multi.css", "home_paper_multi_20260923/home-paper-multi.css"], ["home-peek.js", "home_peek_20260923/home-peek.js"]]) {
+  // Public checkout: the design package is local-only. Without it this comparison prints SKIP (not PASS).
+  if (!existsSync(path.join(REPO_ROOT, "_private"))) { console.log(`SKIP  ${app} package comparison — design package absent (public checkout)`); continue; }
   check(`${app} still byte-identical to the Owner-confirmed package`,
     readFileSync(path.join(APP_DIR, "src", app), "utf8") === readFileSync(path.join(REPO_ROOT, "_private/design", pkg), "utf8"), true);
 }

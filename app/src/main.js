@@ -31,9 +31,20 @@ import {
   amountChoiceMarkup,
   confirmButtonMarkup,
   homePiggyDetailMarkup,
+  controlModeChoicesMarkup,
+  addMoneyEntryMarkup,
+  addMoneySingleMarkup,
+  addMoneyAllocationMarkup,
+  addMoneyPlanMarkup,
+  piggyMoneyStateMarkup,
   HOME_NOT_APPLICABLE_LABEL,
 } from "./home-paper.js";
-import { createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry } from "./piggy-registry.js";
+import { createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry, quantityToUnits, unitsToQuantity } from "./piggy-registry.js";
+import {
+  newPlanId, buildAllocationPlan, approvalForPlan, percentBpsFromAmount, amountFromPercentBps,
+  loadLastSplit, saveLastSplit, prefillFromLastSplit,
+} from "./add-money.js";
+import { CONTROL_MODE_OPTIONS, isControlMode, loadControlMode, saveControlMode } from "./piggy-control-mode.js";
 import { CLAIM_RESULT, claimStatement } from "./gift-piggy-claim-link.js";
 import {
   beginGiftClaim,
@@ -60,8 +71,8 @@ import {
 import { admitModelAPiggy, loadMyPiggiesIndex, registerControlledPiggy, renameIndexedPiggy } from "./piggy-index.js";
 import { recoverProductList } from "./gate-b-recovery.js";
 import { listFundingMethods, startFunding, applyFundingResult, FUNDING_STATE } from "./funding-entry.js";
-import { checkIntentFunding, fundingRequestForShortfall, resumeAfterFunding } from "./funding-intent-bridge.js";
-import { buildFundingContext, validateFundingContext, scopeForChainId } from "./funding-context.js";
+import { checkIntentFunding, fundingRequestForShortfall, resumeAfterFunding, markPlanApproved } from "./funding-intent-bridge.js";
+import { buildFundingContext, validateFundingContext, scopeForChainId, FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "./funding-context.js";
 import { reconcileConfirmedFunding } from "./funding-reconcile.js";
 import {
   decodeReceiptRow,
@@ -3734,17 +3745,36 @@ function renderAuthCard(view = state) {
 // 검토 OPEN). 그 Chog 가 탭 대상이다 → unlockApp(). 실패면 같은 카드의 기존 실패 모습(Couldn't open Piggy)을
 // 쓰되, 두 버튼 모두 잠금 해제 경로에만 묶는다: Try again → LOGIN_CHECKING 으로(인증 호출 0), Check Piggy →
 // unlockApp()(탭 안에서 곧장). 생성·Hatch·서명자 0.
+// [A-640/A-642 Lane V] 대기(waiting/checking) 모습만 reentry_preview.html §1 모바일 구도로 바꾼다 — 카드 대신
+// 큰 Chog 얼굴(기존 chogInviteMarkup() 파츠 중 머리+두 눈만, 몸·팔은 CSS 로 숨김) · 그 아래 Araso(기존
+// arasoBrandMarkup(), 이 화면에서만 한 번) · Checking… · Face ID may appear once.(기존 문구 그대로). 탭 대상은
+// 여전히 #loginChogButton → unlockApp() 하나(아래 배선 불변). 실패 모습은 기존 카드 그대로(renderAuthCard).
+// 좌표 = §1 390 프리뷰 값(style.css .stage--loginCheck). 잠금은 appLockSurface()(≤640)에서만 생기므로 웹 0.
+function loginCheckingMarkup(phase) {
+  return `
+    <section class="stage stage--loginCheck" data-scene="birth" data-app-lock="${phase}">
+      <button class="loginCheck__face" id="loginChogButton" type="button" aria-label="Face ID">${chogInviteMarkup()}</button>
+      ${arasoBrandMarkup()}
+      <h1 class="loginCheck__title">Checking…</h1>
+      <p class="loginCheck__body">Face ID may appear once.</p>
+      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
+    </section>
+  `;
+}
+
 function renderAppLock() {
   clearInviteTimers();
   const failed = state.appLock.phase === "failed";
-  app.innerHTML = renderAuthCard({
-    authPhase: failed ? "idle" : "checking",
-    authCancelled: failed && !!state.appLock.cancelled,
-    message: "",
-    detail: "",
-    appLock: state.appLock.phase,
-    chogTap: !failed,
-  });
+  app.innerHTML = failed
+    ? renderAuthCard({
+        authPhase: failed ? "idle" : "checking",
+        authCancelled: failed && !!state.appLock.cancelled,
+        message: "",
+        detail: "",
+        appLock: state.appLock.phase,
+        chogTap: !failed,
+      })
+    : loginCheckingMarkup(state.appLock.phase);
   mountInviteChog();
   if (failed) {
     document.querySelector("#authTryAgainButton")?.addEventListener("click", () => {
@@ -4781,6 +4811,239 @@ function moneyIntentMarkup(piggy) {
   </div>`;
 }
 
+// [A-644 2C] MY MONEY 에서 "고른 Piggy" = 사용자가 **행을 탭해** 고른 그 한 마리 — 행 탭은
+// historyPiggyId(오른쪽 HISTORY)와 selectedPiggy(A-512 정본 선택)를 같은 id 로 함께 세운다.
+// 둘이 같을 때만 고른 것으로 본다 → 표시된 고른 행 · 조작 깊이 · HISTORY 가 항상 같은 Piggy.
+// (HOME 의 resident records 는 historyPiggyId 만 바꾸므로 여기서 "고름"이 되지 않는다.)
+function myMoneySelectedPiggyId(piggies) {
+  const id = selectedHistoryPiggyId();
+  if (!id || state.selectedPiggy?.id !== id) return null;
+  return piggies.some((p) => p.id === id) ? id : null;
+}
+
+// [A-644 2A/2B] 조작 깊이를 보여 줄 Piggy — **확정된 Second 완료 뒤에만**, 그리고 고른 Piggy
+// 한 마리가 있을 때만. 둘 이상: MY MONEY 에서 고른 행. 한 마리: 그 행을 눌러 연 Piggy 상세.
+// 그 밖(Second 전·실패·미확정, HOME 면, 선택 없음)은 null → 선택지 자체가 없다.
+function controlModePiggyId() {
+  if (state.secondJourneyCompletedOnce !== true || state.scene !== "sendstay") return null;
+  const { piggies } = moneyPiggiesSnapshot();
+  if (state.homePaperMode === "money" && piggies.length > 1) return myMoneySelectedPiggyId(piggies);
+  if (state.homePaperMode === "piggyDetail" && piggies.length === 1) return piggies[0].id;
+  return null;
+}
+
+function controlModeScope(piggyId) {
+  return { ...secondJourneyScope(), piggyId };
+}
+
+// 선호(설정)만 읽어 그린다 — 권한·서명·tx·충전·Job 과 무관하다(A-644 forbidden).
+function controlModeMarkupFor(piggyId) {
+  if (!piggyId) return "";
+  const { mode } = loadControlMode(safeLocalStorage(), controlModeScope(piggyId));
+  return controlModeChoicesMarkup(CONTROL_MODE_OPTIONS, { selected: mode, piggyId });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [A-646 phase B] Add money — A-645 NEXT_APP_INPUT S1·S2·S4(UI)·S8·S9.
+// 입구는 MY MONEY 안에만, **확정된 Second 뒤 + 조용한 Home(sendstay)** 에서만(Slice 1 과 같은 게이트).
+// 한 마리 → 그 Piggy 로 곧장(A-508 picker skip). 둘 이상 → 한 화면 나눔 미리보기.
+// 이 화면 어디서도 보내기 0 · 서명 0 · WebAuthn 0 · tx 0. 레일 0 → ok 뒤에는 기존 방법 목록이 정직하게 전부 비활성.
+// 나눔 기억은 **미리 채우기**만(실행·확인 생략·추천 0). Home 은 돈·서명자를 갖지 않는다 — 받는 곳은 레지스트리의 각 Piggy.
+// 상태는 이 종이가 MY MONEY 인 동안만 산다: 다른 면으로 가면 homePadMarkup 이 지운다(Gate Q4).
+const ADD_MONEY_ASSET = "USDC";
+
+function addMoneyEntryAllowed() {
+  return state.secondJourneyCompletedOnce === true && state.scene === "sendstay" && state.homePaperMode === "money";
+}
+
+function addMoneyDecimals() {
+  return FUNDING_CONTEXT_TOKEN_ALLOWLIST[secondJourneyScope().chainId]?.[ADD_MONEY_ASSET]?.decimals ?? null;
+}
+
+// 받을 수 있는 Piggy = 레지스트리/색인에 주소가 있는 Piggy. 목적지는 여기서만 온다(주소 입력 0).
+function addMoneyPiggies() {
+  return moneyPiggiesSnapshot().piggies.filter((p) => typeof p.address === "string" && /^0x[0-9a-fA-F]{40}$/.test(p.address));
+}
+
+function bpsToPercentText(bps) {
+  if (!Number.isInteger(bps)) return "";
+  const whole = Math.floor(bps / 100);
+  const frac = String(bps % 100).padStart(2, "0").replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : String(whole);
+}
+
+function percentTextToBps(text) {
+  const t = String(text ?? "").trim();
+  if (!/^\d{1,3}(\.\d{1,2})?$/.test(t)) return null;
+  const [w, f = ""] = t.split(".");
+  const bps = Number(w) * 100 + Number(f.padEnd(2, "0"));
+  return bps <= 10000 ? bps : null;
+}
+
+function addMoneyUnits(text) {
+  const d = addMoneyDecimals();
+  const t = String(text ?? "").trim();
+  if (d === null || t === "") return null;
+  return quantityToUnits(t, d);
+}
+
+function openAddMoney() {
+  if (!addMoneyEntryAllowed()) return;
+  const piggies = addMoneyPiggies();
+  if (piggies.length <= 1) {
+    const only = piggies[0] || null;
+    state.addMoney = { kind: "single", piggyId: only?.id ?? null, name: only?.name || displayPiggyName() };
+    return;
+  }
+  // 기억이 있으면 그 비율을 퍼센트 칸에 **숫자로만** 채운다. 없으면 모든 칸이 빈다(미리 고름 0).
+  const { ratios } = loadLastSplit(safeLocalStorage(), secondJourneyScope());
+  const byId = new Map((ratios || []).map((r) => [r.piggyId, r.bps]));
+  const rows = {};
+  for (const p of piggies) {
+    const bps = byId.get(p.id);
+    rows[p.id] = bps ? { amount: "", percent: bpsToPercentText(bps), lead: "percent" } : { amount: "", percent: "", lead: null };
+  }
+  state.addMoney = { kind: "allocation", planId: newPlanId(), total: "", rows, memory: ratios || null, touched: false };
+}
+
+// total 이 바뀌거나 한 칸이 바뀐 뒤 나머지 칸을 다시 센다. 진실은 금액(정수 최소 단위), 퍼센트는 표시.
+function recomputeAddMoney(changedId = null) {
+  const am = state.addMoney;
+  if (!am || am.kind !== "allocation") return;
+  const T = addMoneyUnits(am.total);
+  const valid = T !== null && T > 0n;
+  const d = addMoneyDecimals();
+  const piggies = addMoneyPiggies();
+  // 기억에서 온 비율을 사용자가 아직 건드리지 않았고 모두 그대로 있으면 — 최대 나머지로 Σ = total 을 정확히.
+  if (valid && am.memory && !am.touched) {
+    const pre = prefillFromLastSplit(am.memory, piggies, T.toString());
+    if (pre.rows && pre.dropped.length === 0) {
+      for (const r of pre.rows) if (am.rows[r.piggyId] && am.rows[r.piggyId].lead === "percent") am.rows[r.piggyId].amount = unitsToQuantity(BigInt(r.amount), d);
+      return;
+    }
+  }
+  for (const [id, row] of Object.entries(am.rows)) {
+    if (changedId && id !== changedId) continue;
+    if (row.lead === "percent") {
+      const bps = percentTextToBps(row.percent);
+      row.amount = valid && bps !== null ? unitsToQuantity(BigInt(amountFromPercentBps(bps, T.toString())), d) : "";
+    } else if (row.lead === "amount") {
+      const u = addMoneyUnits(row.amount);
+      const bps = valid && u !== null ? percentBpsFromAmount(u.toString(), T.toString()) : null;
+      row.percent = bps === null ? "" : bpsToPercentText(bps);
+    }
+  }
+}
+
+// ok 가 열리는 조건: total > 0 · 모든 칸이 비었거나 유효 · Σ = total. (남는 돈을 몰래 어디에 두지 않는다.)
+function addMoneyPlanRows() {
+  const am = state.addMoney;
+  if (!am || am.kind !== "allocation") return null;
+  const T = addMoneyUnits(am.total);
+  if (T === null || T <= 0n) return null;
+  const rows = [];
+  let sum = 0n;
+  for (const [piggyId, row] of Object.entries(am.rows)) {
+    const text = String(row.amount ?? "").trim();
+    const u = text === "" ? 0n : addMoneyUnits(text);
+    if (u === null) return null;
+    sum += u;
+    rows.push({ piggyId, amount: u.toString() });
+  }
+  return sum === T && sum > 0n ? { total: T.toString(), rows } : null;
+}
+
+function confirmAddMoney() {
+  const ready = addMoneyPlanRows();
+  const am = state.addMoney;
+  if (!ready || !am) return;
+  const scope = secondJourneyScope();
+  const built = buildAllocationPlan({
+    planId: am.planId, chainId: scope.chainId, accountId: scope.accountId,
+    asset: { symbol: ADD_MONEY_ASSET, decimals: addMoneyDecimals() }, total: ready.total, rows: ready.rows, piggies: addMoneyPiggies(),
+  });
+  if (!built.ok) return;
+  const { approval } = approvalForPlan(built.plan);
+  const approved = markPlanApproved(built.plan, approval);
+  if (!approved.ok) return;
+  // 확인한 나눔의 **비율만** 기억한다 — 다음 미리보기 채우기용. 권한·금액·주소는 남기지 않는다.
+  saveLastSplit(safeLocalStorage(), scope, approved.plan, approval);
+  state.addMoney = { kind: "plan", plan: approved.plan };
+}
+
+function addMoneyBodyMarkup() {
+  const am = state.addMoney;
+  const methodsMarkup = fundingMethodsMarkup(fundingMethods());
+  if (am.kind === "single") return addMoneySingleMarkup({ name: am.name, methodsMarkup });
+  const d = addMoneyDecimals();
+  if (am.kind === "plan") {
+    return addMoneyPlanMarkup({
+      unit: ADD_MONEY_ASSET,
+      legs: am.plan.legs.map((l) => ({ piggyId: l.piggyId, name: l.name, amount: unitsToQuantity(BigInt(l.amount), d) })),
+      methodsMarkup,
+    });
+  }
+  const names = new Map(addMoneyPiggies().map((p) => [p.id, p.name || p.id]));
+  return addMoneyAllocationMarkup({
+    total: am.total,
+    unit: ADD_MONEY_ASSET,
+    rows: Object.entries(am.rows).map(([piggyId, r]) => ({ piggyId, name: names.get(piggyId) || piggyId, amount: r.amount, percent: r.percent })),
+    canConfirm: addMoneyPlanRows() !== null,
+  });
+}
+
+// 입력 중에는 다시 그리지 않는다(초점 유지) — 바뀐 **다른** 칸의 값과 ok 상태만 고친다.
+function handleAddMoneyInput(event) {
+  const am = state.addMoney;
+  const el = event.target;
+  if (!am || am.kind !== "allocation" || !(el instanceof HTMLInputElement)) return;
+  let changedId = null;
+  if (el.id === "homeAddMoneyTotal") {
+    am.total = el.value;
+  } else if (el.id.startsWith("homeAddMoneyAmount--")) {
+    changedId = el.id.slice("homeAddMoneyAmount--".length);
+    if (!am.rows[changedId]) return;
+    am.rows[changedId] = { ...am.rows[changedId], amount: el.value, lead: "amount" };
+    am.touched = true;
+  } else if (el.id.startsWith("homeAddMoneyPercent--")) {
+    changedId = el.id.slice("homeAddMoneyPercent--".length);
+    if (!am.rows[changedId]) return;
+    am.rows[changedId] = { ...am.rows[changedId], percent: el.value, lead: "percent" };
+    am.touched = true;
+  } else {
+    return;
+  }
+  recomputeAddMoney(changedId);
+  for (const [id, row] of Object.entries(am.rows)) {
+    const a = document.getElementById(`homeAddMoneyAmount--${id}`);
+    const pc = document.getElementById(`homeAddMoneyPercent--${id}`);
+    if (a && a !== el) a.value = row.amount;
+    if (pc && pc !== el) pc.value = row.percent;
+  }
+  const ok = document.getElementById("homeAddMoneyOk");
+  if (ok) ok.disabled = addMoneyPlanRows() === null;
+}
+// 문서에 한 번만 거는 위임 — render()(A-633/A-642 byte-stable)를 건드리지 않는다. Add money 칸 밖 입력은 무시.
+if (typeof document?.addEventListener === "function") {
+  document.addEventListener("input", (event) => {
+    if (event.target?.closest?.(".homePaper__addMoney")) handleAddMoneyInput(event);
+  });
+}
+
+// [A-646 S8] 고른 Piggy 안의 돈 상태(상세 자리에서만). 모든 Piggy 같은 규칙:
+// at home = 집에 있는 Piggy 의 확인된 평가만(모르면 unknown, $0 아님) · working with = 나가 있는 Piggy 의
+// 확인된 평가만(없으면 줄 0) · returning = 실제 원천 없음 → 그리지 않는다.
+function piggyMoneyStateMarkupFor(piggyId) {
+  if (!piggyId) return "";
+  const piggy = moneyPiggiesSnapshot().piggies.find((p) => p.id === piggyId) || null;
+  if (!piggy) return "";
+  const usd = piggy.valuation && typeof piggy.valuation.usd === "string" ? `$${piggy.valuation.usd}` : null;
+  return piggyMoneyStateMarkup({
+    atHomeValue: piggy.location === "home" ? usd : null,
+    workingWithValue: piggy.location === "away" ? usd : null,
+  });
+}
+
 function homeMoneyBodyMarkup(name) {
   const time = homeTimeNow();
   if (state.homeMoneyStatus === "idle" || state.homeMoneyStatus === "loading") {
@@ -4803,6 +5066,11 @@ function homeMoneyBodyMarkup(name) {
       },
     });
   }
+  // [A-646] Add money 가 열려 있으면 행 카드 자리를 그 한 화면이 쓴다(새 종이 0). 닫히면 그 자리는 원래 행으로.
+  if (state.addMoney && addMoneyEntryAllowed()) {
+    return homeMoneyMarkup({ title: "MY MONEY", time, rows: [], afterRowsMarkup: addMoneyBodyMarkup() });
+  }
+  const addMoneyEntry = addMoneyEntryAllowed() ? addMoneyEntryMarkup() : "";
   const awayNow = homeMoneyAwayNow();
   const nativeAmount = formatHomeMoneyAmount(state.homeMoneyNativeWei);
   const shmonAmount = formatHomeMoneyAmount(state.homeMoneyShmonWei);
@@ -4815,19 +5083,26 @@ function homeMoneyBodyMarkup(name) {
     const rows = homeMoneyPiggyRows({
       totals: snapshot.totals,
       piggies: snapshot.piggies,
-      selectedPiggyId: selectedHistoryPiggyId(),
+      // [A-644] 보이는 "고른 행" = 행 탭으로 고른 그 Piggy(myMoneySelectedPiggyId). 전에는 이 값이
+      // homeRowMarkup 에서 버려져 화면에 아무 표시도 없었다(Lane U) — 이제 --on 으로 보인다.
+      selectedPiggyId: myMoneySelectedPiggyId(snapshot.piggies),
     });
     // [A-510 Stream A] 고른 Piggy 아래의 give/bring 인라인 동작은 걷어냈다(A-486 이력).
     const selected = snapshot.piggies.find((p) => p.id === state.selectedPiggy?.id) || null;
     const intentMarkup = selected ? moneyIntentMarkup(selected) : "";
     // [A-495 Lane B] 충전이 열려 있으면 그 자리에서 방법을 보여준다(새 종이 0). 받는 곳은 그 Piggy 다.
     const fundingMarkup = state.funding ? fundingMethodsMarkup(fundingMethods()) : "";
-    return homeMoneyMarkup({ title: "MY MONEY", time, rows, note: homeMoneyTotalsNote(snapshot.totals) }) + intentMarkup + fundingMarkup;
+    // [A-644 2B] 고른 Piggy 의 조작 깊이 — Second 확정 뒤 + 고른 행이 있을 때만(controlModePiggyId).
+    // [A-646] 고른 Piggy 의 돈 상태(S8) + Add money 입구(S1)가 같은 자리 뒤에 이어진다.
+    const selectedForSettings = controlModePiggyId();
+    const afterRowsMarkup = controlModeMarkupFor(selectedForSettings) + piggyMoneyStateMarkupFor(selectedForSettings) + addMoneyEntry;
+    return homeMoneyMarkup({ title: "MY MONEY", time, rows, note: homeMoneyTotalsNote(snapshot.totals), afterRowsMarkup }) + intentMarkup + fundingMarkup;
   }
 
   return homeMoneyMarkup({
     title: "MY MONEY",
     time,
+    afterRowsMarkup: addMoneyEntry,
     rows: [
       { label: "at home", amount: nativeAmount, unit: nativeAmount === null ? undefined : "MON" },
       {
@@ -4883,6 +5158,8 @@ function homePiggyDetailBodyMarkup(name) {
     workState: null,
     expectedBack: null,
     costSoFar: receipt ? (gasAmount === null ? null : `${gasAmount} MON`) : HOME_NOT_APPLICABLE_LABEL,
+    // [A-644 2B] 한 마리 경로: 이 상세 면이 "고른 Piggy" 다. Second 확정 전이면 빈 문자열.
+    afterRowsMarkup: controlModeMarkupFor(controlModePiggyId()) + piggyMoneyStateMarkupFor(controlModePiggyId()),
   });
 }
 
@@ -5134,6 +5411,8 @@ function homePadMarkup(scene) {
     recordsEntryMarkup,
     ...homeStatusFromScene(scene),
   };
+  // [A-646 Gate Q4] Add money 는 MY MONEY 면이 떠 있는 동안만 산다 — 다른 면이면 흔적 없이 닫는다.
+  if (mode !== "money") state.addMoney = null;
   if (mode === "home") {
     const residents = homeResidents(base.label, recordsEnabled);
     return homePaperMarkup({ mode: "home", ...base, residents });
@@ -5373,6 +5652,23 @@ function handleHomePaperMountClick(event) {
   // HISTORY's own close/back/list act until it closes. Web is untouched (HOME live, identity
   // switching by another Piggy's records still works there).
   if (state.recordsCardVisible && window.innerWidth <= 640) return;
+  // [A-646] Add money — 열기 · 닫기 · ok(한 번). 셋 다 왼쪽 종이만 다시 그린다. 서명·WebAuthn·tx·충전 0.
+  if (event.target.closest("#homeAddMoney")) {
+    openAddMoney();
+    refreshHomePaperMount();
+    return;
+  }
+  if (event.target.closest("#homeAddMoneyBack")) {
+    state.addMoney = null;
+    refreshHomePaperMount();
+    return;
+  }
+  if (event.target.closest("#homeAddMoneyOk")) {
+    confirmAddMoney();
+    refreshHomePaperMount();
+    return;
+  }
+  if (event.target.closest(".homePaper__addMoney")) return; // 칸 탭은 입력만 — 다른 분기로 흘리지 않는다.
   // [A-510 Stream A] A-486 의 `homePiggyAction--` (give/bring) 분기는 걷어냈다 — 그 버튼을 그리는 곳이 없다.
   const choiceButton = event.target.closest('[id^="homeAmountChoice--"]');
   if (choiceButton && state.moneyIntent) {
@@ -5394,6 +5690,17 @@ function handleHomePaperMountClick(event) {
     return;
   }
 
+  // [A-644 2B] 고른 Piggy 의 조작 깊이 — **선호 저장소에만** 쓴다. 대상 Piggy 는 DOM 이 아니라
+  // 그림을 그린 것과 같은 규칙(controlModePiggyId)으로 다시 정한다. 서명·권한·tx·충전·Job·
+  // moneyIntent·selectedPiggy 를 건드리지 않고, render() 대신 왼쪽 종이만 다시 그린다.
+  const controlModeButton = event.target.closest('[id^="homeControlMode--"]');
+  if (controlModeButton) {
+    const piggyId = controlModePiggyId();
+    const mode = controlModeButton.id.slice("homeControlMode--".length);
+    if (piggyId && isControlMode(mode)) saveControlMode(safeLocalStorage(), controlModeScope(piggyId), mode);
+    refreshHomePaperMount();
+    return;
+  }
   // [A-484 Lane C] MY MONEY 의 Piggy 행 → **오른쪽 HISTORY 의 정체성만** 바꾼다.
   // 새 종이를 만들지 않는다. 다른 행을 고르면 정체성이 교체될 뿐이다.
   const moneyPiggyRow = event.target.closest('[id^="homeMoneyPiggyRow--"]');
@@ -5401,6 +5708,11 @@ function handleHomePaperMountClick(event) {
     state.historyPiggyId = moneyPiggyRow.id.slice("homeMoneyPiggyRow--".length) || null;
     // [A-512] 행을 고르면 그 Piggy 가 돈 동작의 선택이 된다 — 바뀌면 이전 권한부터 죽인다.
     applyPiggySelection(moneyPiggiesSnapshot().piggies.find((p) => p.id === state.historyPiggyId) || null);
+    // [A-644] 고른 행(--on)과 (Second 뒤) 그 Piggy 의 조작 깊이가 바로 보이도록 왼쪽 종이만 다시
+    // 그린다 — 그 전엔 openRecordsCard() 만 불러 종이가 옛 모양 그대로였다. 초점은 같은 행으로 돌려준다.
+    const hadFocus = document.activeElement === moneyPiggyRow;
+    refreshHomePaperMount();
+    if (hadFocus) document.getElementById(moneyPiggyRow.id)?.focus({ preventScroll: true });
     openRecordsCard();
     return;
   }

@@ -108,7 +108,8 @@ check("no third paper, no Piggy Detail page is introduced", () => {
     assert.equal(laneB.includes(banned), false, `must not introduce ${banned}`);
   }
   // 의도/충전 표시는 MY MONEY 본문에 문자열로 이어붙는다(새 앵커/씬 0)
-  assert.match(MAIN, /homeMoneyMarkup\(\{ title: "MY MONEY", time, rows, note: homeMoneyTotalsNote\(snapshot\.totals\) \}\) \+ intentMarkup \+ fundingMarkup/);
+  // [A-644] 같은 호출에 고른 Piggy 조작 깊이(afterRowsMarkup, 행 카드 안)만 더해졌다 — 의도/충전 이어붙임은 그대로.
+  assert.match(MAIN, /homeMoneyMarkup\(\{ title: "MY MONEY", time, rows, note: homeMoneyTotalsNote\(snapshot\.totals\)(, afterRowsMarkup)? \}\) \+ intentMarkup \+ fundingMarkup/);
 });
 
 check("HOME records behaviour is untouched", () => {

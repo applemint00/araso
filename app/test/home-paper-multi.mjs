@@ -13,21 +13,24 @@
 //     by this card's headless-Chrome receipt, not by this file.
 import assert from "node:assert/strict";
 import vm from "node:vm";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 let pass = 0;
 async function check(label, fn) { await fn(); console.log(`PASS  ${label}`); pass += 1; }
 
 // ── 1. verbatim copy ────────────────────────────────────────────────────────────────────
-const PKG_JS = readFileSync(new URL("../../_private/design/home_paper_multi_20260923/home-paper-multi.js", import.meta.url), "utf8");
+// Public checkout: the design package is local-only. Without it the two package comparisons print SKIP (not PASS).
+const HAS_PKG = existsSync(new URL("../../_private", import.meta.url));
+const PKG_JS = HAS_PKG ? readFileSync(new URL("../../_private/design/home_paper_multi_20260923/home-paper-multi.js", import.meta.url), "utf8") : null;
 const APP_JS = readFileSync(new URL("../src/home-paper-multi.js", import.meta.url), "utf8");
-const PKG_CSS = readFileSync(new URL("../../_private/design/home_paper_multi_20260923/home-paper-multi.css", import.meta.url), "utf8");
+const PKG_CSS = HAS_PKG ? readFileSync(new URL("../../_private/design/home_paper_multi_20260923/home-paper-multi.css", import.meta.url), "utf8") : null;
 const APP_CSS = readFileSync(new URL("../src/home-paper-multi.css", import.meta.url), "utf8");
+const pkgCheck = (label, fn) => (HAS_PKG ? check(label, fn) : console.log(`SKIP  ${label} — design package absent (public checkout)`));
 
-await check("home-paper-multi.js is byte-identical to the confirmed design package", () => {
+await pkgCheck("home-paper-multi.js is byte-identical to the confirmed design package", () => {
   assert.equal(APP_JS, PKG_JS);
 });
-await check("home-paper-multi.css is byte-identical to the confirmed design package (no deviation needed here)", () => {
+await pkgCheck("home-paper-multi.css is byte-identical to the confirmed design package (no deviation needed here)", () => {
   assert.equal(APP_CSS, PKG_CSS);
 });
 await check("the 420ms expansion curve is untouched (parent decision 6 — APPLIED_NOT_VISUALLY_CHECKED, no invented timing)", () => {

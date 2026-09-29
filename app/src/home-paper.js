@@ -182,18 +182,49 @@ function homeMoneyValueMarkup(amount, unit) {
 
 // 한 행 = 소유/상태 하나의 사실(예: at home / with Piggy / away). main.js 가 이미 분리해
 // 넘긴 값을 그대로 찍을 뿐, 여기서 두 행을 합산하지 않는다(canon "중복합산0").
-function homeRowMarkup({ id, label, amount, unit, checking, clickable } = {}) {
+// [A-644 U-1] 탭 가능한 행은 Home 패드 체인의 pointer-events:none 을 물려받아 실제 탭이
+// 닿지 않았다(elementFromPoint = section.stage, 390/430/700/1440). 스탬프(A-419)·records·
+// flap/+Piggy(A-623/A-624)와 같은 처방(pointer-events:auto)을, style.css 가 이 카드 허용
+// 범위 밖이라 **이 버튼 자신의 인라인 속성**으로만 건다 — 크기·위치·색 변화 0.
+const TAP_ROW_STYLE = "pointer-events:auto";
+// [A-644] 고른 행/고른 선택지 표시. `--on` 수정자는 이미 쓰이는 이름이지만(amountChoiceMarkup)
+// style.css 에 규칙이 없다 — 새 색을 만들지 않고, 같은 행이 hover/focus 때 이미 쓰는
+// var(--gold) 를 인라인으로 그대로 건다(키보드 focus 에만 기대지 않는다).
+const ON_STYLE = "color:var(--gold)";
+
+function homeRowMarkup({ id, label, amount, unit, checking, clickable, selected } = {}) {
   const valueMarkup = checking
     ? `<span class="homePaper__amount homePaper__amount--checking">${HOME_CHECKING_LABEL}</span>`
     : homeMoneyValueMarkup(amount, unit);
+  const on = clickable && selected === true;
+  // hover/focus 규칙과 같은 두 곳(.homePaper__rowLabel · .homePaper__amount)에만 색을 건다.
+  const onStyle = on ? ` style="${ON_STYLE}"` : "";
   const inner = `
-    <span class="homePaper__rowLabel">${escapeHtml(label)}</span>
-    <span class="homePaper__rowValue">${valueMarkup}</span>
+    <span class="homePaper__rowLabel"${onStyle}>${escapeHtml(label)}</span>
+    <span class="homePaper__rowValue">${on ? valueMarkup.replace(/<span class="homePaper__amount/g, `<span${onStyle} class="homePaper__amount`) : valueMarkup}</span>
   `;
   if (clickable) {
-    return `<button class="homePaper__row homePaper__row--tap" type="button" id="${escapeHtml(id || "")}">${inner}</button>`;
+    const onAttrs = on ? ` aria-current="true"` : "";
+    const onClass = on ? " homePaper__row--on" : "";
+    return `<button class="homePaper__row homePaper__row--tap${onClass}" type="button" id="${escapeHtml(id || "")}" style="${TAP_ROW_STYLE}"${onAttrs}>${inner}</button>`;
   }
   return `<div class="homePaper__row">${inner}</div>`;
+}
+
+// [A-644 2B] 고른 Piggy 의 조작 깊이 — 기존 `.homePaper__choices` + `.homePaper__records`
+// 문법 그대로(amountChoiceMarkup 과 같은 모양), 고른 것만 `--on`. 라벨은 호출자가 넘긴
+// Owner 라벨 세 개뿐이다(새 문구 0). 이 마크업은 **설정(선호)** 일 뿐 권한·서명·tx 를 만들지
+// 않는다 — 누르면 main.js 가 piggy-control-mode.js 저장소에만 쓴다.
+// 가로 한 줄(flex)은 세 줄로 쌓아 집도장과 겹치는 것을 피하려는 배치일 뿐이다(인라인, 새 클래스 0).
+export function controlModeChoicesMarkup(options, { selected = null, piggyId = "", idPrefix = "homeControlMode" } = {}) {
+  if (!Array.isArray(options) || options.length === 0) return "";
+  const body = options.map((o) => {
+    const on = o.value === selected;
+    const cls = on ? " homePaper__records--on" : "";
+    const style = on ? ` style="${ON_STYLE}"` : "";
+    return `<button class="homePaper__records${cls}" id="${escapeHtml(idPrefix)}--${escapeHtml(o.value)}" type="button" aria-pressed="${on}"${style}>${escapeHtml(o.label)}</button>`;
+  }).join("");
+  return `<div class="homePaper__choices homePaper__choices--control" data-control-piggy-id="${escapeHtml(piggyId)}" style="display:flex;flex-wrap:wrap;gap:0 14px">${body}</div>`;
 }
 
 // 조회 실패/빈자산: 별도 에러 페이지가 아니라 같은 카드 자리에서 짧은 문구 + 재시도
@@ -221,6 +252,8 @@ export function homeMoneyMarkup({
   rows = [], // [{ id, label, amount, unit, checking, clickable }]
   note = "", // 예: "home in/out counts are piggy counts, not trip counts"
   status = null, // { text, retryId, retryLabel } — 있으면 rows 대신 이걸 찍는다
+  // [A-644 2B] 같은 행 카드 안, 행(과 note) 바로 아래 — 고른 Piggy 의 조작 깊이 자리. 비면 0.
+  afterRowsMarkup = "",
 } = {}) {
   const rowsCardBody = status
     ? homeStatusFallbackMarkup(status, "homeMoneyRetry")
@@ -229,6 +262,7 @@ export function homeMoneyMarkup({
         ${rows.map(homeRowMarkup).join("")}
       </div>
       ${note ? `<p class="homePaper__note">${escapeHtml(note)}</p>` : ""}
+      ${afterRowsMarkup}
     `;
   return `
     <div class="homePaper__card homePaper__card--status homePaper__card--money">
@@ -259,6 +293,7 @@ export function homePiggyDetailMarkup({
   expectedBack = null,
   costSoFar = null,
   status = null, // { text, retryId, retryLabel } — 있으면 필드 대신 이걸 찍는다
+  afterRowsMarkup = "", // [A-644 2B] 한 마리 경로의 고른 Piggy 조작 깊이 자리(이름 카드 안). 비면 0.
 } = {}) {
   const changedMarkup = (() => {
     if (!changed || changed.amount === null || changed.amount === undefined) {
@@ -292,6 +327,8 @@ export function homePiggyDetailMarkup({
 
   const rowsCardBody = status ? homeStatusFallbackMarkup(status, "homePiggyDetailRetry") : `<div class="homePaper__rows">${fieldRows}</div>`;
 
+  // [A-644] 상세 면은 여섯 줄이라 행 카드 아래는 집도장에 가린다(390 실측) — 조작 깊이는
+  // 이 Piggy 이름 카드 안, 시간 줄 아래에 둔다(두 카드 사이 빈 종이 안; 위치 이동·새 카드 0).
   return `
     <div class="homePaper__card homePaper__card--status homePaper__card--money">
       <button class="homePaper__records" id="homePiggyDetailBack" type="button">&lt; ${escapeHtml(backLabel)}</button>
@@ -299,6 +336,7 @@ export function homePiggyDetailMarkup({
       <div class="homePaper__statusRow homePaper__statusRow--money">
         <span class="homePaper__time">${escapeHtml(time)}</span>
       </div>
+      ${status ? "" : afterRowsMarkup}
     </div>
     <div class="homePaper__card homePaper__card--moneyRows">
       ${rowsCardBody}
@@ -400,6 +438,105 @@ const FUNDING_METHOD_LABEL = Object.freeze({
 const FUNDING_UNAVAILABLE_NOTE = Object.freeze({
   no_provider_selected: "아직 준비 중이야",
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [A-646 phase B] Add money — MY MONEY 안에서만(Second 뒤). A-645 NEXT_APP_INPUT S1·S2·S8·S9.
+// 문구는 기존 캐논 라벨뿐: `Add money` · `total` · `at home` · `working with` · `ok` · `back`.
+// style.css 는 이 카드 범위 밖 — Slice 1 처럼 **인라인 속성**만 쓴다(새 색·새 규칙 0).
+// 입력 칸은 Home 패드의 pointer-events:none 체인 안이라 자기 인라인 pointer-events:auto 를 단다.
+// 탭 영역은 최소 36px 높이(≤430 에서 손가락으로 닿게, A-644 R6).
+const ADD_MONEY_TAP_STYLE = "pointer-events:auto;min-height:36px";
+// 글자·색은 기존 .homePaper__amount 와 같은 값(상속하면 종이 밖 밝은 글자색이 와서 안 보인다).
+const ADD_MONEY_INPUT_STYLE = "pointer-events:auto;font:700 15px/1.25 Georgia,'Times New Roman',serif;color:#141210;background:transparent;border:0;"
+  + "border-bottom:1px solid currentColor;border-radius:0;min-height:36px;padding:0 2px;text-align:right;box-sizing:border-box";
+
+/** MY MONEY 의 `Add money` 입구 하나. 호출자가 게이트(Second 뒤·조용한 Home)를 판단한다. */
+export function addMoneyEntryMarkup() {
+  return `<button class="homePaper__records" id="homeAddMoney" type="button" style="${ADD_MONEY_TAP_STYLE}">&gt; Add money</button>`;
+}
+
+function addMoneyBackMarkup() {
+  return `<button class="homePaper__records" id="homeAddMoneyBack" type="button" style="${ADD_MONEY_TAP_STYLE}">&lt; back</button>`;
+}
+
+/**
+ * 한 마리: 고르는 단계 없이 그 Piggy 가 받는 곳(A-508 picker skip). 퍼센트·여러 줄 0.
+ * 방법 목록은 기존 fundingMethodsMarkup 그대로 — 레일 0 이면 정직하게 전부 비활성.
+ */
+export function addMoneySingleMarkup({ name = "Piggy", methodsMarkup = "" } = {}) {
+  return `<div class="homePaper__addMoney" data-add-money="single">
+    ${addMoneyBackMarkup()}
+    <div class="homePaper__rows"><div class="homePaper__row"><span class="homePaper__rowLabel">${escapeHtml(name)}</span></div></div>
+    ${methodsMarkup}
+  </div>`;
+}
+
+/**
+ * 둘 이상: 한 화면, 있는 Piggy 마다 한 줄 = 이름 · 금액 칸 · 퍼센트 칸. 기준 숫자 = 이번 입금 `total`.
+ * 미리 고른 줄 0(값은 호출자가 넘긴 그대로 — 기억이 있으면 그 숫자, 없으면 빈 칸). 추천 표시 0.
+ * Σ ≠ total 이면 ok 는 disabled. 주소는 그리지 않는다 — 이름만.
+ */
+export function addMoneyAllocationMarkup({ total = "", unit = "", rows = [], canConfirm = false } = {}) {
+  const unitMarkup = unit ? ` <span class="homePaper__unit">${escapeHtml(unit)}</span>` : "";
+  const rowMarkup = rows.map((r) => `
+      <div class="homePaper__row" data-add-money-row="${escapeHtml(r.piggyId)}" style="align-items:center">
+        <span class="homePaper__rowLabel">${escapeHtml(r.name || "Piggy")}</span>
+        <span class="homePaper__rowValue" style="white-space:nowrap">
+          <input class="homePaper__addMoneyAmount" id="homeAddMoneyAmount--${escapeHtml(r.piggyId)}" type="text" inputmode="decimal" autocomplete="off" aria-label="${escapeHtml(r.name || "Piggy")}" value="${escapeHtml(r.amount ?? "")}" style="${ADD_MONEY_INPUT_STYLE};width:5.2em" />
+          <input class="homePaper__addMoneyPercent" id="homeAddMoneyPercent--${escapeHtml(r.piggyId)}" type="text" inputmode="decimal" autocomplete="off" aria-label="${escapeHtml(r.name || "Piggy")} %" value="${escapeHtml(r.percent ?? "")}" style="${ADD_MONEY_INPUT_STYLE};width:3.4em" /><span class="homePaper__unit">%</span>
+        </span>
+      </div>`).join("");
+  return `<div class="homePaper__addMoney" data-add-money="allocation">
+    ${addMoneyBackMarkup()}
+    <div class="homePaper__rows">
+      <div class="homePaper__row" style="align-items:center">
+        <span class="homePaper__rowLabel">total</span>
+        <span class="homePaper__rowValue" style="white-space:nowrap"><input class="homePaper__addMoneyTotal" id="homeAddMoneyTotal" type="text" inputmode="decimal" autocomplete="off" aria-label="total" value="${escapeHtml(total)}" style="${ADD_MONEY_INPUT_STYLE};width:6.2em" />${unitMarkup}</span>
+      </div>
+      ${rowMarkup}
+    </div>
+    ${confirmButtonMarkup({ id: "homeAddMoneyOk", enabled: canConfirm }).replace("<button ", `<button style="${ADD_MONEY_TAP_STYLE}" `)}
+  </div>`;
+}
+
+/**
+ * ok 뒤: 확인한 계획을 **읽기 전용**으로(이름 · 금액) + 기존 방법 목록. 레일 0 → 전부 비활성(정직한 unavailable).
+ * 여기서 보내는 것 0 · 서명 0 · WebAuthn 0.
+ */
+export function addMoneyPlanMarkup({ unit = "", legs = [], methodsMarkup = "" } = {}) {
+  const unitMarkup = unit ? ` <span class="homePaper__unit">${escapeHtml(unit)}</span>` : "";
+  const legRows = legs.map((l) => `
+      <div class="homePaper__row" data-add-money-leg="${escapeHtml(l.piggyId)}">
+        <span class="homePaper__rowLabel">${escapeHtml(l.name || "Piggy")}</span>
+        <span class="homePaper__rowValue"><span class="homePaper__amount">${escapeHtml(l.amount)}</span>${unitMarkup}</span>
+      </div>`).join("");
+  return `<div class="homePaper__addMoney" data-add-money="plan">
+    ${addMoneyBackMarkup()}
+    <div class="homePaper__rows">${legRows}</div>
+    ${methodsMarkup}
+  </div>`;
+}
+
+/**
+ * [A-646 S8] 고른 Piggy 안의 돈 상태 — 모든 Piggy 같은 규칙(특별 취급 0).
+ * `at home` = 확인된 값만, 모르면 unknown(≠ $0). `working with` = 실제 상태가 있을 때만(없으면 줄 자체 0).
+ * `returning` 은 실제 원천이 없어서 **그리지 않는다**. working 을 at home 에 더하지 않는다.
+ */
+export function piggyMoneyStateMarkup({ atHomeValue = null, workingWithValue = null } = {}) {
+  const rows = [`
+      <div class="homePaper__row">
+        <span class="homePaper__rowLabel">at home</span>
+        <span class="homePaper__rowValue">${homeMoneyValueMarkup(atHomeValue)}</span>
+      </div>`];
+  if (typeof workingWithValue === "string" && workingWithValue !== "") {
+    rows.push(`
+      <div class="homePaper__row">
+        <span class="homePaper__rowLabel">working with</span>
+        <span class="homePaper__rowValue">${homeMoneyValueMarkup(workingWithValue)}</span>
+      </div>`);
+  }
+  return `<div class="homePaper__rows homePaper__rows--piggyState" data-piggy-state="1">${rows.join("")}</div>`;
+}
 
 export function fundingMethodsMarkup(methods, { idPrefix = "homeFundingMethod" } = {}) {
   const rows = Array.isArray(methods) ? methods : [];

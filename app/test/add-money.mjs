@@ -108,10 +108,16 @@ check("only an enabled user-funds rail opens the request", () => {
 });
 
 // ── 5. 가짜 버튼을 만들지 않았다 ────────────────────────────────────────────────
-check("no Add money control exists anywhere in the UI", () => {
-  for (const [name, src] of [["main.js", MAIN], ["home-paper.js", HOME]]) {
-    assert.equal(/Add money|addMoney|homeAddMoney/.test(src), false, `${name} must not render an Add money control`);
-  }
+// [A-646 update] A-493 의 "Add money 컨트롤 0" 은 A-645 NEXT_APP_INPUT S1(입구 허용)·S9(레일 0 = 정직한
+// unavailable)로 대체됐다. 남는 계약: 입구는 **하나**, 게이트 뒤에서만 그리고, 레일은 여전히 0 이며,
+// 이 입구가 가짜 방법/레일을 켜지 않는다.
+check("the one Add money entry is gated and still opens no fake rail", () => {
+  assert.equal((HOME.match(/id="homeAddMoney"/g) || []).length, 1, "exactly one entry markup");
+  assert.match(MAIN, /const addMoneyEntry = addMoneyEntryAllowed\(\) \? addMoneyEntryMarkup\(\) : "";/);
+  assert.match(MAIN, /function addMoneyEntryAllowed\(\) \{\n\s+return state\.secondJourneyCompletedOnce === true && state\.scene === "sendstay" && state\.homePaperMode === "money";/);
+  assert.match(MAIN, /const FUNDING_ADAPTERS = \[\];/);
+  assert.equal(REGISTERED_RAILS.length, 0);
+  assert.equal(isAddMoneyAvailable(), false);
 });
 
 check("the module moves no money and assumes no stable price", () => {
