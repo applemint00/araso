@@ -58,11 +58,36 @@
   --paper: #161616;
   --gold: #e0b100;
 
+  /* [A-603] 공유 8px 그리드 — 씬별 개별 좌표계(Invite 420×840/1280×800, Hatch/Name
+     1280×800, Home 1256×772)는 그대로 두고(§O, "기존 자산 좌표는 손대지 않는다"),
+     이 카드가 새로 놓는 자리(ARASO 브랜드, 캐릭터 스케일 바닥)만 이 토큰을 쓴다 —
+     새 매직넘버를 또 만들지 않는다. 4px 은 광학 미세조정에만(카드 지시). */
+  --grid-1: 4px;
+  --grid-2: 8px;
+  --grid-3: 16px;
+  --grid-4: 24px;
+  --grid-5: 32px;
+  /* 모바일 가로 인셋 — 카드 지시값 그대로: ~390 폭은 20px, 430+ 는 24px. 미디어쿼리
+     경계는 기존 A-600 640px 축소와 겹치지 않게 420px(390/430 둘 다 포함, 640 밖)로 둔다. */
+  --mobile-inset: 24px;
+  --mobile-top-safe: calc(env(safe-area-inset-top, 0px) + 14px);
+  --mobile-bottom-safe: calc(env(safe-area-inset-bottom, 0px) + 20px);
+  --tap-target-min: 44px;
+
   color: var(--ink);
   background: var(--paper);
   font-family:
     ui-rounded, "SF Pro Rounded", "SF Pro Display", system-ui, -apple-system,
     BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+/* [A-603] 카드 지시값 그대로: "~390 폭 20px / 430+ 24px". :root 기본은 24px(430+),
+   400px 이하에서만 20px 로 내린다 — A-600 의 640px 축소(§birth 열 폭)는 다른 선택자
+   (`.stage[data-scene="birth"]`/`.authCard`)라 이 변수 값과 무관하게 그대로 남는다. */
+@media (max-width: 400px) {
+  :root {
+    --mobile-inset: 20px;
+  }
 }
 
 * {
@@ -89,7 +114,21 @@ body {
    덮개를 씌우지 않고 뒤 이미지 생성 자체를 멈춘다 — 앞 노트·줄·구멍·테이프·봉투·초그는 그대로.
    기본색 var(--paper) 유지(A-371). */
 body:has(.stage--invite),
-body:has(.stage[data-scene="explore"]) { /* [A-421] 카드 씬(Explore→후보→금액)도 같은 테이프 비침 — Owner "카드보이는창에 왜 또 뒤에 스티커" */
+body:has(.stage[data-scene="explore"]),
+/* [A-600] A-598 BUG FINDING — 같은 원리를 옛 목록(invite/explore)에만 걸어 둔 나머지가
+   문제였다: birth/hatch/name/away/filebox/secondAway/secondReturn 은 `.stage` 자신에
+   배경이 없어(sendstay/return 만 자기 무대에 불투명 단색을 따로 깐다, 위·style.css:2849),
+   그 32px 패딩·카드 둘레 여백에서 body 의 노트지·테이프가 그대로 비쳤다(Owner 스크린샷,
+   INBOX "A-598 BUG FINDING" 재현: birth 는 모든 뷰포트, away 는 desktop 포함 전부).
+   덮개(불투명 레이어)를 새로 얹지 않고 옛 Invite/Explore 교정과 같은 방식으로 body 쪽
+   이미지 생성만 마저 끊는다 — 씬 자신의 그림·모션·카드 재질은 그대로다. */
+body:has(.stage[data-scene="birth"]),
+body:has(.stage[data-scene="hatch"]),
+body:has(.stage[data-scene="name"]),
+body:has(.stage[data-scene="away"]),
+body:has(.stage[data-scene="filebox"]),
+body:has(.stage[data-scene="secondAway"]),
+body:has(.stage[data-scene="secondReturn"]) {
   background-image: none;
 }
 
@@ -436,11 +475,80 @@ h1 {
   transform: translateX(-36px) translateY(10px) scale(0.96);
 }
 
+/* [A-607 canon C/G/H — onboarding Chog master size + continuity] was a flat `<img>` INSIDE
+   the scaled `#nameScene` board (1280x800, fitNameScene() floors at 0.42 narrow) — measured
+   apparent height 154.3px(1440) down to 57.6px(430/390, only ~34% of Hatch/Auth's fixed
+   168.19px) — exactly the master-size break the consolidated canon names. A-607 moved it OUT
+   of the scaled board — a `.stage`-level sibling anchor using the byte-identical
+   chogInviteMarkup()/anchor pattern `.hatchChog` already ships.
+   [A-608 OWNER CORRECTION — FREEZE ALL WEB, 2026-09-27] "Name Chog stage-level move" is one
+   of this correction's own named candidates for revert — the master-size problem this
+   solved was overwhelmingly a NARROW-viewport problem (154.3px@1440 was already only ~8%
+   off the 168.19 master; 57.6px@430/390 was the real ~66% break) — so this class now stays
+   **hidden at web** (`display:none` in the base rule below) and the LEGACY web element
+   (`.nameScene__chogWeb`, the original flat `<img>` inside `#nameScene`, reinstated below
+   with its own original coordinates/asset, unchanged from before A-607) is what actually
+   renders at web again — pixel-identical to the pre-A-607 reference (same asset, same local
+   coordinates inside the same scaled board). Both elements stay in the DOM at every
+   viewport (harmless — one is always `display:none`); `main.js`'s Save-time walk-start rect
+   capture now checks BOTH (`document.querySelector` on each, picks whichever has a real
+   non-zero rect) so canon H's own continuity capture still works correctly at both web (the
+   legacy element) and narrow (this one). */
 .nameScene__chog {
+  display: none;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 107.6px;
+  height: 139.9px;
+  transform: translate(-260%, -6%);
+  pointer-events: none;
+}
+
+.nameScene__chog .chogInvite {
+  left: -15.59px;
+  top: -15.72px;
+  width: 138.79px;
+  height: 168.19px;
+}
+
+@media (max-width: 640px) {
+  .nameScene__chog {
+    display: block;
+    /* same left-axis clearance as .hatchChog/.authCard__chog (canon B) */
+    left: calc(var(--mobile-inset) + var(--grid-4));
+    top: auto;
+    /* [A-607 repair pass — lane_a/lane_b finding, A-608 tuned] `bottom: var(--mobile-bottom-
+       safe)` alone pins the ANCHOR box's own bottom edge exactly to the safe line — lane_b's
+       pixel scan confirmed the real ink then sits flush ON that line (0px clearance, not
+       crossing it, but no breathing room either — the `.chogInvite` crop child being taller
+       than its own anchor, as lane_a found, does NOT push real ink past the line; the
+       sprite's own transparent padding absorbs that, per the pixel scan). A first repair-pass
+       attempt used `+10px` and measured 19px of REAL (pixel-scanned) clearance — more than
+       A-608's own requested ~12–16px band. `+5px` measured 14px real clearance (see WRITER.md
+       Repair-pass-2 table) — inside the requested band. Keep byte-identical to .hatchChog
+       below (canon: "keep Hatch and Name identical"). */
+    bottom: calc(var(--mobile-bottom-safe) + 5px);
+    transform: none;
+  }
+}
+
+/* [A-608 OWNER CORRECTION — FREEZE ALL WEB] legacy web Chog — byte-identical to the rule this
+   exact class carried before A-607 touched it (same asset, `chog_idle_fill.png`, same local
+   board coordinates left196/top556/width104 inside the scaled `#nameScene`). Visible at web
+   only; hidden at narrow so `.nameScene__chog` above (the new, master-size-corrected element)
+   is the only one showing there. */
+.nameScene__chogWeb {
   position: absolute;
   left: 196px;
   top: 556px;
   width: 104px;
+}
+
+@media (max-width: 640px) {
+  .nameScene__chogWeb {
+    display: none;
+  }
 }
 
 /* Name it 카드 — Owner 지정 AskNameIt.dc.html 460×300 엽서(A-324).
@@ -561,18 +669,23 @@ h1 {
   width: 224px;
 }
 
+/* [A-606 item1] 44px 미만 실패 중 1440 몫만 여기서 고친다 — 34px 는 1.125(1440 자연
+   스케일)를 곱해도 38.25px 로 44px 에 못 미친다(A-605 실측). 40px 는 같은 스케일에서
+   45px(버튼과 동일선상) — 카드 자체 좌표(48/152/224)는 그대로, 세로 6px 만 늘렸다.
+   430/390(0.42 바닥) 몫은 44px 에 한참 못 미치는 채로 남는다 — 아래 640px 이하 규칙이
+   그 몫을 맡는다. */
 .nameCard__field input {
   display: block;
   box-sizing: border-box;
   width: 224px;
-  height: 34px;
+  height: 40px;
   margin: 0;
   padding: 0 4px;
   border: 0;
   outline: none;
   background: transparent;
   color: #141210;
-  font: 600 20px/34px system-ui, sans-serif;
+  font: 600 20px/40px system-ui, sans-serif;
 }
 
 .nameCard__line {
@@ -591,6 +704,87 @@ h1 {
 
 .nameCard__btn {
   display: block;
+}
+
+/* [A-606 item1] 좁은 화면 — 판 전체 스케일이 0.42 바닥(`NAME_SCENE_SCALE_FLOOR`,
+   main.js:fitNameScene())에 걸리면 입력칸/버튼도 그 비율만큼 줄어 44px 미만이 된다
+   (A-605 실측: input 14.3px, ok/Save 16.8px @430/390). 판을 더 확대하지 않는다는
+   지시(§카드 item1) 때문에 여기서는 판 스케일이 아니라 이 카드 **내부** 요소만
+   반응형으로 키운다 — "판 안에서 카드가 커진다" 쪽을 고른다(대안 A: 컨트롤을 스케일
+   레이어 밖으로 옮기는 안은 이 두 요소만 별도 DOM 트리로 떼어내는 게 되어 더 침습적).
+   화면에 실제로 보이는(scaled-down) 높이가 44px 이상이려면, 판 스케일로 나눈
+   "판 좌표계(pre-scale)" 높이가 필요하다: 44 / 0.42 ≈ 104.76px. 여유를 둬 108px 로
+   잡는다(0.42 곱하면 45.36px — 부동소수 반올림에도 44px 선을 넘는 여유).
+   카드가 세로로 커지는 만큼(300→460) `.nameScene__pad`/`.nameCard` 높이도 같이
+   늘린다 — 판 안(세로 0–800px) 여유가 충분해 넘치지 않는다(카드 top:292 그대로,
+   292+460=752<800, 48px 여유). Chog(`.nameScene__chog` left196/top556, 가로축이
+   카드(612–1072)와 전혀 안 겹친다)·Piggy peek(카드 **위쪽**에서 겹치는 디자인, 카드가
+   아래로만 커지므로 안 건드림) 좌표는 0 변경 — 카드가 아래쪽으로만 자란다.
+   버튼(.pkbtn, ok/save 공통)도 같은 108px 로 키우고 반원 라운드(54px = 108/2)를
+   유지해 알약 모양이 무너지지 않게 한다 — 다른 카드의 `.pkbtn`(Send/Stay, Try
+   again/Check Piggy 등)은 `.nameCard .pkbtn`로 스코프해 건드리지 않는다.
+   버튼 자리(right:40/bottom:39, 위 규칙 그대로 상속)는 카드가 더 커진 만큼 자동으로
+   더 아래에 앉는다 — 새 카드 높이(460)에서도 입력칸 바닥(152+108=260)과 버튼 위
+   (460-39-108=313) 사이 53px 여유, 겹침 없음.
+   밑줄 SVG(`.nameCard__line`)는 그대로 두면(원래 flow, margin-top만 있음) 텍스트가
+   세로 108px 박스 중앙으로 이동해도 밑줄은 입력칸 맨 아래(108px 뒤)에 남아 글자와
+   너무 멀어진다 — 절대배치로 옮겨 텍스트 중심(세로 108의 중앙 근처) 가까이 붙인다.
+   `.nameCard__field`(label) 자신이 이미 `position:absolute`라 이 자식의 containing
+   block 이 된다. */
+/* [A-608 OWNER ADDENDUM — NAME BUTTON PROPORTION + MOBILE AUTH REVIEW TABS, 2026-09-27]
+   The block above (A-606 item1) grew the input/button/card to a disproportionate 108px
+   pre-scale height purely to counter the board's own 0.42 floor-scale — visually, the input
+   and Save/OK button end up looking oversized/detached relative to the rest of the card
+   (which stayed at its original scale). The addendum rejects this pattern explicitly: "Do
+   NOT make the visible button disproportionately large just to satisfy touch-target rules...
+   visual size follows card scale; interactive target may be larger than the visible button."
+   Reverted: card/input/button/underline all back to their ORIGINAL narrow-unscoped values
+   (same as web — no narrow-specific inflation at all). The ≥44px real hit-area requirement
+   is met instead by an INVISIBLE extension around each control (no visible paint), sized so
+   that at the worst-case 0.42 floor, the real on-screen hit area is still ≥44px:
+   44 / 0.42 ≈ 104.76px of real pre-scale extent needed; the visible controls stay at their
+   original ~40/54.3px, and the extension below adds the rest. */
+@media (max-width: 640px) {
+  /* input + button sit only ~14.7px apart natively (input's own natural content bottom
+     ≈206.3px [top152+height40+margin2+underline≈12.3], button top=221px [card height300 -
+     bottom39 - height40]) — too tight for two full symmetric ≥44px-real hit-area extensions
+     without them overlapping each other. Split the gap: each control's SIDE facing the other
+     control gets only a few px of extension, its OUTER side (away from the other control,
+     where there's real room — ~48px above the input, ~39px below the button) gets the rest.
+     Both still reach ≥44px real hit area at the 0.42 floor (44/0.42≈104.76px pre-scale
+     needed); verified no overlap: input's extended bottom edge ≈211.3px, button's extended
+     top edge =216px (4.7px clear). */
+
+  /* input: `.nameCard__field` is a real <label> (name-card.js) — clicking anywhere in a
+     <label>'s own box natively focuses the input it wraps, no pseudo-element/JS needed.
+     top-pad 46 (outer side) + content ~54.3 + bottom-pad 5 (inner side, facing the button)
+     = 105.3px real pre-scale height → ×0.42 ≈ 44.2px. `top` shifts up by the added
+     top-padding so the VISIBLE input/underline still start at the original 152px line
+     (box-sizing:border-box keeps the label's own explicit `width:224px` for its children;
+     input/underline themselves are UNCHANGED from the base/web rule — no override here). */
+  .nameCard__field {
+    box-sizing: border-box;
+    top: 106px; /* 152 - 46 */
+    padding: 46px 0 5px;
+  }
+
+  /* button: <button> supports ::before, unlike <input> — an absolutely-positioned invisible
+     overlay enlarges ONLY the hit area. top-inset -5 (inner side, facing the input) +
+     visible 40 + bottom-inset -60 (outer side, room below) = 105px real pre-scale height →
+     ×0.42 ≈ 44.1px. Scoped to this card's own `.pkbtn` only (Send/Stay, Try again/Check
+     Piggy etc. untouched). */
+  .nameCard .pkbtn {
+    position: relative;
+  }
+
+  .nameCard .pkbtn::before {
+    content: "";
+    position: absolute;
+    top: -5px;
+    bottom: -60px;
+    left: 0;
+    right: 0;
+  }
 }
 
 /* 한 장 안의 두 상태. 도착 → ok → Name it. */
@@ -759,6 +953,14 @@ h1 {
 /* 상단 메타 자리 — canon 의 SEPTEMBER 16/TUESDAY 두 줄 자리에 기존 ARASO eyebrow 를
    작게 얹는다(A-411-c "기존 ARASO 표식은 작게 상단메타영역"). 이 카드에 날짜를 새로
    더하지 않는다(지시대로 0). */
+/* [A-606 item3] Auth 는 이제 다른 씬과 같은 공유 좌상단 `.arasoBrand`(main.js
+   renderAuthCard() 가 arasoBrandMarkup() 을 부른다)를 쓴다 — 이 카드-안-우상단
+   중복 표식은 마크업·자리를 지우지 않고 시각적으로만 끈다. `visibility:hidden`(아닌
+   display:none)을 고른 이유: 이 요소는 이미 absolute(다른 형제가 이 공간에 기대지
+   않는다)라 어느 쪽을 써도 카드 레이아웃 자체는 바뀌지 않지만, visibility:hidden 은
+   보조기술 트리에서도 함께 빠져(중복 안내 없음) display:none 과 접근성상 동일하게
+   동작하면서도 "마크업 삭제 없음"이라는 조건에 더 가깝다(자리·박스는 DOM에 그대로
+   남는다 — 좌표/치수 실측이 필요해지면 되돌리기만 하면 된다). */
 .authCard__eyebrow {
   position: absolute;
   right: 34px;
@@ -772,6 +974,88 @@ h1 {
   text-transform: uppercase;
   color: rgba(20, 18, 16, 0.55);
   text-align: right;
+  visibility: hidden;
+}
+
+/* [A-603] 공유 셀 브랜드 — Invite/Hatch/Name/Home(sendstay)/birth(Auth, A-606 pass1) 다섯
+   씬 전부. 각 씬의 내부 판(.invite/.hatchStage/.nameScene/.homeBoard)은 전부
+   `position:absolute`라 `.stage` 자신의 padding 을 받지 않는다 — 이 요소도
+   `.stage`(position:relative)에 곧장 얹어 그 안쪽 스케일-핏 보드에 좌우되지 않게 한다
+   (Egg/Hatch 중심을 밀지 않는다). 새 폰트·새 로고 0 — Georgia 폴백 그대로. 씬 이름
+   (Name it/Hatch 등)은 여기 넣지 않는다.
+   [A-606 OWNER ADDENDUM (2026-09-27) · pass2] 한때 좌상단→상단중앙으로 옮겼었다.
+   [A-607, 2026-09-27 CONSOLIDATED CANON] Owner 대화 정본(§2)이 "DO NOT use global
+   top-center anymore... use the LEFT VISUAL AXIS shared with Chog" 라고 해 웹도 포함해
+   left-axis 로 옮겼었다.
+   [A-608 OWNER CORRECTION — FREEZE ALL WEB, MOBILE-ONLY LAYOUT CHANGES, 2026-09-27]
+   그 웹 쪽 변경을 다시 되돌린다: "ALL 1440x900 WEB scene compositions are FROZEN...
+   restore that web layout" — A-606 pass2 가 승인한 상단중앙(centered)이 웹의 기준이다.
+   그래서 base(뷰포트-무관) 규칙은 다시 `left:50%; transform:translateX(-50%);
+   text-align:center` 로 되돌리고, LEFT-axis 규칙(§2 Owner 대화의 실제 의도)은
+   `@media (max-width:640px)` 안에서만 켠다 — "apply layout fixes only at 430x900 and
+   390x844" 그대로. 모바일에서의 A-baseline·Chog-축 측정(WRITER.md §B)은 이 좁은-화면
+   규칙만 읽으므로 그대로 유효하다.
+   [A-616 OWNER EXCEPTION — WEB ARASO POSITION ONLY, 2026-09-28] A-608 웹 동결에 대한
+   **단 하나의 승인된 예외**(INBOX A-616 OWNER_CONFIRMED: "1440 web freeze gets ONE
+   exception only: Araso text position. Adopt the reentry HANDOFF web target for
+   EXISTING web Araso instances: left x=140px, top=32px" —
+   `<private>` §4). `top: var(--grid-5)` 는 이미
+   32px 라 바뀌지 않는다 — `left: 50%; transform: translateX(-50%); text-align: center;`
+   (뷰포트 중앙에 세우는 축) 만 `left: 140px; text-align: left;` 로 바꾸고 transform 은
+   지운다(위치 고정 앵커라 %기반 self-transform 이 더는 필요 없다). 박스는 shrink-to-fit
+   (`width` 지정 없음) 이라 `text-align` 은 렌더에 영향이 없지만, 모바일 규칙과 같은
+   관례로 left 정렬로 맞춘다. 텍스트("Araso")·폰트·weight·size·letter-spacing·color·
+   대소문자·z-index·visibility 는 전부 그대로다 — 옮기는 건 앵커 좌표 하나뿐. 모바일
+   (`@media max-width:640px`, 아래) 규칙은 손대지 않았다 — 그 규칙이 이미 이 네 속성
+   (left/top/transform/text-align)을 전부 자기 값으로 덮어써서 base 규칙 변경이 640px
+   초과에서만 보인다. 계약 테스트: `app/test/home-character-scale-floor.mjs`. */
+.arasoBrand {
+  position: absolute;
+  left: 140px;
+  top: var(--grid-5);
+  z-index: 3;
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-weight: 700;
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+  color: rgba(237, 232, 220, 0.55);
+  pointer-events: none;
+  user-select: none;
+}
+
+@media (max-width: 640px) {
+  .arasoBrand {
+    /* [A-607/A-608] mobile-only: left visual axis (shared with Chog), not centered — the
+       consolidated canon's own left-axis intent, scoped here since web is frozen back to
+       A-606's centered reference above. */
+    left: var(--mobile-inset);
+    top: var(--mobile-top-safe);
+    transform: none;
+    text-align: left;
+    font-size: 11px;
+    letter-spacing: 0.07em;
+  }
+
+  /* [A-619] Invite-only mobile exception: the common mobile `.arasoBrand` rule above
+     (`left: var(--mobile-inset)`, x≈20/24) reads as a stray edge label outside Invite's
+     notebook/hole-rail composition on this scene only. Owner-selected fix moves just this
+     scene's Araso to x=60 (right of the hole rail, left of the centered tape), inside the
+     notebook content area — every other mobile scene (Auth/Hatch/Name/Home) keeps the
+     common rule above untouched. Higher selector specificity (.stage--invite .arasoBrand)
+     wins over the plain `.arasoBrand` rule regardless of source order; only `left` changes.
+     [A-625] x=60 left Araso sitting in the dark band above the notebook paper (measured
+     paper top ≈ y52/390, y42.5/430 — both driven by `fitInvite()`'s aspect-fit scale, see
+     VERIFY.md geometry section). Owner evidence (reentry HANDOFF §4-a): notebook top≈y52,
+     accepted notebook-inside glyph band≈y62–69 — move ONLY this rule's `top` to 62px so the
+     glyph reads inside the paper instead of the band above it. `left` unchanged. */
+  .stage--invite .arasoBrand {
+    left: 60px;
+    top: 62px;
+  }
 }
 
 /* 제목 — Delicious Handrawn 30px/1.15 (A-411-c 명시값). right:40 으로 긴 문구도
@@ -824,6 +1108,99 @@ h1 {
   margin: 0;
 }
 
+/* [A-607 repair pass — lane_a finding, A-608 pass 2 REVISED] `.pkbtn`'s own base rule
+   (height:40px, shared by many buttons across scenes) put "Try again"/"Check Piggy" at 40px
+   tall at every viewport — below the card's own ≥44px control minimum. The first fix grew
+   the VISIBLE button itself to 46px. The "A-608 OWNER ADDENDUM — NAME BUTTON PROPORTION"
+   explicitly rejects that pattern ("Do NOT make the visible button disproportionately large
+   just to satisfy touch-target rules... visual size follows card scale; interactive target
+   may be larger than the visible button") and says to apply the same fix to Auth "if needed
+   so web Auth's visual button returns to its reference size." So the visible box reverts to
+   the shared `.pkbtn` base (40px, unchanged below) and an invisible `::before` overlay
+   supplies the extra hit area instead — applied at every viewport (not just web) for one
+   consistent mechanism and to keep Auth's own mobile buttons no more visually oversized than
+   its web ones (matching Name's own "look related" self-check, A-608 addendum §3). */
+.authCard__actions .pkbtn {
+  position: relative;
+}
+
+.authCard__actions .pkbtn::before {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  /* fully invisible — no background/border — extends only the CLICKABLE box.
+     40px visible + 3px top + 3px bottom = 46px real hit area, ≥44px minimum. */
+}
+
+/* [A-600 · Candidate A, shipped] 좁은 화면 인증실패 카드 clipping 수리(A-598 근거,
+   VIEWPORT_CLIPPING.md Finding 1). 근본 원인 = `.stage`(:114 display:grid;
+   place-items:center) 아래에서 `.authCard`(그리드 항목)가 stretch 되지 않고 제 내용
+   (chog 107.6 + gap 24 + paper 460 = 591.6px) 만큼의 max-content 폭을 갖는다 — 그래서
+   `.authCard__paper` 의 기존 `max-width:100%`(:734)가 그 591.6px 자기 자신을 기준으로
+   풀려 아무 것도 제한하지 못하는 no-op 이 된다(`.stage`의 `overflow:hidden` 이 넘친 만큼을
+   스크롤바 없이 그냥 잘라 화면엔 "Check Piggy" 버튼이 가장자리에 잘려 나온다).
+   [실측 교정] `justify-self:stretch` 만으로는 부족했다 — `.stage` 에 명시적
+   `grid-template-columns` 가 없어서 암묵 열(implicit column) 자신이 이미 콘텐츠 크기
+   (max-content, 591.6px)로 굳어 있고, `place-items:center` 는 그 안에서 항목을 "중앙에
+   두거나 늘리는" 것뿐이라 늘려봤자 같은 591.6px 열 크기를 채울 뿐이었다(실측: 430
+   뷰포트에서 여전히 `.authCard__paper` left16/right476, 고침 전과 동일 — A600
+   lane_w_before/after raw facts 대조). 그래서 이 씬(`birth`)의 열 자체를 컨테이너 실폭
+   기준으로 다시 정의해야 한다 — `.stage[data-scene="birth"]` 하나만, 640px 미만에서만
+   `grid-template-columns: minmax(0, 1fr)` 로 열을 실제 사용가능폭(뷰포트 - 패딩)까지
+   늘린다. 그 위에서만 `.authCard` 의 `justify-self:stretch`/`width:100%` 가 진짜 폭을
+   받고, 같은 줄의 `.authCard__paper max-width:100%` 가 그 실폭 기준으로 풀려 카드가
+   실제로 줄어든다. 다른 씬의 `.stage`(hatch/name/away/등)는 이 선택자 밖이라 전혀
+   영향받지 않는다. 새 규칙·새 폭 수치를 얹지 않는다 — 기존 460×300/절대좌표 자식은
+   그대로, 이 열만 늘어난 여백 안에서 카드 자신의 `max-width:100%` 가 실제로 일하게 된다.
+   데스크톱(1440)은 이 미디어쿼리 밖이라 무변경(A600 browser proof, 1440 전/후 픽셀
+   동일 확인). 640px 미만만 좁은 폰 실뷰포트(390/430)를 잡는다. */
+@media (max-width: 640px) {
+  .stage[data-scene="birth"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .authCard {
+    width: 100%;
+    justify-self: stretch;
+  }
+}
+
+/* [A-605 repair · FAIL 1] 좁은 화면에서 `.authCard`(flex-wrap:wrap, 위 :745) 가 자기
+   콘텐츠 폭(chog 107.6 + gap24 + paper)을 못 채우고 줄바꿈하면, DOM 순서(chog 가 paper
+   보다 먼저, main.js:3358)대로 chog 가 **첫 줄 전체**를 차지하고 paper 가 그 아래 줄로
+   밀려 "카드 위에 chog 가 쌓인" 모습이 된다(카드 지시 FAIL 1 그대로 재현 — 실측
+   `<private>*_facts.json` 참고). 고치는 값은
+   방향 하나뿐이다: 같은 flex 컨테이너를 세로(column-reverse)로 돌려 DOM 순서(chog 먼저)
+   가 시각적으로는 **아래**(chog)/위(paper) 로 뒤집히게 한다 — `main.js`/마크업 순서는
+   그대로, 새 DOM 도 안 만든다. `align-items` 를 flex-end(세로축 정렬용이던 원래 값,
+   column 에서는 가로축이 되어 그대로 두면 chog 가 오른쪽으로 붙는다)에서 flex-start 로
+   바꿔 chog 를 카드 아래 **왼쪽**에 붙인다 — paper 는 이미 `width:100%`/`max-width:100%`
+   라 가로 정렬값과 무관하게 폭을 그대로 채운다. gap 24px 은 새 값이 아니라 기존 24px 을
+   토큰(`--grid-4`)으로만 옮긴 것(공유 그리드 토큰이 이 씬의 실제 배치를 지배하게 하라는
+   카드 FAIL 5 그대로) — 시각적 간격은 바뀌지 않는다. 카드 자신의 460×300/절대좌표 자식,
+   A-600 의 위 열-폭 교정은 그대로다. */
+@media (max-width: 640px) {
+  .authCard {
+    flex-direction: column-reverse;
+    align-items: flex-start;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: var(--grid-4);
+  }
+
+  /* [A-607 canon B — Araso left axis] flex-start put Chog flush against `.authCard`'s own
+     left edge, which (after A-600's column stretch) is the `.stage`'s own left padding —
+     the SAME edge `.arasoBrand` now anchors to. Chog's own sprite (`.chogInvite`, inside
+     `.authCard__chog`) carries a -15.59px crop offset, so flush-left measured ink at
+     x≈8.4px/4.4px (430/390) — left of the brand's own "A" ink (measured via Range, real
+     glyph, not the padded box: x=24/20, i.e. exactly `--mobile-inset`, 0 extra side-bearing
+     at this font/size). Consolidated canon §2: "Chog must NOT extend farther left than
+     this A baseline." Fix: push the anchor right by `--grid-4` (24px) — measured result:
+     ink clears the baseline by ~8.4px at both 430/390 (see WRITER.md). */
+  .authCard__chog {
+    margin-left: var(--grid-4);
+  }
+}
+
 /* [A-356 §1 → A-359 §1 교정] 공통 카드 자리 — 승인 Send 미리보기 숫자(중앙 기준
    왼쪽32/위48, 285×364)는 **실제 뷰포트 CSS px** 다. 예전에는 이 요소가 #homeBoard 의
    자식이라 fitHomeBoard() 의 스케일 s 를 한 번 더 받아, 실측이 285×364 가 아니라
@@ -847,6 +1224,35 @@ h1 {
   transform: translate(calc(-50% - 32px), calc(-50% - 48px));
   z-index: 5;
   pointer-events: none;
+}
+
+/* [A-607 repair pass — lane_d finding, then REVERTED by A-608's own Owner correction
+   ("A-608 OWNER CORRECTION — FREEZE ALL WEB, MOBILE-ONLY LAYOUT CHANGES"), 2026-09-27] this
+   seat briefly added a web-scoped `.stage[data-scene="sendstay"] .cardAnchor { left:
+   var(--grid-5); ... }` rule here, moving First Job's card to the left rail on web to match
+   Records. The Owner correction explicitly calls that exact finding INVALID — "Web First Job
+   centered card is reference behavior and must not be changed" — and freezes all 1440×900
+   web compositions. Reverted in the same repair pass that added it (see WRITER.md's own
+   "Repair pass" section for the full before/after) — the base `.cardAnchor` rule above (its
+   original `left:50%` centered position) is once again the ONLY rule governing First Job's
+   card at web widths; only the narrow (`max-width:640px`) override below still applies at
+   ≤640px, unchanged from A-605. */
+
+/* [A-605 repair · FAIL 4] First Job("send?") 카드만 좁은 화면에서 왼쪽으로 옮긴다 —
+   `.cardAnchor` 자신(위 규칙)은 Explore(Second Journey)·다른 재사용처와 공유하는
+   범용 자리라 여기서 값을 바꾸면 이 카드의 FAIL 목록에 없는 씬까지 다시 그리게 된다
+   ("no passed scene redesigned"). 그래서 `data-scene="sendstay"` 로 씬 하나만 잡는다
+   (main.js renderSendStay(), 이미 있는 선택자 — 새 클래스/새 속성 0). 카드는
+   그대로 285×364, 세로 위치(top:50% + translate Y `-50% - 48px`)도 그대로 — 가로만
+   중앙기준 퍼센트에서 `--mobile-inset` 절대값으로 바꿔 왼쪽 가장자리에 붙인다(Owner
+   확정: "card stays viewer-left"). 캐릭터 무리는 반대쪽(우측/하단)으로 옮긴다
+   (`applyHomeCharacterScaleFloor()`, main.js, `HOME_CHAR_COLLISION_NUDGE_VIEWPORT_PX`). */
+@media (max-width: 640px) {
+  .stage[data-scene="sendstay"] .cardAnchor {
+    left: var(--mobile-inset);
+    top: 50%;
+    transform: translate(0, calc(-50% - 48px));
+  }
 }
 
 /* [A-358 §1 → A-359 §2 교정] 실측 147.05×288.94(뷰포트 997px) 의 원인은 둘이었다
@@ -1292,6 +1698,22 @@ h1 {
   z-index: 1;
 }
 
+/* [A-603] 캐릭터 스케일 바닥 — A-602 Candidate C 로 측정·승인된 그 메커니즘을 그대로
+   앱에 들여온다(receipts/A602_mobile_home_bc_preview/overrides/c_floor.css 의
+   .a602CFloorGroup 과 같은 자리·같은 값 — 재발명 0). #homeChar/#chogHome 을 감싸는
+   *새 조상 하나*일 뿐, 두 자식 자신의 좌표계(1256×772 로컬)·마크업·클래스는 그대로다
+   — applyHomeCharacterScaleFloor()(main.js)가 이 요소를 만들고 지운다(idempotent,
+   매 mountHome()/resize 마다 실측 재계산). scale()/translate() 은 그 함수가 인라인
+   transform 으로만 준다 — 여기서는 상자 자체만 board 와 같은 크기로 정의한다. */
+.homeCharScaleFloor {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1256px;
+  height: 772px;
+  pointer-events: none;
+}
+
 .homeChar {
   position: absolute;
   inset: 0;
@@ -1495,6 +1917,76 @@ h1 {
 
 .homePaper__records:hover {
   color: #141210;
+}
+
+/* [A-624] zero-pixel behaviour fix (card: "web multi-Piggy flap/+Piggy pointer unreachable —
+   zero-pixel behavior-only pointer fixes are allowed at web"). The Home pad chain is
+   pointer-events:none, so the folded `.homeFlap` (web) and every `+ Piggy` tab (1 Piggy: under
+   the card; 2+: folded clone + in-window tab — all widths) got no pointer/tap at all (A-624 pre:
+   webmulti1440/700 flap+tabs pe=none, elementFromPoint = section.stage; mobile tabs too; keyboard
+   already worked). Same fix A-623 made for the mobile flap, now at every width. No geometry,
+   colour or size change; the package's `.homePaper.isResOpen .homeFlap { pointer-events:none }`
+   still wins while open (this rule only matches the folded paper). Both stay out of
+   home-paper-multi.css / home-peek.css (byte-identical Owner-confirmed packages). The tab only
+   exists when showAddPiggyTab() is true (main.js removes it otherwise). */
+.homePaper:not(.isResOpen) .homeFlap,
+.homePaper .homePlusPiggyTab {
+  pointer-events: auto;
+}
+
+/* [A-621] mobile-only readability/touch compensation for HOME's own records entry (web text
+   frozen). `.homePaper` renders at ×0.6408 on mobile (256.338/400), so the authored 12px read
+   as 7.65px with a ~66×24 hit area (A-620/A-621 measured). 18px authored → ~11.5px rendered;
+   the invisible `::after` (home-paper-multi.css A-412 precedent, `inset:-10px -12px`) grows to
+   ≥44 CSS px tall, biased DOWNWARD (empty paper below the piggy card) so it steals as little
+   as possible of the name/state lines above. Only the single-Piggy `#homeRecordsButton`;
+   multi-Piggy `.homePaper__records[data-piggy-id]` entries are unchanged (not in this flow).
+   [A-623] superseded for multi-Piggy: resident entries now share the mobile size (below). */
+@media (max-width: 640px) {
+  #homeRecordsButton,
+  .homePaper__records[data-piggy-id] {
+    font-size: 18px;
+  }
+
+  #homeRecordsButton::after {
+    inset: -14px -12px -34px -12px;
+  }
+
+  /* [A-623] multi-Piggy resident records entries get the same mobile size as the single-Piggy
+     entry (A-621 only targeted #homeRecordsButton; residents stayed 12px → ~7.7px rendered,
+     hit ~51×23). Their hit area can NOT be biased downward like #homeRecordsButton's: below each
+     resident card is the folded `.homeFlap` (folded) or the next resident card (open), and the
+     `.homeResidents` window clips at the card edge. So it grows UPWARD over this card's own
+     name/state lines (text only, no control there) and down only into the card's own 18px
+     bottom padding: 30 + 21.6 (18px × 1.2 line) + 18 = 69.6 local px ≈ 44.6 CSS px at the
+     ×0.6408 mobile paper scale. Beats home-paper-multi.css's generic `inset:-10px -12px`. */
+  .homePaper__records[data-piggy-id]::after {
+    inset: -30px -12px -18px -12px;
+  }
+
+  /* [A-623] the Home pad chain is pointer-events:none (same reason A-419 gave
+     `.homePaper__markButton` pointer-events:auto), so the folded `.homeFlap` — the ONLY tap path
+     to the 2nd+ Piggy's card and its records entry — never received a tap (A-623 runtime:
+     elementFromPoint at the flap = section.stage at 390/430/1440). Kept here, not in
+     home-paper-multi.css (that file stays byte-identical to the Owner-confirmed package).
+     Mobile-only per card scope; look unchanged; the same web defect is reported, not changed.
+     Open state keeps the package's own `.homePaper.isResOpen .homeFlap { pointer-events:none }`.
+     [A-624] the same rule now also exists at all widths (after `.homePaper__records:hover`);
+     this A-623 mobile copy is kept verbatim (its own contract test pins it). */
+  .homePaper:not(.isResOpen) .homeFlap {
+    pointer-events: auto;
+  }
+
+  /* [A-623 · D] HOME secondary lines (time, "still in home") at true phone scale render
+     ~8.3px italic at rgba(…,.55) ≈ 3.99:1 on the #f6f0e4 card paper. Design-first: no size
+     change (they stay the smallest, quietest lines — below name 13.5 / status 10.9 / records
+     11.5), weight unchanged (Georgia has no in-between weight; synthetic bold would read as
+     heavy UI) — only a slight mobile-only contrast lift to the smallest step that clears
+     4.5:1 with texture margin (.62 → 5.0:1). Web keeps .55 (frozen). */
+  .homePaper__time,
+  .homePaper__state {
+    color: rgba(20, 18, 16, 0.62);
+  }
 }
 
 .homePaper__face {
@@ -1701,6 +2193,22 @@ h1 {
 .chogHome__hit:focus-visible {
   outline: 2px solid #e0b100;
   outline-offset: 4px;
+}
+
+/* [A-624] 첫 도착 가르침 신호 B — 손글씨 "tap me!" (Owner 선택, A-614 PREVIEW .laneCue 와
+   같은 글꼴·색·머리 위 가운데 기준). 버튼·카드가 아니다: 입력 0(pointer-events none),
+   AX 0(aria-hidden). 글자 크기·top·left 는 chog-home.js measureTapCue() 가 화면 15px 로
+   환산해 인라인으로 넣는다(로컬 좌표가 화면마다 다른 배율을 받으므로). opacity 는
+   tapCueFrame() 이 프레임마다 쓴다 — CSS transition 을 겹치지 않는다. */
+.chogHome__tapCue {
+  position: absolute;
+  color: var(--gold);
+  font-family: var(--font-cj);
+  font-weight: 400;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translate(-50%, -100%);
+  pointer-events: none;
 }
 
 /* [A-411-i → A-415-f] Owner: 귀환/최종수납씬 가운데 독립 "I'll check it." 대신, 초그 옆
@@ -1926,45 +2434,104 @@ h1 {
   bottom: 24px;
 }
 
-/* [A-383 §1/§2 → A-387 교정] Home 카드 오른쪽 기록 카드 — 별도 records 전체화면(옛
-   .note/.eyebrow, Owner FAIL) 대신 HomeNotepad/현재 home-paper 와 같은 바탕(.homePaper 와
-   값이 같다) 위에 얹는다. [A-387] Codex 실화면검토(1335×717) FAIL: 아래 left/top/width/
-   height 는 "공통 Send 앵커(.cardAnchor, 285×364, 중앙 -32/-48)가 곧 실제 Home 종이"라는
-   틀린 가정의 계산값이었다(실측 x695,y350,w136,h185 vs 이 계산 x802,y129,w256,h364 — Home
-   위에 부분 겹침). 이제 이 값들은 JS 가 붙기 전까지의 자리표시자일 뿐이고, main.js
-   alignRecordsCardToHomePaper() 가 열릴 때 실제 `.homePaper` rect 를 재서 이 자리를 그
-   오른쪽·같은 top·같은 크기·24px 간격(gap)으로 즉시 덮어쓴다(열려 있는 동안 계속). 실제
-   보이는 종이는 자식 .recordsCard 다 — .cardAnchor/.cardAnchor__fit 관례와 같은
-   "자리판과 실물을 나눈다" 원칙(위 §A-359 주석)을 그대로 따른다. */
-/* [A-413-b] Owner 스크린샷 12:12 FAIL: 이 앵커가 z-index:5 라 `.homeBoard`(z-index:1,
-   1176행)보다 위였다 — `.stage` 의 같은 자식 레벨(renderSendStay(), main.js)에서 둘 다
-   position:absolute + 정수 z-index 라 각자 독립 stacking context 를 열고, 그 비교에서
-   기록 카드가 항상 이겨 Chog/Piggy/이름표(모두 homeBoard 안, chog-home.js 참조)를 덮었다
-   (열림 모션의 opacity/translateX 는 z-index 를 안 건드리므로 첫 프레임부터 계속). 카드
-   크기·재질·위치·오프닝 모션은 그대로 두고 이 한 줄만 homeBoard 보다 낮춘다 — 그러면
-   `.recordsCard`(종이)와 그 box-shadow(그림자) 는 안쪽 stacking context 에 갇혀 함께
-   내려간다. `.cardAnchor`(Send/Invite 카드, 776행, z-index 5)는 건드리지 않는다 — 전역
-   z-index 상향 금지, 이 앵커 하나만의 국소 교정. */
+/* [A-383 §1/§2 → A-387 → A-607 REWORK] history superseded.
+   A-387 through A-606 anchored this card to the *right* of the hand-pinned `.homePaper`
+   (chog-home.js's own docking animation, outside this card's allowed files) — that paper
+   lives wherever Piggy's hand currently is (viewer-right living stage), so Records opened
+   even further right, past Piggy. [A-607 OWNER ADDENDUM — STEP 22 HOME+RECORDS FAIL /
+   HOME PAPER CARD SIZE CANON, 2026-09-27] rewrites the grammar entirely:
+     - "Records/HISTORY belongs to viewer-left... active paper aligns to the LEFT safe
+       rail" — structurally incompatible with a right-of-Piggy's-hand anchor, so this is no
+       longer derived from `.homePaper`'s rect at all (main.js `alignRecordsCardToHomePaper
+       ()`/`startRecordsAlignLoop()`/`setHomeTwoCardShift()` are superseded — left defined,
+       unused, see main.js comments).
+     - "use the existing First Job/Send card footprint as reference: 285×364 visible outer
+       bbox... current Records anchor is about 256.338×364, a mismatch... do NOT make the
+       rear paper smaller" — this anchor used to inherit `.homePaper`'s own OWN rendered
+       size (400×568 asset fit into a 285×364 box height-first ⇒ 256.338×364, the exact
+       mismatch the addendum names). Now a fixed 285×364, same constant `.cardAnchor` uses.
+   Left-rail position: `var(--grid-5)` web / `var(--mobile-inset)` narrow — reusing the
+   same tokens Araso's own left axis and First Job's narrow position already read (not a
+   new number). Vertical band: `top:50%` + the same `-48px` Y-offset `.cardAnchor` uses —
+   same main-action/card band, "slightly above visual center" (canon §A). z-index unchanged
+   (0, still below `.homeBoard`'s 1 — z-index canon preserved, A-413-b's own fix untouched).
+   `.recordsCardAnchor__peek` (new, below) is the rear/peeked paper the addendum's own
+   two-paper stack asks for — same 285×364 footprint, offset by x/y + a lower z-index
+   only (depth by offset/z-index/shadow, never by shrinking — addendum's own wording). */
+/* [A-608 OWNER CORRECTION — FREEZE ALL WEB, MOBILE-ONLY LAYOUT CHANGES, 2026-09-27] "Records
+   left-rail rebuild and 285×364 anchor on web" is one of this correction's own named revert
+   candidates — "Home+Records web is also reference/frozen; do not redesign it to mobile
+   rules." So the fixed left-rail/285×364 positioning below now applies ONLY inside the
+   narrow media query. The base (web) rule goes back to being a pure placeholder — no
+   left/top/width/height/transform of its own — and `main.js`'s `alignRecordsCardToHomePaper()`
+   (the ORIGINAL pre-A-607 mechanism, reinstated for web only — see main.js) sets those four
+   properties as inline styles at web, tracking `.homePaper`'s own live rect exactly as it did
+   before A-607 touched this file. */
+/* [A-618 OWNER-CONFIRMED MOBILE TARGET, 2026-09-28] the fixed left-rail/285×364 ≤640px rule
+   that used to live here (A-607 STEP-22, quoted in the long comment above) is superseded —
+   A-616's own RECORDS_TARGET.md names it as drift ("Records left-rail rule... pins HISTORY to
+   the absolute viewport-left, independent of where NOW/Home paper itself is"), and the A-618
+   card restores the HOME-left/HISTORY-right two-paper composition instead. main.js's
+   `fitMobileTwoPaperGroup()` now sets `#recordsCardAnchor`'s left/top/width/height as inline
+   styles at ≤640px too (the exact technique the base rule below already relies on for web),
+   so no ≤640px position/size rule belongs here any more — an inline style would win over one
+   anyway, but leaving the old fixed numbers here would misleadingly suggest they still apply
+   to anything (they do not; there is no more "peek" reserve either, see below). */
+/* [A-621, 2026-09-28] the A-618 side-by-side mobile composition above is itself superseded
+   (failure history: unreadable at phone scale, A-620). Current mobile = HISTORY stacked over
+   the unmoved HOME from viewer-right — main.js stackMobileRecordsOverHome() + the ≤640px
+   block after `.recordsCard` below. Base (web) rule here unchanged. */
 .recordsCardAnchor {
   position: absolute;
-  left: calc(50% + 110.5px + 24px);
-  top: calc(50% - 230px);
-  width: 256.338px;
-  height: 364px;
   z-index: 0;
   pointer-events: none;
   opacity: 1;
-  transform: translateX(0);
 }
 
 .recordsCardAnchor[hidden] {
   display: none;
 }
 
+/* rear/peeked paper — [A-608 web freeze] the pre-A-607 web reference never had a second
+   (peeked) paper — hidden at web, shown only at narrow (below), where the whole two-paper
+   stack is a mobile-only addition. Same outer footprint as the foreground `.recordsCard`
+   (285×364, inherited from the parent anchor's own size at narrow), offset down-right so a
+   visible edge "peeks" past the foreground paper without invading the right-side character
+   stage. Depth = offset + z-index + its own shadow, size is untouched. */
+/* [A-618 card §7] "the A-607 mobile `.recordsCardAnchor__peek` rear/peek paper is NOT part of
+   the newest two-paper target... disable/remove the mobile extra peek visual only." The
+   ≤640px `display: block` override that used to live here is removed — the rule now stays
+   `display: none` (below) at every width, same as it already effectively was on web. The
+   element itself is left in the DOM/markup (main.js `recordsCardMarkup()`, untouched — no
+   HTML/JS restructuring needed for a pure "always hidden" visual change), so mobile two-paper
+   mode shows exactly HOME + HISTORY, never a third paper. */
+.recordsCardAnchor__peek {
+  display: none;
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  width: 100%;
+  height: 100%;
+  z-index: -1;
+  background: #ebe3d5 url("/card/paper_tex_ivory.png") center / 290px auto;
+  border-radius: 3px;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+
 /* [A-387-a] Owner 지시: Home 카드 옆으로 스르륵 여는 짧은 open transition만 — 새 모션
    디자인 확대가 아니라 open 진입 한 번에만 거는 opacity/이동이다. main.js openRecordsCard()
    가 --opening 을 걸었다가 다음 프레임에 뗀다. reduced-motion 은 transition 자체를
-   0으로 죽여 즉시 표시한다(이중 안전망 — JS 도 그 경우 클래스를 아예 걸지 않는다). */
+   0으로 죽여 즉시 표시한다(이중 안전망 — JS 도 그 경우 클래스를 아예 걸지 않는다).
+   [A-608 web freeze] at web, position comes from JS (`alignRecordsCardToHomePaper()`,
+   inline `left`/`top`, no `transform`) — same as the pre-A-607 reference — so the base
+   opening transform reverts to the original plain `translateX(-12px)`.
+   [A-618, 2026-09-28] the narrow-only Y-carrying override that used to live here
+   (`translate(-12px, calc(-50% - 48px))`) is removed — it existed only to layer onto the old
+   fixed `top:50%` mobile anchor rule (removed above), which this card supersedes. Mobile now
+   gets its position from `fitMobileTwoPaperGroup()`'s own inline `left`/`top` (exact final
+   target, no separate CSS Y-placement to compose with), so mobile reuses the exact same plain
+   `translateX(-12px)` opening slide as web — one open-transition shape, not two. */
 .recordsCardAnchor:not(.recordsCardAnchor--opening) {
   transition: opacity 160ms ease, transform 160ms ease;
 }
@@ -1995,6 +2562,54 @@ h1 {
   gap: 10px;
   overflow: hidden;
   pointer-events: auto;
+}
+
+/* [A-621 OWNER CONFIRMED · MOBILE RECORDS STACK, 2026-09-28 — Candidate B] mobile only; web
+   (>640px) untouched. Supersedes A-618's mobile `.recordsCard { inset:auto; 285×364 }` +
+   `--recordsShrink` group-fit shrink (removed — HISTORY text measured 5.9–7.8px there, A-620).
+   main.js stackMobileRecordsOverHome() sizes `#recordsCardAnchor` to the live corrected HOME
+   (same size, same top, right edge on the safe rail), so `.recordsCard` keeps the base
+   `inset: 0` at native scale (= web text size).
+   - z-index 2: HISTORY stacks ABOVE HOME (`.homeBoard` is 1). It never reaches the resident
+     characters (HISTORY bottom = HOME bottom, above the cluster) — verified in A-621 VERIFY.
+   - `--opening`/`--closing`: the existing 160ms opacity+12px slide, mirrored to +12px so
+     HISTORY enters from and exits toward viewer-right. `--closing` stops taps during exit.
+   - close/back hit areas: invisible `::after` grown INWARD to ≥44×44 CSS px (the card's
+     14px side/bottom padding is the outward limit — `.recordsCard` clips overflow). Visible
+     text stays the existing 12px (renders 12px here since HISTORY is not shrunk). */
+@media (max-width: 640px) {
+  .recordsCardAnchor {
+    z-index: 2;
+  }
+
+  .recordsCardAnchor--opening,
+  .recordsCardAnchor--closing {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+
+  .recordsCardAnchor--closing .recordsCard {
+    pointer-events: none;
+  }
+
+  .recordsCard__back,
+  .recordsCard__close {
+    position: relative;
+  }
+
+  .recordsCard__close::after,
+  .recordsCard__back::after {
+    content: "";
+    position: absolute;
+  }
+
+  .recordsCard__close::after {
+    inset: -17px -12px -13px -10px;
+  }
+
+  .recordsCard__back::after {
+    inset: -15px -10px -15px -12px;
+  }
 }
 
 .recordsCard__body {
@@ -2208,9 +2823,34 @@ h1 {
 }
 
 @media (max-width: 620px) {
+  /* [A-606 OWNER ADDENDUM · pass2] bare `.stage` (no `--invite`/`--hatch`/`--name` modifier)
+     is only actually flow-laid-out for `birth` (Auth) — every other bare-`.stage` scene
+     (sendstay/explore/secondAway/away/filebox) renders exclusively `position:absolute`
+     children (`.homeBoard`/`.cardAnchor`/canvas) that ignore `.stage`'s own padding
+     (documented above at `.arasoBrand`). So this padding-top change only moves Auth's own
+     card start position. Was a bare `24px` — the addendum's real-iPhone-safe-frame review
+     found Auth's card starting inside the simulated ~59–63px top band at 390/430 (top:24 <
+     harness top-safe:61). `var(--mobile-top-safe)` reuses the same token Chog/brand already
+     read (`calc(env(safe-area-inset-top,0) + 14px)` in production; harness-overridden for
+     review, see scripts/a606_pass2_sweep.mjs) instead of a second hardcoded number.
+     First real capture with just `var(--mobile-top-safe)` put the card's own top edge at
+     EXACTLY the same line the now-centered `.arasoBrand` sits on (both read the same token,
+     brand horizontally centered, card horizontally centered too at this width) — the card's
+     opaque paper painted directly over/coincident with the brand text (confirmed by a Pillow
+     pixel sample at the brand's own rect: solid `#ebe3d5`-ish fill, not text-over-background —
+     a real paint collision the DOM-only "is it visible" check couldn't see, since the brand
+     element itself was still `visibility:visible`/laid out, just occluded). Fixed by adding
+     one more gap term (`--grid-4`, the same 24px token already reused for the auth-narrow
+     Chog gap elsewhere in this file) on top of the safe-top token, so the card starts clearly
+     below the brand's own ~11px line instead of exactly on it.
+     [A-607] side padding — was a bare `16px`, which undercuts the consolidated canon's own
+     "390-ish: 20px minimum content inset. 430+: 24px minimum content inset... real
+     composition margins, not just CSS tokens" (§1 GLOBAL FRAME). `var(--mobile-inset)`
+     already resolves to exactly that (20px ≤400px / 24px 400-640px, style.css :root) — reuse
+     the token instead of a second hardcoded number that happened to be smaller. */
   .stage {
     align-items: start;
-    padding: 24px 16px 144px;
+    padding: calc(var(--mobile-top-safe) + var(--grid-4)) var(--mobile-inset) 144px;
   }
 
   .note {
@@ -2478,11 +3118,18 @@ h1 {
   object-fit: contain;
 }
 
-/* Face ID = 이 화면의 유일한 입력. */
+/* Face ID = 이 화면의 유일한 입력.
+   [A-607 canon D — Invite mobile vertical spacing] Owner: mobile letter/paper-to-button gap
+   "feels wrong" (web is fine — `.invite--wide .invite__face` below is untouched). Root
+   cause: envelope (`.invite__hero`, local board-Y 180-384) to button (local top 455) left a
+   93-local-px (~86 real px) gap, well past the canon's own "major gaps 16/24/32px" rhythm.
+   `top` 455→405 tightens it to ~43 local px (~40 real px) — still clear breathing room, not
+   flush, closer to the 32px rhythm step. Only this mobile rule changes; envelope/Chog/copy
+   positions untouched (`top` is the only edited property). */
 .invite__face {
   position: absolute;
   left: 196px;
-  top: 455px;
+  top: 405px;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2519,12 +3166,28 @@ h1 {
   pointer-events: none;
 }
 
+/* [A-607 canon C — onboarding Chog master size] mobile Invite used to crop chogInvite via
+   the SMALLER base anchor ratio (62-unit, .chogInvite's own base rule below) — apparent
+   height ~91.4 local px, well under Hatch/Auth's 168.19 (they use the "big" 107.6/139.9
+   anchor ratio, INVITE_ANCHOR_WIDE). Consolidated canon §4: "Invite Chog size ≈ Hatch Chog
+   size ≈ Name Chog size — one onboarding size family." Fix: keep this anchor box's own
+   position (left/top are just a reference point, not a clip — no overflow:hidden anywhere
+   in this chain) but override its `.chogInvite` child below to the SAME big-anchor crop
+   Hatch/Auth/invite-wide already use, and move `top` up (620→560) so the now-taller ink
+   (168.19 vs 91.4 local px) clears `.invite__copy` (top:742) instead of running into it. */
 .invite__chog {
   position: absolute;
   left: 30px;
-  top: 620px;
+  top: 560px;
   width: 140px;
   height: 84px;
+}
+
+.invite__chog .chogInvite {
+  left: -15.59px;  /* same "big" anchor ratio as .hatchChog/.authCard__chog/.invite__chogNative */
+  top: -15.72px;
+  width: 138.79px;
+  height: 168.19px;
 }
 
 .invite__trail {
@@ -2803,7 +3466,14 @@ h1 {
   height: 168.19px;/* 139.9 * (2140/1780) */
 }
 
-/* 해치 씬의 Chog — 초대에서 이어진 같은 캐릭터. 자리 점프가 없도록 같은 앵커를 쓴다. */
+/* 해치 씬의 Chog — 초대에서 이어진 같은 캐릭터. 자리 점프가 없도록 같은 앵커를 쓴다.
+   left:50%+translate(-260%,-6%) 는 이 요소 자신의 고정 107.6px 폭 기준 퍼센트라
+   뷰포트 폭과 무관하게 항상 같은 px 만큼(-279.76px) 화면 중앙에서 왼쪽으로 밀린다 —
+   1440 에서는 그 중앙이 화면 안쪽 깊숙히 있어 문제가 없지만, 430/390 처럼 중앙 자체가
+   왼쪽 가장자리에 가까운 좁은 화면에서는 같은 -279.76px 가 화면 밖으로 넘친다
+   (A-603 SCENE_GEOMETRY.md §3 실측: 430 left−80.3/390 left−100.3, 각각 ≈42%/≈28%만
+   보임). Egg 중심(가운데 정렬, hatch.css, 이 카드 write 경계 밖)은 이 규칙과 무관하니
+   그대로 둔다. */
 .hatchChog {
   position: absolute;
   left: 50%;
@@ -2819,6 +3489,31 @@ h1 {
   top: -15.72px;
   width: 138.79px;
   height: 168.19px;
+}
+
+/* [A-603 repair] 좁은 화면에서는 중앙 기준 퍼센트 산수를 버리고, Invite/Name 과 같은
+   "뷰어 좌하단" 절대 자리로 바꾼다 — 크기(107.6×139.9, .chogInvite 내부 오프셋)는
+   그대로다(아이콘 크기로 줄이지 않는다). `.stage`(position:relative) 기준 절대좌표라
+   Egg(가운데 정렬, hatch.css)와 무관하게 움직인다 — Egg 는 그대로 가운데다. bottom
+   앵커는 Egg 의 실측 하단(430 top335.4+h220.4=555.8, 390 top318.1+h199.9=518.0)보다
+   충분히 아래라 겹치지 않는다.
+   [A-607 canon B — Araso left axis] `left: var(--mobile-inset)` alone put this anchor
+   flush on the same edge `.arasoBrand` now reads too, and this chog's own -15.59px crop
+   offset pushes its real ink further left still (measured ink x≈8.4/4.4 at 430/390 — left
+   of the brand's own real "A" ink at x=24/20). Same fix as `.authCard__chog` — push the
+   anchor right by `--grid-4` (24px), same measured clearance (~8.4px). */
+@media (max-width: 640px) {
+  .hatchChog {
+    left: calc(var(--mobile-inset) + var(--grid-4));
+    top: auto;
+    /* [A-607 repair pass — lane_a/lane_b finding, A-608 tuned] real ink sat flush (0px
+       clearance, pixel-scan confirmed, not crossing) on the simulated bottom-safe line —
+       same fix and same +5px as `.nameScene__chog` (kept byte-identical, per canon; tuned
+       down from an initial +10px, which measured 19px real clearance, to +5px, measuring
+       14px — inside A-608's requested ~12–16px band). */
+    bottom: calc(var(--mobile-bottom-safe) + 5px);
+    transform: none;
+  }
 }
 
 @keyframes spark-out {
@@ -3160,8 +3855,14 @@ h1 {
 .secondJourneyCard .secondJourney__pick:not(.is-picked) { background:none; } /* 노란 밑강조 = 고른 것 하나만 */
 .secondJourneyCard .secondJourney__pick + .secondJourney__pick { margin-top:20px; }
 .secondJourneyCard .secondJourney__pick:disabled { opacity:.34; cursor:default; } /* [A-421 Owner "그래"] 행동 카드만 시안 380 폭(높이 560 동일) */ /* [A-421] 행동 카드만 — footer margin-top:auto 가 종이 하단에 붙도록(v25 main 과 같은 flex column) */
-/* [A-415-k] Owner Figma exact 요일 10px/line-height7.5px/letter-spacing1.8px, 60% opacity. */
-.secondJourney__date small { display:block; font-size:10px; line-height:7.5px; opacity:.6; margin-top:4px; letter-spacing:1.8px; }
+/* [A-415-k] Owner Figma exact 요일 10px/line-height7.5px/letter-spacing1.8px, 60% opacity.
+   [A-614 Lane A] records 는 위 3565 공유 룰(.secondJourney__date, .recordsCard__date)로
+   날짜 본문 값은 이미 같이 받지만, 이 small(요일) 룰은 그때 .secondJourney__date 만
+   선택자였다 — .recordsCard__date small 은 대상이 아니어서 대문자 요일이 block/작게/
+   옅게 되지 못하고 인라인 기본 <small> 로 날짜 뒤에 그대로 붙어 있었다("SEPTEMBER 27SUNDAY"
+   한 줄, 겹침/줄바꿈 위험). 같은 값을 records 선택자에 그대로 덧붙인다 — 새 수치 0. */
+.secondJourney__date small,
+.recordsCard__date small { display:block; font-size:10px; line-height:7.5px; opacity:.6; margin-top:4px; letter-spacing:1.8px; }
 .secondJourney__dot { margin-top:4px; }
 .secondJourneyCard > .sendCard__dot { display:none; }
 .secondJourney__list--interests .secondJourney__item:has(input:focus-visible) { outline:2px solid #e0b100; outline-offset:3px; }
@@ -3371,3 +4072,18 @@ h1 {
    이 카드의 Send 는 `.pkbtn` 껍질을 그대로 쓰므로 여기에 별도 버튼 규칙을 두지 않는다 —
    두 정본을 병행하던 상태를 끝낸다. `.back`(위)은 종이 버튼이 아니라 v25 의 밑줄 텍스트
    버튼이라 그대로 둔다. */
+
+/* [A-633 A] LOGIN_CHECKING 의 탭 대상 = 인증 카드 옆 **기존** Chog 상자(.authCard__chog — 자리·크기·그림
+   그대로). 잠금 화면에서만 main.js renderAuthCard({chogTap}) 이 그 상자를 div 대신 button 으로 그린다 — 여기서는
+   button 기본 껍질(안쪽 여백·테두리·배경)만 지우고, 기존 `pointer-events: none` 을 이 경우에만 되살린다.
+   margin 은 건드리지 않는다(≤640 의 기존 margin-left 축 정렬을 그대로 받는다). */
+.authCard__chog.authCard__chog--tap {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  pointer-events: auto;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}

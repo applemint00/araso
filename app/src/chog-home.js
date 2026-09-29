@@ -115,6 +115,25 @@ const WALK_FPS_MS = 30;
 const WALK_TOTAL_MS = 3000;
 const REST_MS = 240; // 다리가 ±60 로컬에서 제자리로 모이는 시간
 
+// [A-614 repair] Piggy 와 Chog 는 각자 자기 진짜 Name-final 자리에서 자기 진짜 정착
+// 자리까지, 완전히 독립된 직선을 걷는다(A-612 BEFORE.md §B — 두 시작점이 서로
+// 160~410px 떨어진 무관한 두 선이라, mid-walk 에 130~220px 벌어져 보인다는 실측 진단).
+// 두 캐릭터의 끝점(진짜 시작·진짜 A-608 정착)은 그대로 두고, **위치 lerp 에 먹이는
+// 진행률만** 앞쪽으로 몰아(front-load) 실제 걷는 시간 기준으로 서로에게 더 빨리
+// 가까워지게 한다 — u=0 에서 0, u=1 에서 1 인 항등이라 첫 프레임(시작 연속성)과
+// 정착(A-608 자리)은 손대지 않는다. 걷기 프레임 인덱스(`move`)·페이드 블렌드
+// (`walkElapsed`)는 이 값을 쓰지 않으므로 다리 애니 타이밍·프레임 순서는 그대로다.
+// 좁은 화면(플로어 적용)에서만 켠다 — main.js 의 `pairConvergeActive`
+// (`computeHomeCharScaleFloorPlan(fit).applied`) 가 그 판정이고, 1440(플로어
+// 미적용)에서는 호출부가 이 옵션을 넘기지 않아 `u` 가 그대로 쓰인다(byte-identical
+// no-op, 카드 지시). 지수(POWER)는 A-614 home_pair 실측 프로브로 튜닝한 값이다 —
+// HOME_PAIR.md 의 before/after 표가 그 근거다.
+export const PAIR_CONVERGE_POWER = 5.5; // A614 home_pair 실측(430/390 real-flow probe)으로 정한 값
+export function pairConvergenceEase(u) {
+  const c = Math.min(1, Math.max(0, u));
+  return 1 - Math.pow(1 - c, PAIR_CONVERGE_POWER);
+}
+
 // --- 졸기 (sleep-motion.js CONFIG 그대로) --------------------------------
 export const SLEEP_IDLE_MS = 60000; // [A-421 Owner "일분으로 줄여" 2026-09-18] 180000 → 60000
 // [A-421 Owner "고개가 꾸벅 졸아야해"] droop 4→12, drop 34→60 (INFERRED — 확정본 4/34 는 고개가 거의 안 보였다).
@@ -134,6 +153,61 @@ const SLEEP_BODY_TY = -81;
 const clamp01 = (v) => Math.min(1, Math.max(0, v));
 const ease = (x) => x * x * (3 - 2 * x);
 const lerp = (a, b, t) => a + (b - a) * t;
+
+// --- [A-624] 첫 도착 가르침 신호 B (Owner 선택 — A-614 lane_home_affordance PREVIEW) ------
+// 정착 뒤 한 번: 앞팔만 작게 한 번 흔들고(wave) 손글씨 "tap me!" 가 뜬다. Home 종이를 스스로
+// 열지 않는다(hover() 를 부르지 않는다 — PREVIEW 의 hover(1) 단계는 카드 "Do NOT auto-open"
+// 에 따라 뺐다). 실제 Chog 탭(toggle)에서 사라진다. reduced-motion = 흔들기 0, 정지 라벨만.
+// 흔들기 키 = PREVIEW sequence.js WAVE_SUBTLE_KEYS 그대로(Invite WAVE_KEYS 를 0 기준·~30% 로
+// 줄인 값). 새 그림 0 — 기존 home-near-arm 래스터를 같은 어깨 pivot 으로 더 돌릴 뿐이다.
+const TAP_CUE_DELAY_MS = 300; // PREVIEW WAVE_START_B
+const TAP_CUE_WAVE_KEYS = [
+  [0, 0],
+  [350, -7],
+  [550, -4],
+  [770, -8],
+  [960, -4],
+  [1320, 0],
+];
+const TAP_CUE_WAVE_MS = 1320;
+const TAP_CUE_FADE_MS = 250; // PREVIEW 라벨 페이드
+// 라벨 글자 크기는 화면 px 로 고정한다(INFERRED — Owner 수치 아님). .chogHome 로컬 좌표는
+// 바닥 스케일·판 스케일을 거쳐 390 에서 ≈0.245배, 1440 에서 ≈0.54배로 줄어들어 로컬 18px
+// (PREVIEW) 은 폰에서 ≈4px 가 된다 — 읽히지 않는 신호는 신호가 아니다.
+const TAP_CUE_SCREEN_PX = 15;
+const TAP_CUE_GAP_SCREEN_PX = 4;
+// [A-626 A] Owner: 라벨이 완전히 보인 뒤 약 1.0–1.5초(목표 1.2초) 그대로 읽히게 둔 다음에야 첫 Journey
+// 카드가 자리를 가져간다. 신호 시계(tapCue.t)는 화면에 그려진 프레임 dt 로만 흐르므로(숨은 탭 dt 0)
+// 숨은 동안에는 이 대기도 멈춘다 — 카드가 보이지 않은 라벨을 건너뛰지 못한다.
+const TAP_CUE_HOLD_MS = 1200;
+export const TAP_CUE_TIMING = {
+  delayMs: TAP_CUE_DELAY_MS,
+  waveMs: TAP_CUE_WAVE_MS,
+  fadeMs: TAP_CUE_FADE_MS,
+  entranceMs: TAP_CUE_DELAY_MS + TAP_CUE_WAVE_MS + TAP_CUE_FADE_MS,
+  holdMs: TAP_CUE_HOLD_MS,
+  readyMs: TAP_CUE_DELAY_MS + TAP_CUE_WAVE_MS + TAP_CUE_FADE_MS + TAP_CUE_HOLD_MS,
+  waveKeys: TAP_CUE_WAVE_KEYS,
+  screenPx: TAP_CUE_SCREEN_PX,
+};
+function between(t, keys) {
+  for (let i = 1; i < keys.length; i += 1) {
+    if (t <= keys[i][0]) {
+      const a = keys[i - 1];
+      const b = keys[i];
+      return a[1] + (b[1] - a[1]) * ease(clamp01((t - a[0]) / (b[0] - a[0])));
+    }
+  }
+  return keys[keys.length - 1][1];
+}
+// 순수 함수 — 테스트가 곡선을 브라우저 없이 확인한다.
+export function tapCueFrame(t, reduced = false) {
+  if (reduced) return { waveDeg: 0, labelOpacity: 1, entering: false };
+  const local = t - TAP_CUE_DELAY_MS;
+  const waveDeg = local > 0 && local < TAP_CUE_WAVE_MS ? between(local, TAP_CUE_WAVE_KEYS) : 0;
+  const labelOpacity = ease(clamp01((local - TAP_CUE_WAVE_MS) / TAP_CUE_FADE_MS));
+  return { waveDeg, labelOpacity, entering: t < TAP_CUE_TIMING.entranceMs };
+}
 
 function img(name, extra = "", srcName = name) {
   return `<img class="chogHome__part" data-part="${name}" src="${DIR}/${srcName}.png" alt="" ${extra} />`;
@@ -322,7 +396,7 @@ export function mountChogHome(root, opts) {
   // [A-360 §3] onTap — 공통 카드 자리가 비어 있을 때(!cardClaimed)만 "여는 탭"(pinned
   // false→true) 에서 한 번 불린다. hover(pointerenter/leave)는 여전히 기존 노트패드만
   // 연다/닫는다 — "normal Home hover" 그대로. 호출부(main.js)가 Explore 진입을 여기 건다.
-  const { startRect = null, board, reduced = false, cardClaimed = false, onFrame, onCleanup, listen, onTap = () => {} } = opts;
+  const { startRect = null, board, reduced = false, cardClaimed = false, onFrame, onCleanup, listen, onTap = () => {}, pairConverge = false } = opts;
   layout(root);
 
   const stack = root.querySelector("#chogHomeStack");
@@ -366,6 +440,9 @@ export function mountChogHome(root, opts) {
   let sitTimer = 0;
   let destroyed = false;
   let handoff = null; // Name it 그림 → 걷기 넘김용 임시 <img>
+  // [A-624] 첫 도착 신호 — startTapCue() 전에는 null. { t, label, hidden, measure }
+  let tapCue = null;
+  let waveDeg = 0;
 
   // [A-358 §3] hover 노트패드의 손끝-출발 모션은 그대로 두고(아래 draw() 의 sx/sy/dx/dy),
   // release(카드가 열리는 마지막 구간)가 끝나갈 때만 같은 공통 카드 자리(.cardAnchor,
@@ -389,9 +466,18 @@ export function mountChogHome(root, opts) {
     // 의 기존 sx/sy/dx/dy 수식)에 그대로 머문다. pinned 는 꺼지지 않는다(그건 사용자
     // 입력이다) — 겹치는 것은 "같은 화면자리" 뿐이라 여기서만 막는다.
     if (cardClaimed) return null;
-    const boardRect = (homeBoardEl && homeBoardEl.getBoundingClientRect()) || board;
+    // [A-620] root(#chogHome) 의 **실제 부모 좌표계**를 잰다. 좁은 화면에서는 main.js
+    // applyHomeCharacterScaleFloor() 가 #chogHome 을 .homeCharScaleFloor(1256×772 상자,
+    // translate+scale(k=0.52/s))로 감싸므로, #homeBoard rect 만 쓰면 이 목표가 그 k 를 한 번
+    // 더 받아 종이가 256.338×k(390: 429px, 430: 389px)로 커지고 왼쪽 밖으로 밀렸다
+    // (A620 VERIFY §1). 부모 상자의 rect 는 그 합성 변환을 그대로 담고 있으니 이것 하나로
+    // 목표를 되돌린다. 1440(바닥 미적용)은 부모가 곧 #homeBoard 라 결과가 이전과 같다.
+    const parentEl = root.parentElement;
+    const frameEl = parentEl && parentEl.matches("#homeBoard, .homeCharScaleFloor") ? parentEl : homeBoardEl;
+    const frameW = (frameEl && frameEl.offsetWidth) || 1256;
+    const boardRect = (frameEl && frameEl.getBoundingClientRect()) || board;
     if (!boardRect || !boardRect.width) return null;
-    const boardScale = boardRect.width / 1256;
+    const boardScale = boardRect.width / frameW;
     if (!boardScale) return null;
     const viewportScale = boardScale * HOME_SCALE;
     // [A-359 §2] 실측 x324,y128.5,w256.338,h364 — 종이는 400×568 을 285×364 안에 등축
@@ -445,7 +531,9 @@ export function mountChogHome(root, opts) {
     const bob = crouch + rebound + landing;
 
     // 두 팔은 회전과 bob 을 같이 받는다. bob 루프가 회전을 덮지 않도록 여기서 합친다.
-    if (nearArm) nearArm.style.transform = `translateY(${bob}px) rotate(${angle}deg)`;
+    // [A-624] 첫 도착 신호의 흔들기(waveDeg)는 같은 어깨 pivot 에 회전만 더한다 — 신호가
+    // 없으면 0 이라 이 줄은 이전과 같은 값을 낸다.
+    if (nearArm) nearArm.style.transform = `translateY(${bob}px) rotate(${angle + waveDeg}deg)`;
     if (farArm) farArm.style.transform = `translateY(${bob}px) rotate(${-102 * push}deg)`;
     for (const el of bobParts) {
       if (!el || el === farArm || el === nearArm || el === faceBase) continue;
@@ -485,6 +573,14 @@ export function mountChogHome(root, opts) {
       const finalRotate = anchorTarget ? lerp(handRotate, 0, anchorBlend) : handRotate;
       pad.style.transform = `translate(${finalX}px, ${finalY}px) rotate(${finalRotate}deg) scale(${finalScale})`;
       pad.style.opacity = cardClaimed ? "0" : String(clamp01(progress / 0.1));
+      // [A-628 B] 완전히 접힌 종이(progress 0 · 여는 의도 target 0 — opacity 0, 손끝 크기)는 키보드에서
+      // 빠진다. 전에는 보이지 않는 records/money stamp/flap/+Piggy 가 Tab·focus 를 받았고, 접힌 채
+      // Enter 로 HISTORY 가 손끝 크기로 열리거나(Chog 까지 inert 로 갇힘) Money 모드·flap 이 몰래
+      // 바뀌었다(A-628 pre 390/430/1440). #chogHomeHit 은 pad 밖 형제라 그대로 산다. 여는 순간
+      // (target 1) 바로 풀리므로 열린 종이의 키보드/포인터와 닫히는 애니메이션 동안의 포인터는
+      // 전과 같다. 접힌 pad 는 포인터 적중 0(pre 표본 780/1786점 전부 0)이라 포인터 변화도 0.
+      const folded = progress === 0 && target === 0;
+      if (pad.inert !== folded) pad.inert = folded;
     }
   }
 
@@ -596,6 +692,45 @@ export function mountChogHome(root, opts) {
     draw();
   }
 
+  // ---- [A-624] 첫 도착 신호 B ------------------------------------------------
+  // 호출부(main.js mountHome settle())가 "Save 직후 첫 도착" 사실(isFirstArrival)로만 부른다 —
+  // 새 저장 키 0. 한 인스턴스에 한 번. 공통 카드 자리가 이미 다른 카드 몫이면(cardClaimed)
+  // Chog 탭이 종이를 못 여니 가르칠 것이 없다 → 띄우지 않는다.
+  function startTapCue() {
+    if (destroyed || cardClaimed || tapCue || !hit) return false;
+    const label = document.createElement("div");
+    label.className = "chogHome__tapCue";
+    label.setAttribute("aria-hidden", "true"); // 탭 대상(#chogHomeHit "Chog")이 이미 AX 에 있다
+    label.textContent = "tap me!";
+    label.style.opacity = reduced ? "1" : "0";
+    root.append(label);
+    tapCue = { t: 0, label, hidden: false, measure: true };
+    root.dataset.tapCue = reduced ? "shown" : "entering";
+    measureTapCue();
+    return true;
+  }
+
+  // 로컬 좌표 → 화면 배율은 hit 의 실제 rect 로 잰다(바닥 스케일·판 스케일 합성값).
+  function measureTapCue() {
+    if (!tapCue || tapCue.hidden) return;
+    const r = hit.getBoundingClientRect();
+    const k = r.width / (INK.right - INK.left);
+    if (!k) return;
+    tapCue.measure = false;
+    const { label } = tapCue;
+    label.style.fontSize = `${TAP_CUE_SCREEN_PX / k}px`;
+    label.style.left = `${(INK.left + INK.right) / 2}px`;
+    label.style.top = `${INK.top - TAP_CUE_GAP_SCREEN_PX / k}px`;
+  }
+
+  function hideTapCue() {
+    if (!tapCue || tapCue.hidden) return;
+    tapCue.hidden = true;
+    waveDeg = 0;
+    tapCue.label.remove();
+    root.dataset.tapCue = "off";
+  }
+
   if (hit) {
     listen(hit, "pointerenter", () => requestHover(1));
     listen(hit, "pointerleave", () => {
@@ -608,6 +743,8 @@ export function mountChogHome(root, opts) {
     });
     const toggle = (e) => {
       e.preventDefault();
+      // [A-624] 실제 Chog 탭(click/touch/Enter/Space) = 신호를 치운다. hover/focus 는 아니다.
+      hideTapCue();
       pinned = !pinned;
       requestHover(pinned ? 1 : 0);
       // [A-360 §3] "여는 탭"에서만 — 자리가 이미 다른 카드 몫이면(cardClaimed) 부르지
@@ -648,6 +785,10 @@ export function mountChogHome(root, opts) {
   for (const type of ["pointerdown", "pointermove", "keydown", "wheel", "touchstart"]) {
     listen(document, type, activity, { passive: true });
   }
+  // [A-624] 창 크기가 바뀌면(바닥 스케일 재계산) 신호 글자 크기를 다음 프레임에 다시 잰다.
+  listen(window, "resize", () => {
+    if (tapCue) tapCue.measure = true;
+  });
   listen(document, "visibilitychange", () => {
     if (document.hidden) {
       clearSleepTimers();
@@ -721,10 +862,13 @@ export function mountChogHome(root, opts) {
         handoff.style.opacity = String(1 - blend);
         if (blend >= 1) { handoff.remove(); handoff = null; }
       }
+      // [A-614 repair] 위치/스케일 lerp 에만 앞선 곡선을 먹인다 — 위 walk.src/blend 는
+      // 그대로 원래 선형 시간을 쓴다(프레임 순서·크로스페이드 타이밍 불변).
+      const posU = pairConverge ? pairConvergenceEase(u) : u;
       place(
-        lerp(start.x, CORNER_TX, u),
-        lerp(start.y, CORNER_TY, u),
-        lerp(start.scale, HOME_SCALE, u),
+        lerp(start.x, CORNER_TX, posU),
+        lerp(start.y, CORNER_TY, posU),
+        lerp(start.scale, HOME_SCALE, posU),
       );
       if (walkElapsed >= WALK_TOTAL_MS) {
         walking = false;
@@ -739,6 +883,17 @@ export function mountChogHome(root, opts) {
       }
       draw();
       return true;
+    }
+
+    if (tapCue && !tapCue.hidden) {
+      if (tapCue.measure) measureTapCue();
+      if (!reduced) {
+        tapCue.t += dt;
+        const f = tapCueFrame(tapCue.t);
+        waveDeg = f.waveDeg;
+        tapCue.label.style.opacity = String(f.labelOpacity);
+        if (!f.entering && root.dataset.tapCue === "entering") root.dataset.tapCue = "shown";
+      }
     }
 
     if (!reduced) {
@@ -773,6 +928,8 @@ export function mountChogHome(root, opts) {
   // 프레임을 만들지 않는다. progress 를 0으로 즉시 내려 draw() 가 opacity 0 을 낸다
   // (기존 650ms easing 을 기다리지 않는다 — 소유권 이전은 즉시여야 한다).
   const closeCard = () => {
+    // [A-624] 자리를 넘기는 순간 신호도 같이 치운다 — 다음 카드와 한 프레임도 겹치지 않게.
+    hideTapCue();
     pinned = false;
     target = 0;
     progress = 0;
@@ -795,6 +952,17 @@ export function mountChogHome(root, opts) {
     get state() {
       return { ready, walking, progress, pinned, dozePhase, stage: dozeState.stage, asleep: dozeState.asleep };
     },
+    // [A-624] 신호가 아직 등장 중인가 — main.js 첫 Journey 카드가 이 동안 기존 재시도 규율로 미룬다.
+    get tapCueEntering() {
+      return !!tapCue && !tapCue.hidden && !reduced && tapCue.t < TAP_CUE_TIMING.entranceMs;
+    },
+    // [A-626 A] 등장 + 완전 가시 유지(holdMs)까지 남은 신호 시간(ms). 신호 없음/치움/reduced = 0
+    // (reduced 는 정착 즉시 정지 라벨이라 기존 1200ms 첫 카드 대기가 그대로 읽힘 창이다).
+    get tapCueHoldRemainingMs() {
+      if (!tapCue || tapCue.hidden || reduced) return 0;
+      return Math.max(0, TAP_CUE_TIMING.readyMs - tapCue.t);
+    },
+    startTapCue,
     wake,
     hover: requestHover,
     closeCard,

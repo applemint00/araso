@@ -37,13 +37,16 @@ const FUNCTIONS = [
   "createEmptySecondJourney", "secondJourneyScope", "currentSecondDraft", "persistSecondDraft", "safeLocalStorage",
   "ensureSecondJourneyDomainState", "persistSecondJourneyDomainState", "buildDevPreviewOverrides", "buildDevPreviewEvidence",
   "recomputeSecondJourneyFlow", "handleCandidateCheck", "handleJitAnswer", "recordSecondJourneyDecisionForAnswer", "handleReadinessBack",
+  // [A-629] LOCAL_ONLY harness hooks; inert here because LOCAL_DEV_ENTRY is false in this module.
+  "localTestReturnReadConfig", "localTestJobBindings",
 ];
 
 // Builds a module from the real main.js text. `readConfig` replaces the null config only when a
 // test wants the configured-reader path (fake fetch); product source keeps null.
 async function loadMainSecondJourney({ readConfig = null } = {}) {
   const url = (file) => new URL(file, SRC_DIR).href;
-  let consts = [cutConst("SECOND_DECISION_SELECTION_SOURCE"), cutConst("RETURN_EVIDENCE_READ_CONFIG")].join("\n");
+  let consts = [cutConst("SECOND_DECISION_SELECTION_SOURCE"), cutConst("RETURN_EVIDENCE_READ_CONFIG"),
+    cutConst("LOCAL_TEST_RETURN_READ_HOOK"), cutConst("LOCAL_TEST_JOB_BINDINGS_HOOK"), "const LOCAL_DEV_ENTRY = false;"].join("\n");
   if (readConfig) consts = consts.replace("const RETURN_EVIDENCE_READ_CONFIG = null;", `const RETURN_EVIDENCE_READ_CONFIG = ${JSON.stringify(readConfig)};`);
   const body = FUNCTIONS.map(cutFunction).join("\n\n").replaceAll("import.meta.env.DEV", "__env.DEV");
   const code = `

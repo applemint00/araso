@@ -12,7 +12,7 @@
 // Method (reused, not reinvented — see phase1/STEP0.md consumed_source list):
 //   - CDP client: hand-rolled, dependency-free (Node 24 global fetch + WebSocket), copied and
 //     adapted inline from
-//     _private/ops/receipts/A544_receipt_owner_visibility/tools/cdp.mjs (self-contained here
+//     the A544 receipt's tools/cdp.mjs (CDP code origin: A544 receipt; self-contained here
 //     per this card's instruction, no new npm deps, no import from the receipts dir).
 //   - Fixture seeding: the REAL app/src/piggy-index.js (registerControlledPiggy) and
 //     app/src/piggy-registry.js (migrateSinglePiggy/createPiggy/saveRegistry) functions,
@@ -26,7 +26,7 @@
 // Hard timeout: 90s. Chrome + Vite are always killed in a finally block, even on timeout/throw.
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,11 +37,11 @@ import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const APP_DIR = path.join(REPO_ROOT, "app");
-const OUT_DIR = path.join(
-  REPO_ROOT,
-  "_private/ops/receipts/A552_pre_design_hardening_close/phase1/evidence",
-);
-mkdirSync(OUT_DIR, { recursive: true });
+// [A-638 (reissue of A-637)] Runtime screenshots/results go to a unique per-run OS temp dir.
+// This general regression test must never write into historical receipt evidence directories
+// (it previously overwrote the A-552 phase1 evidence on every full-suite run).
+const OUT_DIR = mkdtempSync(path.join(process.env.TMPDIR || tmpdir(), "a552-mpbr-out-"));
+console.log(`output dir (temp, per-run): ${OUT_DIR}`);
 
 const VITE_PORT = 5552;
 const CDP_PORT = 9552;

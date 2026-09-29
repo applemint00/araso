@@ -249,7 +249,7 @@ export function buildDestinationFixtures(runtimeContext = {}, evidenceOptions = 
     requireObservation: evidenceOptions.freshReturnDestinationId === KINTSU_DESTINATION_ID,
   });
   const kintsuJobChain = kintsuReturnEvidence?.provenance?.chain || "UNKNOWN";
-  return [
+  const fixtures = [
     {
       id: "aave-like-grow-supply",
       laneId: "grow",
@@ -378,6 +378,38 @@ export function buildDestinationFixtures(runtimeContext = {}, evidenceOptions = 
       },
     },
   ];
+  return applyJobBindings(fixtures, CURRENT_PIGGY_CONTEXT, evidenceOptions);
+}
+
+// [A-629] Binds more fixture destinations to real studied Job records (second-job-readiness.js
+// FORK_PROVEN_DESTINATIONS), so the same pre-Send decision contract runs on more than one Job
+// family. Only a caller-supplied map { destinationId: jobId } binds. No product caller passes
+// one: main.js forwards it only from a LOCAL_ONLY harness hook. A binding is refused, and the
+// destination stays exactly as it was, when the Job is unknown, the destination is already
+// bound, or the Job's own exit mode differs from the fixture's return model (no borrowing of
+// another family's mechanics). The Job's evidence is read the same way as Kintsu's above.
+function applyJobBindings(destinations, currentPiggyContext, evidenceOptions = {}) {
+  const bindings = evidenceOptions.jobBindings;
+  if (!bindings || typeof bindings !== "object" || Array.isArray(bindings)) return destinations;
+  return destinations.map((destination) => {
+    const jobId = Object.prototype.hasOwnProperty.call(bindings, destination.id) ? bindings[destination.id] : null;
+    if (typeof jobId !== "string" || !jobId || destination.boundJobId) return destination;
+    const returnEvidence = readDestinationReturnEvidence(jobId, {
+      observation: evidenceOptions.returnObservations?.[jobId] ?? null,
+      nowMs: evidenceOptions.nowMs,
+      requireObservation: evidenceOptions.freshReturnDestinationId === destination.id,
+    });
+    if (!returnEvidence || returnEvidence.provenance?.exitMode !== destination.capabilityContext?.returnModel?.type) return destination;
+    const jobChain = returnEvidence.provenance.chain || "UNKNOWN";
+    return {
+      ...destination,
+      boundJobId: jobId,
+      jobChain,
+      executionContext: boundExecutionContext(currentPiggyContext.chain, jobChain),
+      returnEvidence,
+      evidenceState: boundEvidenceState(jobId, returnEvidence, [...(destination.evidenceState?.sourceTasks || []), "A-480", "A-629"]),
+    };
+  });
 }
 
 function normalizeSelection(selectionKind = "one", selectedErrandIds = ["market"]) {
@@ -435,6 +467,14 @@ export function deriveDestinationStatus(destination, context = {}) {
   // [A-579] every answer (right_back / few_days / no_rush) goes through the Job's evidence.
   if (destination.boundJobId && returnAnswer) {
     return deriveSemanticReturnStatus(destination, returnAnswer);
+  }
+
+  // [A-629] Universal pre-Send contract: for ANY destination bound to a real Job, whatever its
+  // family, no agreed meaning exists yet for this selection, so the rule cannot decide. That is
+  // `ask` (the one JIT question), action 0. For the delayed Kintsu destination this is the same
+  // result the delayed branch below already gave; it no longer depends on the family.
+  if (destination.boundJobId) {
+    return { status: STATUS.JOB_OPEN, reasonCode: "return_tolerance_unknown", action: ACTION.ASK };
   }
 
   if (returnModel.type === "delayed") {
@@ -630,7 +670,8 @@ export function runSecondJourney(options = {}) {
   // [A-579] `requireFreshReturnObservation` = decision-time mode for the destination the user
   // checked. Default false keeps the recorded-read behaviour for every other caller.
   const freshReturnDestinationId = options.requireFreshReturnObservation === true ? options.preferredDestinationId || null : null;
-  const destinations = buildDestinationFixtures(runtimeContext, { returnObservations: options.returnObservations, nowMs: options.nowMs, freshReturnDestinationId })
+  // [A-629] `jobBindings` = extra fixture→Job bindings. Only a LOCAL_ONLY harness passes one.
+  const destinations = buildDestinationFixtures(runtimeContext, { returnObservations: options.returnObservations, nowMs: options.nowMs, freshReturnDestinationId, jobBindings: options.jobBindings })
     .filter((destination) => destination.errandIds?.some((id) => selection.errandIds.includes(id)))
     .map((destination) => ({ ...destination, ...(destinationOverrides[destination.id] || {}) }));
   const derivedDestinations = destinations.map((destination) => {

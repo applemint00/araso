@@ -41,7 +41,9 @@ check("showAddPiggyTab() 자체가 그 canonical 조건을 그대로 return 한�
 // ── §2 mountHomeResidentModule() 의 게이트 — predicate 가 거짓이면 +Piggy 뿐 아니라
 //     peek(.homePeekBody/.homePeekHandClip) 도, 그 둘에 남을 수 있는 stale .hasPeek 도
 //     전부 뗀다(A-544 Repair B — A-540 은 .homePlusPiggyTab 만 뗐던 것의 수리) ──────────────
-const mountSrc = cut("function mountHomeResidentModule() {", "\nfunction refreshHomePaperMount() {");
+// [A-624] signature gained `{ reopen = false } = {}` (breakpoint remount keeps the open state) —
+// marker updated; the gate/teardown-order contract below is unchanged.
+const mountSrc = cut("function mountHomeResidentModule({ reopen = false } = {}) {", "\nfunction remountHomeResidentsForBreakpoint() {");
 const gateIfPos = mountSrc.indexOf('if (!showAddPiggyTab(state.scene, "home")) {');
 check("mountHomeResidentModule() 안에 predicate 거짓 분기가 있다", gateIfPos >= 0, true);
 const gateBlock = gateIfPos >= 0 ? mountSrc.slice(gateIfPos, gateIfPos + 400) : "";
@@ -88,7 +90,8 @@ check(
 );
 
 // ── §5 teardown 은 매 mount 전에 먼저 돈다(재mount/모드전환/씬전환에서 중복 DOM 0) ──────────
-const teardownFirstCall = mountSrc.indexOf("teardownHomeResidentModule();");
+// [A-624] measured from the body's opening line (the signature grew by `{ reopen = false } = {}`).
+const teardownFirstCall = mountSrc.indexOf("teardownHomeResidentModule();") - mountSrc.indexOf("{ reopen = false } = {}) {");
 check("mountHomeResidentModule() 은 자기 몸에서 teardownHomeResidentModule() 을 가장 먼저 부른다", teardownFirstCall >= 0 && teardownFirstCall < 60, true);
 const refreshSrc = cut("function refreshHomePaperMount() {", "\n}\n");
 check("refreshHomePaperMount() 도 innerHTML 교체 전에 teardown, 교체 뒤에 mount 한다(순서 보존)", /teardownHomeResidentModule\(\);[\s\S]*mount\.innerHTML[\s\S]*mountHomeResidentModule\(\);/.test(refreshSrc), true);

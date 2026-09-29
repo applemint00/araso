@@ -272,9 +272,20 @@ check("Piggy-switch and Gate C money functions are byte-identical to the pre-A-5
 });
 
 // ══ 10. the five existing session functions are untouched by this card ═════════════════════════
+// [A-633 B] touchAppSession 만 예외 하나: app-idle 만료 콜백에 모바일 잠금 분기 한 줄(+주석 2줄)이 **추가**됐다.
+// 그 세 줄을 빼면 pre-A-565 스냅숏과 byte-동일해야 한다(다른 어떤 줄도 바뀌지 않았다는 증명). 나머지 넷은 그대로 byte-동일.
+const A633_IDLE_LOCK_LINES =
+  "    // [A-633 B] 모바일/app 표면만: 풀린 Home 을 잠금 화면처럼 남기지 않고 LOGIN_CHECKING 으로 잠근다.\n" +
+  "    // 웹(641+)·지원되지 않는 origin 은 아래 기존 resting 동작 그대로다.\n" +
+  "    if (lockAppAfterIdle()) return;\n";
 check("endSignerSession/endActiveSession/touchAppSession/armSignerExpiry/activateSigningSession are byte-identical to the pre-A-565 snapshot", () => {
   for (const name of ["endSignerSession", "endActiveSession", "touchAppSession", "armSignerExpiry", "activateSigningSession"]) {
-    assert.equal(extractFunction(MAIN, name), extractFunction(PRE, name), `${name} changed — this card must only ADD a new hook, never edit these`);
+    let now = extractFunction(MAIN, name);
+    if (name === "touchAppSession") {
+      assert.equal(now.split(A633_IDLE_LOCK_LINES).length, 2, "A-633 idle-lock branch present exactly once");
+      now = now.replace(A633_IDLE_LOCK_LINES, "");
+    }
+    assert.equal(now, extractFunction(PRE, name), `${name} changed — this card must only ADD a new hook, never edit these`);
   }
 });
 
