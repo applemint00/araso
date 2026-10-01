@@ -4,9 +4,9 @@
 //  - 파일 없음        = 첫 실행. 빈 원장으로 시작(정상, 에러 아님).
 //  - 파싱/읽기 실패   = throw LEDGER_CORRUPT. 호출자가 fail-closed 로 처리한다
 //                       (server.mjs: 원장을 못 읽으면 /grant 는 전부 거부, 사유를 응답에 담는다).
-//  - [A-439] 스키마 검증 = entries 는 객체(배열 거부), 각 항목의 주소·금액·상태·txHash 형식을 본다.
+//  - [relayer safety] 스키마 검증 = entries 는 객체(배열 거부), 각 항목의 주소·금액·상태·txHash 형식을 본다.
 //                       하나라도 틀리면 throw LEDGER_SCHEMA — 재시작 뒤 dedup·상한이 조용히 풀리지 않게.
-//  - [A-439] 단일 writer = `<path>.lock` 을 O_EXCL(wx) 로 만든다. 이미 있으면 throw LEDGER_LOCKED —
+//  - [relayer safety] 단일 writer = `<path>.lock` 을 O_EXCL(wx) 로 만든다. 이미 있으면 throw LEDGER_LOCKED —
 //                       같은 원장을 두 프로세스가 쓰지 못한다. 남은 lock 을 자동으로 지우지 않는다
 //                       (stale 여부는 사람이 확인). 자기 lock 은 close() 로만 푼다.
 //  - reserve() 는 tx 전송 **전에** 기록한다. 전송 후 크래시해도 중복 지급이 안 된다.
@@ -94,7 +94,7 @@ export function openLedger(path) {
 
   const has = (addr) => Object.prototype.hasOwnProperty.call(data.entries, key(addr));
   const get = (addr) => data.entries[key(addr)] ?? null;
-  /** [A-439] 원장 전체 지급 건수·금액 — 상태와 무관하게 예약된 것은 모두 센다(FAILED 도 불확실 broadcast 일 수 있다). */
+  /** [relayer safety] 원장 전체 지급 건수·금액 — 상태와 무관하게 예약된 것은 모두 센다(FAILED 도 불확실 broadcast 일 수 있다). */
   const count = () => Object.keys(data.entries).length;
   const totalWei = () => Object.values(data.entries).reduce((s, e) => s + BigInt(e.amountWei), 0n);
 

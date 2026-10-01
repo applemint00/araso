@@ -21,7 +21,7 @@ export function returnSceneMarkup(input) {
   return `
     <section class="stage" data-scene="return">
       <canvas class="departStage" id="returnStage" aria-hidden="true"></canvas>
-      <!-- [A-358 §2] #homeBoard 자체는 aria-hidden 을 걸지 않는다 — 안의 Chog hit(role=button)
+      <!-- #homeBoard 자체는 aria-hidden 을 걸지 않는다 — 안의 Chog hit(role=button)
            까지 AX 트리에서 빠진다. 장식 파츠는 chog-home.js 쪽에서 개별로 숨긴다. -->
       <div class="homeBoard" id="homeBoard">
         <div class="returnChogHop" id="returnChogHop">${input.homeChogMarkup || ""}</div>
@@ -32,7 +32,7 @@ export function returnSceneMarkup(input) {
       </button>
       <span class="returnTap__hint" id="returnHint" hidden></span>
       <button class="tiny returnOpen" id="returnOpen" type="button" hidden>open the file</button>
-      <!-- [A-466 Lane A] 결과 모션 skip. 문구·클래스·자리 전부 hatch 의 승인된 skip 과 같은 것을
+      <!-- 결과 모션 skip. 문구·클래스·자리 전부 hatch 의 승인된 skip 과 같은 것을
            재사용한다(새 카피·새 수치 0). 첫 결과에서는 숨고, 그 뒤 Return 에서만 보인다. -->
       <button class="tiny skip" id="returnSkip" type="button" hidden>skip</button>
       <article class="note note--quiet"><p class="line" id="returnLine">${line}</p></article>
@@ -105,13 +105,42 @@ export function mountReturnView(opts) {
     return null;
   }
 
+  // [A-656 decision 4] Mobile/mid-band: the canvas (Piggy + Receipt/portal choreography) is
+  // resized/repositioned with the SAME A-607 canon-K formula the First Job work canvas uses
+  // (main.js), instead of `.departStage`'s plain centered fit — so Piggy's filed seat lands on
+  // the exact Home foot on mobile and mid-band, not just the DOM Chog/name (`fitBoard()`, wired
+  // in main.js's mountReturn()/mountSecondReturn(), already wraps #returnChogHop/#returnName and
+  // returns `{ ...fit, floor }`, floor = null when neither applies — a strict no-op there, byte-
+  // identical to the pre-A-656 plain fit, e.g. every measured web width).
   const fit = () => {
     const s = Math.min(window.innerWidth / BOARD_W, window.innerHeight / BOARD_H);
-    canvas.width = Math.round(BOARD_W * s * (window.devicePixelRatio || 1));
-    canvas.height = Math.round(BOARD_H * s * (window.devicePixelRatio || 1));
-    canvas.style.width = `${BOARD_W * s}px`;
-    canvas.style.height = `${BOARD_H * s}px`;
-    fitBoard();
+    const info = fitBoard();
+    const floor = info && info.floor;
+    if (floor) {
+      const k = floor.k;
+      const left = info.left + s * HOME_CENTER * (1 - k) + floor.nudgeViewportX;
+      const top = info.top + s * HOME_FLOOR * (1 - k) + floor.nudgeViewportY;
+      const effW = BOARD_W * s * k;
+      const effH = BOARD_H * s * k;
+      canvas.width = Math.round(effW * (window.devicePixelRatio || 1));
+      canvas.height = Math.round(effH * (window.devicePixelRatio || 1));
+      canvas.style.width = `${effW}px`;
+      canvas.style.height = `${effH}px`;
+      canvas.style.left = `${left}px`;
+      canvas.style.top = `${top}px`;
+      canvas.style.transform = "none";
+    } else {
+      // Desktop / floor-not-active: unchanged simple centered fit (`.departStage`'s own CSS
+      // left:50%/top:50%/translate(-50%,-50%) applies whenever these inline overrides are
+      // cleared — same as every pre-A-656 width).
+      canvas.style.left = "";
+      canvas.style.top = "";
+      canvas.style.transform = "";
+      canvas.width = Math.round(BOARD_W * s * (window.devicePixelRatio || 1));
+      canvas.height = Math.round(BOARD_H * s * (window.devicePixelRatio || 1));
+      canvas.style.width = `${BOARD_W * s}px`;
+      canvas.style.height = `${BOARD_H * s}px`;
+    }
   };
   fit();
 

@@ -105,7 +105,7 @@ export const RULE_EXAMPLES = Object.freeze({
   rewardExpiry: { id: "reward", field: "rewardExpiryHours", comparator: "gte", expected: 24, agreed: true, materialityPct: 0.25 },
 });
 
-// ── semantic evidence extension (A-571 Phase C) ──────────────────────────────
+// ── semantic evidence extension ──────────────────────────────
 //
 // Narrow, additive extension for rules the user agreed to in MEANING, not a number
 // (e.g. "I want it right back"). `decideRule`/`decideRules`/`compare` above are
@@ -129,7 +129,7 @@ const RETURN_CLASS = Object.freeze({
 // Only meanings explicitly listed here are understood. An expected meaning not in this
 // table is unknown evidence, not a guess — see `decideSemanticReturnRule`.
 //
-// [A-579] `needsDuration`: classes where the meaning can only be judged against the Job's
+// [semantic evidence extension] `needsDuration`: classes where the meaning can only be judged against the Job's
 // OWN stated duration. The meaning is never turned into a number here. If the Job does not
 // state its duration (`value.durationKnown !== true`) the answer is `unknown`. If it does,
 // the answer is `ask`: the user confirms the Job's own duration, and nothing is guessed.

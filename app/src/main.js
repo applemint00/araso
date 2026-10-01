@@ -11,10 +11,20 @@ import { chogHomeMarkup, mountChogHome, CHOG_HOME_GEOMETRY, pairConvergenceEase 
 import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-invite.js";
 import { createDepartPlayback, createDepartRenderer, loadDepartAssets } from "./piggy-depart.js";
 import {
+  assignHomeAmbient,
   buildPiggyMotionStateMap,
+  fitWideSlot,
+  hashSeed,
+  homeSlotBand,
+  isRuntimeMotionState,
+  orderHomeResidents,
   PIGGY_MOTION_STATE,
   piggyMotionStateFromMap,
+  planHomeSlots,
+  rect as slotRect,
+  rectsTouch,
   resolvePiggyMotionState,
+  seededRandom,
 } from "./piggy-motion-state.js";
 import { nameCardMarkup, mountNameCard } from "./name-card.js";
 import { returnSceneMarkup, mountReturnView, RETURN_VIEW_GEOMETRY } from "./return-view.js";
@@ -73,6 +83,7 @@ import { recoverProductList } from "./gate-b-recovery.js";
 import { listFundingMethods, startFunding, applyFundingResult, FUNDING_STATE } from "./funding-entry.js";
 import { checkIntentFunding, fundingRequestForShortfall, resumeAfterFunding, markPlanApproved } from "./funding-intent-bridge.js";
 import { buildFundingContext, validateFundingContext, scopeForChainId, FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "./funding-context.js";
+import { legacyTestnetPathOpen, profileScope, resolveChainProfile } from "./chain-profile.js";
 import { reconcileConfirmedFunding } from "./funding-reconcile.js";
 import {
   decodeReceiptRow,
@@ -113,7 +124,7 @@ import {
 } from "./second-journey-view.js";
 import "./style.css";
 // [A-540] confirmed HOME peek/+Piggy + multi-Piggy fold/expand packages — dropped in verbatim
-// (<private>, <private>). CSS is
+// (the confirmed home-peek and home-paper-multi design packages, kept outside this repo). CSS is
 // imported here so vite bundles it with the rest of the app (no style.css value transplant).
 import "./home-peek.css";
 import "./home-paper-multi.css";
@@ -134,6 +145,14 @@ const MONAD_TESTNET = {
     default: { http: [MONAD_TESTNET_RPC] },
   },
 };
+// Chain profile (chain-profile.js): testnet unless the build config names the mainnet profile
+// id exactly; any other value is blocked (scope "", nothing persists, nothing sends).
+const CHAIN_PROFILE = resolveChainProfile(import.meta.env.VITE_ARASO_CHAIN_PROFILE);
+const RUNTIME_CHAIN_SCOPE = profileScope(CHAIN_PROFILE);
+// The first shMON send, the relayer grant, the testnet RPC client and the legacy receipt rows
+// (which carry no chain id) exist on testnet only. On any other profile they stay sealed:
+// not read, not written, not reconciled, so testnet state is never shown as this chain's.
+const LEGACY_TESTNET_PATH = legacyTestnetPathOpen(CHAIN_PROFILE);
 // 기본값 = 같은 origin 의 서버리스(`/api/grant`). 로컬 relayer 로 붙일 때만 VITE_RELAYER_URL 로 덮는다.
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "/api";
 const SEND_AMOUNT = parseEther("0.001");
@@ -290,12 +309,12 @@ const state = {
   message: "",
   detail: "",
   address: localStorage.getItem("araso.address") || "",
-  mark: localStorage.getItem("araso.mark") || "",
-  txHash: localStorage.getItem("araso.txHash") || "",
+  mark: LEGACY_TESTNET_PATH ? localStorage.getItem("araso.mark") || "" : "",
+  txHash: LEGACY_TESTNET_PATH ? localStorage.getItem("araso.txHash") || "" : "",
   grantTxHash: "",
   // settle() 이 만든 receipt 를 최근 것부터 2건. 세션 메모리가 아니라 저장소에 남는다 —
   // 2회차에서는 새 영수증을 받은 뒤에도 직전 바퀴를 다시 열어봐야 한다(A-015).
-  receipts: readReceipts(),
+  receipts: LEGACY_TESTNET_PATH ? readReceipts() : [],
   receiptIndex: 0,
   credential: readCredential(),
   awayLine: "I'll check it.",
@@ -311,11 +330,11 @@ const state = {
   // 옛 저장값에는 이 키가 없으므로 txHash 가 있으면 닫힌 것으로 본다(A-048 이관과 같은 다리).
   // [A-441] 단 미확정 Send 기록(SEND_PENDING_KEY)이 있으면 그 다리를 쓰지 않는다 — 확정 전 txHash 가
   // 닫힌 바퀴로 복구되지 않게(computeTripClosed).
-  tripClosed: computeTripClosed({
+  tripClosed: LEGACY_TESTNET_PATH ? computeTripClosed({
     tripClosedFlag: localStorage.getItem(TRIP_CLOSED_KEY),
     txHash: localStorage.getItem("araso.txHash"),
     pending: readSendPending(),
-  }),
+  }) : false,
   // 이름을 짓다 나갔다가 돌아온 진입인가. 그렇다면 Piggy 는 숨은 상태로 기다리고
   // Save 로만 다시 나온다(A-288). 해치에서 곧장 온 진입은 숨기지 않는다.
   // 「일반 대기에서 언제 숨길지」(시간)는 아직 정해지지 않았다 — 여기 넣지 않는다.
@@ -431,10 +450,26 @@ state.nameResumed = state.scene === "name";
 // ("Second 완료는 quiet Home", A-411-n §2/A-421)을 어겼다(A-461 Lane B 재현 g).
 state.homeQuietForExplore = state.scene === "sendstay" && state.tripClosed && !state.secondJourneyCompletedOnce;
 
-const publicClient = createPublicClient({
-  chain: MONAD_TESTNET,
-  transport: http(MONAD_TESTNET_RPC),
-});
+const publicClient = LEGACY_TESTNET_PATH
+  ? createPublicClient({
+    chain: MONAD_TESTNET,
+    transport: http(MONAD_TESTNET_RPC),
+  })
+  : sealedTestnetClient();
+
+// Outside the testnet profile nothing may read testnet state and show it as this chain's.
+// Every method rejects (callers already treat a failed read as "couldn't read / unknown");
+// `chain` is null, so every chain-scope check on this client fails closed.
+function sealedTestnetClient() {
+  const refuse = () => Promise.reject(new Error("testnet client sealed on this chain profile"));
+  return new Proxy({ chain: null }, {
+    get(target, prop) {
+      if (prop in target) return target[prop];
+      if (prop === "then" || typeof prop === "symbol") return undefined;
+      return refuse;
+    },
+  });
+}
 
 let activeSession = null;
 let activeAccount = null;
@@ -456,7 +491,7 @@ function readCredential() {
 // 였다 — 한 줄이라도 깨지면(BigInt("undefined") 등) 이력 전체가 [] 로 사라졌다. legacy 줄은
 // **그 안전장치를 그대로 지킨다**(반쯤 읽힌 목록에서 숫자를 그리지 않는다) — legacy 줄 decode 실패는
 // 바깥 catch 로 올라가 전체 [] 다. **add_money 줄만** 따로 감싼다: add_money 줄 하나가 깨져도
-// legacy 이력은 지워지지 않는다(§lane_b/AUDIT.md 버그 2 · A-553 리뷰 결함 1 수리).
+// legacy 이력은 지워지지 않는다(감사 버그 2 · A-553 결함 1 수리).
 function readReceipts() {
   try {
     const stored = JSON.parse(localStorage.getItem(RECEIPTS_KEY) || "[]");
@@ -505,6 +540,11 @@ function rememberReceipt(receipt) {
   const kept = [receipt, ...state.receipts];
   state.receipts = kept;
   state.receiptIndex = 0;
+  // The legacy receipt store holds testnet rows (the legacy rows carry no chain id). Off the
+  // testnet profile it is never read (state init) and never rewritten here, so a testnet row is
+  // neither shown as this chain's nor dropped. `typeof`: existing tests run this function cut
+  // out on stubs where the module const does not exist; in the app it always does.
+  if (typeof LEGACY_TESTNET_PATH === "boolean" && LEGACY_TESTNET_PATH !== true) return;
   localStorage.setItem(RECEIPTS_KEY, JSON.stringify(kept.map(serializeReceiptRow)));
 }
 
@@ -1847,7 +1887,10 @@ function commitSendSuccess(redeemTxHash) {
 function syncSendButton() {
   const btn = document.querySelector("#sendButton");
   if (!btn) return;
-  const locked = !isAllowedPiggyRpId() || sendBusy();
+  // The first send is a testnet-only path (see LEGACY_TESTNET_PATH). `typeof`: existing tests run
+  // this function cut out on stubs where the module const does not exist; in the app it always does.
+  const sealed = typeof LEGACY_TESTNET_PATH === "boolean" && LEGACY_TESTNET_PATH !== true;
+  const locked = sealed || !isAllowedPiggyRpId() || sendBusy();
   btn.disabled = locked;
   if (locked) btn.setAttribute("aria-disabled", "true");
   else btn.removeAttribute("aria-disabled");
@@ -1856,6 +1899,12 @@ function syncSendButton() {
 async function sendPiggy() {
   // [A-441] 두 번째 호출·미확정 기록이 있으면 아무것도 시작하지 않는다.
   if (sendInFlight) return;
+  // Testnet-only path: off the testnet profile nothing starts — no grant, no auth prompt, no
+  // sign, no send, and the testnet pending record is not read. Existing copy, no new words.
+  if (typeof LEGACY_TESTNET_PATH === "boolean" && LEGACY_TESTNET_PATH !== true) {
+    setScene("sendstay", "Piggy can't go out yet.", "");
+    return;
+  }
   if (readSendPending()) {
     // 새 문구 0 — 기존 「확인 중」 표현을 그대로 쓴다(finishTrip 의 미확정 경로와 같은 말).
     // [A-556] A-555 S4 가 여기 넣었던 fail-safe endActiveSession() 호출은 없앴다 — Owner
@@ -2163,7 +2212,10 @@ function computeExploreDisplayErrands(sj) {
 // 유효시만관심persist"). 첫 Journey 의 RECEIPTS_KEY/PASSKEY_STORAGE_KEY 와는 다른
 // 이름공간(second-journey-state.js STORAGE_PREFIX)이다 — 섞이지 않는다.
 function secondJourneyScope() {
-  return { accountId: state.address || "", chainId: "monad-testnet" };
+  // RUNTIME_CHAIN_SCOPE comes from the chain profile ("" when blocked: every store refuses it).
+  // `typeof`: existing tests run this function cut out on stubs where the module const does not
+  // exist (testnet semantics there); in the app it is always declared, so this never falls back.
+  return { accountId: state.address || "", chainId: typeof RUNTIME_CHAIN_SCOPE === "string" ? RUNTIME_CHAIN_SCOPE : "monad-testnet" };
 }
 // [A-475] 사용자가 **쓰다 만 것**만 남긴다. 배운 것(관심·선호)은 위 도메인 상태 몫이다.
 // 권한·READY·판정 캐시·금융 결과는 저장하지 않는다 — 복귀 후 항상 새로 계산한다.
@@ -2954,6 +3006,9 @@ function mountSecondAway() {
     onSceneTeardown(() => {
       homeChog = null;
     });
+    // [A-656 decision 3] Chog does not move because Piggy is Away — keep it at the same Home
+    // anchor (mobile floor / mid-band) the settled Home cluster uses.
+    applyHomeFloorToChogOnly(boardFit);
   }
   const token = sceneToken;
   let stopped = false;
@@ -2977,7 +3032,7 @@ function mountSecondAway() {
   const canvas = document.querySelector("#departStage");
   if (!canvas) {
     sceneListener(window, "resize", () => {
-      fitHomeBoard();
+      applyHomeFloorToChogOnly(fitHomeBoard());
     });
     // [A-407-g] render() 의 씬 분기(맨 아래 if (state.scene === ...) 사슬, 이 함수를
     // 부른 그 자리)는 **하나의 render() 호출 안에서** 여러 if 를 차례로 검사한다 —
@@ -2992,12 +3047,11 @@ function mountSecondAway() {
     return;
   }
   const fit = () => {
-    const s = Math.min(window.innerWidth / 1256, window.innerHeight / 772);
-    canvas.width = Math.round(1256 * s * (window.devicePixelRatio || 1));
-    canvas.height = Math.round(772 * s * (window.devicePixelRatio || 1));
-    canvas.style.width = `${1256 * s}px`;
-    canvas.style.height = `${772 * s}px`;
-    fitHomeBoard();
+    // [A-656 OWNER CORRECTION] Departure start must share the same Home floor/mid-band
+    // baseline Return already carries — see applyHomeFloorToDepartCanvas() above.
+    applyHomeFloorToDepartCanvas(canvas);
+    // [A-656 decision 3] Chog does not move because Piggy is Away — same Home anchor on resize.
+    applyHomeFloorToChogOnly(fitHomeBoard());
   };
   fit();
   sceneListener(window, "resize", fit);
@@ -3107,7 +3161,14 @@ function mountSecondReturn() {
     schedule: (step) => runSceneFrames(step),
     listen: (target, type, handler, options) => sceneListener(target, type, handler, options),
     onCleanup: (fn) => onSceneTeardown(fn),
-    fitBoard: () => fitHomeBoard(),
+    // [A-656 decision 4] Same Home anchor math (mobile floor / mid-band) as Home settled —
+    // wraps #returnChogHop + #returnName, and hands the canvas consumer (return-view.js fit())
+    // the viewport-space k/nudge it needs to resize/reposition itself the same way.
+    fitBoard: () => {
+      const fit = fitHomeBoard();
+      const plan = applyHomeFloorToReturnCluster(fit);
+      return { ...fit, floor: computeHomeFloorViewportNudge(plan, fit.s) };
+    },
     mountHomeChog: (chogRoot, o) => {
       homeChog = mountChogHome(chogRoot, {
         startRect: null,
@@ -3228,7 +3289,9 @@ function closeRecordsCard() {
     // `--closing` = the same 160ms opacity/transform transition, mirrored), then hides. HOME
     // is never touched by this — it never moved on open. Web keeps its immediate hide (frozen);
     // reduced motion hides immediately (identical final state).
-    if (window.innerWidth <= 640 && !anchor.hidden && !prefersReducedMotion()) {
+    // [A-662] geometry-fit decision replaces the old flat `window.innerWidth <= 640` — see
+    // computeHistoryFitMode().
+    if (computeHistoryFitMode() === "stacked" && !anchor.hidden && !prefersReducedMotion()) {
       anchor.classList.add("recordsCardAnchor--closing");
       recordsExitTimer = window.setTimeout(() => {
         recordsExitTimer = 0;
@@ -3261,12 +3324,15 @@ function closeRecordsCard() {
 // by tapping another Piggy's records while HISTORY is open keeps working).
 function syncRecordsViewportState() {
   const open = Boolean(state.recordsCardVisible);
-  const mobile = window.innerWidth <= 640;
+  // [A-662] geometry-fit decision replaces the old flat `window.innerWidth <= 640` — see
+  // computeHistoryFitMode(). Variable kept as a boolean "is HISTORY in stacked mode" (the
+  // shift/inert branches below only ever cared about stacked-vs-not, never the raw width).
+  const stackedMode = computeHistoryFitMode() === "stacked";
   const mount = document.querySelector(".homePaperMount");
   if (!mount) return;
-  const shift = open && !mobile;
+  const shift = open && !stackedMode;
   if (mount.classList.contains("homePaperMount--twoCardShift") !== shift) setHomeTwoCardShift(shift);
-  const background = open && mobile;
+  const background = open && stackedMode;
   if (mount.inert !== background) mount.inert = background;
   // [A-624] Chog 는 같은 배경 Home 의 일부다. 모바일 HISTORY 가 열린 동안 Chog 탭(chog-home.js
   // toggle → pinned false → hover 0)은 Home 종이를 손끝 크기로 접었고, HISTORY 는 그 접힌
@@ -3397,7 +3463,7 @@ function formatMoney(wei) {
 
 // File Box 3칸: settle() receipt 위에서만 그린다. 화면은 숫자를 따로 계산하지 않는다.
 // [A-553 Lane B] add_money 영수증은 BigInt sent/gas/after 필드가 아예 없다 — 옛 필드로
-// formatEther()를 부르면 던진다(§lane_b/AUDIT.md 버그 3). **기존에 있던 라벨만** 보수적으로
+// formatEther()를 부르면 던진다(감사 버그 3). **기존에 있던 라벨만** 보수적으로
 // 쓴다(Tx/Block) — 새 문구·새 라벨 0.
 function receiptRows(receipt) {
   if (!receipt) return [];
@@ -3433,7 +3499,7 @@ function receiptCheck(receipt) {
 // 배포에 나가는 것은 **화면 크기 래스터 사본만**(최대 2x). 벡터 원본(SVG)·폰트 파일은
 // app/public/ 에 두지 않는다 — 배포된 파일은 URL 만 알면 누구나 받아갈 수 있고,
 // SVG 는 그림이 아니라 편집 가능한 도면이기 때문이다(Owner 판정 2026-09-03).
-// 원본 = <private>** (커밋 대상 아님).
+// 원본 = 비공개 디자인 원본(이 저장소 밖).
 const CHOG_IDLE_SRC = "/chog/chog_idle@2x.png";
 // [A-318] Away 걸음 대역(CHOG_WALK_FRAMES / chogWalkCycle)은 제거했다 — away 도
 // Home 의 확정 Chog 를 그대로 쓴다. 대역을 두면 같은 화면에 초그가 둘이 된다.
@@ -3474,8 +3540,8 @@ function arasoBrandMarkup() {
 // 아트보드 두 장을 그대로 옮긴다: InviteWide.dc.html(1280×800) · Main.dc.html(420×840).
 // 좌표·크기·색·keyframes 는 캔버스 값이다. 여기에 우리가 만든 것을 얹지 않는다.
 // 봉투를 뜯는 단계 전환은 와이드 아트보드의 tapFace() 타임라인 그대로다.
-// 원본(폰트 otf·풀사이즈 PNG)은 `<private>**` 에만 둔다. 손글씨 두 줄은
-// 폰트 파일을 배포하지 않으려고 낱말만 그림으로 렌더한 것이다(OPERATING_RULES §C-2).
+// 원본(폰트 otf·풀사이즈 PNG)은 비공개 디자인 원본에만 둔다. 손글씨 두 줄은
+// 폰트 파일을 배포하지 않으려고 낱말만 그림으로 렌더한 것이다.
 const INVITE_WIDE_MIN = 900;
 
 // 캔버스 tapFace() 의 타임라인 그대로(ms).
@@ -3741,7 +3807,7 @@ function renderAuthCard(view = state) {
 
 // [A-633 A] 잠긴 동안의 전체 그리기 — 목적지 씬은 그리지도 mount 하지도 않는다(state.scene 은 보존).
 // LOGIN_CHECKING = **기존** 인증 카드의 checking 모습 그대로("Checking…" / "Face ID may appear once.", 버튼 0)
-// + 카드 옆 기존 Chog(mountInviteChog) — 새 구도·새 그림 0(coordinator 결정: 가장 가벼운 재사용, Owner 시각
+// + 카드 옆 기존 Chog(mountInviteChog) — 새 구도·새 그림 0(가장 가벼운 재사용, Owner 시각
 // 검토 OPEN). 그 Chog 가 탭 대상이다 → unlockApp(). 실패면 같은 카드의 기존 실패 모습(Couldn't open Piggy)을
 // 쓰되, 두 버튼 모두 잠금 해제 경로에만 묶는다: Try again → LOGIN_CHECKING 으로(인증 호출 0), Check Piggy →
 // unlockApp()(탭 안에서 곧장). 생성·Hatch·서명자 0.
@@ -3792,8 +3858,7 @@ function renderAppLock() {
 // =======================================================================
 // 탄생 한 바퀴 — 해치 → Name it → Save → 숨은 Piggy → 첫 Home  (A-292)
 //
-// 그림·박자·파츠 좌표는 전부 확정 보관본
-// `<private>`
+// 그림·박자·파츠 좌표는 전부 확정 보관본(비공개 모션 디자인 원본, connected 미리보기)
 // 에서 그대로 옮긴 것이다. 여기서 새로 그리거나 타이밍을 고치지 않는다.
 // 옮겨온 자산은 `app/public/motion/` 에 있다(원본 벡터·폰트는 넣지 않았다 — A-013).
 //
@@ -4152,6 +4217,9 @@ async function mountHatch() {
   const host = document.querySelector("#hatchStage");
   if (!host) return;
   const token = sceneToken;
+  // [A-662 OWNER DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY] see applyOnboardingPhoneFoot().
+  applyOnboardingPhoneFoot();
+  sceneListener(window, "resize", applyOnboardingPhoneFoot);
 
   let markup;
   try {
@@ -4273,6 +4341,11 @@ function fitNameScene() {
   const natural = Math.min(window.innerWidth / 1280, window.innerHeight / 800);
   const scale = Math.max(natural, NAME_SCENE_SCALE_FLOOR);
   board.style.transform = `translate(${(window.innerWidth - 1280 * scale) / 2}px, ${(window.innerHeight - 800 * scale) / 2}px) scale(${scale})`;
+  // [A-662 OWNER DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY] see applyOnboardingPhoneFoot().
+  // `.nameScene__chog` is a `.stage`-level sibling of `#nameScene` (not inside this scaled board),
+  // so it needs its own placement call here — piggybacking this function's existing mount+resize
+  // wiring rather than adding a 2nd listener.
+  applyOnboardingPhoneFoot();
 }
 
 function mountName() {
@@ -4344,8 +4417,7 @@ const HOME_FPS = 0.03;
 // 초안으로 쓴다 — Owner 확정 초수 아님. mountHome() 의 settle() 이 이 표를 쓴다.
 const HOME_FIRST_JOURNEY_CARD_MS = 1200;
 
-// [A-603] 캐릭터 스케일 바닥 — A-602 Owner 프리뷰(Candidate C, receipts/
-// A602_mobile_home_bc_preview/overrides/c_floor.js)가 측정·검증한 그 메커니즘을 값·
+// [A-603] 캐릭터 스케일 바닥 — A-602 Owner 프리뷰(Candidate C, c_floor.js)가 측정·검증한 그 메커니즘을 값·
 // 넛지까지 그대로 들여온다(재발명 0, "port the A-602 C mechanism into app properly").
 // fitHomeBoard() 의 실측 s 가 이 값보다 작을 때만 #homeChar/#chogHome 을 감싸는 새
 // 조상(.homeCharScaleFloor, style.css)에 scale(k)+작은 고정 넛지를 건다 — 두 자식
@@ -4490,7 +4562,7 @@ const consumedFundingProofNonces = new Set();
 // 있는 문이 아니다.
 // [A-555 S2] `controlProof` 없이는 열리지 않는다 — 캐스팅 전에 verifyFundingTargetProof 로
 // **서명으로 증명된** 목적지인지부터 본다. 호출자가 넘긴 signerAddress 문자열이나 로컬
-// 인덱스 주소는 그 자체로 증명이 아니다(lane_b coordinator 교정) — 통과 못 하면 항상 같은
+// 인덱스 주소는 그 자체로 증명이 아니다 — 통과 못 하면 항상 같은
 // 이유(funding_target_unproven) 하나로 닫힌다.
 async function beginFundingForPiggy(piggy, { action = null, amount, asset = "USDC", controlProof = null } = {}) {
   if (!piggy || typeof piggy.id !== "string") return { opened: false, reason: "missing_piggy" };
@@ -5181,15 +5253,1493 @@ function currentScenePiggyId() {
 function applyHomeResidentMotionStates(paper) {
   const residents = indexedResidents();
   const affectedPiggyId = state.scene === "sendstay" && state.sendCardVisible ? currentScenePiggyId() : null;
+  // [A-654] same projection map, one more tier: runtime truth (away) and the stage's current
+  // Home-life ambient assignment. Visual only — the cards just mirror what Home is drawing.
   const states = buildPiggyMotionStateMap(residents, {
     affectedPiggyId,
     cue: affectedPiggyId ? PIGGY_MOTION_STATE.WORK : PIGGY_MOTION_STATE.IDLE,
+    runtime: homeResidentRuntimeStates(residents),
+    ambient: homeAmbient.assignment,
   });
   paper.querySelectorAll(".homePaper__card--piggy[data-piggy-id]").forEach((card) => {
     const projected = piggyMotionStateFromMap(states, card.dataset.piggyId);
     card.dataset.motionState = projected.state;
     card.toggleAttribute("data-motion-active", projected.active);
   });
+}
+
+// ═══ [A-654] Multi-Piggy living Home ═══════════════════════════════════════════════════════════
+// With two or more indexed Piggies, every Home-present Piggy lives on a measured safe slot with one
+// Owner-confirmed ambient motion (Home motion freeze 2026-09-26; its preview renderer math is ported
+// below, the SVG parts are served unchanged from /motion/home-ambient/). With one Piggy nothing here
+// runs, so the single-Piggy Home stays exactly as it was.
+// Visual only: this reads the index, the registry location and the scene; it never writes money,
+// job, permission, selection or signer state. The one thing it keeps is a non-secret Home-life nonce
+// in sessionStorage, so a reload inside the same session shows the same slots and motions.
+const HOME_LIFE_KEY = "araso.homeLife.v1";
+const HOME_LIFE_SCENES = ["sendstay", "explore"];
+const HOME_AMBIENT_DIR = "home-ambient"; // under MOTION_DIR (joined at use: this slice is also evaluated alone by tests)
+// Paper+HISTORY maximum footprint height (A-654 geometry lane, residents window expanded at 3+
+// Piggies): mobile stack 467.8, web 456.9. Slots are chosen once against this maximum so opening
+// HISTORY, MY MONEY or the residents window never moves a Piggy.
+const HOME_AMBIENT_FOOT_H = Object.freeze({ mobile: 467.8, web: 456.9 });
+let homeLifeLeft = false;
+let homeLife = null;
+let homeAmbientResizeTimer = 0;
+const homeAmbient = { assignment: null, layer: null, cleanup: null, seq: 0 };
+
+function readHomeLife() {
+  try {
+    const raw = JSON.parse(sessionStorage.getItem(HOME_LIFE_KEY) || "null");
+    if (raw && /^[0-9a-f]{16}$/.test(String(raw.nonce)) && Number.isFinite(raw.startedAt)) return { nonce: raw.nonce, startedAt: raw.startedAt };
+  } catch {
+    // No session storage: the cycle stays memory-only.
+  }
+  return null;
+}
+
+function startHomeLife() {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  const life = { nonce: [...bytes].map((b) => b.toString(16).padStart(2, "0")).join(""), startedAt: Date.now() };
+  try {
+    sessionStorage.setItem(HOME_LIFE_KEY, JSON.stringify(life));
+  } catch {
+    // Memory-only cycle.
+  }
+  return life;
+}
+
+// A new Home-life cycle starts only on a genuine Home re-entry: arriving at Home from a non-Home
+// scene (a trip, a return, Name, the file box). Paper/HISTORY/MY MONEY toggles, selection changes
+// and plain re-renders keep the cycle; a reload keeps it through the session value.
+// Called from the Home mount (settle / resize) — render() itself is untouched. Leaving Home is seen
+// by a scene-teardown watcher: when the next render tears Home down for a non-Home scene, the next
+// Home mount begins a new cycle. A page that boots outside Home starts outside the cycle (see boot).
+function syncHomeLifeCycle() {
+  if (!homeLife) homeLife = readHomeLife();
+  if (!homeLife || homeLifeLeft) homeLife = startHomeLife();
+  homeLifeLeft = false;
+  onSceneTeardown(() => {
+    if (!HOME_LIFE_SCENES.includes(state.scene)) homeLifeLeft = true;
+  });
+}
+
+// Runtime truth per Piggy id (never invented): the scene Piggy works while its card is up / in
+// Explore, and is away or returning in the trip scenes; any other Piggy is away only when its own
+// registry location says so. Everything else is Home-present.
+function homeResidentRuntimeStates(residents = indexedResidents()) {
+  const runtime = new Map();
+  let registry = [];
+  try {
+    registry = secondPiggyRegistrySnapshot().piggies;
+  } catch {
+    registry = [];
+  }
+  const where = new Map(registry.map((p) => [p.id, p.location]));
+  for (const r of residents) {
+    if (where.get(r.id) === "away") runtime.set(r.id, PIGGY_MOTION_STATE.AWAY);
+  }
+  const sceneId = currentScenePiggyId();
+  if (sceneId) {
+    if ((state.scene === "sendstay" && state.sendCardVisible) || state.scene === "explore") runtime.set(sceneId, PIGGY_MOTION_STATE.WORK);
+    else if (state.scene === "away" || state.scene === "secondAway") runtime.set(sceneId, PIGGY_MOTION_STATE.AWAY);
+    else if (state.scene === "return" || state.scene === "secondReturn") runtime.set(sceneId, PIGGY_MOTION_STATE.RETURN);
+  }
+  return runtime;
+}
+
+// Chog ink = union of every Chog part (awake and dozing) trimmed to its drawn pixels, so the slot
+// set does not change when Chog falls asleep or wakes.
+const chogInkFractions = new Map();
+function chogPartInk(img) {
+  const key = img.currentSrc || img.src;
+  if (chogInkFractions.has(key)) return chogInkFractions.get(key);
+  if (!img.complete || !img.naturalWidth) return null;
+  let f = { x0: 0, y0: 0, x1: 1, y1: 1 };
+  try {
+    const W = 200;
+    const H = Math.max(1, Math.round((W * img.naturalHeight) / img.naturalWidth));
+    const c = document.createElement("canvas");
+    c.width = W;
+    c.height = H;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(img, 0, 0, W, H);
+    const d = g.getImageData(0, 0, W, H).data;
+    let x0 = W, y0 = H, x1 = -1, y1 = -1;
+    for (let y = 0; y < H; y += 1) {
+      for (let x = 0; x < W; x += 1) {
+        if (d[(y * W + x) * 4 + 3] > 24) {
+          if (x < x0) x0 = x;
+          if (y < y0) y0 = y;
+          if (x > x1) x1 = x;
+          if (y > y1) y1 = y;
+        }
+      }
+    }
+    f = x1 < 0 ? null : { x0: x0 / W, y0: y0 / H, x1: (x1 + 1) / W, y1: (y1 + 1) / H };
+  } catch {
+    // Unreadable pixels: keep the whole part box (never smaller than the ink).
+  }
+  chogInkFractions.set(key, f);
+  return f;
+}
+
+function chogInkRect(root) {
+  let out = null;
+  let pending = false;
+  root.querySelectorAll(".chogHome__stack img, .chogHome__sleep img").forEach((img) => {
+    if (img.classList.contains("chogHome__walk")) return;
+    const b = img.getBoundingClientRect();
+    if (!b.width || !b.height) return;
+    const f = chogPartInk(img);
+    if (f === null && !(img.complete && img.naturalWidth)) pending = true;
+    const ink = f ? slotRect(b.left + f.x0 * b.width, b.top + f.y0 * b.height, b.left + f.x1 * b.width, b.top + f.y1 * b.height)
+      : !(img.complete && img.naturalWidth) ? slotRect(b.left, b.top, b.right, b.bottom) : null;
+    if (!ink) return;
+    out = out ? slotRect(Math.min(out.x, ink.x), Math.min(out.y, ink.y), Math.max(out.r, ink.r), Math.max(out.b, ink.b)) : ink;
+  });
+  return out ? { ...out, pending } : null;
+}
+
+// Live anchors → the measured slot formulas (piggy-motion-state.js planHomeSlots).
+function homeAmbientAnchors() {
+  const seat = document.querySelector("#homeSeat");
+  const name = document.querySelector("#homeName");
+  const chog = document.querySelector("#chogHome");
+  if (!seat || !name || !chog) return null;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const toRect = (b) => slotRect(b.left, b.top, b.right, b.bottom);
+  const seatImg = toRect(seat.getBoundingClientRect());
+  const nameR = toRect(name.getBoundingClientRect());
+  if (!(seatImg.w > 0 && seatImg.h > 0)) return null;
+  const S = slotRect(Math.min(seatImg.x, nameR.x), seatImg.y, Math.max(seatImg.r, nameR.r), Math.max(seatImg.b, nameR.b));
+  const C = chogInkRect(chog);
+  if (!C) return null;
+  // Paper open = the shared card anchor chog-home.js docks it to (viewport centre −32/−48).
+  const paperScale = Math.min(285 / 400, 364 / 568);
+  const paperW = 400 * paperScale;
+  const paperH = 568 * paperScale;
+  const px = vw / 2 - 32 - paperW / 2;
+  const py = vh / 2 - 48 - paperH / 2;
+  const P = slotRect(px, py, px + paperW, py + paperH);
+  const band = homeSlotBand(vw);
+  let F;
+  if (band === "mobile") {
+    const inset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--mobile-inset")) || 24;
+    const historyRight = Math.max(P.x, vw - inset - paperW) + paperW;
+    F = slotRect(P.x, P.y, Math.max(P.r, historyRight), P.y + HOME_AMBIENT_FOOT_H.mobile);
+  } else {
+    const x = P.x - HOME_TWO_CARD_SHIFT_VIEWPORT_PX;
+    F = slotRect(x, P.y, x + paperW + RECORDS_CARD_GAP + paperW, P.y + HOME_AMBIENT_FOOT_H.web);
+  }
+  const brandEl = document.querySelector(".arasoBrand");
+  const brandBox = brandEl ? brandEl.getBoundingClientRect() : null;
+  const brand = brandBox && brandBox.width ? toRect(brandBox) : null;
+  const mobile = band === "mobile";
+  const top = mobile ? resolveCssLengthVarPx("--mobile-top-safe", 14) : 16;
+  const bottom = mobile ? resolveCssLengthVarPx("--mobile-bottom-safe", 20) : 16;
+  const safe = slotRect(16, top, vw - 16, vh - bottom);
+  return { vw, vh, seat: S, seatImg, name: nameR, chog: C, paper: P, foot: F, brand, safe };
+}
+
+// Growth of the wide lying poses beyond the seat box, as fractions of the slot size, at the approved
+// scale (the preview draws Watching in the same box height as the seated pose; Flop→sleep footprint
+// measured from the ported rig over its whole sequence, A-654 VERIFY).
+const HOME_AMBIENT_WIDE = Object.freeze({
+  // keys = PIGGY_MOTION_STATE.WATCHING / .FLOP_SLEEP values (see HOME_AMBIENT_NEEDS on why literal)
+  watching: Object.freeze({ left: ((1981 * 1102) / (1229 * 1056) - 1) / 2, right: ((1981 * 1102) / (1229 * 1056) - 1) / 2, top: 0, bottom: 0 }),
+  // Flop→roll→sleep: rendered-ink union over the whole sequence (A-654 VERIFY, 1440 WA2, 142 frames:
+  // left .31 · right .28 · top .16 · bottom .21 of the slot) plus a small stroke margin.
+  // [A-656 P5] bottom widened .25 → .40 — measured unclipped ink bottom is .383–.394 (plus the
+  // dropped name label, main.js ambFlopSleep() name-offset below), so the eligibility fit check
+  // now matches what actually renders once `.homeAmbient__flop{overflow:visible}` (style.css)
+  // stops clipping it. Re-fit gives the SAME eligible slot set (900 WN1; 1200 WA1/WA2; 1440 W2/
+  // WA1/WA2, A-656 P45 raw/p5_refit.json) — no slot newly gained or lost.
+  "flop-sleep": Object.freeze({ left: 0.36, right: 0.33, top: 0.2, bottom: 0.4 }),
+});
+
+// [A-656 P4] Stable seeded-random slot PREFERENCE — a Fisher–Yates shuffle of the free slot
+// NAMES (not just who sits where), driven by the Home-life nonce + Piggy id. This is what makes
+// the multi-Piggy fill less grid-like: which measured SAFE slot each Piggy prefers, not just the
+// id→slot pairing order. No new zones, no continuous x/y — only `planHomeSlots()`'s own measured
+// slot set is ever shuffled.
+function homeSlotPreference(nonce, id, names) {
+  const list = [...names].sort();
+  const rng = seededRandom(hashSeed(`${nonce}|${id}|slot`));
+  for (let i = list.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
+    [list[i], list[j]] = [list[j], list[i]];
+  }
+  return list;
+}
+
+// Place + assign one resident set against one slot plan. Pure over its inputs.
+// [A-656 P4] `keep` (optional): a Map(id -> slot) from the FULL-cycle placement — when present,
+// a resident already in `keep` at a still-free slot stays there instead of being reshuffled, so a
+// Piggy going to WORK/AWAY/RETURN never shifts anyone else on screen. Only an over-capacity
+// resident (one `keep` did not seat) may then claim the slot that Piggy vacated.
+function placeHomeAmbientSet(plan, anchors, ids, sceneId, nonce, keep = null) {
+  const order = orderHomeResidents(ids, nonce, sceneId);
+  const free = new Map(plan.slots.filter((s) => !s.seat).map((s) => [s.name, s]));
+  const taken = new Set();
+  if (keep) {
+    for (const id of ids) {
+      const k = keep.get(id);
+      if (k && !k.seat && free.has(k.name)) taken.add(k.name);
+    }
+  }
+  const placed = [];
+  for (const id of order) {
+    if (id === sceneId) { placed.push({ id, slot: plan.slots[0] }); continue; }
+    const kept = keep?.get(id);
+    if (kept && !kept.seat && free.has(kept.name)) { placed.push({ id, slot: free.get(kept.name) }); continue; }
+    const pick = homeSlotPreference(nonce, id, free.keys()).find((n) => !taken.has(n));
+    if (!pick) continue; // beyond capacity → card-only, as today
+    taken.add(pick);
+    placed.push({ id, slot: free.get(pick) });
+  }
+  const slotOf = new Map(placed.map((p) => [p.id, p.slot]));
+  const occupied = placed.map((p) => p.slot);
+  const obstacles = [anchors.chog, anchors.foot, anchors.brand].filter(Boolean);
+  const wide = new Map();
+  // The seat keeps the established composition: only seated poses there. Elsewhere a wide pose is
+  // allowed only where its full footprint clears everything at the approved scale (no shrink).
+  const fitAt = (id, motion) => {
+    const footprint = HOME_AMBIENT_WIDE[motion];
+    const slot = slotOf.get(id);
+    if (!footprint || !slot || slot.seat) return null;
+    return fitWideSlot({ slot, footprint, others: occupied, obstacles, safe: anchors.safe, gap: plan.gap });
+  };
+  const eligible = (id, motion) => {
+    if (!HOME_AMBIENT_WIDE[motion]) return true;
+    const fit = fitAt(id, motion);
+    if (fit) wide.set(`${id}|${motion}`, fit);
+    return Boolean(fit);
+  };
+  const assigned = assignHomeAmbient(placed.map((p) => p.id), nonce, { eligible });
+  // Two different wide poses could still meet each other: keep the first (stable order), the other idles.
+  const assignment = new Map();
+  const wideTaken = [];
+  for (const [id, a] of assigned) {
+    const fit = wide.get(`${id}|${a.state}`) || null;
+    if (HOME_AMBIENT_WIDE[a.state] && (!fit || wideTaken.some((r) => rectsTouch(r, fit.rect, plan.gap)))) {
+      assignment.set(id, Object.freeze({ state: PIGGY_MOTION_STATE.IDLE, phaseS: a.phaseS % 3.2 }));
+      continue;
+    }
+    if (fit) wideTaken.push(fit.rect);
+    assignment.set(id, a);
+  }
+  return { order, placed, slotOf, assignment, wide, fitAt };
+}
+
+// [A-654 F1] The ambient projection (state + phase + density rules) is decided once per Home-life
+// cycle over the FULL resident set, as if every Piggy were home. A Piggy that goes to work / away /
+// returning is then only dropped from the projection, so no other Piggy's state or phase changes
+// (card rule: a runtime change invalidates only that Piggy's own ambient projection). Slots are
+// still placed for the Piggies actually present. A wide pose that no longer fits at a Piggy's
+// present slot falls back to Idle for that Piggy only.
+function planHomeAmbient(anchors, residents, runtime, sceneId, nonce) {
+  const plan = planHomeSlots({ width: anchors.vw, seat: anchors.seat, chog: anchors.chog, foot: anchors.foot, paper: anchors.paper, brand: anchors.brand, safe: anchors.safe });
+  const everyone = residents.map((r) => r.id);
+  const present = everyone.filter((id) => !isRuntimeMotionState(runtime.get(id)));
+  const full = placeHomeAmbientSet(plan, anchors, everyone, sceneId, nonce);
+  // [A-656 P4] Keep the full-cycle slots for the present subset — nobody shifts when one Piggy
+  // leaves; only a Piggy that was off-slot (beyond capacity) may claim the freed slot.
+  const now = present.length === everyone.length ? full : placeHomeAmbientSet(plan, anchors, present, sceneId, nonce, full.slotOf);
+  if (now === full) return { plan, placed: full.placed, assignment: full.assignment, wide: full.wide, offstage: full.order.filter((id) => !full.slotOf.has(id)) };
+  const assignment = new Map();
+  const wide = new Map();
+  const wideTaken = [];
+  for (const { id } of now.placed) {
+    const a = full.assignment.get(id);
+    if (!a) continue;
+    if (HOME_AMBIENT_WIDE[a.state]) {
+      const fit = now.fitAt(id, a.state);
+      if (!fit || wideTaken.some((r) => rectsTouch(r, fit.rect, plan.gap))) {
+        assignment.set(id, Object.freeze({ state: PIGGY_MOTION_STATE.IDLE, phaseS: a.phaseS % 3.2 }));
+        continue;
+      }
+      wideTaken.push(fit.rect);
+      wide.set(`${id}|${a.state}`, fit);
+    }
+    assignment.set(id, a);
+  }
+  return { plan, placed: now.placed, assignment, wide, offstage: now.order.filter((id) => !now.slotOf.has(id)) };
+}
+
+function unmountHomeAmbientLayer() {
+  homeAmbient.seq += 1;
+  if (homeAmbient.cleanup) {
+    try {
+      homeAmbient.cleanup();
+    } catch {
+      // best effort
+    }
+  }
+  homeAmbient.cleanup = null;
+  homeAmbient.layer?.remove();
+  homeAmbient.layer = null;
+  document.querySelector("#homeChar")?.removeAttribute("data-ambient-seat");
+}
+
+// Mounted from mountHome()'s settle() and re-planned on resize. Scene teardown removes it.
+function mountHomeAmbientResidents() {
+  unmountHomeAmbientLayer();
+  homeAmbient.assignment = null;
+  if (!HOME_LIFE_SCENES.includes(state.scene)) return;
+  syncHomeLifeCycle();
+  if (indexedResidents().length < 2) return;
+  // Chog's ink is read from its drawn pixels, so wait until every part image is decoded — the slot
+  // set is planned once, never nudged after it is on screen.
+  const seq = homeAmbient.seq;
+  const token = sceneToken;
+  const parts = [...document.querySelectorAll("#chogHome .chogHome__stack img, #chogHome .chogHome__sleep img")];
+  Promise.all(parts.map((img) => (img.complete && img.naturalWidth ? null : img.decode().catch(() => null))))
+    .then(() => {
+      if (seq === homeAmbient.seq && token === sceneToken) placeHomeAmbientResidents(seq, token, 0);
+    });
+}
+
+function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
+  const residents = indexedResidents();
+  const anchors = homeAmbientAnchors();
+  const stage = document.querySelector(`.stage[data-scene="${state.scene}"]`);
+  const board = document.querySelector("#homeBoard");
+  if (!anchors || !stage || !board) {
+    // Right after a trip the Home cluster can still be settling (Chog/seat not laid out yet):
+    // look again shortly instead of giving up; the slot set is still planned once.
+    if (attempt < 20) {
+      sceneTimeout(() => {
+        if (mountSeq === homeAmbient.seq && mountToken === sceneToken) placeHomeAmbientResidents(mountSeq, mountToken, attempt + 1);
+      }, 250);
+    }
+    return;
+  }
+  const runtime = homeResidentRuntimeStates(residents);
+  const sceneId = currentScenePiggyId();
+  const planned = planHomeAmbient(anchors, residents, runtime, sceneId, homeLife.nonce);
+  homeAmbient.assignment = planned.assignment;
+  // The paper cards mirror the same projection (visual attribute only).
+  const paper = document.querySelector('.homePaper[data-paper-mode="home"]');
+  if (paper) applyHomeResidentMotionStates(paper);
+
+  const seq = homeAmbient.seq;
+  const token = sceneToken;
+  const layer = document.createElement("div");
+  layer.className = "homeLivingLayer";
+  layer.setAttribute("aria-hidden", "true");
+  layer.dataset.band = planned.plan.band;
+  layer.dataset.capacity = String(planned.plan.slots.length);
+  layer.dataset.offstage = String(planned.offstage.length);
+  stage.insertBefore(layer, board);
+  homeAmbient.layer = layer;
+  const stageBox = stage.getBoundingClientRect();
+  const reduced = prefersReducedMotion();
+  const nameById = new Map(residents.map((r) => [r.id, r.name || "Piggy"]));
+  const S = anchors.seat;
+  const seatOff = { x: anchors.seatImg.x - S.x, y: anchors.seatImg.y - S.y };
+  const q = anchors.seatImg.h / AMB_SEATED.h;
+  const nameScale = anchors.name.w / 120;
+  const nameOff = { x: anchors.name.x - S.x, y: anchors.name.y - S.y };
+  const entries = [];
+  for (const { id, slot } of planned.placed) {
+    const projected = resolvePiggyMotionState({ piggyId: id, runtime, ambient: planned.assignment });
+    const phaseS = planned.assignment.get(id)?.phaseS || 0;
+    const fit = planned.wide.get(`${id}|${projected.state}`) || null;
+    const dx = fit ? fit.dx : 0;
+    const box = slot.rect;
+    const el = document.createElement("div");
+    el.className = "homeLiving";
+    el.dataset.piggyId = id;
+    el.dataset.slot = slot.name;
+    el.dataset.motionState = projected.state;
+    el.dataset.phase = phaseS.toFixed(3);
+    if (fit) el.dataset.ambientAlign = fit.align;
+    el.style.left = `${box.x - stageBox.left}px`;
+    el.style.top = `${box.y - stageBox.top}px`;
+    el.style.width = `${box.w}px`;
+    el.style.height = `${box.h}px`;
+    el.style.visibility = "hidden";
+    const stageEl = document.createElement("div");
+    stageEl.className = "homeLiving__stage";
+    stageEl.style.left = `${seatOff.x + dx - AMB_SEATED.x * q}px`;
+    stageEl.style.top = `${seatOff.y - AMB_SEATED.y * q}px`;
+    stageEl.style.transform = `scale(${q})`;
+    el.append(stageEl);
+    if (!slot.seat) {
+      const tag = document.createElement("span");
+      tag.className = "homeLiving__name";
+      tag.textContent = nameById.get(id);
+      tag.style.left = `${nameOff.x + dx}px`;
+      // [A-656 P5] flop-sleep only: drop the label below the settled lying pose. Every other
+      // state keeps the existing seated offset unchanged. The lying pose's feet/outline/blanket
+      // crossed the label at the seated offset (measured 56–347px overlap, first-glyph clip
+      // 15–77px, A-656 P45 raw/p5_measure.json) — this puts the label just below the
+      // settled-sleep ink bottom (≤.287h), measured overlap 0 once combined with the widened
+      // `flop-sleep` footprint above and `.homeAmbient__flop{overflow:visible}` (style.css).
+      const nameDropPx = projected.state === "flop-sleep" ? S.b - anchors.name.y + 0.29 * box.h + 2 : 0;
+      tag.style.top = `${nameOff.y + nameDropPx}px`;
+      tag.style.transform = `scale(${nameScale})`;
+      el.append(tag);
+    } else {
+      el.dataset.seat = "1";
+    }
+    layer.append(el);
+    entries.push({ id, el, stageEl, motion: projected.state, phaseS, seat: Boolean(slot.seat) });
+  }
+
+  let stopped = false;
+  let stopFrames = null;
+  homeAmbient.cleanup = () => {
+    stopped = true;
+    if (stopFrames) stopFrames();
+  };
+  onSceneTeardown(() => {
+    if (seq === homeAmbient.seq) unmountHomeAmbientLayer();
+  });
+  const alive = () => !stopped && seq === homeAmbient.seq && token === sceneToken;
+  loadHomeAmbientAssets([...new Set(entries.map((e) => e.motion))])
+    .then((assets) => {
+      if (!alive()) return;
+      const arts = [];
+      for (const entry of entries) {
+        let art = null;
+        try {
+          art = buildAmbientArt(entry.motion, assets, entry.stageEl, `${homeLife.nonce}|${entry.id}`);
+        } catch {
+          art = null;
+        }
+        if (!art) {
+          entry.el.remove();
+          continue;
+        }
+        arts.push({ ...entry, art });
+      }
+      const elapsed = (entry) => Math.max(0, (Date.now() - homeLife.startedAt) / 1000 + entry.phaseS);
+      const drawAll = () => {
+        for (const a of arts) a.art.draw(elapsed(a), reduced);
+      };
+      drawAll();
+      for (const a of arts) {
+        a.el.style.removeProperty("visibility");
+        if (a.seat) document.querySelector("#homeChar")?.setAttribute("data-ambient-seat", "1");
+      }
+      if (reduced) return;
+      stopFrames = runSceneFrames(() => {
+        if (!alive()) return false;
+        drawAll();
+        return true;
+      });
+    })
+    .catch(() => {
+      // Missing ambient parts: leave the extra residents undrawn and the seat exactly as it was.
+      if (alive()) unmountHomeAmbientLayer();
+    });
+}
+
+// ── confirmed Home motion parts (served unchanged) ──
+const HOME_AMBIENT_FILES = Object.freeze({
+  idle: "piggy_seat_idle.svg",
+  drink0: "piggy_seat_drink.svg",
+  drink1: "piggy_seat_drink-1.svg",
+  drink2: "piggy_seat_drink-2.svg",
+  listenBase: "piggy_seat_listen.svg",
+  listenUp: "piggy_seat_listen-1.svg",
+  phone: "piggy_seat_phone.svg",
+  phoneGlasses: "piggy_seat_phone-1.svg",
+  phoneTap: "piggy_seat_phone-2.svg",
+  phoneTapTwo: "piggy_seat_sunshine_tap2_owner.svg",
+  watching: "piggy_watching_fit.svg",
+  flopSquash: "piggy_flop_zip5_squash.svg",
+  flopLean: "piggy_flop_zip5_lean.svg",
+  flopLand: "piggy_rolling.svg",
+  rollRight: "rolling_right_owner.svg",
+  lookRight: "lookdown_right_owner.svg",
+  rollLeft: "rolling_left_owner.svg",
+  lookLeft: "lookdown_left_owner.svg",
+  blanket: "piggy_seat_lookdownR_blanket.svg",
+});
+// Keys are the PIGGY_MOTION_STATE values written out: this section sits inside the index slice that
+// several tests evaluate on its own, so its top-level code must not read outer bindings.
+const HOME_AMBIENT_NEEDS = Object.freeze({
+  idle: ["idle"],
+  drink: ["drink0", "drink1", "drink2"],
+  listen: ["listenBase", "listenUp"],
+  sunshine: ["phone", "phoneGlasses", "phoneTap", "phoneTapTwo"],
+  watching: ["watching"],
+  "flop-sleep": ["idle", "flopSquash", "flopLean", "flopLand", "rollRight", "lookRight", "rollLeft", "lookLeft", "blanket"],
+});
+const homeAmbientText = new Map();
+function homeAmbientUrl(key) {
+  return `${MOTION_DIR}/${HOME_AMBIENT_DIR}/${HOME_AMBIENT_FILES[key]}`;
+}
+function loadHomeAmbientAssets(motions) {
+  const keys = [...new Set(motions.flatMap((m) => HOME_AMBIENT_NEEDS[m] || []))];
+  return Promise.all(keys.map((key) => {
+    if (!homeAmbientText.has(key)) {
+      homeAmbientText.set(key, fetch(homeAmbientUrl(key)).then((r) => {
+        if (!r.ok) throw new Error(`ambient part ${key} ${r.status}`);
+        return r.text();
+      }).catch((error) => {
+        homeAmbientText.delete(key);
+        throw error;
+      }));
+    }
+    return homeAmbientText.get(key).then((text) => [key, text]);
+  })).then((pairs) => {
+    const text = Object.fromEntries(pairs);
+    return { text, url: homeAmbientUrl };
+  });
+}
+
+// ── ported renderer (preview.js of the 2026-09-26 freeze; timings/keyframes/coefficients unchanged) ──
+// Every cue draws inside one canonical resident box — the preview's resident at its widest layout
+// (1071px, aspect 1256:772, seated art padded 34/22/16) — and that box is scaled so the seated pose
+// lands exactly on the approved seat size. Relative sizes between cues are therefore the preview's.
+const AMB_BOX_W = 1071;
+const AMB_BOX_H = (AMB_BOX_W * 772) / 1256;
+const AMB_SEATED = (() => {
+  const iw = AMB_BOX_W - 44;
+  const ih = AMB_BOX_H - 50;
+  const a = Math.min(iw / 1056, ih / 1102);
+  return { a, x: 22 + (iw - 1056 * a) / 2, y: 34 + (ih - 1102 * a) / 2, w: 1056 * a, h: 1102 * a };
+})();
+const AMB_NS = "http://www.w3.org/2000/svg";
+const AMB_BLINK_MS = 3200;
+const AMB_BLINK_KEYS = [
+  { offset: 0, transform: "scaleY(1)", easing: "ease-in-out" },
+  { offset: 0.92, transform: "scaleY(1)", easing: "ease-in-out" },
+  { offset: 0.95, transform: "scaleY(.08)", easing: "ease-in-out" },
+  { offset: 0.98, transform: "scaleY(1)", easing: "ease-in-out" },
+  { offset: 1, transform: "scaleY(1)" },
+];
+// Browser-local Owner adjustments of the preview are not readable here; these are its documented
+// code defaults (face 0/0/0 · sleep face −70,0 · hand_L −18,18 · hand_R −50,0).
+const AMB_FACE_ADJUST = Object.freeze({ left: { x: 0, y: 0, angle: 0 }, center: { x: 0, y: 0, angle: 0 }, right: { x: 0, y: 0, angle: 0 } });
+const AMB_SLEEP_OFFSETS = Object.freeze({ face: { x: -70, y: 0 }, hand_L: { x: -18, y: 18 }, hand_R: { x: -50, y: 0 } });
+let ambUid = 0;
+
+function ambSmooth(value) {
+  const c = Math.max(0, Math.min(1, value));
+  return c * c * (3 - 2 * c);
+}
+
+// Each inline copy gets its own ids for anything referenced by url(#…)/href, so two residents never
+// resolve each other's clip paths or masks.
+function ambUniqueSvg(text) {
+  const uid = `amb${(ambUid += 1)}`;
+  const refs = new Set();
+  for (const m of text.matchAll(/url\(#([^)]+)\)/g)) refs.add(m[1]);
+  for (const m of text.matchAll(/href="#([^"]+)"/g)) refs.add(m[1]);
+  let out = text;
+  for (const id of refs) {
+    const esc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out
+      .replace(new RegExp(`id="${esc}"`, "g"), `id="${id}-${uid}"`)
+      .replace(new RegExp(`url\\(#${esc}\\)`, "g"), `url(#${id}-${uid})`)
+      .replace(new RegExp(`href="#${esc}"`, "g"), `href="#${id}-${uid}"`);
+  }
+  return out;
+}
+
+function ambArt(className, padded) {
+  const el = document.createElement("div");
+  el.className = `homeAmbient__art ${className}${padded ? " homeAmbient__art--padded" : ""}`;
+  return el;
+}
+
+function ambBlink(eyes) {
+  return eyes.filter(Boolean).map((eye) => {
+    eye.style.transformBox = "fill-box";
+    eye.style.transformOrigin = "50% 50%";
+    const animation = eye.animate(AMB_BLINK_KEYS, { duration: AMB_BLINK_MS, iterations: Infinity });
+    animation.pause();
+    return animation;
+  });
+}
+
+function ambDrawBlink(animations, t, reduced) {
+  const currentTime = reduced ? 0 : (t * 1000) % AMB_BLINK_MS;
+  animations.forEach((animation) => {
+    animation.currentTime = currentTime;
+  });
+}
+
+function buildAmbientArt(motion, assets, mountEl, seed) {
+  const S = PIGGY_MOTION_STATE;
+  if (motion === S.IDLE) return ambIdle(assets, mountEl);
+  if (motion === S.DRINK) return ambDrink(assets, mountEl);
+  if (motion === S.LISTEN) return ambListen(assets, mountEl, seed);
+  if (motion === S.SUNSHINE) return ambSunshine(assets, mountEl);
+  if (motion === S.WATCHING) return ambWatching(assets, mountEl);
+  if (motion === S.FLOP_SLEEP) return ambFlopSleep(assets, mountEl, seed);
+  return null;
+}
+
+// Idle / blink — seated pose, 3.2s blink.
+function ambIdle(assets, mountEl) {
+  const art = ambArt("homeAmbient__idle", true);
+  art.innerHTML = ambUniqueSvg(assets.text.idle);
+  mountEl.append(art);
+  const blink = ambBlink([art.querySelector("#eye_L"), art.querySelector("#eye_R")]);
+  return { draw: (t, reduced) => ambDrawBlink(blink, t, reduced) };
+}
+
+// Drink — cup held, occasional sip, shut eyes (6s loop after a .45s intro).
+const AMB_SAVOR_EYES = `<svg class="homeAmbient__savor" viewBox="0 0 1056 1102" aria-hidden="true"><ellipse cx="385.5" cy="507" rx="34" ry="38" fill="#000" /><ellipse cx="529" cy="507" rx="34" ry="38" fill="#000" /><path d="M365.32 470.797L353.066 474.569L344.796 480.811L339.182 491.881L337.005 503.581L339.042 511.741L345.371 520.71L355.448 528.637L364.905 530.396L370.37 529.684L378.018 526.784L383.245 522.569L390.422 512.654L392.909 499.283L389.386 484.784L383.759 476.821L379.072 473.355L365.32 470.797Z" fill="#fff" transform="translate(20.5 6.5) translate(365 500.5) rotate(-4) scale(1 .17) translate(-365 -500.5)" /><path d="M510.911 495.436L499.827 497.697L488.824 504.295L481.648 514.21L479.627 525.074L481.197 535.741L488.933 546.701L497.448 553.472L507.764 555.392L520.721 552.615L525.638 550.071L532.047 544.337L534.542 540.478L537.651 523.765L537.572 519.417L533.26 509.104L521.931 498.351L510.911 495.436Z" fill="#fff" transform="translate(20.5 -18.5) translate(508.5 525.5) rotate(4) scale(1 .17) translate(-508.5 -525.5)" /></svg>`;
+function ambDrink(assets, mountEl) {
+  const art = ambArt("homeAmbient__drink", false);
+  const img = document.createElement("img");
+  img.className = "homeAmbient__candidate";
+  img.alt = "";
+  art.append(img);
+  art.insertAdjacentHTML("beforeend", AMB_SAVOR_EYES);
+  mountEl.append(art);
+  const savor = art.querySelector(".homeAmbient__savor");
+  const frames = ["drink0", "drink1", "drink2", "drink1"].map((key) => assets.url(key));
+  const starts = [0, 0.45, 2.6, 3.7];
+  return {
+    draw(e, reduced) {
+      // Preview reduced motion holds the cue at half its length (3s).
+      const t = reduced ? 3 : e <= 6 ? e : 0.45 + ((e - 0.45) % 5.55);
+      const index = starts.reduce((current, start, i) => (t >= start ? i : current), 0);
+      if (img.dataset.src !== frames[index]) {
+        img.src = frames[index];
+        img.dataset.src = frames[index];
+      }
+      savor.classList.toggle("is-visible", t >= 3.2 && t < 3.7);
+      if (t >= 0.45) {
+        const sway = Math.sin(((t - 0.45) / 3.2) * Math.PI * 2);
+        const transform = `translateY(${(2 * sway).toFixed(2)}px) rotate(${sway.toFixed(2)}deg)`;
+        img.style.transform = transform;
+        savor.style.transform = transform;
+      } else {
+        img.style.transform = "";
+        savor.style.transform = "";
+      }
+    },
+  };
+}
+
+// Listen — headphones on; original listen/listen-1 headbang plus hands, left/right rhythm (6s plan).
+const AMB_LISTEN_HEAD = ["ear_L", "ear_R", "face", "headphone_L", "headphone_R", "headphone_grip"];
+const AMB_LISTEN_HAND = ["hand_L", "hand_R"];
+function ambListenPlan(seed, loop) {
+  // The preview draws a fresh random plan per load/loop; here it is seeded by Piggy id + Home life.
+  const rng = seededRandom(hashSeed(`${seed}|listen|${loop}`));
+  const beats = ["double", "sway", "nod", "rest", "sway"];
+  for (let index = beats.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(rng() * (index + 1));
+    [beats[index], beats[swapIndex]] = [beats[swapIndex], beats[index]];
+  }
+  return ["nod", ...beats].map((type) => ({ type, vigor: 0.88 + rng() * 0.24 }));
+}
+function ambListenHead(plan, elapsed) {
+  const beatIndex = Math.min(plan.length - 1, Math.floor(elapsed));
+  const beat = plan[beatIndex];
+  const phase = elapsed - beatIndex;
+  const vigor = beat.vigor;
+  if (beat.type === "rest") return { x: 0, y: 0, rotate: 0 };
+  if (beat.type === "sway") {
+    if (phase < 0.28) return { x: -26 * vigor, y: -3, rotate: -5 * vigor };
+    if (phase < 0.56) return { x: 26 * vigor, y: -3, rotate: 5 * vigor };
+    if (phase < 0.78) return { x: -13 * vigor, y: 0, rotate: -2.5 * vigor };
+    return { x: 0, y: 0, rotate: 0 };
+  }
+  if (beat.type === "double") {
+    if (phase < 0.16) return { x: 0, y: 8, rotate: 0 };
+    if (phase < 0.34) return { x: 0, y: -43 * vigor, rotate: 0 };
+    if (phase < 0.5) return { x: 0, y: 7, rotate: 0 };
+    if (phase < 0.68) return { x: 0, y: -37 * vigor, rotate: 0 };
+    return { x: 0, y: 0, rotate: 0 };
+  }
+  if (phase < 0.2) return { x: 0, y: 8, rotate: 0 };
+  if (phase < 0.48) return { x: 0, y: -44 * vigor, rotate: 0 };
+  if (phase < 0.7) return { x: 0, y: 6, rotate: 0 };
+  return { x: 0, y: 0, rotate: 0 };
+}
+function ambListen(assets, mountEl, seed) {
+  const art = ambArt("homeAmbient__listen", false);
+  const img = document.createElement("img");
+  img.className = "homeAmbient__candidate";
+  img.alt = "";
+  const inline = ambArt("homeAmbient__listenParts", true);
+  inline.innerHTML = ambUniqueSvg(assets.text.listenBase);
+  art.append(img, inline);
+  mountEl.append(art);
+  [...AMB_LISTEN_HEAD, ...AMB_LISTEN_HAND].forEach((id) => {
+    const part = inline.querySelector(`#${id}`);
+    if (part) part.dataset.baseTransform = part.getAttribute("transform") || "";
+  });
+  const base = assets.url("listenBase");
+  const up = assets.url("listenUp");
+  let planLoop = -1;
+  let plan = null;
+  return {
+    draw(e, reduced) {
+      const loop = reduced ? 0 : Math.floor(e / 6);
+      if (loop !== planLoop) {
+        plan = ambListenPlan(seed, loop);
+        planLoop = loop;
+      }
+      const t = reduced ? 3 : e - loop * 6;
+      const beat = plan[Math.min(plan.length - 1, Math.floor(t))];
+      const headbang = !reduced && (beat.type === "nod" || beat.type === "double");
+      img.hidden = !headbang;
+      inline.hidden = headbang;
+      if (headbang) {
+        const phase = t - Math.floor(t);
+        const isUp = beat.type === "double" ? (phase >= 0.16 && phase < 0.34) || (phase >= 0.5 && phase < 0.68) : phase >= 0.2 && phase < 0.48;
+        const src = isUp ? up : base;
+        if (img.dataset.src !== src) {
+          img.src = src;
+          img.dataset.src = src;
+        }
+        return;
+      }
+      const motionT = reduced ? 0 : t;
+      const motion = ambListenHead(plan, motionT);
+      const current = plan[Math.min(plan.length - 1, Math.floor(motionT))];
+      const verticalHandFollow = current.type === "nod" || current.type === "double" ? 0.72 : 0.35;
+      const headTransform = `translate(${motion.x.toFixed(2)} ${motion.y.toFixed(2)}) rotate(${motion.rotate.toFixed(2)} 528 360)`;
+      const handTransform = `translate(${(motion.x * 0.45).toFixed(2)} ${(motion.y * verticalHandFollow).toFixed(2)}) rotate(${(motion.rotate * 0.45).toFixed(2)} 528 680)`;
+      AMB_LISTEN_HEAD.forEach((id) => {
+        const part = inline.querySelector(`#${id}`);
+        if (part) part.setAttribute("transform", `${part.dataset.baseTransform} ${headTransform}`.trim());
+      });
+      AMB_LISTEN_HAND.forEach((id) => {
+        const part = inline.querySelector(`#${id}`);
+        if (part) part.setAttribute("transform", `${part.dataset.baseTransform} ${handTransform}`.trim());
+      });
+    },
+  };
+}
+
+// Sunshine / tap-tap — glasses appear, first raised-hand tap held, second hand/glasses lift (4.4s).
+const AMB_SUNSHINE_UPPER = ["body", "ear_L", "ear_R", "hand_L"];
+function ambCloneLayer(sourceDocument, id) {
+  const source = sourceDocument.getElementById(id);
+  if (!source) throw new Error(`Missing SVG layer: ${id}`);
+  const clone = source.cloneNode(true);
+  clone.removeAttribute("id");
+  clone.querySelectorAll("[id]").forEach((child) => child.removeAttribute("id"));
+  return clone;
+}
+function ambSunshineLayer(className, faceDocument, handDocument, glassesDocument = faceDocument, glassesIds = ["glasses_R", "glasses_L"]) {
+  const layer = document.createElementNS(AMB_NS, "g");
+  layer.classList.add(className);
+  layer.style.display = "none";
+  layer.append(
+    ambCloneLayer(handDocument, "hand_R_fill"),
+    ambCloneLayer(handDocument, "hand_R"),
+    ambCloneLayer(faceDocument, "face"),
+    ...glassesIds.map((id) => ambCloneLayer(glassesDocument, id)),
+  );
+  return layer;
+}
+function ambSunshineRhythm(phase) {
+  if (phase < 1 || phase >= 4.4) return { y: 0, rotate: 0 };
+  const smooth = (value) => value * value * (3 - 2 * value);
+  if (phase >= 2.3 && phase < 2.58) {
+    const rise = smooth(Math.min(1, (phase - 2.3) / 0.1));
+    return { y: -8 * rise, rotate: -0.65 * rise };
+  }
+  if (phase >= 2.58 && phase < 2.9) {
+    const tap = phase - 2.58;
+    if (tap < 0.1) {
+      const rise = smooth(tap / 0.1);
+      return { y: -8 - 6 * rise, rotate: -0.65 + 1.5 * rise };
+    }
+    if (tap < 0.22) return { y: -14, rotate: 0.85 };
+    const release = smooth((tap - 0.22) / 0.1);
+    return { y: -14 * (1 - release), rotate: 0.85 * (1 - release) };
+  }
+  const pulse = (start, duration, down, upValue) => {
+    const t = (phase - start) / duration;
+    if (t < 0 || t >= 1) return 0;
+    if (t < 0.22) return (t / 0.22) * down;
+    if (t < 0.58) return down + ((t - 0.22) / 0.36) * (upValue - down);
+    return upValue * (1 - (t - 0.58) / 0.42);
+  };
+  const idleBeat = Math.sin((phase - 1) * Math.PI * 2 * 1.25);
+  return { y: idleBeat * 2.5 + pulse(1, 0.42, 5, -7), rotate: idleBeat * 0.55 };
+}
+function ambSunshine(assets, mountEl) {
+  const art = ambArt("homeAmbient__sunshine", true);
+  art.innerHTML = ambUniqueSvg(assets.text.phone);
+  mountEl.append(art);
+  const parse = (text) => new DOMParser().parseFromString(text, "image/svg+xml");
+  const glasses = parse(assets.text.phoneGlasses);
+  const tap = parse(assets.text.phoneTap);
+  const tapTwo = parse(assets.text.phoneTapTwo);
+  const svg = art.querySelector("svg");
+  const normalLayer = ambSunshineLayer("sunshine-normal-layer", glasses, glasses);
+  const tapOneLayer = ambSunshineLayer("sunshine-tap-one-layer", glasses, tap);
+  const tapTwoLayer = ambSunshineLayer("sunshine-tap-two-layer", tapTwo, tapTwo, tapTwo, ["Vector 33", "Vector 34"]);
+  svg.append(normalLayer, tapOneLayer, tapTwoLayer);
+  const baseFace = art.querySelector("#face");
+  const baseHandFill = art.querySelector("#hand_R_fill");
+  const baseHand = art.querySelector("#hand_R");
+  const upper = AMB_SUNSHINE_UPPER.map((id) => art.querySelector(`#${id}`));
+  return {
+    draw(e, reduced) {
+      const phase = (reduced ? 1.5 : e) % 4.4;
+      const sunshineVisible = phase >= 1 && phase < 4.4;
+      const firstTap = phase >= 2.3 && phase < 2.58;
+      const secondTap = phase >= 2.58 && phase < 2.9;
+      const active = sunshineVisible || firstTap || secondTap;
+      normalLayer.style.display = sunshineVisible && !firstTap && !secondTap ? "" : "none";
+      tapOneLayer.style.display = firstTap ? "" : "none";
+      tapTwoLayer.style.display = secondTap ? "" : "none";
+      [baseFace, baseHandFill, baseHand].forEach((part) => {
+        if (part) part.style.display = active ? "none" : "";
+      });
+      const rhythm = reduced ? { y: 0, rotate: 0 } : ambSunshineRhythm(phase);
+      const rhythmTransform = rhythm.y === 0 && rhythm.rotate === 0 ? "" : `translate(0 ${rhythm.y.toFixed(2)}) rotate(${rhythm.rotate.toFixed(2)} 528 820)`;
+      [...upper, baseFace, baseHandFill, baseHand, normalLayer, tapOneLayer, tapTwoLayer].forEach((part) => {
+        if (part) part.setAttribute("transform", rhythmTransform);
+      });
+    },
+  };
+}
+
+// Watching — silver device back, separate subtle colour-changing light, gaze/blink, breath .008 (48s).
+function ambWatching(assets, mountEl) {
+  const art = ambArt("homeAmbient__watching", true);
+  art.innerHTML = ambUniqueSvg(assets.text.watching);
+  mountEl.append(art);
+  const uid = `amb${(ambUid += 1)}`;
+  const svg = art.querySelector("svg");
+  const defs = document.createElementNS(AMB_NS, "defs");
+  const gradient = document.createElementNS(AMB_NS, "linearGradient");
+  gradient.id = `watching-light-${uid}`;
+  for (const [offset, opacity] of [["0%", "0.42"], ["35%", "0.30"], ["70%", "0.12"], ["100%", "0"]]) {
+    const stop = document.createElementNS(AMB_NS, "stop");
+    stop.setAttribute("offset", offset);
+    stop.setAttribute("stop-opacity", opacity);
+    gradient.append(stop);
+  }
+  defs.append(gradient);
+  svg.prepend(defs);
+  const spillFilter = document.createElementNS(AMB_NS, "filter");
+  spillFilter.id = `watching-spill-${uid}`;
+  spillFilter.setAttribute("x", "-40%");
+  spillFilter.setAttribute("y", "-40%");
+  spillFilter.setAttribute("width", "180%");
+  spillFilter.setAttribute("height", "180%");
+  const blur = document.createElementNS(AMB_NS, "feGaussianBlur");
+  blur.setAttribute("stdDeviation", "28");
+  spillFilter.append(blur);
+  defs.append(spillFilter);
+  const device = svg.querySelector('[id="screen"]');
+  const spill = svg.querySelector('[id="screen_fill"]').cloneNode(true);
+  spill.removeAttribute("id");
+  spill.classList.add("watching-screen-spill");
+  spill.setAttribute("filter", `url(#${spillFilter.id})`);
+  spill.setAttribute("opacity", "0");
+  spill.setAttribute("stroke-width", "48");
+  device.prepend(spill);
+  const body = svg.querySelector('[id="body"]');
+  const mask = document.createElementNS(AMB_NS, "mask");
+  mask.id = `watching-interior-${uid}`;
+  const interior = body.cloneNode(true);
+  interior.removeAttribute("id");
+  interior.setAttribute("fill", "white");
+  interior.setAttribute("stroke", "black");
+  mask.append(interior);
+  defs.append(mask);
+  const light = body.cloneNode(true);
+  light.classList.add("watching-face-light");
+  light.setAttribute("opacity", "0");
+  light.removeAttribute("id");
+  light.removeAttribute("stroke");
+  light.setAttribute("fill", `url(#${gradient.id})`);
+  light.setAttribute("mask", `url(#${mask.id})`);
+  body.after(light);
+  if (svg.querySelector('[id="hand_R_fill2"]') && svg.querySelector('[id="hand_R_outline"]')) {
+    svg.querySelector('[id="hand_R_fill"]').style.display = "none";
+  }
+  const eyes = [...svg.querySelectorAll('[id="eye_L"], [id="eye_R"]')];
+  const blink = ambBlink(eyes);
+  const lying = svg.querySelector('[id="piggy_lying"]');
+  lying.style.transformBox = "fill-box";
+  lying.style.transformOrigin = "50% 85%";
+  const stops = [...gradient.querySelectorAll("stop")];
+  return {
+    draw(e, reduced) {
+      const t = reduced ? 0 : e % 48;
+      ambDrawBlink(blink, t, reduced);
+      const gazeTime = t % 12;
+      const gaze = ambSmooth((gazeTime - 3.8) / 1.1) * (1 - ambSmooth((gazeTime - 6.5) / 1.2));
+      eyes.forEach((eye) => {
+        eye.style.translate = `${-10 * gaze}px 0px`;
+      });
+      const breath = (1 - Math.cos((t * Math.PI) / 2)) * 0.008;
+      lying.style.transform = `scale(${1 + breath * 0.35}, ${1 + breath})`;
+      const colors = [[192, 218, 239], [223, 206, 235], [232, 224, 195]];
+      const segment = Math.floor(t / 8) % colors.length;
+      const mix = ambSmooth(((t % 8) - 5) / 3);
+      const color = colors[segment].map((v, i) => Math.round(v + (colors[(segment + 1) % colors.length][i] - v) * mix));
+      const fill = `rgb(${color.join(",")})`;
+      stops.forEach((stop) => stop.setAttribute("stop-color", fill));
+      spill.setAttribute("fill", fill);
+      spill.setAttribute("stroke", fill);
+      const lightTime = t % 12;
+      const luminance = reduced ? 0 : 0.6 * ambSmooth((lightTime - 1.8) / 2.2) * (1 - ambSmooth((lightTime - 7) / 3));
+      light.setAttribute("opacity", String(luminance));
+      spill.setAttribute("opacity", String(0.3 * luminance));
+    },
+  };
+}
+
+// Flop → right roll → drowsy → sleep — the connected sequence on one continuous body rig; sleep
+// holds (no wake transition is confirmed) until the next Home-life cycle.
+function ambFlopSleep(assets, mountEl, seed) {
+  const art = ambArt("homeAmbient__flop", false);
+  mountEl.append(art);
+  const F = ambConfigureFlop(art, assets, seed);
+  // Map the flop box so its first frame (the seated idle drawing) lands exactly on the seated pose:
+  // same approved scale and foot anchor; every later frame keeps the preview's relative geometry.
+  const W = AMB_BOX_W;
+  const H = AMB_BOX_H;
+  const fx = 0.08 * W;
+  const fy = 0.08 * H;
+  const fw = 0.84 * W;
+  const fh = 0.84 * H;
+  const k = Math.min(fw / 2000, fh / 1800);
+  const ox = fx + (fw - 2000 * k) / 2;
+  const oy = fy + (fh - 1800 * k) / 2;
+  const { box, scale } = F.firstFrame;
+  const a = AMB_SEATED.a;
+  const m = a / (scale * k);
+  const tx = AMB_SEATED.x + a * (box.x + box.width / 2) - m * (ox + 1000 * k);
+  const ty = AMB_SEATED.y + a * (box.y + box.height) - m * (oy + 1300 * k);
+  art.style.transform = `translate(${tx}px, ${ty}px) scale(${m})`;
+  return {
+    draw(e, reduced) {
+      // Preview reduced motion holds the cue at half its length (38.55s → persistent sleep pose).
+      const t = reduced ? 77.1 * 0.5 : e <= 77.1 ? e : 13.1 + ((e - 13.1) % 64);
+      if (t < 1.3 && !reduced) return ambFlopDraw(F, t, "flop-experiment", reduced);
+      if (t < 3 && !reduced) return ambConnectedRest(F, 0, null, t - 1.3, reduced);
+      if (t < 4.5 && !reduced) return ambConnectedRest(F, ambSmooth((t - 3) / 1.5), null, null, reduced);
+      return ambConnectedRest(F, 1, Math.max(0, t - 4.5), null, reduced);
+    },
+  };
+}
+
+function ambConfigureFlop(art, assets, seed) {
+  const T = assets.text;
+  const rng = seededRandom(hashSeed(`${seed}|sleep`));
+  const F = { art, sleepHoldPlan: Array.from({ length: 4 }, () => 5 + rng() * 3), firstFrame: null, sleepPartTracks: null };
+  const uid = `amb${(ambUid += 1)}`;
+  const ownerRollSources = [T.rollRight, T.lookRight, T.rollLeft, T.lookLeft];
+  ownerRollSources.forEach((source, poseIndex) => {
+    const frame = document.createElement("div");
+    frame.className = "owner-roll-frame";
+    frame.style.cssText = "position:absolute;inset:8%;opacity:0;pointer-events:none";
+    frame.innerHTML = ambUniqueSvg(source);
+    art.append(frame);
+    const svg = frame.querySelector("svg");
+    if (poseIndex === 1 || poseIndex === 3) {
+      const arm = svg.querySelector('[id="Group 5"]');
+      arm.classList.add("owner-roll-front-arm");
+      arm.dataset.pivot = poseIndex === 1 ? "212 650" : "839 660";
+      arm.dataset.direction = poseIndex === 1 ? "-1" : "1";
+      const leg = svg.querySelector('[id="leg_L"]');
+      leg.classList.add("owner-roll-front-leg");
+      leg.dataset.pivot = poseIndex === 1 ? "615 1110" : "402 1090";
+      leg.dataset.direction = poseIndex === 1 ? "1" : "-1";
+      if (poseIndex === 3) svg.querySelector('[id="Vector_6"]').classList.add("owner-roll-right-foot");
+    }
+    const body = [...svg.querySelectorAll("path")]
+      .filter((path) => !path.closest("defs,mask,clipPath"))
+      .map((path) => ({ path, box: path.getBBox() }))
+      .sort((p, q) => q.box.width * q.box.height - p.box.width * p.box.height)[0];
+    const box = body.box;
+    body.path.classList.add("owner-roll-silhouette");
+    const scale = 1000 / box.height;
+    frame.dataset.bodyWidth = String(box.width * scale);
+    frame.dataset.sourceScale = String(scale);
+    frame.dataset.bodyCenter = JSON.stringify([box.x + box.width / 2, box.y + box.height / 2]);
+    const eyes = [...svg.querySelectorAll('[id="eye_L"], [id="eye_R"], [id="Vector_8"], [id="Vector_9"]')]
+      .map((eye) => ({ eye, box: eye.getBBox() }))
+      .sort((p, q) => p.box.x - q.box.x);
+    frame.dataset.eyePositions = JSON.stringify(eyes.map(({ eye, box: eyeBox }, index) => {
+      eye.dataset.rollEye = String(index);
+      return [(eyeBox.x + eyeBox.width / 2 - box.x - box.width / 2) * scale, (eyeBox.y + eyeBox.height / 2 - box.y - box.height / 2) * scale];
+    }));
+    const face = svg.querySelector('[id="face"], [id="Group 11"]');
+    face.classList.add("owner-roll-face");
+    const faceBox = face.getBBox();
+    frame.dataset.faceCenter = JSON.stringify([
+      (faceBox.x + faceBox.width / 2 - box.x - box.width / 2) * scale,
+      (faceBox.y + faceBox.height / 2 - box.y - box.height / 2) * scale,
+    ]);
+    frame.dataset.faceOrigin = JSON.stringify([faceBox.x + faceBox.width / 2, faceBox.y + faceBox.height / 2]);
+    const assembly = document.createElementNS(AMB_NS, "g");
+    while (svg.firstChild) assembly.append(svg.firstChild);
+    assembly.setAttribute("transform", `scale(${scale}) translate(${-box.x - box.width / 2} ${-box.y - box.height / 2})`);
+    const roll = document.createElementNS(AMB_NS, "g");
+    roll.classList.add("owner-roll-body");
+    roll.append(assembly);
+    svg.append(roll);
+    svg.setAttribute("viewBox", "-900 -900 1800 1800");
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    svg.style.cssText = "width:100%;height:100%;display:block;transform:none";
+  });
+  const rollFrames = art.querySelectorAll(".owner-roll-frame");
+  const blanketProbe = document.createElement("div");
+  blanketProbe.innerHTML = ambUniqueSvg(T.blanket);
+  art.append(blanketProbe);
+  const blanketBox = blanketProbe.querySelector('[id="blanket"]').getBBox();
+  const blanketScale = 1150 / blanketBox.width;
+  const blanketPath = blanketProbe.querySelector('[id="blanket"]').cloneNode(true);
+  blanketPath.removeAttribute("id");
+  const closedSources = ["eye_L_closed", "eye_R_closed"].map((id) => {
+    const eye = blanketProbe.querySelector(`[id="${id}"]`);
+    return { node: eye.cloneNode(true), box: eye.getBBox() };
+  });
+  const openEyeBoxes = [...rollFrames[0].querySelectorAll('[id="eye_L"], [id="eye_R"]')].map((eye) => eye.getBBox());
+  const faceTemplate = rollFrames[0].querySelector(".owner-roll-face").cloneNode(true);
+  [...faceTemplate.querySelectorAll('[id="eye_L"], [id="eye_R"]')].forEach((eye, index) => {
+    const eyeBox = openEyeBoxes[index];
+    eye.classList.add("sleep-open-eye");
+    eye.dataset.cy = String(eyeBox.y + eyeBox.height / 2);
+  });
+  const centers = (boxes) => boxes.map((b) => [b.x + b.width / 2, b.y + b.height / 2]).sort((p, q) => p[0] - q[0]);
+  const sourceEyes = centers(closedSources.map((source) => source.box));
+  const targetEyes = centers(openEyeBoxes);
+  const pairAngle = (pair) => Math.atan2(pair[1][1] - pair[0][1], pair[1][0] - pair[0][0]);
+  const pairDistance = (pair) => Math.hypot(pair[1][0] - pair[0][0], pair[1][1] - pair[0][1]);
+  const eyePair = document.createElementNS(AMB_NS, "g");
+  eyePair.classList.add("sleep-closed-eye");
+  eyePair.style.opacity = "0";
+  eyePair.setAttribute("transform", `translate(${(targetEyes[0][0] + targetEyes[1][0]) / 2} ${(targetEyes[0][1] + targetEyes[1][1]) / 2}) rotate(${((pairAngle(targetEyes) - pairAngle(sourceEyes)) * 180) / Math.PI}) scale(${pairDistance(targetEyes) / pairDistance(sourceEyes)}) translate(${-(sourceEyes[0][0] + sourceEyes[1][0]) / 2} ${-(sourceEyes[0][1] + sourceEyes[1][1]) / 2})`);
+  closedSources.forEach((source) => eyePair.append(source.node.cloneNode(true)));
+  faceTemplate.append(eyePair);
+  faceTemplate.querySelector('[id="mouth_smile"]').classList.add("sleep-mouth");
+  faceTemplate.removeAttribute("class");
+  [faceTemplate, ...faceTemplate.querySelectorAll("[id]")].forEach((node) => node.removeAttribute("id"));
+  const [faceOriginX, faceOriginY] = JSON.parse(rollFrames[0].dataset.faceOrigin);
+  faceTemplate.setAttribute("transform", `scale(${rollFrames[0].dataset.sourceScale}) translate(${-faceOriginX} ${-faceOriginY})`);
+  rollFrames.forEach((frame) => {
+    frame.querySelector(".owner-roll-face").style.visibility = "hidden";
+    const faceMotion = document.createElementNS(AMB_NS, "g");
+    faceMotion.classList.add("owner-roll-face-arc");
+    faceMotion.append(faceTemplate.cloneNode(true));
+    frame.querySelector(".owner-roll-body").append(faceMotion);
+    const cover = document.createElementNS(AMB_NS, "g");
+    cover.classList.add("sleep-blanket");
+    const normalized = document.createElementNS(AMB_NS, "g");
+    normalized.setAttribute("transform", `translate(0 40) scale(${-blanketScale} ${blanketScale}) translate(${-blanketBox.x - blanketBox.width / 2} ${-blanketBox.y})`);
+    normalized.append(blanketPath.cloneNode(true));
+    cover.append(normalized);
+    cover.style.opacity = "0";
+    frame.querySelector(".owner-roll-body").append(cover);
+  });
+  blanketProbe.className = "owner-sleep-source";
+  blanketProbe.style.cssText = "position:absolute;inset:8%;opacity:0;pointer-events:none";
+  const sleepSvg = blanketProbe.querySelector("svg");
+  const sleepBodyBox = sleepSvg.querySelector('[id="body"]').getBBox();
+  const sleepScale = 1000 / sleepBodyBox.height;
+  const sleepAssembly = document.createElementNS(AMB_NS, "g");
+  while (sleepSvg.firstChild) sleepAssembly.append(sleepSvg.firstChild);
+  sleepAssembly.setAttribute("transform", `scale(${sleepScale}) translate(${-sleepBodyBox.x - sleepBodyBox.width / 2} ${-sleepBodyBox.y - sleepBodyBox.height / 2})`);
+  sleepSvg.append(sleepAssembly);
+  const sleepMotion = document.createElementNS(AMB_NS, "g");
+  sleepMotion.classList.add("source-sleep-motion");
+  sleepSvg.append(sleepMotion);
+  sleepMotion.append(sleepAssembly);
+  const sleepZ = document.createElementNS(AMB_NS, "text");
+  sleepZ.classList.add("source-sleep-zz");
+  sleepZ.setAttribute("x", "360");
+  sleepZ.setAttribute("y", "-570");
+  sleepZ.setAttribute("fill", "white");
+  sleepZ.setAttribute("font-size", "68");
+  sleepZ.textContent = "z";
+  sleepSvg.append(sleepZ);
+  const upperZ = sleepZ.cloneNode(true);
+  upperZ.classList.add("source-sleep-zz-upper");
+  upperZ.setAttribute("x", "435");
+  upperZ.setAttribute("y", "-665");
+  upperZ.setAttribute("font-size", "98");
+  sleepSvg.append(upperZ);
+  const sleepPlacement = document.createElementNS(AMB_NS, "g");
+  sleepPlacement.classList.add("source-sleep-placement");
+  sleepPlacement.append(sleepMotion, sleepZ, upperZ);
+  sleepSvg.append(sleepPlacement);
+  rollFrames.forEach((frame) => {
+    [sleepZ, upperZ].forEach((source) => {
+      const zz = source.cloneNode(true);
+      zz.classList.add("connected-sleep-zz");
+      zz.style.opacity = "0";
+      frame.querySelector("svg").append(zz);
+    });
+  });
+  sleepSvg.setAttribute("viewBox", "-1000 -900 2000 1800");
+  sleepSvg.style.cssText = "width:100%;height:100%;display:block;transform:none";
+  const sleepCover = document.createElementNS(AMB_NS, "g");
+  sleepCover.classList.add("source-sleep-cover");
+  const sourceBlanket = sleepSvg.querySelector('[id="blanket"]');
+  sourceBlanket.before(sleepCover);
+  sleepCover.append(sourceBlanket);
+  ["hand_L", "hand_R"].forEach((id) => sleepCover.append(sleepSvg.querySelector(`[id="${id}"]`)));
+  blanketProbe.dataset.bodyWidth = String(sleepBodyBox.width * sleepScale);
+  const rightFrame = rollFrames[1];
+  const sleepParts = document.createElementNS(AMB_NS, "g");
+  sleepParts.classList.add("connected-sleep-parts");
+  sleepParts.style.opacity = "0";
+  rightFrame.querySelector(".owner-roll-body").append(sleepParts);
+  const partScaleX = (sleepScale * Number(rightFrame.dataset.bodyWidth)) / Number(blanketProbe.dataset.bodyWidth);
+  const sleepPartsLowerY = 100;
+  const sourceCenter = [sleepBodyBox.x + sleepBodyBox.width / 2, sleepBodyBox.y + sleepBodyBox.height / 2];
+  const normalizePart = (node) => {
+    const group = document.createElementNS(AMB_NS, "g");
+    group.setAttribute("transform", `translate(0 ${sleepPartsLowerY}) scale(${partScaleX} ${sleepScale}) translate(${-sourceCenter[0]} ${-sourceCenter[1]})`);
+    group.append(node.cloneNode(true));
+    return group;
+  };
+  const blanketOnly = document.createElementNS(AMB_NS, "g");
+  blanketOnly.classList.add("connected-blanket-only");
+  blanketOnly.append(normalizePart(sourceBlanket));
+  sleepParts.append(blanketOnly);
+  const targetHands = ["hand_L", "hand_R"].map((id) => {
+    const node = sleepSvg.querySelector(`[id="${id}"]`);
+    const b = node.getBBox();
+    return { node, id, width: b.width * partScaleX, height: b.height * sleepScale,
+      center: [(b.x + b.width / 2 - sourceCenter[0]) * partScaleX, (b.y + b.height / 2 - sourceCenter[1]) * sleepScale + sleepPartsLowerY] };
+  }).sort((p, q) => p.center[0] - q.center[0]);
+  const [rollCX, rollCY] = JSON.parse(rightFrame.dataset.bodyCenter);
+  const rollScale = Number(rightFrame.dataset.sourceScale);
+  F.sleepPartTracks = ["Group 5", "Vector_5"].map((id, index) => {
+    const node = rightFrame.querySelector(`[id="${id}"]`);
+    const b = node.getBBox();
+    const original = document.createElementNS(AMB_NS, "g");
+    original.classList.add("connected-original-arm");
+    node.before(original);
+    original.append(node);
+    const homeAnchor = document.createElementNS(AMB_NS, "g");
+    original.before(homeAnchor);
+    const foreground = document.createElementNS(AMB_NS, "g");
+    foreground.classList.add("connected-arm-foreground");
+    const rollBody = rightFrame.querySelector(".owner-roll-body");
+    const placement = rollBody.getCTM().inverse().multiply(original.parentNode.getCTM());
+    foreground.setAttribute("transform", `matrix(${[placement.a, placement.b, placement.c, placement.d, placement.e, placement.f].join(" ")})`);
+    rollBody.append(foreground);
+    let openArm = null;
+    let armRevealCover = null;
+    if (index === 1) {
+      openArm = document.createElementNS(AMB_NS, "g");
+      openArm.classList.add("connected-right-open-arm");
+      openArm.style.opacity = "0";
+      openArm.append(normalizePart(targetHands[index].node));
+      const mask = document.createElementNS(AMB_NS, "mask");
+      mask.id = `sleep-arm-occlusion-${uid}`;
+      mask.setAttribute("maskUnits", "userSpaceOnUse");
+      mask.setAttribute("x", "-3000");
+      mask.setAttribute("y", "-3000");
+      mask.setAttribute("width", "6000");
+      mask.setAttribute("height", "6000");
+      const outside = document.createElementNS(AMB_NS, "rect");
+      for (const [key, value] of Object.entries({ x: -3000, y: -3000, width: 6000, height: 6000, fill: "white" })) outside.setAttribute(key, value);
+      mask.append(outside);
+      const silhouette = rightFrame.querySelector(".owner-roll-silhouette");
+      const occluder = silhouette.cloneNode(true);
+      occluder.removeAttribute("id");
+      occluder.removeAttribute("class");
+      occluder.removeAttribute("mask");
+      occluder.setAttribute("fill", "black");
+      occluder.setAttribute("stroke", "black");
+      const matrix = rollBody.getCTM().inverse().multiply(silhouette.getCTM());
+      occluder.setAttribute("transform", `matrix(${[matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f].join(" ")})`);
+      mask.append(occluder);
+      armRevealCover = blanketOnly.cloneNode(true);
+      armRevealCover.removeAttribute("class");
+      armRevealCover.querySelectorAll("[id]").forEach((part) => part.removeAttribute("id"));
+      armRevealCover.querySelectorAll("path").forEach((part) => {
+        part.setAttribute("fill", "white");
+        part.setAttribute("stroke", "white");
+      });
+      armRevealCover.style.opacity = "0";
+      mask.append(armRevealCover);
+      const defs = document.createElementNS(AMB_NS, "defs");
+      defs.append(mask);
+      rightFrame.querySelector("svg").prepend(defs);
+      const visibleArm = document.createElementNS(AMB_NS, "g");
+      visibleArm.setAttribute("mask", `url(#${mask.id})`);
+      visibleArm.append(openArm);
+      rollBody.append(visibleArm);
+    }
+    return { original, foreground, homeAnchor, openArm, armRevealCover, sourceScale: rollScale, targetId: targetHands[index].id,
+      from: [(b.x + b.width / 2 - rollCX) * rollScale, (b.y + b.height / 2 - rollCY) * rollScale],
+      to: targetHands[index].center };
+  });
+  [0, 2].forEach((index) => {
+    const rolling = rollFrames[index];
+    const side = rollFrames[index + 1];
+    rolling.dataset.widthFit = String(Math.max(0.94, Math.min(1, Number(side.dataset.bodyWidth) / Number(rolling.dataset.bodyWidth))));
+  });
+  [T.idle, T.flopSquash, T.flopLean, T.flopLand].forEach((source, index) => {
+    const frame = document.createElement("div");
+    frame.className = "flop-experiment-frame";
+    frame.style.cssText = "position:absolute;inset:8%;opacity:0;pointer-events:none";
+    frame.innerHTML = ambUniqueSvg(source);
+    art.append(frame);
+    const svg = frame.querySelector("svg");
+    const paths = [...svg.querySelectorAll("path")];
+    const body = svg.querySelector('[id="body"]') || paths.reduce((largest, path) => {
+      const b = path.getBBox();
+      const old = largest.getBBox();
+      return b.width * b.height > old.width * old.height ? path : largest;
+    });
+    const box = body.getBBox();
+    const scale = Math.sqrt(700000 / (box.width * box.height));
+    if (index === 0) F.firstFrame = { box: { x: box.x, y: box.y, width: box.width, height: box.height }, scale };
+    const assembly = document.createElementNS(AMB_NS, "g");
+    while (svg.firstChild) assembly.append(svg.firstChild);
+    assembly.setAttribute("transform", `translate(0 400) scale(${index === 3 ? -scale : scale} ${scale}) translate(${-box.x - box.width / 2} ${-box.y - box.height})`);
+    const motion = document.createElementNS(AMB_NS, "g");
+    motion.classList.add("flop-experiment-motion");
+    motion.append(assembly);
+    svg.append(motion);
+    svg.setAttribute("viewBox", "-1000 -900 2000 1800");
+    svg.style.cssText = "width:100%;height:100%;display:block";
+  });
+  return F;
+}
+
+function ambSleepTurn(F, rest) {
+  const cycle = ((rest % 64) + 64) % 64;
+  const index = Math.floor(cycle / 16);
+  const time = cycle % 16;
+  const start = F.sleepHoldPlan[index];
+  const end = 12 + (F.sleepHoldPlan[(index + 1) % 4] - 5) * 0.35;
+  const entering = Math.max(0, Math.min(1, (time - start) / 0.9));
+  const leaving = Math.max(0, Math.min(1, (time - end) / 1.1));
+  return {
+    weight: ambSmooth(entering) * (1 - ambSmooth(leaving)),
+    lift: Math.sin(entering * Math.PI) + Math.sin(leaving * Math.PI),
+  };
+}
+
+function ambConnectedRest(F, rollTime, sleepElapsed, landingElapsed, reduced) {
+  if (sleepElapsed !== null) return ambSleepHandoff(F, sleepElapsed, reduced);
+  const art = F.art;
+  ambFlopDraw(F, rollTime, "roll-test", reduced);
+  const rest = 0;
+  const breath = reduced ? 0 : (1 - Math.cos((rest * Math.PI) / 2)) * 0.013;
+  const compression = landingElapsed === null || reduced ? 0 : Math.sin(Math.PI * Math.min(1, Math.max(0, landingElapsed) / 0.26)) * 0.035;
+  const turn = { weight: 0, lift: 0 };
+  const rise = 0;
+  const eyelid = 1;
+  art.querySelectorAll(".owner-roll-frame").forEach((frame) => {
+    const body = frame.querySelector(".owner-roll-body");
+    body.setAttribute("transform", `${body.getAttribute("transform")} translate(${-turn.weight * 5} ${500 - turn.lift * 14 - turn.weight * 3}) scale(${1 + compression * 0.6 + breath * 0.35} ${1 - compression + breath}) translate(0 -500)`);
+    const face = frame.querySelector(".owner-roll-face-arc");
+    face.style.translate = `${AMB_SLEEP_OFFSETS.face.x * turn.weight + breath * 35}px ${AMB_SLEEP_OFFSETS.face.y * turn.weight + breath * 90}px`;
+    const cover = frame.querySelector(".sleep-blanket");
+    cover.style.opacity = String(rise);
+    cover.setAttribute("transform", `translate(0 ${(1 - rise) * 90})`);
+    frame.querySelectorAll(".sleep-open-eye").forEach((eye) => {
+      const cy = Number(eye.dataset.cy);
+      eye.style.opacity = eyelid < 0.08 ? "0" : "1";
+      eye.setAttribute("transform", `translate(0 ${cy}) scale(1 ${Math.max(0.08, eyelid)}) translate(0 ${-cy})`);
+    });
+    frame.querySelectorAll(".sleep-closed-eye").forEach((eye) => {
+      eye.style.opacity = eyelid < 0.08 ? "1" : "0";
+    });
+    frame.querySelector(".sleep-mouth").style.opacity = "1";
+    frame.querySelectorAll(".connected-sleep-zz").forEach((zz, index) => {
+      const wave = (1 - Math.cos((rest * Math.PI) / 2 - index * 0.6)) / 2;
+      zz.style.opacity = "0";
+      zz.setAttribute("transform", `translate(0 ${reduced ? 0 : -wave * 18})`);
+    });
+  });
+  return undefined;
+}
+
+function ambSleepHandoff(F, elapsed, reduced) {
+  const art = F.art;
+  const duration = 3.2;
+  if (elapsed >= duration || reduced) {
+    ambFlopDraw(F, 1, "roll-test", reduced);
+    const frame = art.querySelectorAll(".owner-roll-frame")[1];
+    const age = Math.max(0, elapsed - duration);
+    const rest = Math.max(0, age - 2.4);
+    const breath = reduced ? 0 : (1 - Math.cos((rest * Math.PI) / 2)) * 0.013;
+    const turn = reduced ? { weight: 0, lift: 0 } : ambSleepTurn(F, rest);
+    const body = frame.querySelector(".owner-roll-body");
+    body.setAttribute("transform", `${body.getAttribute("transform")} translate(${-turn.weight * 5} ${500 - turn.lift * 14 - turn.weight * 3}) scale(${1 + breath * 0.35} ${1 + breath}) translate(0 -500)`);
+    frame.querySelectorAll(".sleep-open-eye").forEach((eye) => {
+      eye.style.opacity = "0";
+    });
+    frame.querySelectorAll(".sleep-closed-eye").forEach((eye) => {
+      eye.style.opacity = "1";
+    });
+    frame.querySelector(".sleep-mouth").style.opacity = String(reduced ? 0 : 1 - ambSmooth((age - 0.25) / 0.65));
+    frame.querySelector(".owner-roll-face-arc").style.translate = `${AMB_SLEEP_OFFSETS.face.x * turn.weight + breath * 35}px ${AMB_SLEEP_OFFSETS.face.y * turn.weight + breath * 90}px`;
+    frame.querySelector(".connected-sleep-parts").style.opacity = "1";
+    const blanket = frame.querySelector(".connected-blanket-only");
+    const rise = reduced ? 1 : ambSmooth(age / 2.4);
+    blanket.style.opacity = String(reduced ? 1 : ambSmooth(age / 0.7));
+    blanket.setAttribute("transform", `translate(0 ${(1 - rise) * 180})`);
+    F.sleepPartTracks.forEach((track) => {
+      track.foreground.append(track.original);
+      const progress = reduced ? 1 : ambSmooth((age - 0.15) / 1.5);
+      const dx = track.to[0] - track.from[0];
+      const dy = track.to[1] - track.from[1];
+      const offset = AMB_SLEEP_OFFSETS[track.targetId];
+      track.original.setAttribute("transform", `translate(${(dx * progress + offset.x * turn.weight) / track.sourceScale} ${(dy * progress + offset.y * turn.weight) / track.sourceScale})`);
+      track.original.style.opacity = "1";
+      if (track.openArm) {
+        track.original.style.opacity = "0";
+        track.openArm.style.opacity = "1";
+        track.armRevealCover.setAttribute("transform", blanket.getAttribute("transform"));
+        track.armRevealCover.style.opacity = blanket.style.opacity;
+        track.openArm.setAttribute("transform", `translate(${-dx * (1 - progress) + offset.x * turn.weight} ${-dy * (1 - progress) + offset.y * turn.weight})`);
+      }
+    });
+    frame.querySelectorAll(".connected-sleep-zz").forEach((zz, index) => {
+      const wave = (1 - Math.cos((rest * Math.PI) / 2 - index * 0.6)) / 2;
+      zz.style.opacity = String(age < 2.4 ? 0 : reduced ? 1 : 0.35 + wave * 0.65);
+      zz.setAttribute("transform", `translate(0 ${reduced ? 0 : -wave * 18})`);
+    });
+    return undefined;
+  }
+  ambFlopDraw(F, 1, "roll-test", reduced);
+  const frame = art.querySelectorAll(".owner-roll-frame")[1];
+  const body = frame.querySelector(".owner-roll-body");
+  const tilt = Math.sin((elapsed / duration) * Math.PI * 2) * 1.2 * Math.sin((elapsed / duration) * Math.PI);
+  body.setAttribute("transform", `${body.getAttribute("transform")} rotate(${tilt})`);
+  let eyelid = 1;
+  for (const [start, length] of [[0.35, 0.22], [1.05, 0.5], [2.1, 0.85]]) {
+    const phase = (elapsed - start) / length;
+    if (phase > 0 && phase < 1) eyelid = Math.min(eyelid, 1 - 0.96 * Math.sin(phase * Math.PI));
+  }
+  eyelid *= 1 - ambSmooth((elapsed - 2.65) / 0.55);
+  frame.querySelectorAll(".sleep-open-eye").forEach((eye) => {
+    const cy = Number(eye.dataset.cy);
+    eye.style.opacity = eyelid < 0.08 ? "0" : "1";
+    eye.setAttribute("transform", `translate(0 ${cy}) scale(1 ${Math.max(0.08, eyelid)}) translate(0 ${-cy})`);
+  });
+  frame.querySelectorAll(".sleep-closed-eye").forEach((eye) => {
+    eye.style.opacity = eyelid < 0.08 ? "1" : "0";
+  });
+  return undefined;
+}
+
+// The two branches of the preview's drawIdleFlop() the connected sequence uses: the confirmed Flop
+// (quick drop, 1.30s impact) and the viewer-right roll rig. `reduced` holds the rig at its end pose,
+// exactly like the preview does for the flop-sleep cue.
+function ambFlopDraw(F, elapsed, cueId, reduced) {
+  const art = F.art;
+  F.sleepPartTracks?.forEach((track) => {
+    if (track.openArm) track.openArm.style.opacity = "0";
+    if (track.original.parentNode === track.foreground) track.homeAnchor.after(track.original);
+  });
+  art.querySelectorAll(".connected-sleep-parts").forEach((parts) => {
+    parts.style.opacity = "0";
+  });
+  art.querySelectorAll(".connected-original-arm").forEach((arm) => {
+    arm.style.opacity = "1";
+    arm.removeAttribute("transform");
+  });
+  art.querySelector(".source-sleep-placement")?.removeAttribute("transform");
+  art.querySelectorAll(".connected-sleep-zz").forEach((zz) => {
+    zz.style.opacity = "0";
+  });
+  art.querySelectorAll(".owner-roll-face-arc").forEach((face) => {
+    face.style.translate = "";
+  });
+  const experimentFrames = art.querySelectorAll(".flop-experiment-frame");
+  experimentFrames.forEach((frame) => {
+    frame.style.opacity = "0";
+  });
+  if (cueId === "flop-experiment") {
+    art.querySelectorAll(".owner-roll-frame, .owner-sleep-source").forEach((frame) => {
+      frame.style.opacity = "0";
+    });
+    const impactAt = 1.3;
+    const index = reduced ? 3 : elapsed < 1 ? 0 : elapsed < 1.24 ? 1 : elapsed < impactAt ? 2 : 3;
+    const impact = Math.max(0, elapsed - impactAt);
+    const compression = index === 3 && !reduced ? Math.sin(Math.PI * Math.min(1, impact / 0.26)) * 0.035 : 0;
+    experimentFrames[index].style.opacity = "1";
+    experimentFrames[index].querySelector(".flop-experiment-motion").setAttribute("transform", `translate(0 400) scale(${1 + compression * 0.6} ${1 - compression}) translate(0 -400)`);
+    return undefined;
+  }
+  const sourceSleep = art.querySelector(".owner-sleep-source");
+  sourceSleep.style.opacity = "0";
+  const ownerFrames = art.querySelectorAll(".owner-roll-frame");
+  ownerFrames.forEach((frame) => {
+    frame.style.opacity = "0";
+  });
+  const keys = [
+    [0, 0, 0], [0.2, 0, 0], [0.85, 1, 1], [1.2, 1, 1], [1.75, 0, 0],
+    [2, 2, 0], [2.2, 2, 0], [2.85, 3, -1], [3.2, 3, -1], [3.75, 2, 0], [4, 0, 0],
+  ];
+  // The connected sequence is the preview's "flop-sleep" cue: reduced motion holds the roll at t=1.
+  const t = reduced ? 1 : elapsed % 4;
+  const end = keys.findIndex((key) => key[0] > t);
+  const a = keys[Math.max(0, end - 1)];
+  const b = keys[end < 0 ? keys.length - 1 : end];
+  const fraction = Math.min(1, Math.max(0, (t - a[0]) / Math.max(0.001, b[0] - a[0])));
+  const eased = ambSmooth(fraction);
+  const turn = a[2] + (b[2] - a[2]) * eased;
+  const blend = fraction < 0.68 ? 0 : 1;
+  ownerFrames[a[1]].style.opacity = String(a[1] === b[1] ? 1 : 1 - blend);
+  if (a[1] !== b[1]) ownerFrames[b[1]].style.opacity = String(blend);
+  const poseWidth = (index) => Number(ownerFrames[index].dataset.bodyWidth) * Number(ownerFrames[index].dataset.widthFit || 1);
+  const widthProgress = eased;
+  const continuousWidth = poseWidth(a[1]) + (poseWidth(b[1]) - poseWidth(a[1])) * widthProgress;
+  const leftFace = JSON.parse(ownerFrames[3].dataset.faceCenter);
+  const rightFace = JSON.parse(ownerFrames[1].dataset.faceCenter);
+  const faceProgress = 0.5 + turn * 0.4;
+  const faceX = leftFace[0] + (rightFace[0] - leftFace[0]) * faceProgress - 70 * Math.max(0, -turn);
+  const faceY = 40 + 25 * Math.abs(turn) + leftFace[1] + (rightFace[1] - leftFace[1]) * faceProgress - 20 * 4 * faceProgress * (1 - faceProgress);
+  const sourceFaceAngle = (index) => {
+    const [left, right] = JSON.parse(ownerFrames[index].dataset.eyePositions);
+    return (Math.atan2(right[1] - left[1], right[0] - left[0]) * 180) / Math.PI;
+  };
+  const faceAngle = (turn < 0 ? sourceFaceAngle(3) : sourceFaceAngle(1)) - sourceFaceAngle(0);
+  const bodyAngle = 28 + Math.abs(turn) * 8;
+  const endpoint = AMB_FACE_ADJUST[turn < 0 ? "left" : "right"];
+  const adjustment = Object.fromEntries(["x", "y", "angle"].map((key) => [key, AMB_FACE_ADJUST.center[key] + (endpoint[key] - AMB_FACE_ADJUST.center[key]) * Math.abs(turn)]));
+  ownerFrames.forEach((frame) => {
+    const widthFit = continuousWidth / Number(frame.dataset.bodyWidth);
+    const faceBodyScale = continuousWidth / Number(ownerFrames[0].dataset.bodyWidth);
+    frame.querySelector(".owner-roll-face-arc").setAttribute("transform", `translate(${(faceX * faceBodyScale) / widthFit + adjustment.x} ${faceY + adjustment.y}) scale(${faceBodyScale / widthFit} 1) rotate(${faceAngle * Math.abs(turn) + adjustment.angle})`);
+    const breathing = 0;
+    frame.querySelector(".owner-roll-body").setAttribute("transform", `translate(${turn * 74} ${turn * 39}) rotate(${bodyAngle}) translate(0 500) scale(${widthFit * (1 + breathing * 0.5)} ${1 + breathing}) translate(0 -500)`);
+    const coverProgress = 0;
+    const blanket = frame.querySelector(".sleep-blanket");
+    blanket.style.opacity = String(coverProgress);
+    blanket.setAttribute("transform", `translate(0 ${(1 - coverProgress) * 430})`);
+    const eyelid = 1;
+    frame.querySelectorAll(".sleep-open-eye").forEach((eye) => {
+      const cy = Number(eye.dataset.cy);
+      eye.style.opacity = eyelid < 0.08 ? "0" : "1";
+      eye.setAttribute("transform", `translate(0 ${cy}) scale(1 ${Math.max(0.08, eyelid)}) translate(0 ${-cy})`);
+    });
+    frame.querySelectorAll(".sleep-closed-eye").forEach((eye) => {
+      eye.style.opacity = eyelid < 0.08 ? "1" : "0";
+    });
+    frame.querySelector(".sleep-mouth").style.opacity = "1";
+    const arm = frame.querySelector(".owner-roll-front-arm");
+    if (arm) {
+      const localTime = t % 2;
+      const follow = reduced ? 0 : ambSmooth((localTime - 0.32) / 0.45) * (1 - ambSmooth((localTime - 1.35) / 0.4));
+      arm.setAttribute("transform", `rotate(${Number(arm.dataset.direction) * 9 * follow} ${arm.dataset.pivot})`);
+      const leg = frame.querySelector(".owner-roll-front-leg");
+      const legFollow = reduced ? 0 : ambSmooth((localTime - 0.4) / 0.43) * (1 - ambSmooth((localTime - 1.35) / 0.4));
+      const [hipX, hipY] = leg.dataset.pivot.split(" ").map(Number);
+      leg.setAttribute("transform", `rotate(${Number(leg.dataset.direction) * 14 * legFollow} ${leg.dataset.pivot}) translate(${hipX} ${hipY}) scale(0.85) translate(${-hipX} ${-hipY})`);
+      const rightFoot = frame.querySelector(".owner-roll-right-foot");
+      if (rightFoot) rightFoot.setAttribute("transform", `rotate(${8 * legFollow} 708 1090)`);
+    }
+  });
+  return undefined;
 }
 
 // MY MONEY 행 = 레지스트리 투영(돈) + 색인(정체성·locator). **돈은 색인에서 오지 않는다** —
@@ -5651,7 +7201,12 @@ function handleHomePaperMountClick(event) {
   // makes `.homePaperMount` inert; this guard also covers synthetic/programmatic clicks). Only
   // HISTORY's own close/back/list act until it closes. Web is untouched (HOME live, identity
   // switching by another Piggy's records still works there).
-  if (state.recordsCardVisible && window.innerWidth <= 640) return;
+  // [A-662] this is the SAME "HISTORY stacked & open" condition `syncRecordsViewportState()`
+  // already sets `.homePaperMount.inert` from — kept consistent with the new geometry-fit
+  // decision (computeHistoryFitMode()) instead of the old flat `window.innerWidth <= 640`, so a
+  // synthetic/programmatic click can't slip through in the 641-~710 range that used to read as
+  // "web" under the old threshold but is now stacked mode.
+  if (state.recordsCardVisible && computeHistoryFitMode() === "stacked") return;
   // [A-646] Add money — 열기 · 닫기 · ok(한 번). 셋 다 왼쪽 종이만 다시 그린다. 서명·WebAuthn·tx·충전 0.
   if (event.target.closest("#homeAddMoney")) {
     openAddMoney();
@@ -5879,6 +7434,82 @@ function homeCharacterCollisionActive() {
   return state.scene === "sendstay" && !!state.sendCardVisible;
 }
 
+// [A-656 decision 2, coordinator merge 2026-09-30 → A-659 OWNER VISUAL REPAIR 2026-09-30 →
+// A-659 OWNER CORRECTION "1440 WEB VERTICAL CANON" 2026-09-30/10-01, superseding rewrite #2]
+// Web Home vertical anchor. History: A-656 scoped the correction to 641≤vw<1200 and left 1200+
+// ("1440 reference") untouched. The A-659 visual-repair pass (superseded rewrite #1, see git
+// blame on this block) replaced that with ONE fixed bottom-safe rule (`vh − max(64, 0.08·vh)`,
+// foot ≈0.92·vh) applied to every width ≥641 including 1440 — the Owner's LATEST correction
+// (INBOX "OWNER CORRECTION — 1440 WEB VERTICAL CANON + MOTION-COHERENCE" / "... 1440 WEB CANON
+// 우선", both 2026-10-01) overturns that: **1440×900's current settled foot is canon and must
+// not move.** Every other web width (641..∞, still no upper bound — 1200 is not a hole) must
+// instead match 1440's own NORMALIZED foot ratio (foot Y / vh), not a fixed px gap and not the
+// previous pass's fixed 0.92 fraction.
+//
+// `HOME_FOOT_NORMALIZED_RATIO` (≈0.8341, matches the Owner's measured 1440×900 canon
+// 750.7/900) is DERIVED here from the same board constants every other Home placement uses
+// (HOME_BOARD_W/H, HOME_FLOOR) via the reference viewport's own natural aspect-fit — the exact
+// `refS`/`refFootFrac` shape A-656 originally used before the now-superseded rewrite replaced
+// it — not hand-typed as a magic literal. Because it is derived from the SAME formula
+// `computeHomeMidBandDropPx()` evaluates at runtime, plugging vw=1440/vh=900 back in below
+// reproduces the canon exactly (`dy` resolves to 0), so 1440×900 gets no wrapper transform at
+// all — byte/pixel-identical to the pre-repair baseline, not merely visually close.
+const HOME_FOOT_REF_VW = 1440;
+const HOME_FOOT_REF_VH = 900;
+function computeHomeFootNormalizedRatio() {
+  const refS = Math.min(HOME_FOOT_REF_VW / HOME_BOARD_W, HOME_FOOT_REF_VH / HOME_BOARD_H);
+  const refTop = (HOME_FOOT_REF_VH - HOME_BOARD_H * refS) / 2;
+  const refFootY = refTop + HOME_FLOOR * refS;
+  return refFootY / HOME_FOOT_REF_VH;
+}
+const HOME_FOOT_NORMALIZED_RATIO = computeHomeFootNormalizedRatio();
+// Mobile safe-area is a MINIMUM clearance only (Owner correction — 390/430 no longer use the
+// fixed ~42px gap as the primary target): the proportional target wins unless it would leave
+// less than this many px between the foot and the viewport bottom, which the normalized ratio's
+// own ≈16.6% bottom-gap never does at any realistic viewport height. Same two tokens the narrow
+// scale-floor branch already used (`--mobile-bottom-safe` + `HOME_CHAR_BOTTOM_ANCHOR_GAP_PX`) —
+// one shared target function now, not a duplicated formula per call site.
+function computeHomeFootTargetViewportY(vh) {
+  const bottomSafeMinPx = resolveCssLengthVarPx("--mobile-bottom-safe", 20) + HOME_CHAR_BOTTOM_ANCHOR_GAP_PX;
+  return Math.min(HOME_FOOT_NORMALIZED_RATIO * vh, vh - bottomSafeMinPx);
+}
+
+// [A-662 OWNER DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY, 2026-10-01, option ③] Hatch's
+// and Name's phone (≤640px) anchor used to be a fixed near-bottom offset
+// (`bottom: calc(var(--mobile-bottom-safe) + 5px)`, style.css — real ink measured ≈0.957·vh:
+// 810/844 @390, 866/900 @430) completely unrelated to Home's own resident floor target
+// (`computeHomeFootTargetViewportY()` → ≈0.834·vh: 703.8/844, 750.7/900) — two independent
+// corrections (A-608 for this anchor, A-659 for Home's ratio) that never cross-checked each
+// other, producing the ~107–116px visible-foot jump at the Name→Home cut (M1_CODE_MAP.md root
+// cause, A-662 prewrite). Owner's 2026-10-01 decision (option ③) rejects "the walk is continuous
+// so the jump doesn't matter" and requires fixing the ENDPOINT relationship itself, through the
+// EXISTING shared safe-frame/floor contract — not a new one-off per-width offset. This reuses
+// `computeHomeFootTargetViewportY()` ITSELF (the exact function/ratio Home's own resident floor
+// targets) for Hatch/Name's phone anchor too — one shared target, two already-existing
+// consumers — while leaving the onboarding close-up's own SIZE (107.6×139.9, `.chogInvite`
+// crop) completely untouched, per Owner's explicit "preserve apparent onboarding scale, do not
+// force identical character size" — only the anchor's distance from the viewport bottom moves.
+// Hatch and Name stay byte-identical to each other (canon: "keep Hatch and Name identical") —
+// same function call, same result, applied to both. Web (>640px) is untouched (frozen, A-608).
+function applyOnboardingPhoneFoot() {
+  const narrow = window.innerWidth <= 640;
+  const bottomPx = narrow ? `${Math.max(0, window.innerHeight - computeHomeFootTargetViewportY(window.innerHeight))}px` : "";
+  const hatch = document.querySelector(".hatchChog");
+  if (hatch) hatch.style.bottom = bottomPx;
+  const name = document.querySelector(".nameScene__chog");
+  if (name) name.style.bottom = bottomPx;
+}
+const HOME_MID_BAND_MIN_VW = 641;
+function computeHomeMidBandDropPx(fit, boardRect, s) {
+  const vw = window.innerWidth;
+  if (!(vw >= HOME_MID_BAND_MIN_VW)) return 0;
+  const vh = window.innerHeight;
+  const targetFootViewportY = computeHomeFootTargetViewportY(vh);
+  const boardTop = fit && Number.isFinite(fit.top) ? fit.top : boardRect.top;
+  const dy = targetFootViewportY - (boardTop + HOME_FLOOR * s);
+  return dy > 0.5 ? dy : 0;
+}
+
 function applyHomeCharacterScaleFloor(fit) {
   const board = document.querySelector("#homeBoard");
   if (!board) return null;
@@ -5889,6 +7520,29 @@ function applyHomeCharacterScaleFloor(fit) {
   const boardRect = board.getBoundingClientRect();
   const s = fit && fit.s > 0 ? fit.s : boardRect.width / HOME_BOARD_W;
   if (!(s > 0) || !Number.isFinite(s)) return null;
+  // [A-656 decision 2 → A-659 OWNER VISUAL REPAIR] Web (vw≥641, no upper bound) translate-only
+  // drop — see computeHomeMidBandDropPx() above. This branch is separate from, and evaluated before, the
+  // mobile scale-floor branch's own no-op guard immediately below (that guard's literal source
+  // shape is unchanged — home-character-scale-floor.mjs's locked contract still finds it). A
+  // distinct `midBand: true` (never `applied: true`) on the returned plan is deliberate: the
+  // walk-start / pairConverge gate (`computeHomeCharScaleFloorPlan(fit)?.applied`, used at
+  // mountHome()'s pairConvergeActive/chogWalkStartBoardRect call sites) must NOT switch on for
+  // mid-band — only the real narrow-scale floor does.
+  if (s >= HOME_CHAR_SCALE_FLOOR) {
+    const midBandDy = computeHomeMidBandDropPx(fit, boardRect, s);
+    if (midBandDy > 0) {
+      const midBandParts = [homeChar, chogHome].filter(Boolean);
+      const midBandGroup = document.createElement("div");
+      midBandGroup.className = "homeCharScaleFloor";
+      midBandGroup.setAttribute("data-scale-floor", "1");
+      midBandGroup.setAttribute("data-mid-band-drop", midBandDy.toFixed(2));
+      board.insertBefore(midBandGroup, board.firstChild);
+      midBandParts.forEach((el) => midBandGroup.appendChild(el));
+      midBandGroup.style.transformOrigin = `${HOME_CENTER}px ${HOME_FLOOR}px`;
+      midBandGroup.style.transform = `translate(0px, ${(midBandDy / s).toFixed(4)}px) scale(1)`;
+      return { applied: false, s, midBand: true, midBandDy };
+    }
+  }
   // [A-605 repair] 겹침 재배치는 이 바닥 자체가 이미 작동 중인 좁은 화면(s < FLOOR)
   // 에서만 얹는다 — 실측(SCENE_GEOMETRY.md §7)상 겹침이 나온 430/390 이 정확히 이
   // 구간이고, 1440(s=1.1465>FLOOR)은 애초에 겹침이 없다("PASS 항목은 다시 그리지
@@ -5919,18 +7573,22 @@ function applyHomeCharacterScaleFloor(fit) {
   // and since the 1256×772 board's aspect ratio rarely matches the viewport's, that natural
   // foot position often lands well above the vertical middle (measured: ~540px of an 900px
   // viewport before this fix — ~360px of empty space below, exactly the Owner's complaint).
-  // Fix: derive the Y nudge from an explicit **target** (bottom-safe token + 20-24px gap,
-  // `HOME_CHAR_BOTTOM_ANCHOR_GAP_PX`) instead of a fixed offset from whatever the natural
-  // position happens to be. `originLocalY` (=HOME_FLOOR) is still the transform-origin — the
-  // foot's own LOCAL point never moves under `scale(k)` — so "foot anchor stable, grow
-  // upward" holds exactly as before; only the *translate* component's Y is now computed
-  // rather than a magic number. Same `fit`/`s` at walk-start and settle (A-605's own
-  // no-jump guarantee) ⇒ this Y nudge is byte-identical across the whole walk→settle
-  // sequence, same as before.
-  const bottomSafePx = resolveCssLengthVarPx("--mobile-bottom-safe", 20);
+  // Fix: derive the Y nudge from an explicit **target** instead of a fixed offset from
+  // whatever the natural position happens to be. [A-659 OWNER CORRECTION — 1440 WEB VERTICAL
+  // CANON, 2026-10-01] the target itself used to be a fixed bottom-safe token (`--mobile-
+  // bottom-safe` + `HOME_CHAR_BOTTOM_ANCHOR_GAP_PX`, ~42px gap) — the Owner's latest
+  // correction overturns that for THIS narrow/mobile branch too: it must now match the SAME
+  // 1440×900-derived normalized foot ratio the web mid-band branch uses
+  // (`computeHomeFootTargetViewportY()`, defined above `computeHomeMidBandDropPx()`), with the
+  // old bottom-safe tokens folded into that function as a MINIMUM clearance only, not the
+  // primary target. `originLocalY` (=HOME_FLOOR) is still the transform-origin — the foot's
+  // own LOCAL point never moves under `scale(k)` — so "foot anchor stable, grow upward" holds
+  // exactly as before; only the *translate* component's Y is now computed rather than a magic
+  // number. Same `fit`/`s` at walk-start and settle (A-605's own no-jump guarantee) ⇒ this Y
+  // nudge is byte-identical across the whole walk→settle sequence, same as before.
   const boardTop = fit && Number.isFinite(fit.top) ? fit.top : boardRect.top;
   const naturalFootViewportY = boardTop + originLocalY * s;
-  const targetFootViewportY = window.innerHeight - bottomSafePx - HOME_CHAR_BOTTOM_ANCHOR_GAP_PX;
+  const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight);
   // [A-608 OWNER CORRECTION — MOBILE HOME CHARACTER CLUSTER MUST NOT MOVE BETWEEN CARDS,
   // 2026-09-27] the collision term used to add 96px here whenever First Job's card was up,
   // shifting Chog (and, before it was split out, Piggy) right to dodge the card. The Owner's
@@ -5972,19 +7630,100 @@ function computeHomeCharScaleFloorPlan(fit) {
   const boardRect = board.getBoundingClientRect();
   const s = fit && fit.s > 0 ? fit.s : boardRect.width / HOME_BOARD_W;
   if (!(s > 0) || !Number.isFinite(s)) return null;
+  // [A-656 decision 2/3/4] Mid-band twin of applyHomeCharacterScaleFloor()'s own mid-band branch
+  // — read-only (this function never mutates the DOM), so Away/Return/First-Job consumers can
+  // learn the SAME drop before mounting/re-fitting their own elements.
+  if (s >= HOME_CHAR_SCALE_FLOOR) {
+    const midBandDy = computeHomeMidBandDropPx(fit, boardRect, s);
+    if (midBandDy > 0) return { applied: false, s, midBand: true, midBandDy };
+  }
   if (s >= HOME_CHAR_SCALE_FLOOR) return { applied: false, s };
   const k = HOME_CHAR_SCALE_FLOOR / s;
   const originLocalX = HOME_CENTER;
   const originLocalY = HOME_FLOOR;
-  const bottomSafePx = resolveCssLengthVarPx("--mobile-bottom-safe", 20);
   const boardTop = fit && Number.isFinite(fit.top) ? fit.top : boardRect.top;
   const naturalFootViewportY = boardTop + originLocalY * s;
-  const targetFootViewportY = window.innerHeight - bottomSafePx - HOME_CHAR_BOTTOM_ANCHOR_GAP_PX;
+  const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight);
   const nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x;
   const nudgeViewportY = targetFootViewportY - naturalFootViewportY;
   const nudgeLocalX = nudgeViewportX / s;
   const nudgeLocalY = nudgeViewportY / s;
   return { applied: true, s, k, originLocalX, originLocalY, nudgeLocalX, nudgeLocalY };
+}
+
+// [A-656 decision 3 — CANON "Away does NOT move Chog"] Away/Return render `#chogHome` as a direct
+// child of their OWN `#homeBoard` (same markup convention Home uses — see renderAway()/
+// renderSecondAway() markup) but never render `#homeChar` (Piggy there is drawn on the depart/
+// return canvas, not through `#homeChar`), so `applyHomeCharacterScaleFloor()`'s own
+// `if (!homeChar) return null;` guard always bails there. Proven root cause of the mobile Away/
+// Return Chog jump (A-656 P3: "renderAway() has no #homeChar, so the scale-floor group is never
+// built"). This applies the SAME plan (`computeHomeCharScaleFloorPlan(fit)` — mobile floor OR
+// mid-band, whichever is active; a strict no-op otherwise) to `#chogHome` alone, reusing the same
+// idempotent global `.homeCharScaleFloor` wrap/unwrap idiom Home itself uses. Home, Away and
+// Return never share the DOM at once (different state.scene), so the one global marker is safe to
+// reuse here — same as `unwrapHomeCharacterScaleFloor()` already assumes.
+function applyHomeFloorToChogOnly(fit) {
+  const board = document.querySelector("#homeBoard");
+  unwrapHomeCharacterScaleFloor();
+  const chogHome = document.querySelector("#chogHome");
+  if (!board || !chogHome) return null;
+  const plan = computeHomeCharScaleFloorPlan(fit);
+  if (!plan || (!plan.applied && !plan.midBand)) return plan;
+  const s = plan.s;
+  const k = plan.applied ? plan.k : 1;
+  const nudgeLocalX = plan.applied ? plan.nudgeLocalX : 0;
+  const nudgeLocalY = plan.applied ? plan.nudgeLocalY : plan.midBandDy / s;
+  const group = document.createElement("div");
+  group.className = "homeCharScaleFloor";
+  group.setAttribute("data-scale-floor", plan.applied ? String(HOME_CHAR_SCALE_FLOOR) : "1");
+  board.insertBefore(group, board.firstChild);
+  group.appendChild(chogHome);
+  group.style.transformOrigin = `${HOME_CENTER}px ${HOME_FLOOR}px`;
+  group.style.transform = `translate(${nudgeLocalX}px, ${nudgeLocalY}px) scale(${k})`;
+  return plan;
+}
+
+// [A-656 decision 4] Return's `#homeBoard` has TWO direct children beyond the usual
+// `#homeChar`/`#chogHome` pair the floor otherwise wraps: `#returnChogHop` (Chog's OWN
+// alarm-hop wrapper — return-view.js's `placeChog()` animates ITS transform; wrapping
+// `#chogHome` directly instead would silently detach it from that hop) and `#returnName` (the
+// filed-state name tag, return-view.js's own `onFiled()`). Both need the SAME floor/mid-band
+// group Home settled uses, so the coming-home Chog, the filed Chog and the filed name all agree
+// with Home on mobile and mid-band (A-656 P3 §4 R2/R3). Same idempotent global marker/unwrap
+// idiom as `applyHomeFloorToChogOnly()` — Home/Away/Return never share the DOM at once.
+function applyHomeFloorToReturnCluster(fit) {
+  const board = document.querySelector("#homeBoard");
+  unwrapHomeCharacterScaleFloor();
+  if (!board) return null;
+  const plan = computeHomeCharScaleFloorPlan(fit);
+  if (!plan || (!plan.applied && !plan.midBand)) return plan;
+  const parts = [board.querySelector("#returnChogHop"), board.querySelector("#returnName")].filter(Boolean);
+  if (!parts.length) return plan;
+  const s = plan.s;
+  const k = plan.applied ? plan.k : 1;
+  const nudgeLocalX = plan.applied ? plan.nudgeLocalX : 0;
+  const nudgeLocalY = plan.applied ? plan.nudgeLocalY : plan.midBandDy / s;
+  const group = document.createElement("div");
+  group.className = "homeCharScaleFloor";
+  group.setAttribute("data-scale-floor", plan.applied ? String(HOME_CHAR_SCALE_FLOOR) : "1");
+  board.insertBefore(group, board.firstChild);
+  parts.forEach((el) => group.appendChild(el));
+  group.style.transformOrigin = `${HOME_CENTER}px ${HOME_FLOOR}px`;
+  group.style.transform = `translate(${nudgeLocalX}px, ${nudgeLocalY}px) scale(${k})`;
+  return plan;
+}
+
+// [A-656 decision 4] Viewport-space (not local/board-space) view of a floor/mid-band plan, for
+// consumers that must resize/reposition their OWN element (a <canvas>, not a DOM subtree CSS
+// can wrap) with the A-607 canon-K formula — the Return canvas (return-view.js `fit()`, fed
+// through the `fitBoard()` injection below) and the First Job work canvas (main.js, "apply the
+// same anchor... for mid-band"). `k=1`/`nudgeViewportX=0` for mid-band mirrors the fact that
+// mid-band never rescales, only translates.
+function computeHomeFloorViewportNudge(plan, s) {
+  if (!plan || !(s > 0)) return null;
+  if (plan.applied) return { k: plan.k, nudgeViewportX: plan.nudgeLocalX * s, nudgeViewportY: plan.nudgeLocalY * s };
+  if (plan.midBand) return { k: 1, nudgeViewportX: 0, nudgeViewportY: plan.midBandDy };
+  return null;
 }
 
 // [A-610 repair] `applyHomeCharacterScaleFloor()` re-parents `#chogHome` into
@@ -6023,6 +7762,76 @@ function chogWalkStartBoardRect(fit, plan) {
     top: fit.rect.top + fit.s * (HOME_FLOOR * (1 - k) + nudgeLocalY),
     width: fit.rect.width * k,
   };
+}
+
+// [A-656 OWNER CORRECTION — WEB-FIRST PROPORTIONAL INVARIANT, 2026-09-30] `mountAway()` /
+// `mountSecondAway()`'s own `#departStage` canvas (the departing-Piggy board — piggy-depart.js's
+// own renderer is board-local, `sx() = canvas.width/BOARD_W`, so an outer canvas resize/
+// reposition alone is enough, no piggy-depart.js edit) used to size itself with the plain
+// centered fit (`s = min(vw/HOME_BOARD_W, vh/HOME_BOARD_H)`, `.departStage`'s own CSS
+// left:50%/top:50%/translate(-50%,-50%)) alone — never floor/mid-band corrected, unlike
+// `#chogHome` (`applyHomeFloorToChogOnly()`, called right beside this at both mount and resize)
+// or the First Job work canvas (`mountSendCardWorkPose()`'s own `fit()`, main.js:8069-8135,
+// which this generalizes). Measured (A-656 PROP.md Q1, awayprobe): the departing Piggy's foot
+// sat 113–319px off the Home foot at every width below 1200 (worst −3.91 normalized units at
+// 430) — "Departure and Return must share the same Home baseline relationship" (Owner
+// correction) was failing outright for Departure while Return (return-view.js `fit()`) already
+// carried it. Same k/nudge/mid-band formulas as `mountSendCardWorkPose()`'s own branches, minus
+// the `clock === "send"` gate — Departure/Second-Departure have no "off" state needing the
+// floor, so this always applies it when active. Strict no-op at 1440 and at any width where
+// neither the mobile floor nor the mid-band drop is active (`s >= HOME_CHAR_SCALE_FLOOR`, no mid-
+// band): falls through to clearing the inline overrides so `.departStage`'s own CSS centering
+// still applies, byte-identical to pre-correction sizing.
+function applyHomeFloorToDepartCanvas(canvas) {
+  if (!canvas) return;
+  const board = document.querySelector("#homeBoard");
+  const s = Math.min(window.innerWidth / HOME_BOARD_W, window.innerHeight / HOME_BOARD_H);
+  if (board && s > 0 && s < HOME_CHAR_SCALE_FLOOR) {
+    const k = HOME_CHAR_SCALE_FLOOR / s;
+    const fitLeft = (window.innerWidth - HOME_BOARD_W * s) / 2;
+    const fitTop = (window.innerHeight - HOME_BOARD_H * s) / 2;
+    const naturalFootViewportY = fitTop + HOME_FLOOR * s;
+    const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight);
+    const nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x;
+    const nudgeViewportY = targetFootViewportY - naturalFootViewportY;
+    const effW = HOME_BOARD_W * s * k;
+    const effH = HOME_BOARD_H * s * k;
+    const left = fitLeft + s * HOME_CENTER * (1 - k) + nudgeViewportX;
+    const top = fitTop + s * HOME_FLOOR * (1 - k) + nudgeViewportY;
+    canvas.width = Math.round(effW * (window.devicePixelRatio || 1));
+    canvas.height = Math.round(effH * (window.devicePixelRatio || 1));
+    canvas.style.width = `${effW}px`;
+    canvas.style.height = `${effH}px`;
+    canvas.style.left = `${left}px`;
+    canvas.style.top = `${top}px`;
+    canvas.style.transform = "none";
+    return;
+  }
+  if (board && s >= HOME_CHAR_SCALE_FLOOR) {
+    const fitLeftMid = (window.innerWidth - HOME_BOARD_W * s) / 2;
+    const fitTopMid = (window.innerHeight - HOME_BOARD_H * s) / 2;
+    const midBandDy = computeHomeMidBandDropPx({ top: fitTopMid }, null, s);
+    if (midBandDy > 0) {
+      canvas.width = Math.round(HOME_BOARD_W * s * (window.devicePixelRatio || 1));
+      canvas.height = Math.round(HOME_BOARD_H * s * (window.devicePixelRatio || 1));
+      canvas.style.width = `${HOME_BOARD_W * s}px`;
+      canvas.style.height = `${HOME_BOARD_H * s}px`;
+      canvas.style.left = `${fitLeftMid}px`;
+      canvas.style.top = `${fitTopMid + midBandDy}px`;
+      canvas.style.transform = "none";
+      return;
+    }
+  }
+  // Desktop / floor-not-active: unchanged simple centered fit (`.departStage`'s own CSS
+  // left:50%/top:50%/translate(-50%,-50%) applies whenever these inline overrides are cleared —
+  // same as every pre-correction width).
+  canvas.style.left = "";
+  canvas.style.top = "";
+  canvas.style.transform = "";
+  canvas.width = Math.round(HOME_BOARD_W * s * (window.devicePixelRatio || 1));
+  canvas.height = Math.round(HOME_BOARD_H * s * (window.devicePixelRatio || 1));
+  canvas.style.width = `${HOME_BOARD_W * s}px`;
+  canvas.style.height = `${HOME_BOARD_H * s}px`;
 }
 
 // 정본 배치 — 걷기와 앉기를 각자의 발밑 기준으로 같은 바닥선에 놓는다.
@@ -6083,6 +7892,11 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     // 크기가 한 프레임에서 튄다("location first, scale second" 원칙 그대로 유지).
     if (host.dataset.arrival !== "1") applyHomeCharacterScaleFloor(freshFit);
     if (state.recordsCardVisible) alignRecordsCardToHomePaper();
+    // [A-654] re-plan the living Home against the new live anchors (same Home-life seed).
+    if (host.dataset.arrival !== "1") {
+      clearTimeout(homeAmbientResizeTimer);
+      homeAmbientResizeTimer = sceneTimeout(mountHomeAmbientResidents, 120);
+    }
   });
 
   // Home Chog — Piggy 와 같은 판·같은 발선. 같은 Save 전환에서 함께 출발한다.
@@ -6149,6 +7963,8 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     applyHomeCharacterScaleFloor(fit);
     // [A-447 Owner "이름은 Piggy 가 Home 으로 이동·정착한 뒤"] 걷기 도중 숨긴 이름표를 정착에서 보인다.
     host.querySelector("#homeName")?.style.removeProperty("visibility");
+    // [A-654] 2+ indexed Piggies only: the living Home residents (no-op with one Piggy).
+    mountHomeAmbientResidents();
     if (!keepPose) {
       if (walk) walk.style.removeProperty("transform");
       if (seat) seat.style.removeProperty("transform");
@@ -6371,8 +8187,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
 // createDepartRenderer(mode:"work")를 그대로 부른다.
 //
 // [보고할 남은 문제] piggy-depart.js drawAt()의 mode==="work" 분기는 확정 원본
-// (`<private>
-// departure.js:79` `source=.15+.65*ease(elapsed/.55)`)과 달리 scene 진행값 `t`를 그
+// (비공개 모션 디자인 원본 departure.js:79 `source=.15+.65*ease(elapsed/.55)`)과 달리 scene 진행값 `t`를 그
 // 홀드식으로 다시 누르지 않고 `elapsed`를 그대로 t로 흘려보낸다(app/src/
 // piggy-depart.js:190 `const source = mode === "send" ? sendSourceOf(e) : e;`). 그
 // 결과 같은 파일 268~278행의 눈 깜빡임(work-half/shut, `elapsed % 3.6` 이 1.65~2.16
@@ -6443,9 +8258,8 @@ function mountSendCardWorkPose({
       const k = HOME_CHAR_SCALE_FLOOR / s;
       const fitLeft = (window.innerWidth - HOME_BOARD_W * s) / 2;
       const fitTop = (window.innerHeight - HOME_BOARD_H * s) / 2;
-      const bottomSafePx = resolveCssLengthVarPx("--mobile-bottom-safe", 20);
       const naturalFootViewportY = fitTop + HOME_FLOOR * s;
-      const targetFootViewportY = window.innerHeight - bottomSafePx - HOME_CHAR_BOTTOM_ANCHOR_GAP_PX;
+      const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight);
       // [A-608 OWNER CORRECTION — MOBILE HOME CHARACTER CLUSTER MUST NOT MOVE BETWEEN CARDS,
       // 2026-09-27] earlier attempts here tried to compensate for the fact that the REAL
       // group (Chog) got a +96px "collision" push while this canvas (Piggy) did not (or got a
@@ -6473,6 +8287,25 @@ function mountSendCardWorkPose({
       canvas.style.top = `${top}px`;
       canvas.style.transform = "none";
       return;
+    }
+    // [A-656 decision 4 → A-659 OWNER VISUAL REPAIR] "Also apply the same anchor to the First Job
+    // work canvas" — so Home → work (this canvas) → Away → Return has no jump at any web width
+    // (vw≥641, no upper bound since A-659). Translate-only (no scale change, mirrors decision 2's
+    // own web-drop branch).
+    if (clock === "send" && board && s >= HOME_CHAR_SCALE_FLOOR) {
+      const fitLeftMid = (window.innerWidth - HOME_BOARD_W * s) / 2;
+      const fitTopMid = (window.innerHeight - HOME_BOARD_H * s) / 2;
+      const midBandDy = computeHomeMidBandDropPx({ top: fitTopMid }, null, s);
+      if (midBandDy > 0) {
+        canvas.width = Math.round(HOME_BOARD_W * s * (window.devicePixelRatio || 1));
+        canvas.height = Math.round(HOME_BOARD_H * s * (window.devicePixelRatio || 1));
+        canvas.style.width = `${HOME_BOARD_W * s}px`;
+        canvas.style.height = `${HOME_BOARD_H * s}px`;
+        canvas.style.left = `${fitLeftMid}px`;
+        canvas.style.top = `${fitTopMid + midBandDy}px`;
+        canvas.style.transform = "none";
+        return;
+      }
     }
     // Desktop / floor-not-active / Explore's "second" clock: unchanged simple centered fit
     // (`.departStage`'s own CSS left:50%/top:50%/translate(-50%,-50%) still applies whenever
@@ -6635,10 +8468,13 @@ function mountAway() {
     onSceneTeardown(() => {
       homeChog = null;
     });
+    // [A-656 decision 3] Chog does not move because Piggy is Away — keep it at the same Home
+    // anchor (mobile floor / mid-band) the settled Home cluster uses.
+    applyHomeFloorToChogOnly(boardFit);
   }
   // 판 다시 맞추기는 아래 `fit()` 이 함께 한다. canvas 가 없는 경우만 여기서 건다.
   const canvas = document.querySelector("#departStage");
-  if (!canvas) { sceneListener(window, "resize", () => { fitHomeBoard(); }); return; }
+  if (!canvas) { sceneListener(window, "resize", () => { applyHomeFloorToChogOnly(fitHomeBoard()); }); return; }
 
   // 이번 진입에서 재생할 것이 아니면 캔버스를 비워 둔다(재방문·새로고침 재생 0).
   if (!state.departureArrival) return;
@@ -6652,12 +8488,11 @@ function mountAway() {
   });
 
   const fit = () => {
-    const s = Math.min(window.innerWidth / 1256, window.innerHeight / 772);
-    canvas.width = Math.round(1256 * s * (window.devicePixelRatio || 1));
-    canvas.height = Math.round(772 * s * (window.devicePixelRatio || 1));
-    canvas.style.width = `${1256 * s}px`;
-    canvas.style.height = `${772 * s}px`;
-    fitHomeBoard();
+    // [A-656 OWNER CORRECTION] Departure start must share the same Home floor/mid-band
+    // baseline Return already carries — see applyHomeFloorToDepartCanvas() above.
+    applyHomeFloorToDepartCanvas(canvas);
+    // [A-656 decision 3] Chog does not move because Piggy is Away — same Home anchor on resize.
+    applyHomeFloorToChogOnly(fitHomeBoard());
   };
   fit();
   sceneListener(window, "resize", fit);
@@ -6743,7 +8578,7 @@ function returnReceiptRows() {
 // .chogCheckLine, 기존 .notice 노란(var(--gold)) 텍스트 톤 재사용 — 새 그래픽/모션 0).
 //
 // [A-413 §4 / A-415-f] 이 씬에 남는 유일한 발화 — 작은 노란 "[이름] is coming home"
-// 알람. 승인 원본(<private>:10 "0.7–1.8 |
+// 알람. 승인 원본(비공개 return 리뷰 노트 README.md:10 "0.7–1.8 |
 // Alarm: Honeybun is coming back. / Chog만 짧게 반응", 같은 파일 §38 "실제 알림음은
 // 확정 자산이 없어 넣지 않음")에서 Alarm 구간의 시각 요소는 이 문구 카드 하나와 Chog의
 // 짧은 반응(hop)뿐이다 — 별도 벨/링 그래픽은 canon 에 없다(portal-ring 은 그 뒤
@@ -6752,7 +8587,7 @@ function returnReceiptRows() {
 // 당시(그 시점 canon) 기준이다 — Owner 가 그 뒤(2026-09-18 채팅)에 실제 알람 종 그래픽을
 // 새로 지시했다(piggy-return.js BELL_* 참고, 그 파일이 그린다). 여기 문장은 그 지시
 // 이전 기록이라 갱신하지 않고 그대로 두되(이 발화 span 의 히스토리 문맥은 바뀌지 않았다)
-// 이 주석으로 바로잡는다 — [A-415-e 흔적 정리, 다음 main.js 에이전트가 또 헷갈리지 않게].
+// 이 주석으로 바로잡는다 — [A-415-e 흔적 정리].
 // Chog 의 반응(hop)은 이미 알람 구간(0.7–2.8s)에 걸려 있다
 // (piggy-return.js alertHop → return-view.js placeChog(), 이 파일 범위 밖, 그대로 둔다).
 // state.returnArrivalAlarm 은 finishTrip() 이 실제 단수 귀환에서만 세우고, mountReturn()
@@ -6763,8 +8598,7 @@ function returnReceiptRows() {
 // 만들어지므로(§render()) "늦게 붙이기"는 여기서 span 자체를 `hidden` 으로 먼저 심어
 // 두고, mountReturn() 이 sceneTimeout() 으로 그 hidden 만 나중에 벗기는 방식으로 푼다
 // (style.css 에 `.chogCheckLine{display:...}` 오버라이드가 없어 `[hidden]` UA 규칙이
-// 그대로 먹는다 — style.css 는 이번 dispatch 허용 파일이 아니라 확인만 하고 손대지
-// 않았다). 정확한 지연 값·근거는 mountReturn() 주석 참고. received/필드를 기다리지
+// 그대로 먹는다). 정확한 지연 값·근거는 mountReturn() 주석 참고. received/필드를 기다리지
 // 않는다(옛 체킹줄과 달리 "수령 확인" 신호가 필요 없다).
 function chogHomeMarkupForReturn(scene) {
   let markup = chogHomeMarkup({ padMarkup: homePadMarkup(scene) });
@@ -6869,7 +8703,14 @@ function mountReturn() {
     schedule: (step) => runSceneFrames(step),
     listen: (target, type, handler, options) => sceneListener(target, type, handler, options),
     onCleanup: (fn) => onSceneTeardown(fn),
-    fitBoard: () => fitHomeBoard(),
+    // [A-656 decision 4] Same Home anchor math (mobile floor / mid-band) as Home settled —
+    // wraps #returnChogHop + #returnName, and hands the canvas consumer (return-view.js fit())
+    // the viewport-space k/nudge it needs to resize/reposition itself the same way.
+    fitBoard: () => {
+      const fit = fitHomeBoard();
+      const plan = applyHomeFloorToReturnCluster(fit);
+      return { ...fit, floor: computeHomeFloorViewportNudge(plan, fit.s) };
+    },
     mountHomeChog: (chogRoot, o) => {
       homeChog = mountChogHome(chogRoot, {
         startRect: null, startSrc: null, board: o.board,
@@ -6946,7 +8787,7 @@ function renderFileBox() {
         <div class="filebox__paper">${paperMarkup}</div>
         <div class="receipt">${rowsMarkup}${receiptCheck(receipt)}</div>
       </article>
-      <!-- [A-360 §3] filebox 에는 다음 진입이 없었다 — Home 복귀와 Explore 진입을
+      <!-- filebox 에는 다음 진입이 없었다 — Home 복귀와 Explore 진입을
            연결하는 첫 걸음. Home 에 도착한 뒤 Chog 탭이 Explore 를 연다. -->
       <button class="tiny home" id="fileboxHomeButton" type="button">home</button>
       ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
@@ -6964,6 +8805,28 @@ function renderFileBox() {
 // h185), alignRecordsCardToHomePaper() 가 실제 `.homePaper` rect 를 그대로 물려받는다
 // (아래). 간격만 이 상수를 유지한다.
 const RECORDS_CARD_GAP = 24;
+// [A-662 coordinator browser regression fix] `.homePaper`'s own CSS box is 400×568 local px
+// (style.css `.homePaper{width:400px;height:568px}` — the SAME ratio a621/a623 already pin as
+// HOME_W=256.338/HOME_H=364). home-paper-multi.js's multi-Piggy resident list ONLY overrides
+// `paper.style.height` when the list is unfolded/open (never `.width`) — so `paperRect.width`
+// stays this fixed ratio's own invariant, while `paperRect.height` can grow well past it. Used
+// below to recover the paper's "single-card" reference height from its (always-stable) live
+// width, for the character-safe check only — see its own comment.
+const HOME_PAPER_ASPECT_H_OVER_W = 568 / 400;
+// [A-662 coordinator browser regression fix — HYSTERESIS BUG] `.homePaper`'s own live rect is
+// NOT mode-independent: `syncRecordsViewportState()` applies the A-411 two-card shift
+// (`.homePaperMount--twoCardShift`, translateX) only while HISTORY is open AND NOT stacked —
+// so computeHistoryFitMode() was reading a `.homePaper` rect whose X position already depended
+// on the PREVIOUS mode decision, feeding back into the NEXT one. Once stacked (no shift, HOME
+// sits ~46px further right → less whitespace → stays stacked) or once side-by-side (shift
+// applied, HOME ~46px further left → more whitespace → stays side-by-side), the decision became
+// a self-reinforcing fixed point that never re-crossed, even on a real resize (coordinator
+// real-browser repro: 700→800→700 same-page, mode frozen both directions). Fix: always evaluate
+// the candidate against the shift-NORMALIZED (side-by-side-reference) paper position, regardless
+// of which class is currently applied — this exact 46px viewport-space delta is not a new magic
+// number: it is the same A-411 shift a623's own test already pins exactly
+// ("web two-card shift = −46px exactly when open ... after a mobile→web crossing").
+const RECORDS_TWO_CARD_SHIFT_VIEWPORT_PX = 46;
 
 // [A-411] Owner "두 카드 열릴 때 묶음 왼쪽 이동" — 감독 실측(1335×717, A-410-a)에서
 // 기록 카드 우하단이 Piggy 왼쪽 귀와 겹친다. 캐릭터 좌표는 그대로 두고(금지) 카드 두 장만
@@ -7218,15 +9081,153 @@ function recordsCardMarkup() {
 // ≤640px — see fitMobileTwoPaperGroup()'s own comment). [A-621] that premise ended with A-620's
 // sharedCardPadTarget() repair: the live mobile `.homePaper` rect is now the corrected in-frame
 // HOME, and the mobile branch reads it again (stackMobileRecordsOverHome()).
+// [A-662 OWNER RESPONSIVE DECISION, 2026-10-01 → A-662 OWNER CORRECTION PREWRITE §2(c)]
+// Read-only twin of fitHomeBoard()'s own {s,left,top} — that function also WRITES
+// #homeBoard's transform as a side effect (mountHome()/the resize listener already keep it
+// current at all real interaction times); calling it again here, once per HISTORY align-loop
+// tick, would force a redundant style write/reflow every frame for a value that hasn't
+// changed. This instead reads the board's already-applied live rect — same
+// "read, never recompute-and-write" contract computeHomeCharScaleFloorPlan() itself already
+// uses for its own `fit` input.
+function readHomeBoardFitForHistory() {
+  const board = document.querySelector("#homeBoard");
+  if (!board) return null;
+  const rect = board.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return { s: rect.width / HOME_BOARD_W, left: rect.left, top: rect.top, rect };
+}
+
+// [A-662 §2(c) condition 2 — character-safe clearance, required, not whitespace-only] The
+// resident cluster's board-local ink/seat corners, reusing chog-home.js's own EXPORTED
+// CHOG_HOME_GEOMETRY (ink box + corner transform + homeScale — no new constants, no
+// re-measurement) for Chog, and the same HOME_SEAT_ / HOME_FLOOR constants
+// layoutHomeCharacter() itself places Piggy with, for Piggy. #chogHome's OWN
+// getBoundingClientRect() was tried and rejected here — that element is the WHOLE 1256×772
+// board-local box scaled down around the corner (chog-home.js place()), so its bounding rect
+// is mostly transparent padding, not Chog's visible ink (measured: it falsely "collided" with
+// HISTORY's candidate box at 900×900 even though the real render has an ~82px clear Y gap
+// there — see A662 VERIFY.md). This computes the SAME
+// `origin(HOME_CENTER,HOME_FLOOR) + k·(point−origin) + nudge` composition
+// applyHomeCharacterScaleFloor()/computeHomeFloorViewportNudge() already perform for the
+// floor/mid-band group's transform, applied to the ink/seat corner points instead of the DOM
+// subtree — correct whether the narrow floor, the mid-band drop, or neither is currently active,
+// without a 4th hand-rederivation of that k/nudge math and without any DOM write.
+function homeCharacterSafeBoxViewport(plan, fit) {
+  if (!fit || !(fit.s > 0)) return null;
+  const s = fit.s;
+  const k = plan && plan.applied ? plan.k : 1;
+  const nudgeLocalX = plan && plan.applied ? plan.nudgeLocalX : 0;
+  const nudgeLocalY = plan && plan.applied ? plan.nudgeLocalY : plan && plan.midBand ? plan.midBandDy / s : 0;
+  const toBoard = (x, y) => ({
+    x: HOME_CENTER + k * (x - HOME_CENTER) + nudgeLocalX,
+    y: HOME_FLOOR + k * (y - HOME_FLOOR) + nudgeLocalY,
+  });
+  // [A-662 coordinator browser regression fix] HOME_SEAT_H/HOME_SEAT_FOOT describe the Piggy
+  // seat ASSET's own full box (like #chogHome's raw box, rejected above) — they include unmeasured
+  // transparent headroom above the drawn ink, not Piggy's real ink top. Using that full box here
+  // pushed the safe box's top far above the real character ink (measured regression: falsely
+  // "collided" with HISTORY at 1440/1200/900/800/768/720, forcing stacked/HOME-inert at widths
+  // that must stay side-by-side/HOME-live — coordinator real-browser run, a626/a628/a623/a654).
+  // Chog is the one character with real exported ink bounds (CHOG_HOME_GEOMETRY.inkLocal); both
+  // residents share the same HOME_FLOOR-anchored floor line, so this reuses Chog's measured ink
+  // HEIGHT as the conservative vertical extent for the whole cluster (X stays per-character —
+  // Piggy sits to Chog's right, per canon) instead of guessing at the seat asset's padding.
+  const g = CHOG_HOME_GEOMETRY;
+  const chogInkTopLocal = g.cornerTransform.y + g.inkLocal.top * g.homeScale;
+  const chogA = toBoard(g.cornerTransform.x + g.inkLocal.left * g.homeScale, chogInkTopLocal);
+  const chogB = toBoard(g.cornerTransform.x + g.inkLocal.right * g.homeScale, HOME_FLOOR);
+  const seatA = toBoard(HOME_SEAT_L, chogInkTopLocal);
+  const seatB = toBoard(HOME_SEAT_L + HOME_SEAT_W, HOME_FLOOR);
+  const xs = [chogA.x, chogB.x, seatA.x, seatB.x];
+  const ys = [chogA.y, chogB.y, seatA.y, seatB.y];
+  return {
+    left: fit.left + Math.min(...xs) * s,
+    right: fit.left + Math.max(...xs) * s,
+    top: fit.top + Math.min(...ys) * s,
+    bottom: fit.top + Math.max(...ys) * s,
+  };
+}
+
+// [A-651 OWNER RESPONSIVE DECISION 2026-10-01 → A-662 OWNER CORRECTION PREWRITE §2(c)] ONE
+// shared geometry-fit decision for HISTORY, replacing the 3 independently-duplicated
+// `window.innerWidth <= 640` checks this function/closeRecordsCard()/syncRecordsViewportState()
+// used to each re-test on their own. Reads the LIVE `.homePaper` rect fresh on every call —
+// never cached, so a multi-Piggy resident-card fold/open (home-paper-multi.js
+// mountResidentPaper(), which changes `.homePaper`'s own height) is picked up the same frame,
+// exactly like the existing per-frame align loop already re-measures every tick. Side-by-side
+// is valid only when BOTH:
+//   (1) the candidate side-by-side HISTORY rect (HOME's own live rect, right edge +
+//       RECORDS_CARD_GAP) leaves at least RECORDS_CARD_GAP(24) more of whitespace before the
+//       viewport's own right edge — reusing RECORDS_CARD_GAP itself as the required safe-margin
+//       value. Owner's own words ("우리가 정한 여백" — "the whitespace WE defined") point at this
+//       24px inter-paper gap already used everywhere in this system, not a new or borrowed
+//       token — `--mobile-inset` stays mobile-labeled and is never read by this path;
+//   (2) that same candidate rect does not rectangle-intersect the resident character cluster's
+//       safe box (homeCharacterSafeBoxViewport() above) — Owner's own trigger text names
+//       "collide with the character-safe area" explicitly, so this is implemented, not deferred.
+// Falls back to "stacked" — the already Owner-confirmed A-621 mobile grammar, safe by
+// construction — whenever `.homePaper` isn't present/measurable yet, so a mid-mount call never
+// claims side-by-side on missing evidence. No hardcoded width: on the current 24px-gap/256×364
+// paper geometry this produces a crossover between 700 and 720 (19.5px vs 29.5px measured
+// whitespace, A662 VERIFY.md) — a CONSEQUENCE of the measurement, never an asserted constant.
+// [coordinator browser regression fix] The character-safe check (condition 2 below) uses the
+// paper's single-card REFERENCE height (derived from its always-stable live width, see
+// HOME_PAPER_ASPECT_H_OVER_W), not its live (possibly multi-Piggy-resident-list-grown) height —
+// HOME/HISTORY's actual rendered size still follows the live height unchanged (unaffected
+// anywhere else). Reasoning: HOME and HISTORY always share the identical top/height in EITHER
+// mode, so a tall unfolded resident list reaches exactly as far down whether HISTORY sits beside
+// HOME or stacked above it — switching modes cannot avoid that overlap, so it must not be what
+// decides the mode (an unfolded multi-Piggy list must not flip 1440/1200/900/etc.'s own frozen
+// wide-web side-by-side canon, "Preserve 1440 canon and wide-web side-by-side composition").
+function computeHistoryFitMode() {
+  const stage = document.querySelector('.stage[data-scene="sendstay"]');
+  const paper = document.querySelector(".homePaper");
+  if (!stage || !paper) return "stacked";
+  const paperRect = paper.getBoundingClientRect();
+  if (!paperRect.width || !paperRect.height) return "stacked";
+  // [A-662 coordinator browser regression fix — hysteresis] normalize to the side-by-side
+  // (shifted) reference position regardless of whether the shift is CURRENTLY applied — see
+  // RECORDS_TWO_CARD_SHIFT_VIEWPORT_PX's own comment. Only X moves (translateX); top/height are
+  // untouched by the shift.
+  const mount = document.querySelector(".homePaperMount");
+  const alreadyShifted = !!mount && mount.classList.contains("homePaperMount--twoCardShift");
+  const shiftCorrection = alreadyShifted ? 0 : RECORDS_TWO_CARD_SHIFT_VIEWPORT_PX;
+  const normalizedPaperRight = paperRect.right - shiftCorrection;
+  const candidate = {
+    left: normalizedPaperRight + RECORDS_CARD_GAP,
+    right: normalizedPaperRight + RECORDS_CARD_GAP + paperRect.width,
+    top: paperRect.top,
+    bottom: paperRect.top + paperRect.height,
+  };
+  if (window.innerWidth - candidate.right < RECORDS_CARD_GAP) return "stacked";
+  const fit = readHomeBoardFitForHistory();
+  const plan = fit && computeHomeCharScaleFloorPlan(fit);
+  const charBox = fit && homeCharacterSafeBoxViewport(plan, fit);
+  if (charBox) {
+    const characterCheckBottom = candidate.top + paperRect.width * HOME_PAPER_ASPECT_H_OVER_W;
+    const overlapsX = candidate.left < charBox.right && candidate.right > charBox.left;
+    const overlapsY = candidate.top < charBox.bottom && characterCheckBottom > charBox.top;
+    if (overlapsX && overlapsY) return "stacked";
+  }
+  return "side-by-side";
+}
+
 function alignRecordsCardToHomePaper() {
   const anchor = document.querySelector("#recordsCardAnchor");
   if (!anchor) return;
   // [A-623] shift/inert follow the CURRENT breakpoint before the live `.homePaper` is measured.
   syncRecordsViewportState();
-  if (window.innerWidth <= 640) {
+  // [A-662] geometry-fit decision (side-by-side vs stacked) replaces the old flat fixed-width
+  // check — see computeHistoryFitMode() above.
+  if (computeHistoryFitMode() === "stacked") {
     stackMobileRecordsOverHome();
     return;
   }
+  // [A-662 coordinator browser regression fix] the stacked-mode styling below (z-order above
+  // HOME, +12px slide direction) is keyed off this class now, not only the old ≤640px media
+  // query — side-by-side must clear it explicitly (stackMobileRecordsOverHome() is the only
+  // place that sets it, idempotent either way).
+  anchor.classList.remove("recordsCardAnchor--stackedMode");
   const stage = document.querySelector('.stage[data-scene="sendstay"]');
   const paper = document.querySelector(".homePaper");
   if (!stage || !paper) return;
@@ -7264,6 +9265,16 @@ function stackMobileRecordsOverHome() {
   const stage = document.querySelector('.stage[data-scene="sendstay"]');
   const paper = document.querySelector(".homePaper");
   if (!anchor || !stage || !paper) return;
+  // [A-662 coordinator browser regression fix, 2026-10-01] web "stacked" widths (641-~710, the
+  // narrow-web extension A-651/A-662 added) were computing the right geometry but rendering
+  // HOME drawn OVER HISTORY — the z-order/slide-direction CSS that makes this stack grammar
+  // actually look stacked (`.recordsCardAnchor` z-index:2 above `.homeBoard`'s 1, the +12px
+  // viewer-right slide) was still gated behind the OLD flat `@media (max-width: 640px)`, so it
+  // never applied above 640px even though this function (and the geometry) now does. This class
+  // (style.css `.recordsCardAnchor--stackedMode`) carries the SAME declarations at any width —
+  // additive to, not a replacement of, the existing ≤640px rule (both apply there, redundantly,
+  // harmlessly). alignRecordsCardToHomePaper()'s side-by-side branch clears it.
+  anchor.classList.add("recordsCardAnchor--stackedMode");
   const paperRect = paper.getBoundingClientRect();
   if (!paperRect.width || !paperRect.height) return;
   const stageRect = stage.getBoundingClientRect();
@@ -7447,7 +9458,7 @@ if (state.scene === "received" && (readCredential() || state.address)) {
 // 웹(641+)·인증 불가 origin 은 지금 그대로다. First Send 미확정 기록이 있으면 목적지는 Away(checking…)이고,
 // 그 hash 의 결과를 **공개 읽기로만** 잠금과 병렬로 조회한다(reconcileSendPending — 서명·전송 0).
 if (state.credential && (state.scene === "name" || state.scene === "sendstay") && appLockSurface()) {
-  const bootPending = state.scene === "sendstay" ? readSendPending() : null;
+  const bootPending = state.scene === "sendstay" && LEGACY_TESTNET_PATH ? readSendPending() : null;
   if (bootPending) {
     state.scene = "away";
     state.homeQuietForExplore = false;
@@ -7475,6 +9486,10 @@ if (typeof location !== "undefined") {
     stripClaimFragmentFromUrl();
   }
 }
+
+// [A-654] A page that opens away from Home (a trip, Name, auth) is outside the Home-life cycle, so
+// the first Home it reaches starts a new one (visual only).
+homeLifeLeft = !HOME_LIFE_SCENES.includes(state.scene);
 
 render();
 

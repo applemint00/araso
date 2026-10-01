@@ -1,4 +1,4 @@
-// [A-644 2B] Selected-Piggy control depth — a **preference**, never a permission.
+// [selected-Piggy control depth] a **preference**, never a permission.
 //
 // Owner labels (verbatim): "Piggy decides" / "Ask me" / "I'll manage". Stored as the semantic
 // value only (piggy_decides / ask_me / ill_manage); the label is chosen at render time.
@@ -12,7 +12,7 @@
 // record per Piggy, so changing one Piggy's mode cannot touch another's (two keys, two writes,
 // no shared object). Same scope/version/fail-closed pattern as piggy-registry.js.
 //
-// Default = `ask_me`. Canon names no default (A-644 Lane S §2). This is the coordinator's
+// Default = `ask_me`. Canon names no default. This is the
 // conservative existing-behavior equivalent (today every action already asks first) — not an
 // Owner-sourced default.
 

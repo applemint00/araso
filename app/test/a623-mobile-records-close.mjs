@@ -66,21 +66,26 @@ function fnBody(src, name) {
 const code = stripComments(MAIN);
 const sync = fnBody(code, "syncRecordsViewportState");
 check("syncRecordsViewportState() exists", sync.length > 0, true);
-check("sync: shift = open && !mobile, inert = open && mobile (current innerWidth, 640 boundary)",
-  /const mobile = window\.innerWidth <= 640;/.test(sync) && /const shift = open && !mobile;/.test(sync) &&
-  /setHomeTwoCardShift\(shift\)/.test(sync) && /const background = open && mobile;/.test(sync) && /mount\.inert = background/.test(sync), true);
+// [A-662] "mobile" → "stackedMode", literal `window.innerWidth <= 640` → the one shared
+// geometry-fit decision (computeHistoryFitMode()) — same shift/inert contract, geometry-derived
+// trigger instead of a flat 640 cutoff (A-651/A-662 OWNER RESPONSIVE DECISION).
+check("sync: shift = open && !stackedMode, inert = open && stackedMode (computeHistoryFitMode())",
+  /const stackedMode = computeHistoryFitMode\(\) === "stacked";/.test(sync) && /const shift = open && !stackedMode;/.test(sync) &&
+  /setHomeTwoCardShift\(shift\)/.test(sync) && /const background = open && stackedMode;/.test(sync) && /mount\.inert = background/.test(sync), true);
 check("alignRecordsCardToHomePaper() re-syncs BEFORE measuring (per-frame loop + resize both call it)",
-  /syncRecordsViewportState\(\);\s*if \(window\.innerWidth <= 640\)/.test(fnBody(code, "alignRecordsCardToHomePaper")), true);
+  /syncRecordsViewportState\(\);[\s\S]*?if \(computeHistoryFitMode\(\) === "stacked"\)/.test(fnBody(code, "alignRecordsCardToHomePaper")), true);
 check("openRecordsCard(): no one-shot `innerWidth > 640 → setHomeTwoCardShift(true)` left",
   /setHomeTwoCardShift\(true\)/.test(fnBody(code, "openRecordsCard")), false);
 check("openRecordsCard() syncs before the anchor is un-hidden",
   fnBody(code, "openRecordsCard").indexOf("syncRecordsViewportState()") < fnBody(code, "openRecordsCard").indexOf("anchor.hidden = false"), true);
 check("closeRecordsCard() syncs (shift off + HOME live immediately), no bare setHomeTwoCardShift(false)",
   /syncRecordsViewportState\(\)/.test(fnBody(code, "closeRecordsCard")) && !/setHomeTwoCardShift\(false\)/.test(fnBody(code, "closeRecordsCard")), true);
-check("handleHomePaperMountClick(): mobile+open guard precedes every records/money branch",
+// [A-662] same guard, now asking the shared geometry-fit decision instead of a flat 640 cutoff
+// (kept consistent with syncRecordsViewportState()'s own inert condition above).
+check("handleHomePaperMountClick(): stacked+open guard precedes every records/money branch",
   (() => {
     const b = fnBody(code, "handleHomePaperMountClick");
-    const g = b.indexOf("if (state.recordsCardVisible && window.innerWidth <= 640) return;");
+    const g = b.indexOf('if (state.recordsCardVisible && computeHistoryFitMode() === "stacked") return;');
     return g > 0 && g < b.indexOf("homeAmountChoice--") && g < b.indexOf("#homeRecordsButton") && g < b.indexOf(".homePaper__records[data-piggy-id]");
   })(), true);
 check("openRecordsCard() itself has no blanket already-open return (web identity switch stays legit)",
@@ -343,25 +348,36 @@ async function live() {
     s = await snap();
     check(`${W}: no replay / identity unchanged after background pointer+keyboard+synthetic`, [s.openingAdds, s.identity, s.rows, s.open], [0, "Honeybun", ["0"], true]);
 
-    // B — LIVE breakpoint transition while open
-    await c.viewport(1440, 900);
-    await wait(600);
-    s = await snap();
-    const webOpen = s;
-    check(`${W}→1440 open: web shift ON, HOME live (not inert)`, [s.shift, s.inert], [true, false]);
-    await c.viewport(641, 900);
-    await wait(600);
-    s = await snap();
-    check(`→641 open: web shift ON`, [s.shift, s.inert], [true, false]);
-    await c.viewport(640, 900);
-    await wait(600);
-    s = await snap();
-    check(`→640 open: mobile (shift OFF, HOME inert)`, [s.shift, s.inert], [false, true]);
-    await c.viewport(W, H);
-    await wait(600);
-    s = await snap();
-    check(`→${W} open: shift OFF, inert, HOME back at its unshifted mobile rect, no h-scroll`,
-      [s.shift, s.inert, near(s.home.l, closedHome.l) && near(s.home.t, closedHome.t), s.sw], [false, true, true, W]);
+    // B — LIVE breakpoint transition while open. [A-662] the stacked/side-by-side trigger is now
+    // a live geometry decision (computeHistoryFitMode(), A-651/A-662 OWNER RESPONSIVE DECISION
+    // "not a one-off viewport hack") — this asserts by the SAME rect-math the real function uses
+    // (live `.homePaper` rect + RECORDS_CARD_GAP=24 whitespace), not a hardcoded 640/641 pixel
+    // pair, so it stays correct if the paper size/gap ever changes the exact crossover.
+    async function expectedStacked() {
+      return ev(`(() => {
+        const paper = document.querySelector(".homePaper");
+        if (!paper) return true;
+        const r = paper.getBoundingClientRect();
+        if (!r.width || !r.height) return true;
+        const candidateRight = r.right + 24 + r.width;
+        return (window.innerWidth - candidateRight) < 24;
+      })()`);
+    }
+    async function checkLiveCrossing(label, w, h) {
+      await c.viewport(w, h);
+      await wait(600);
+      const stackedExpected = await expectedStacked();
+      const snapped = await snap();
+      check(`${label}: shift/inert follow live rect-math (computeHistoryFitMode(), stacked=${stackedExpected})`,
+        [snapped.shift, snapped.inert], stackedExpected ? [false, true] : [true, false]);
+      return snapped;
+    }
+    const webOpen = await checkLiveCrossing(`${W}→1440`, 1440, 900);
+    await checkLiveCrossing("→900", 900, 900);
+    await checkLiveCrossing("→660", 660, 900);
+    s = await checkLiveCrossing(`→${W}`, W, H);
+    check(`${W}: HOME back at its unshifted stacked rect, no h-scroll`,
+      [near(s.home.l, closedHome.l) && near(s.home.t, closedHome.t), s.sw], [true, W]);
     check(`${W}: HISTORY stays open with same identity across the transitions`, [s.open, s.identity], [true, "Honeybun"]);
 
     // close → HOME controls live again; then web closed reference for the −46px shift

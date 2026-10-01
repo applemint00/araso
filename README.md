@@ -21,7 +21,7 @@ This section is deliberately first, because parts of the product are not finishe
   function `api/grant.js` in production, or by `relayer/` locally. Both share one policy module.
 - Offline test suites under `app/test/` and `relayer/test/` (run with plain `node`, no network,
   no real keys).
-- **A first real testnet round trip has succeeded once (A-465).** On Monad Testnet
+- **A first real testnet round trip has succeeded once.** On Monad Testnet
   (chain id `10143`), a shMON `deposit` and the matching `redeem` were both mined with
   status `0x1`:
 

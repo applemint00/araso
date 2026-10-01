@@ -336,8 +336,8 @@ h1 {
    먼저·회전이 나중 적용) — 정지 포즈 팔끝(945.5)보다 더 오른쪽이다. 230px 렌더 기준
    배율 .23 을 곱하고 스트로크 절반(17.5 × |scaleX| × .23)을 더하면 wrap 좌측(380px)
    에서 화면 x≈642.4px 까지 나가, 카드 왼쪽 모서리(612px, `.nameScene__pad{left:612px}`)
-   를 약 30.4px 넘어선다(node 순수계산, `<private>` 재현
-   가능 — 스크린샷 대신 좌표 계산으로 검증, 렌더 확인은 Codex 화면검토 몫).
+   를 약 30.4px 넘어선다(node 순수계산으로 재현 가능 — 스크린샷 대신 좌표 계산으로
+   검증, 렌더 확인은 별도 화면검토 몫).
    `translate`(margin 아님)를 쓰는 이유: `.pgwrap` 은 이미 자기 자신에게 인라인
    `position:absolute;left:380px;top:252px`를 갖고 있다 — 여기서 `position`이나
    `left/top`을 다시 주면 위 A-348-c 이중오프셋이 재발한다. `transform`은 A-348-c 가
@@ -518,17 +518,18 @@ h1 {
     /* same left-axis clearance as .hatchChog/.authCard__chog (canon B) */
     left: calc(var(--mobile-inset) + var(--grid-4));
     top: auto;
-    /* [A-607 repair pass — lane_a/lane_b finding, A-608 tuned] `bottom: var(--mobile-bottom-
-       safe)` alone pins the ANCHOR box's own bottom edge exactly to the safe line — lane_b's
-       pixel scan confirmed the real ink then sits flush ON that line (0px clearance, not
-       crossing it, but no breathing room either — the `.chogInvite` crop child being taller
-       than its own anchor, as lane_a found, does NOT push real ink past the line; the
-       sprite's own transparent padding absorbs that, per the pixel scan). A first repair-pass
-       attempt used `+10px` and measured 19px of REAL (pixel-scanned) clearance — more than
-       A-608's own requested ~12–16px band. `+5px` measured 14px real clearance (see WRITER.md
-       Repair-pass-2 table) — inside the requested band. Keep byte-identical to .hatchChog
-       below (canon: "keep Hatch and Name identical"). */
-    bottom: calc(var(--mobile-bottom-safe) + 5px);
+    /* [A-607 repair pass — lane_a/lane_b finding, A-608 tuned, SUPERSEDED by A-662 OWNER
+       DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY, 2026-10-01 option ③] this used to be a
+       fixed "--mobile-bottom-safe plus 5px" offset — real ink then sat ≈0.957·vh,
+       completely unrelated to Home's own resident-floor target (≈0.834·vh), producing a
+       ~107–116px visible-foot jump at the Name→Home cut that two independent corrections
+       (this one and Home's own A-659 ratio) never cross-checked against each other
+       (A-662 prewrite M1_CODE_MAP.md root cause). Owner's decision requires deriving this
+       anchor from the SAME shared floor contract Home uses, not a second one-off offset — so
+       `bottom` is now set by `applyOnboardingPhoneFoot()` (main.js), which calls
+       `computeHomeFootTargetViewportY()` itself (Home's own target function, not a copy).
+       Keep byte-identical to .hatchChog below (canon: "keep Hatch and Name identical") — JS
+       applies the identical value to both. */
     transform: none;
   }
 }
@@ -999,7 +1000,7 @@ h1 {
    **단 하나의 승인된 예외**(INBOX A-616 OWNER_CONFIRMED: "1440 web freeze gets ONE
    exception only: Araso text position. Adopt the reentry HANDOFF web target for
    EXISTING web Araso instances: left x=140px, top=32px" —
-   `<private>` §4). `top: var(--grid-5)` 는 이미
+   비공개 reentry 디자인 HANDOFF §4). `top: var(--grid-5)` 는 이미
    32px 라 바뀌지 않는다 — `left: 50%; transform: translateX(-50%); text-align: center;`
    (뷰포트 중앙에 세우는 축) 만 `left: 140px; text-align: left;` 로 바꾸고 transform 은
    지운다(위치 고정 앵커라 %기반 self-transform 이 더는 필요 없다). 박스는 shrink-to-fit
@@ -1168,7 +1169,7 @@ h1 {
    콘텐츠 폭(chog 107.6 + gap24 + paper)을 못 채우고 줄바꿈하면, DOM 순서(chog 가 paper
    보다 먼저, main.js:3358)대로 chog 가 **첫 줄 전체**를 차지하고 paper 가 그 아래 줄로
    밀려 "카드 위에 chog 가 쌓인" 모습이 된다(카드 지시 FAIL 1 그대로 재현 — 실측
-   `<private>*_facts.json` 참고). 고치는 값은
+   으로 확인). 고치는 값은
    방향 하나뿐이다: 같은 flex 컨테이너를 세로(column-reverse)로 돌려 DOM 순서(chog 먼저)
    가 시각적으로는 **아래**(chog)/위(paper) 로 뒤집히게 한다 — `main.js`/마크업 순서는
    그대로, 새 DOM 도 안 만든다. `align-items` 를 flex-end(세로축 정렬용이던 원래 값,
@@ -1541,8 +1542,8 @@ h1 {
 /* [A-421] Owner: Candidates/readiness 제목도 Name/Send/Explore 와 같은 정본
    Delicious Handrawn Regular 36/line-height30/letter-spacing0 로 통일한다. 이 클래스는
    note(Paper 대사)/Candidates("Candidates")/Check("Check")/JIT질문/chosen.title 화면이
-   전부 공유하는 h2 라 selector 를 나누지 않고(second-journey-view.js 는 이 dispatch의
-   allowlist 밖) 이 한 규칙만 바꿔 전체에 적용한다 — 문구별 분기 없음. 옛 20px/1.2 Georgia
+   전부 공유하는 h2 라 selector 를 나누지 않고
+   이 한 규칙만 바꿔 전체에 적용한다 — 문구별 분기 없음. 옛 20px/1.2 Georgia
    700 은 폐기. 실제 렌더/줄바꿈/카드 높이 초과 여부는 브라우저 미보유로 미확인
    (OWNER_INPUT_REQUIRED — 특히 note/jit 질문처럼 문구 길이가 가변인 화면은 20px→36px
    확대로 새 겹침 위험이 있을 수 있으나 실측 전이라 임의로 margin/width 를 조정하지
@@ -1699,7 +1700,7 @@ h1 {
 }
 
 /* [A-603] 캐릭터 스케일 바닥 — A-602 Candidate C 로 측정·승인된 그 메커니즘을 그대로
-   앱에 들여온다(receipts/A602_mobile_home_bc_preview/overrides/c_floor.css 의
+   앱에 들여온다(A-602 프리뷰 c_floor.css 의
    .a602CFloorGroup 과 같은 자리·같은 값 — 재발명 0). #homeChar/#chogHome 을 감싸는
    *새 조상 하나*일 뿐, 두 자식 자신의 좌표계(1256×772 로컬)·마크업·클래스는 그대로다
    — applyHomeCharacterScaleFloor()(main.js)가 이 요소를 만들고 지운다(idempotent,
@@ -1750,6 +1751,121 @@ h1 {
   font-size: 13px;
   text-align: center;
   letter-spacing: 0.2px;
+}
+
+/* [A-654] Multi-Piggy living Home — only mounted with 2+ indexed Piggies (main.js
+   mountHomeAmbientResidents). Slots are live viewport rects from the measured formulas; each
+   resident is drawn at the seat's own approved size (the stage is one uniform scale, no shrink).
+   The layer sits under #homeBoard, so the paper/Chog/HISTORY always paint above a resident. */
+.homeLivingLayer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.homeLiving {
+  position: absolute;
+  pointer-events: none;
+}
+
+.homeLiving__stage {
+  position: absolute;
+  width: 1071px;
+  height: calc(1071px * 772 / 1256);
+  transform-origin: 0 0;
+}
+
+/* Same label as #homeName (.homeChar__name), scaled by the same factor as the seat. */
+.homeLiving__name {
+  position: absolute;
+  width: 120px;
+  color: #ede8dc;
+  font-size: 13px;
+  text-align: center;
+  letter-spacing: 0.2px;
+  transform-origin: 0 0;
+}
+
+.homeAmbient__art {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+}
+
+.homeAmbient__art--padded {
+  padding: 34px 22px 16px;
+}
+
+.homeAmbient__art--padded > svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.homeAmbient__watching > svg {
+  overflow: hidden;
+}
+
+.homeAmbient__candidate {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  object-fit: contain;
+  padding: 34px 22px 16px;
+  transform-origin: 50% 82%;
+}
+
+.homeAmbient__art[hidden],
+.homeAmbient__candidate[hidden] {
+  display: none;
+}
+
+.homeAmbient__savor {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: none;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 34px 22px 16px;
+  pointer-events: none;
+  transform-origin: 50% 82%;
+}
+
+.homeAmbient__savor.is-visible {
+  display: block;
+}
+
+.homeAmbient__flop {
+  /* [A-656 P5] Flop→sleep's rendered ink (blanket rising, measured union .383–.394 of the slot
+     height, A-656 P45 raw/p5_measure.json) exceeds the old `overflow:hidden` clip — the blanket's
+     bottom edge showed a flat, permanently-clipped line from ~7.7s on. No art/timing change; only
+     the clip is removed (the widened `flop-sleep` HOME_AMBIENT_WIDE.bottom below keeps the fit
+     eligibility check honest about the real, now-visible footprint). */
+  overflow: visible;
+  transform-origin: 0 0;
+}
+
+.homeAmbient__flop .owner-roll-frame > svg {
+  /* [A-656 P5] same clip, one level down — the inline roll-rig SVG's own viewport (inset 8%)
+     also cut the rising blanket. */
+  overflow: visible;
+}
+
+/* The seat Piggy's ambient pose is drawn by the layer at the exact seat rect; the seat image steps
+   aside only while that drawing is on screen (attribute removed with the layer). */
+.homeChar[data-ambient-seat="1"] .homeChar__seat {
+  visibility: hidden;
 }
 
 /* --- Home Chog (A-308) ------------------------------------------------
@@ -2577,6 +2693,30 @@ h1 {
    - close/back hit areas: invisible `::after` grown INWARD to ≥44×44 CSS px (the card's
      14px side/bottom padding is the outward limit — `.recordsCard` clips overflow). Visible
      text stays the existing 12px (renders 12px here since HISTORY is not shrunk). */
+/* [A-662 coordinator browser regression fix, 2026-10-01] the stacked-mode z-order/slide-
+   direction rules below used to live ONLY inside the `@media (max-width: 640px)` block that
+   follows — correct for phone widths, but A-651/A-662's OWNER RESPONSIVE DECISION extends the
+   SAME stacked grammar upward into a narrow-web zone (641-~710px) that computeHistoryFitMode()
+   can select even above 640px. Real-browser check found HOME drawn OVER HISTORY there (only the
+   JS geometry had moved, not this CSS) — `.recordsCardAnchor--stackedMode` (set by
+   stackMobileRecordsOverHome(), cleared by alignRecordsCardToHomePaper()'s side-by-side branch,
+   main.js) now carries the identical declarations at ANY width. Additive, not a replacement —
+   the ≤640px block below still applies too (same values, harmless overlap); kept separate so
+   the existing byte-pinned mobile contract test (a621) stays untouched. */
+.recordsCardAnchor--stackedMode {
+  z-index: 2;
+}
+
+.recordsCardAnchor--stackedMode.recordsCardAnchor--opening,
+.recordsCardAnchor--stackedMode.recordsCardAnchor--closing {
+  opacity: 0;
+  transform: translateX(12px);
+}
+
+.recordsCardAnchor--stackedMode.recordsCardAnchor--closing .recordsCard {
+  pointer-events: none;
+}
+
 @media (max-width: 640px) {
   .recordsCardAnchor {
     z-index: 2;
@@ -3506,12 +3646,12 @@ h1 {
   .hatchChog {
     left: calc(var(--mobile-inset) + var(--grid-4));
     top: auto;
-    /* [A-607 repair pass — lane_a/lane_b finding, A-608 tuned] real ink sat flush (0px
-       clearance, pixel-scan confirmed, not crossing) on the simulated bottom-safe line —
-       same fix and same +5px as `.nameScene__chog` (kept byte-identical, per canon; tuned
-       down from an initial +10px, which measured 19px real clearance, to +5px, measuring
-       14px — inside A-608's requested ~12–16px band). */
-    bottom: calc(var(--mobile-bottom-safe) + 5px);
+    /* [A-607 repair pass — lane_a/lane_b finding, A-608 tuned, SUPERSEDED by A-662 OWNER
+       DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY, 2026-10-01 option ③] see
+       `.nameScene__chog`'s own comment above (byte-identical history/reasoning) — `bottom` is
+       now set by `applyOnboardingPhoneFoot()` (main.js), the same shared Home floor target
+       function, not a fixed `+5px` offset. Kept byte-identical to `.nameScene__chog` — JS
+       applies the identical value to both. */
     transform: none;
   }
 }
@@ -3613,6 +3753,16 @@ h1 {
    내용을 합성한 뒤의 실제 알파(= teeth 의 투명 V 틈 포함)를 기준으로 그림자를 만들어서,
    틈으로는 여전히 비쳐 보이되 box-shadow 처럼 사각형으로 덮어씌우지 않는다. offset/blur
    값은 원래 box-shadow 와 동일(spread 0 이라 drop-shadow 로 그대로 옮길 수 있다). */
+/* [A-659 OWNER VISUAL REPAIR — E, round 2, 2026-09-30] Owner: 196px too small — FIRST attempt
+   bumped this `width` to 228px directly and broke aspect (coordinator-measured: 390 gate2
+   117.6×135.2 → 137.5×138.7, width +17% but height only +2.6% — this box's height is
+   content-driven off fixed px padding/font-sizes/line-heights, not off `width`, so widening the
+   box alone made it squat, not bigger). Reverted: this stays 196px. The enlargement instead lives
+   ENTIRELY in piggy-return.js's RECEIPT_SIZE_SCALE, which scales the delivery TARGET box
+   (rw/rh — `placePaper()` in return-view.js contain-fits this SAME fixed-196px/fixed-aspect paper
+   into that target via `--paperScale`, a CSS `transform: scale()` — inherently uniform on width
+   AND height together, unlike changing `width` here). Scaling the target uniformly makes the
+   resulting `--paperScale` itself multiply by that same factor, so the paper grows uniformly. */
 .receiptPaper {
   position: relative;
   width: 196px;
@@ -3682,6 +3832,9 @@ h1 {
 
 /* filebox 읽기 — 같은 receiptPaper 를 축소해 folder--3 위에 앉힌다. 아래 .receipt 는
    기존 Money/Cost/Left/Tx/Block 상세 증거 그대로(§2 「읽기상세에 보존」) — 지우지 않는다. */
+/* [A-659 OWNER VISUAL REPAIR — E, round 2] .receiptPaper's own base width (above) is back to its
+   original 196px (see round-2 comment there) — this scale is likewise back to its original 0.82,
+   unedited by this card. */
 .filebox__paper {
   position: absolute;
   left: 50%;
@@ -3814,7 +3967,7 @@ h1 {
    canvas 실측폭 `400 13px Playfair` 150.88 == `700 13px Playfair` 150.88
    != `400 13px Georgia` 148.15. 이 Bold 렌더도, Georgia 폴백도 정본 준수로
    보고하지 않는다(SOURCE_MISSING 유지). 필요한 실물: PlayfairDisplay-Regular.woff2
-   (400 normal). 새 폰트 파일 추가는 이 dispatch(A-421) 범위 밖이라 선언은 바꾸지 않고
+   (400 normal). 새 폰트 파일은 추가하지 않았으므로 선언은 바꾸지 않고
    그대로 둔다 — 실물 source 대조 필요. */
 .secondJourneyCard .secondJourney__list--interests .secondJourney__item {
   position: relative;
@@ -4088,7 +4241,7 @@ h1 {
   -webkit-tap-highlight-color: transparent;
 }
 
-/* [A-640/A-642 Lane V] LOGIN_CHECKING 대기 모습 = `<private>` §1
+/* [A-640/A-642 Lane V] LOGIN_CHECKING 대기 모습 = 비공개 reentry 디자인 프리뷰(reentry_preview.html) §1
    「제안 (모바일 390)」 값 그대로(check_390.png): 얼굴 상자 left 94.5 / top 132.5 / 202.4×243.2 · Araso top 340 16px ·
    Checking… top 380 28px · Face ID may appear once. top 420 12px — 전부 가운데 정렬, 줄높이 1.5(프리뷰 body 값).
    얼굴·글자 모두 화면 위쪽 절반(≤ y438)이라 iOS 패스키 시트(아래 약 380px)를 피한다. 가로는 390 의 left 94.5 를

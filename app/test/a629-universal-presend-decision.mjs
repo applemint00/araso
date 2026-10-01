@@ -54,12 +54,12 @@ await check("A2 grow_stable binding: Aave-like -> aave-usdc with provenance; no 
   assert.deepEqual(aave.executionContext, { runtimeChain: "monad-testnet", jobChain: "monad-mainnet", executable: false, role: "evidence_only_other_chain" });
   assert.equal(aave.returnEvidence.provenance.jobId, "aave-usdc");
   assert.equal(aave.returnEvidence.provenance.exitMode, "immediate");
-  assert.deepEqual(aave.returnEvidence.provenance.forkEvidence, { label: "PASS_FORK_SIM", block: 106616273, note: "$5 -> 5.016499 recovered (A-480)" });
+  assert.deepEqual(aave.returnEvidence.provenance.forkEvidence, { label: "PASS_FORK_SIM", block: 106616273, note: "$5 -> 5.016499 recovered (fork-evidence 2026-09, 30-day time-warped fork simulation, not immediate/earned)" });
   assert.equal(aave.returnEvidence.provenance.liveRead, null, "no recorded live read is invented for aave-usdc");
   assert.equal(aave.returnEvidence.observedAt, null);
   assert.equal(aave.capabilityStatus, "qualified");
   assert.equal(aave.currentPiggyStatus, "NEEDS_FUNDING");
-  assert.ok(aave.evidenceState.sourceTasks.includes("A-629"));
+  assert.ok(aave.evidenceState.sourceTasks.includes("universal-presend-binding"));
   assert.equal(byId(list, KINTSU_DEST).boundJobId, "kintsu-smon");
 });
 

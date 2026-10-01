@@ -1,6 +1,6 @@
 // 가짜 submitter 로 /health, /grant 계약을 검증한다 — 네트워크·키·실 RPC·tx 접촉 0.
 //   node relayer/test/smoke.mjs
-// [A-439] 루프백 bind · 검증된 chainId health · 허용 주소/전체 상한 · 동시 다른 주소 · 재시작 상한 ·
+// [relayer safety] 루프백 bind · 검증된 chainId health · 허용 주소/전체 상한 · 동시 다른 주소 · 재시작 상한 ·
 //         원장 스키마 손상 · 동일 원장 writer 충돌 · 실패 예약 유지까지 fake 로만 잰다.
 import { createRelayServer, listenLocal, BIND_HOST } from "../src/server.mjs";
 import { openLedger } from "../src/ledger.mjs";

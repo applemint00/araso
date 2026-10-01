@@ -91,9 +91,10 @@ check("B: save for an added Piggy still renames only that Piggy and returns Home
 }
 
 // D — Chog hit inert at every width while HISTORY open
+// [A-662] "mobile" → "stackedMode" (geometry-fit decision, computeHistoryFitMode()), same contract.
 const sync = fnBody(code, "syncRecordsViewportState");
-check("D: chogHit.inert = open (all widths); HOME mount inert = open && mobile (web Home live)",
-  /if \(chogHit && chogHit\.inert !== open\) chogHit\.inert = open;/.test(sync) && /const background = open && mobile;/.test(sync), true);
+check("D: chogHit.inert = open (all widths); HOME mount inert = open && stackedMode (side-by-side Home live)",
+  /if \(chogHit && chogHit\.inert !== open\) chogHit\.inert = open;/.test(sync) && /const background = open && stackedMode;/.test(sync), true);
 
 // E — +Piggy activation only with a visibly open Home paper
 check("E: onAdd returns early unless homePaperVisiblyOpen()",

@@ -9,7 +9,7 @@
 //   - 동시에 들어온 두 요청은 서로의 잔고 변화를 못 본다 → 이중 지급 창이 남는다. 노출 상한은 그 창에서 GRANT_WEI 몇 배다.
 //   - 진짜 상한은 relayer 지갑 잔고다. 그 이상은 못 나간다.
 //
-// [A-466 B3] 그래서 기본값을 바꿨다 — **`ARASO_GRANT_ENABLED` 로 명시적으로 켜지 않으면 tx 전에 503 으로 닫힌다.**
+// 그래서 기본값을 바꿨다 — **`ARASO_GRANT_ENABLED` 로 명시적으로 켜지 않으면 tx 전에 503 으로 닫힌다.**
 // 이건 race 를 고친 게 아니다. 위 한계(이중 지급 창)는 켜는 순간 그대로 돌아온다. 고친 것은 기본값뿐이다.
 //   꺼짐 = HARDENED_DEFAULT · 켜짐 = STILL_PARTIAL_WHEN_ENABLED
 //
@@ -28,7 +28,7 @@ import {
   validateGrantRequest,
 } from "../relayer/src/policy.mjs";
 
-/** [A-466 B3] launch gate — 기본값은 **꺼짐**.
+/** Launch gate — 기본값은 **꺼짐**.
  *  durable ledger 가 없는 한 exact-once 는 만들 수 없으므로, 대신 "명시적으로 켜지 않으면 tx 자체가 없다" 로 막는다.
  *  env 이름은 **서버 전용**이다 — `VITE_` 접두사를 쓰면 클라이언트 번들에 구워지므로 절대 금지.
  *  허용값은 `1` / `true` 딱 둘. 그 외(미설정·오타·빈 문자열)는 전부 disabled = fail-closed.

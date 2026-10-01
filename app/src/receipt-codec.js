@@ -1,4 +1,4 @@
-// [A-553 Lane B] Receipt codec — 옛(legacy shMON) 영수증과 새 add_money 영수증이 **같은 저장소**를
+// [receipt codec] 옛(legacy shMON) 영수증과 새 add_money 영수증이 **같은 저장소**를
 // 안전하게 나눠 쓰게 한다.
 //
 // 규칙: `kind` 필드가 discriminator 다. 없으면 legacy(지금까지의 shMON 모양) — legacy 줄은
@@ -7,7 +7,7 @@
 //
 // 이 파일이 하지 않는 일: BigInt 자리표시(placeholder) 채우기, 화면 문구 만들기. 값을 모르면
 // throw 한다 — 호출부(main.js readReceipts)가 그 한 줄만 건너뛰고 나머지 이력은 지킨다
-// (§lane_b/AUDIT.md 버그 2: 예전엔 한 줄이 깨지면 BigInt("undefined") 가 던진 예외가
+// (감사 버그 2: 예전엔 한 줄이 깨지면 BigInt("undefined") 가 던진 예외가
 // readReceipts 전체를 [] 로 만들었다 — add_money 한 줄이 legacy 이력 전체를 지우면 안 된다).
 
 export const RECEIPT_KIND = Object.freeze({ ADD_MONEY: "add_money" });
@@ -40,7 +40,7 @@ function decodeLegacyRow(row) {
     status: row.status || "",
     at: row.at || 0,
     // 저장된 값이 비어 있지 않은 문자열일 때만 읽는다 — 없거나 빈칸/문자열이 아니면 owner
-    // 필드 자체를 만들지 않는다(A-544, history-filter.js receiptOwnerId()).
+    // 필드 자체를 만들지 않는다(참고: history-filter.js receiptOwnerId()).
     ...(typeof row.piggyId === "string" && row.piggyId.trim() !== ""
       ? { piggyId: row.piggyId.trim() }
       : {}),

@@ -2,7 +2,7 @@
 // network 0, browser 0, same "cut the real source and check the contract" pattern as
 // a607/a618/a620 tests. Real-flow proof (390×844 / 430×900 A-B-C-D-E-R rects, font/hit table,
 // elementFromPoint, 1440 no-regression, screenshots) lives in
-// _private/ops/receipts/A621_mobile_records_stack/VERIFY.md; this file locks the formula and
+// the A-621 verification record (kept outside this repo); this file locks the formula and
 // wiring so a later edit cannot silently bring back the A-618 side-by-side shrink, move HOME on
 // open, or change web.
 //   node app/test/a621-mobile-records-stack.mjs
@@ -38,6 +38,11 @@ function stack(home, vw, inset) {
   const left = Math.max(home.left, vw - inset - home.width);
   return { left, top: home.top, width: home.width, height: home.height };
 }
+// [A-662] these rows test stackMobileRecordsOverHome()'s own stack() formula in isolation
+// (HOME rect → HISTORY rect), NOT the side-by-side/stacked trigger — that became a live
+// geometry decision (computeHistoryFitMode(), section 2 below) and no longer has a single
+// fixed-width switch. 640 here is just one more width inside what is now (and remains, per
+// A-662 VERIFY.md) the stacked range — not asserted as "the" mobile/web boundary value.
 for (const [vw, vh, inset, wantLeft, wantEdge] of [
   [390, 844, 20, 113.662, 78.831],
   [430, 900, 24, 149.662, 94.831],
@@ -79,24 +84,31 @@ check("no --recordsShrink write anywhere in main.js (HISTORY renders at native/w
   /--recordsShrink"/.test(SRC.replace(/\/\/.*$/gm, "")), false);
 
 const alignSrc = cut(SRC, "function alignRecordsCardToHomePaper() {", "\n}\n");
-check("alignRecordsCardToHomePaper(): ≤640px → stackMobileRecordsOverHome(); web branch keeps the live .homePaper + RECORDS_CARD_GAP side-by-side",
-  /if \(window\.innerWidth <= 640\) \{\s*\n\s*stackMobileRecordsOverHome\(\);\s*\n\s*return;/.test(alignSrc) &&
+// [A-662] the flat `window.innerWidth <= 640` check is gone — alignRecordsCardToHomePaper()
+// now asks the one shared geometry-fit decision (computeHistoryFitMode()) instead of testing
+// the raw width itself. The web side-by-side formula below it is unchanged.
+check("alignRecordsCardToHomePaper(): stacked mode (computeHistoryFitMode()) → stackMobileRecordsOverHome(); web branch keeps the live .homePaper + RECORDS_CARD_GAP side-by-side",
+  /if \(computeHistoryFitMode\(\) === "stacked"\) \{\s*\n\s*stackMobileRecordsOverHome\(\);\s*\n\s*return;/.test(alignSrc) &&
   /const left = paperRect\.right - stageRect\.left \+ RECORDS_CARD_GAP;/.test(alignSrc), true);
+check("no bare `window.innerWidth <= 640` left inside alignRecordsCardToHomePaper() (the shared decision owns it now)",
+  /window\.innerWidth <= 640/.test(alignSrc), false);
 
 const openSrc = cut(SRC, "function openRecordsCard() {", "\n}\n");
 const closeSrc = cut(SRC, "function closeRecordsCard() {", "\n}\n");
 // [A-623 superseding update] the one-shot `if (innerWidth > 640) setHomeTwoCardShift(true)` gate
 // moved into syncRecordsViewportState() (re-run per align frame so a live 640px crossing can't
 // leave a stale shift) — same contract: shift only on web, never on mobile open.
-check("openRecordsCard(): setHomeTwoCardShift only on web (HOME never moves on mobile open)",
+// [A-662] "mobile" → "stackedMode", literal width test → computeHistoryFitMode() — same contract
+// (shift only when HISTORY is NOT stacked), just geometry-derived instead of a flat 640 cutoff.
+check("openRecordsCard(): setHomeTwoCardShift only when HISTORY is side-by-side (HOME never moves while stacked)",
   /syncRecordsViewportState\(\);/.test(openSrc) &&
-  /const mobile = window\.innerWidth <= 640;[\s\S]*?const shift = open && !mobile;/.test(SRC), true);
+  /const stackedMode = computeHistoryFitMode\(\) === "stacked";[\s\S]*?const shift = open && !stackedMode;/.test(SRC), true);
 check("openRecordsCard(): a reopen cancels a pending mobile exit (timer + --closing class)",
   /clearRecordsExitTimer\(\);/.test(openSrc) && /classList\.remove\("recordsCardAnchor--closing"\)/.test(openSrc), true);
 check("openRecordsCard(): reduced motion never adds --opening (immediate final state)",
   /if \(!reduced\) anchor\.classList\.add\("recordsCardAnchor--opening"\);/.test(openSrc), true);
-check("closeRecordsCard(): mobile + motion → --closing then hide after RECORDS_EXIT_MS; else immediate hide",
-  /window\.innerWidth <= 640 && !anchor\.hidden && !prefersReducedMotion\(\)/.test(closeSrc) &&
+check("closeRecordsCard(): stacked mode + motion → --closing then hide after RECORDS_EXIT_MS; else immediate hide",
+  /computeHistoryFitMode\(\) === "stacked" && !anchor\.hidden && !prefersReducedMotion\(\)/.test(closeSrc) &&
   /classList\.add\("recordsCardAnchor--closing"\)/.test(closeSrc) &&
   /RECORDS_EXIT_MS\)/.test(closeSrc) &&
   /\} else \{\s*\n\s*anchor\.hidden = true;/.test(closeSrc), true);
@@ -134,6 +146,66 @@ check("≤640px only: #homeRecordsButton 18px (≈11.5px rendered at ×0.6408) +
 check("records hit math: (18×1.2 + 14 + 34) × 0.6408 ≥ 44 and 18 × 0.6408 ≥ 11",
   (18 * 1.2 + 14 + 34) * (256.338 / 400) >= 44 && 18 * (256.338 / 400) >= 11, true);
 check("web .homePaper__records base font stays 12px", /\.homePaper__records \{[^}]*font:\s*italic 12px\/1\.2 Georgia/.test(CSS), true);
+
+// ── 4. [A-662] computeHistoryFitMode() — geometry-fit trigger, no hardcoded width ──────────
+// Source wiring: the function exists, is used by all 3 call sites (checked in section 2/close
+// test above), and actually implements BOTH the whitespace check AND the character-safe check
+// (Condition 2 of the A-662 prewrite review — whitespace-only was explicitly rejected).
+const fitModeSrc = cut(SRC, "function computeHistoryFitMode() {", "\n}\n");
+check("computeHistoryFitMode(): reads the live .homePaper rect (never cached)",
+  /document\.querySelector\("\.homePaper"\)/.test(fitModeSrc) && /paper\.getBoundingClientRect\(\)/.test(fitModeSrc), true);
+check("computeHistoryFitMode(): whitespace check reuses RECORDS_CARD_GAP as the required safe margin (not --mobile-inset)",
+  (fitModeSrc.match(/RECORDS_CARD_GAP/g) || []).length >= 2 && !/--mobile-inset/.test(fitModeSrc), true);
+check("computeHistoryFitMode(): also checks the character-safe box (not whitespace-only)",
+  /homeCharacterSafeBoxViewport\(/.test(fitModeSrc), true);
+check("computeHistoryFitMode(): missing/unmeasurable .homePaper never claims side-by-side",
+  /if \(!stage \|\| !paper\) return "stacked";/.test(fitModeSrc) &&
+  /if \(!paperRect\.width \|\| !paperRect\.height\) return "stacked";/.test(fitModeSrc), true);
+
+// Whitespace-only re-implementation, fed with A-662 VERIFY.md's own re-measured current-code
+// numbers (RECORDS_CARD_GAP=24, live .homePaper right edge + width at vh=900, no character
+// overlap at any of these widths — confirmed separately below) — this is the same formula
+// computeHistoryFitMode() uses for its own whitespace test, independent of the character check.
+const GAP = 24;
+function whitespaceOnlyMode(vw, paperRight, paperWidth) {
+  const candidateRight = paperRight + GAP + paperWidth;
+  return vw - candidateRight < GAP ? "stacked" : "side-by-side";
+}
+for (const [vw, paperRight, paperWidth, want] of [
+  [641, 370.7, 256.3, "stacked"], // whitespace ≈ -10.0
+  [660, 380.2, 256.3, "stacked"], // whitespace ≈ -0.5
+  [700, 400.2, 256.3, "stacked"], // whitespace ≈ 19.5 (<24)
+  [720, 410.2, 256.3, "side-by-side"], // whitespace ≈ 29.5 (≥24)
+  [768, 434.2, 256.3, "side-by-side"], // whitespace ≈ 53.5
+  [800, 450.2, 256.3, "side-by-side"], // whitespace ≈ 69.5
+  [1440, 770.2, 256.3, "side-by-side"], // whitespace ≈ 389.5
+]) {
+  check(`computeHistoryFitMode() whitespace formula @ ${vw}×900 (current .homePaper geometry) → ${want}`,
+    whitespaceOnlyMode(vw, paperRight, paperWidth), want);
+}
+check("641/660/700 no longer read as an unresolved residual (all correctly resolve to stacked, not a clipped side-by-side)",
+  ["641", "660", "700"].every((w) => whitespaceOnlyMode(Number(w), { 641: 370.7, 660: 380.2, 700: 400.2 }[w], 256.3) === "stacked"),
+  true);
+
+// Character-clearance case (A-662 prewrite review §3 Condition 2): the rectangle-intersection
+// logic itself, isolated from the specific board-local geometry derivation (that derivation is
+// exercised live in the browser matrix, A-662 VERIFY.md) — proves the function does not just
+// return "side-by-side" whenever whitespace alone passes.
+function collisionMode(candidate, charBox) {
+  if (!charBox) return "side-by-side";
+  const overlapsX = candidate.left < charBox.right && candidate.right > charBox.left;
+  const overlapsY = candidate.top < charBox.bottom && candidate.bottom > charBox.top;
+  return overlapsX && overlapsY ? "stacked" : "side-by-side";
+}
+{
+  const candidate = { left: 424, right: 680, top: 220, bottom: 584 };
+  const collidingCharBox = { left: 400, right: 900, top: 300, bottom: 650 }; // overlaps both axes
+  const clearCharBox = { left: 605, right: 672, top: 666, bottom: 751 }; // A-662 900×900 measured-equivalent box (no Y overlap with candidate.bottom=584)
+  check("character-clearance case: candidate rect colliding with the character-safe box → stacked even though whitespace alone would pass",
+    collisionMode(candidate, collidingCharBox), "stacked");
+  check("character-clearance case: candidate rect clear of the character-safe box (real 900×900 geometry) → side-by-side",
+    collisionMode(candidate, clearCharBox), "side-by-side");
+}
 
 console.log(`${pass}/${pass + fail} PASS`);
 if (fail > 0) process.exit(1);

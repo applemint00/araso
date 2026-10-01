@@ -1,6 +1,5 @@
-// [A-564 Lane B] **Gift create plan** — sender-side, PURE planning helper. See
-// `<private>` for the full
-// audit this file is built from.
+// [A-564 Lane B] **Gift create plan** — sender-side, PURE planning helper, built from a
+// sender-side audit kept outside this repository.
 //
 // This file does NOT:
 //  · send a transaction, build a permission envelope, touch any UI, or create a provider/client.

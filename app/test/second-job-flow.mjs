@@ -11,11 +11,11 @@ const TEST_RUNTIME_CONTEXT = { address: "0x0000000000000000000000000000000000000
 let pass = 0;
 function check(label, fn) { fn(); console.log(`PASS  ${label}`); pass += 1; }
 
-check("1 visible second Journey starts only after A-174 first Receipt reference", () => {
+check("1 visible second Journey starts only after the first Receipt reference", () => {
 
 const flow = runSecondJourney();
   assert.equal(flow.visibleFlow[0], "First shMON Receipt");
-  assert.equal(flow.firstReceipt.sourceTask, "A-174");
+  assert.equal(flow.firstReceipt.sourceTask, "job-feed-first-receipt");
   assert.equal(flow.firstReceipt.receiptClosed, true);
 });
 

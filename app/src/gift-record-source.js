@@ -14,7 +14,7 @@
 //     wrong-token/wrong-amount/wrong-decimals condition.
 //
 // [A-575] Getter shape = the ADOPTED A commit-reveal escrow (A-570 ADOPTION: A-568 candidate_a,
-// `<private>`).
+// the GiftPiggyUSDC.sol contract source kept outside this repository).
 // That contract has no `claimSigner` any more: `gifts(bytes32)` returns 6 fields
 // (sender, token, amount, expiry, claimed, claimTokenHash), and `claim()` itself verifies
 // `sha256(preimage) == claimTokenHash` after a >=1-block commit. The pre-A-570 7-field getter
@@ -41,7 +41,7 @@ const ZERO_BYTES32 = `0x${"0".repeat(64)}`;
 
 // Minimal ABI — only the exact getter this adapter calls. Field order matches the adopted A
 // contract's compiled ABI for `gifts(bytes32)` exactly (A-575: verified against the forge
-// artifact of the byte-identical candidate_a copy in `<private>`):
+// artifact of the byte-identical candidate_a copy in the local mainnet-fork harness):
 // sender, token, amount, expiry, claimed, claimTokenHash.
 const GIFTS_GETTER_ABI = Object.freeze([
   {

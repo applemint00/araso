@@ -23,7 +23,7 @@ let pass = 0;
 function check(label, fn) { fn(); console.log(`PASS  ${label}`); pass += 1; }
 
 check("feed is gated after the A-174 first shMON receipt", () => {
-  assert.equal(FIRST_JOB_RECEIPT.sourceTask, "A-174");
+  assert.equal(FIRST_JOB_RECEIPT.sourceTask, "job-feed-first-receipt");
   assert.equal(FIRST_JOB_RECEIPT.action, "first_job_shmon_roundtrip");
   assert.equal(FIRST_JOB_RECEIPT.finalShmonBalance, "0");
 });
@@ -157,7 +157,7 @@ check("A-576 fresh delayed evidence + right_back -> nah, action 0, provenance su
   assert.equal(r.evidence.provenance.contract, "0xA3227C5969757783154C60bF0bC1944180ed81B9");
   assert.equal(r.evidence.provenance.chainId, 143);
   assert.equal(r.evidence.provenance.forkEvidence.block, 106616273);
-  assert.equal(r.evidence.provenance.liveRead.sourceTask, "A-571");
+  assert.equal(r.evidence.provenance.liveRead.sourceTask, "live-read-2026-09");
   assert.equal(r.evidence.provenance.expectedDuration, null);
   assert.match(r.evidence.source, /kintsu-smon/);
 });

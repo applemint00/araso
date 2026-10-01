@@ -83,7 +83,7 @@ export function sendCardDate(now = new Date()) {
 // <input> 이 아니다(§7 "체크표시는 기존 실제 Permission 의미를 넘어 새권한을 부여하지
 // 않는다"). 원본 13px/1.2 체크행 기준.
 //
-// [A-415-c] 체크행 밑줄(물결선) 복원 — Owner 제공 원본 `<local>`,
+// [A-415-c] 체크행 밑줄(물결선) 복원 — Owner 제공 원본 SVG,
 // 감독 보존본 `.../scene-card-handoff/assets/send-checklist-underline-original.svg` 그대로
 // path/viewBox(0 0 86 6)/stroke(#141210 1.6 round-cap) 불변 이식. 원본의 clipPath
 // (id clip0_2_427)는 rect 가 viewBox 와 정확히 같은 86×6 라 시각 효과가 없고, 여러 term

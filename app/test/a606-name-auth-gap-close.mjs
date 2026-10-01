@@ -2,7 +2,7 @@
 // no code change so nothing new to lock there, Auth shared-brand). Same "cut the real source
 // and check the contract" pattern as a605-common-shell-repair.mjs — network 0, browser 0.
 // Live/measured proof (pixel rects, dense walk-frame sequence, before/after numbers) lives in
-// _private/ops/receipts/A606_a605_gap_close/{raw,screenshots}/ + WRITER.md — this file only
+// the A-606 run records (raw facts + screenshots, kept outside this repo) — this file only
 // locks the source contract so a future edit can't silently regress it.
 //   node app/test/a606-name-auth-gap-close.mjs
 import { readFileSync } from "node:fs";

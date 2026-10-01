@@ -5,7 +5,7 @@
 // 그 보존식은 **Home 이 따로 돈을 가진다**는 옛 모델의 것이라 A-508 에서 역사가 됐다.
 // 역사가 된 단언: CREATE 가 atHome 에서 차감 · GIVE(집→Piggy) · BRING_SOME/BRING_ALL(Piggy→집) ·
 // insufficient_at_home · nothing_to_bring_home · position_*_not_liquid(bring 경로).
-// 증거는 _private/ops/receipts/A485_t3_actions · A486_ui_runtime 에 그대로 남아 있다.
+// 증거는 A-485/A-486 실행 기록(저장소 밖)에 그대로 남아 있다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {

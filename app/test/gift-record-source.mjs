@@ -34,7 +34,7 @@ const ZERO_BYTES32 = `0x${"0".repeat(64)}`;
 // [Control: derive from the real forge artifact, not a hand-typed guess] Confirms the exact
 // `gifts(bytes32)` output shape the module's own minimal ABI must match — verified against the
 // real compiled artifact. [A-575] = the ADOPTED A commit-reveal contract (byte-identical A-568
-// candidate_a copy, built by `forge build` in `_private/ops/harness/gift-mainnet-fork/`).
+// candidate_a copy, built by `forge build` in the local mainnet-fork harness).
 // Public checkout: the artifact is local-only. Without it this control prints SKIP (not PASS) and the
 // adapter checks below compare against the same pinned shape the control asserts.
 const PINNED_OUTPUT_SHAPE = ["sender:address", "token:address", "amount:uint256", "expiry:uint64", "claimed:bool", "claimTokenHash:bytes32"];

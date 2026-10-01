@@ -1,13 +1,12 @@
 // Home Chog — 걷기 · idle · hover · 3분 졸기 (A-308)
 //
-// 그림과 수식은 전부 확정 보관본
-// `<private>`
+// 그림과 수식은 전부 확정 보관본(비공개 모션 디자인 원본, connected 미리보기)
 // 의 것이다. 여기서 새로 설계하지 않는다.
 //   index.html #hoverStage/#cornerScene/#character  — 배치·파츠 z 순서
 //   flow.js                                        — Name 출발 → Home 걷기
 //   hover.js                                       — hover 수식 · 노트패드
 //   sleep-motion.js                                — 180000ms 졸기 advance()
-// 파츠는 `<private>` 가 구운 2x 래스터다(로컬 사본).
+// 파츠는 비공개 디자인 원본에서 구운 2x 래스터다.
 //
 // 좌표는 **corner 로컬**로 다룬다. Home 판(1256×772)으로의 환산은 바깥 컨테이너의
 // `translate(...) scale(homeScale)` 하나가 맡는다 — 그래서 여기 숫자는 원본과 같다.
@@ -598,7 +597,7 @@ export function mountChogHome(root, opts) {
       el.style.transform = headT; // head 와 같은 행렬 · 같은 origin
     }
     // [A-421 Owner "넣어라"] 코·볼 — metro pose_v2 pose_sit_sleepy 원본을 눈과 같은 캔버스로 반입
-    // (<private>). 눈처럼 머리와 같이 움직인다.
+    // (비공개 디자인 원본의 doze face parts). 눈처럼 머리와 같이 움직인다.
     if (dozeFace) dozeFace.style.transform = headT;
     if (sleepTorso) {
       sleepTorso.style.transform = reduced

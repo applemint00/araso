@@ -1,7 +1,7 @@
-// [A-499 lane R] Second Journey Receipt — 제품 배선의 **문지기**.
+// [Second Journey Receipt bridge] 제품 배선의 **문지기**.
 //
 // 왜 이 파일이 생겼나: `recordSecondJourneyReceipt()` (second-journey-state.js:225) 는
-// 있었지만 **제품 안에 부르는 자리가 없었다**(A-495 가 남긴 구멍). 그렇다고 아무 곳에서나
+// 있었지만 **제품 안에 부르는 자리가 없었다**(이전에 남겨진 구멍). 그렇다고 아무 곳에서나
 // 부르면 안 된다 — 지금 Second 의 완료 경로는 **DEV mock/preview 뿐**이고(main.js
 // handleSecondSend:2013 은 `devPreview` 가 아니면 아예 `return` 한다), 그 mock 을 도메인
 // receipts 에 넣는 순간 **미리보기가 금융 기록으로 굳는다**.

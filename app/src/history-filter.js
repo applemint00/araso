@@ -1,4 +1,4 @@
-// [A-485 Lane A] HISTORY 를 **어느 Piggy 의 기록인가**로 거르는 순수 함수들.
+// [history filter] HISTORY 를 **어느 Piggy 의 기록인가**로 거르는 순수 함수들.
 //
 // 규율:
 //  · 원래 인덱스를 잃지 않는다 — 상세 보기가 `state.receipts` 인덱스를 쓰기 때문이다.

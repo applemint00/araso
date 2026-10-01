@@ -3,7 +3,7 @@
 //   V1–V4  LOGIN_CHECKING waiting look = reentry_preview.html §1 mobile composition, built from existing parts
 //   V5–V7  Away restore line legible on ≤640 (≈18px at 390) without touching global Home scale / web
 //   V8     no logic change: the A-633 auth/session/reconcile code is byte-identical to the A-633 baseline
-// Browser evidence (390/430/1440 captures, counters) lives in the lane_v VERIFY receipt, not here.
+// Browser evidence (390/430/1440 captures, counters) lives in the verification record outside this repo, not here.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
@@ -167,7 +167,13 @@ check("V8 A-633 auth/session/reconcile/return code byte-identical to the A-633 b
   };
   const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha16(fnBody(n))]));
   assert.deepEqual(got, want);
-  assert.equal(sha16(cut("// [A-633 A/C] 모바일/app 표면에서 저장된 credential", "// [A-559 PHASE S1] Gift 링크 fragment")), "83b318186c3ee7bc", "boot lock block");
+  // Boot lock block re-pinned once for the chain-profile seal: the only change is
+  // `const bootPending = state.scene === "sendstay" && LEGACY_TESTNET_PATH ? readSendPending() : null;`
+  // (was `state.scene === "sendstay" ? ...`). On the default testnet profile LEGACY_TESTNET_PATH is
+  // true, so the block behaves exactly as before; off testnet the testnet pending record is not
+  // reconciled as this chain's. Previous pin: 83b318186c3ee7bc. The lock condition line is unchanged
+  // (a633 A5 still asserts it).
+  assert.equal(sha16(cut("// [A-633 A/C] 모바일/app 표면에서 저장된 credential", "// [A-559 PHASE S1] Gift 링크 fragment")), "23694803737b62f4", "boot lock block");
   assert.equal(sha16(cut("// [A-633 C] First Send 미확정 기록", "async function requestGrant(")), "20b3279a70c7c1eb", "reconcile region");
   assert.equal(sha16(cut("let activeSession = null;", "function readCredential()") + cut("function endSignerSession() {", "// --- 씬 정리 (A-292 번호 9)")), "1c2a32a1eb2a752f", "session/timer region");
 });

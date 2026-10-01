@@ -90,7 +90,7 @@ export function nameCardMarkup({ phase = "arrival", name = "", now = new Date() 
         <label class="nameCard__field">
           <span class="sr-only">Piggy name</span>
           <input id="piggyNameInput" name="piggyName" maxlength="24" autocomplete="off" value="${value}" />
-          <!-- [A-407-c] Owner 원본 Name 입력선 SVG, inline 이식.
+          <!-- Owner 원본 Name 입력선 SVG, inline 이식.
                출처: <local>
                  scene-card-handoff/typography-20260918/name/assets/name-underline-original.svg
                sha256: 5882fd1f24f138684e97c6451f72211b85ac97e265f9c8efaccabb32f264a950

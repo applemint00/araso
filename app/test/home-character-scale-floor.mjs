@@ -1,5 +1,5 @@
 // [A-603] Contract test for the Home character scale-floor (ported from A-602's measured
-// Candidate-C mechanism, receipts/A602_mobile_home_bc_preview/overrides/c_floor.js) and the
+// Candidate-C mechanism, the A-602 preview's c_floor.js) and the
 // shared ARASO shell brand — network 0, browser 0, same "cut the real source and check the
 // contract" pattern as app/test/home-arrival.mjs.
 //   node app/test/home-character-scale-floor.mjs
@@ -60,10 +60,15 @@ check("resize listener re-applies it, guarded to skip mid-walk",
 // instead of wherever fitHomeBoard()'s own aspect-fit centering happened to leave them.
 check("resolveCssLengthVarPx() reads the LIVE computed px value of a CSS custom property (not the raw unresolved string)",
   /function resolveCssLengthVarPx\(varName, fallbackPx\) \{/.test(SRC), true);
-check("bottom-safe px is read from --mobile-bottom-safe (production env()-based token, harness-overridable)",
-  /resolveCssLengthVarPx\("--mobile-bottom-safe", 20\)/.test(applyFnSrc), true);
-check("Y nudge is DERIVED from a target foot position (innerHeight - bottomSafe - gap), not a fixed offset from natural position",
-  /const targetFootViewportY = window\.innerHeight - bottomSafePx - HOME_CHAR_BOTTOM_ANCHOR_GAP_PX;/.test(applyFnSrc), true);
+// [A-659 OWNER CORRECTION — 1440 WEB VERTICAL CANON, 2026-10-01] the target used to be computed
+// inline here as a fixed bottom-safe offset (innerHeight - bottomSafe - gap). The Owner's latest
+// correction makes this branch share the SAME 1440-canon-derived proportional target the web
+// mid-band branch uses — folding --mobile-bottom-safe into that shared function
+// (computeHomeFootTargetViewportY(), main.js) as a MINIMUM clearance only, not the primary
+// target. The token is still read (inside that shared function, checked separately by
+// a656-return-home-anchor.mjs's own N2) — this branch now just calls the shared target function.
+check("Y nudge target now comes from the SAME shared, 1440-canon-derived target function the web mid-band branch uses (not a fixed bottom-safe offset re-derived inline)",
+  /const targetFootViewportY = computeHomeFootTargetViewportY\(window\.innerHeight\);/.test(applyFnSrc), true);
 check("Y nudge = target - natural (replaces the old fixed .y sum entirely)",
   /const nudgeViewportY = targetFootViewportY - naturalFootViewportY;/.test(applyFnSrc), true);
 // [A-608 pass 2 — MOBILE HOME CHARACTER CLUSTER MUST NOT MOVE BETWEEN CARDS] the collision
@@ -117,7 +122,7 @@ check("birth/authCard now also renders the shared shell brand (A-606 — no long
 // [A-616 OWNER EXCEPTION — WEB ARASO POSITION ONLY, 2026-09-28] this A-608 web-freeze
 // contract itself is superseded, but only for this one property set: INBOX A-616
 // OWNER_CONFIRMED grants "ONE exception" to the 1440 freeze — adopt the reentry HANDOFF
-// web target (`_private/design/reentry_auth_20260928/HANDOFF.md` §4) for the EXISTING
+// web target (reentry design HANDOFF §4, kept outside this repo) for the EXISTING
 // `.arasoBrand`: rendered left anchor x=140px, top=32px (top was already `var(--grid-5)`
 // = 32px, unchanged). The old "centered again" assertion below is replaced with the new
 // fixed left-anchor contract; text/font/weight/size/letter-spacing/color/casing/z-index/

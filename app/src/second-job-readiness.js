@@ -307,7 +307,7 @@ export const JOB_FAMILY = Object.freeze({
 
 const ADAPTER_ADDR = /^0x[0-9a-fA-F]{40}$/;
 
-// 주소는 A-480/A-481 에서 **직접 체인에서 읽어** 확인한 것들이다.
+// 주소는 mainnet fork lab 에서 **직접 체인에서 읽어** 확인한 것들이다.
 const FORK_PROVEN_DESTINATIONS = Object.freeze([
   Object.freeze({
     id: "aave-usdc", family: JOB_FAMILY.GROW_STABLE, baseline: true,
@@ -319,7 +319,7 @@ const FORK_PROVEN_DESTINATIONS = Object.freeze([
     exit: Object.freeze({ mode: "immediate", path: "withdraw(USDC -> Piggy)", expectedDuration: "immediate" }),
     receiptFields: Object.freeze(["approveTx", "supplyTx", "withdrawTx", "usdcBefore", "usdcAfter", "aTokenBefore", "aTokenAfter", "supplyApr", "gasUsed"]),
     stopConditions: Object.freeze(["reserve frozen or paused", "supply cap reached", "gas cost exceeds agreed share", "balance delta mismatch"]),
-    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "$5 -> 5.016499 recovered (A-480)" }),
+    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "$5 -> 5.016499 recovered (fork-evidence 2026-09, 30-day time-warped fork simulation, not immediate/earned)" }),
   }),
   Object.freeze({
     id: "curvance-usdc", family: JOB_FAMILY.GROW_STABLE, baseline: false,
@@ -331,7 +331,7 @@ const FORK_PROVEN_DESTINATIONS = Object.freeze([
     exit: Object.freeze({ mode: "immediate", path: "redeem(shares)", expectedDuration: "immediate" }),
     receiptFields: Object.freeze(["depositTx", "redeemTx", "usdcBefore", "usdcAfter", "shareBefore", "shareAfter", "gasUsed"]),
     stopConditions: Object.freeze(["vault paused", "insufficient liquidity", "share price unreadable"]),
-    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "$5 -> 5.020637 recovered (A-480)" }),
+    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "$5 -> 5.020637 recovered (fork-evidence 2026-09, 30-day time-warped fork simulation, not immediate/earned)" }),
   }),
   Object.freeze({
     id: "neverland-usdc", family: JOB_FAMILY.GROW_STABLE, baseline: false,
@@ -343,7 +343,7 @@ const FORK_PROVEN_DESTINATIONS = Object.freeze([
     exit: Object.freeze({ mode: "immediate", path: "withdraw(USDC -> Piggy)", expectedDuration: "immediate" }),
     receiptFields: Object.freeze(["supplyTx", "withdrawTx", "usdcBefore", "usdcAfter", "nTokenBefore", "nTokenAfter", "gasUsed"]),
     stopConditions: Object.freeze(["reserve frozen or paused", "insufficient liquidity", "gas cost exceeds agreed share"]),
-    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "$5 -> 5.008743 recovered (A-480)" }),
+    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "$5 -> 5.008743 recovered (fork-evidence 2026-09, 30-day time-warped fork simulation, not immediate/earned)" }),
   }),
   Object.freeze({
     id: "kintsu-smon", family: JOB_FAMILY.GROW_DELAYED, baseline: true,
@@ -355,9 +355,9 @@ const FORK_PROVEN_DESTINATIONS = Object.freeze([
     exit: Object.freeze({
       mode: "delayed",
       path: "requestUnlock -> submitBatch -> redeem",
-      // 문서에 숫자가 없다. 모르는 것을 모른다고 적는다(A-477).
+      // 문서에 숫자가 없다. 모르는 것을 모른다고 적는다(undocumented by protocol).
       expectedDuration: null,
-      expectedDurationUnknownReason: "COOLDOWN_PERIOD / BATCH_INTERVAL_DELAY not published (A-477)",
+      expectedDurationUnknownReason: "COOLDOWN_PERIOD / BATCH_INTERVAL_DELAY not published (undocumented by protocol)",
       cancelPath: "cancelUnlockRequest (only before batch submission)",
       exitFeeBips: 10,
     }),
@@ -366,7 +366,7 @@ const FORK_PROVEN_DESTINATIONS = Object.freeze([
     risks: Object.freeze(["MON price exposure", "return timing unknown", "exit fee 0.10%"]),
     forkEvidence: Object.freeze({
       label: EVIDENCE_LABEL.FORK_SIM_PENDING, block: 106616273,
-      note: "entry + requestUnlock + trackable pending PASS; submitBatch blocked on fork; cancel restored full shares (A-480)",
+      note: "entry + requestUnlock + trackable pending PASS; submitBatch blocked on fork; cancel restored full shares (fork-evidence 2026-09)",
     }),
   }),
   Object.freeze({
@@ -379,7 +379,7 @@ const FORK_PROVEN_DESTINATIONS = Object.freeze([
     exit: Object.freeze({ mode: "not_applicable", path: "no money moves; re-approve to undo", expectedDuration: "immediate" }),
     receiptFields: Object.freeze(["revokeTx", "token", "spender", "allowanceBefore", "allowanceAfter", "gasUsed"]),
     stopConditions: Object.freeze(["no allowance to revoke", "target token or spender unresolved"]),
-    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "allowance 5 -> 0 (A-480)" }),
+    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "allowance 5 -> 0 (fork-evidence 2026-09)" }),
   }),
   Object.freeze({
     id: "abil-spot", family: JOB_FAMILY.OWN_RWA, baseline: true,
@@ -392,23 +392,23 @@ const FORK_PROVEN_DESTINATIONS = Object.freeze([
     receiptFields: Object.freeze(["buyTx", "sellTx", "usdcBefore", "usdcAfter", "abilBefore", "abilAfter", "roundTripCost"]),
     stopConditions: Object.freeze(["pool liquidity absent", "slippage beyond agreed bound", "eligibility gate unresolved"]),
     risks: Object.freeze(["round trip friction about 0.6% at measured snapshot", "thin liquidity", "dividend UNKNOWN"]),
-    // A-481 이 확정한 경계. 이 네 줄은 선택이 아니라 계약이다.
+    // mainnet fork lab 이 확정한 경계. 이 네 줄은 선택이 아니라 계약이다.
     rights: Object.freeze({
       shareholderRights: false,
       statement: "economic exposure only - no voting rights, no shareholder reporting rights, no direct legal ownership",
       dividend: "UNKNOWN",
-      dividendReason: "issuer docs define no ETF distribution rule; aBIL wording is venue-sourced only (A-481)",
+      dividendReason: "issuer docs define no ETF distribution rule; aBIL wording is venue-sourced only (mainnet fork lab)",
     }),
     eligibilityGate: "jurisdiction/terms unresolved - runtime fact, not provable here",
-    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "$5 -> 0.0544 aBIL -> $4.970045 recovered (A-481)" }),
+    forkEvidence: Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, block: 106616273, note: "$5 -> 0.0544 aBIL -> $4.970045 recovered (mainnet fork lab)" }),
   }),
 ]);
 
 // 막혀 있는 경로. 우회하지 않는다 — 왜 막혔는지만 정확히 남긴다.
 export const BLOCKED_PATHS = Object.freeze([
-  Object.freeze({ id: "monday-direct-issuance", reason: "authenticated partner API + unpublished ABI (A-480)", bypassAllowed: false }),
-  Object.freeze({ id: "centrifuge-vault", reason: "investor whitelist: maxDeposit=0, deposit reverts (A-480)", bypassAllowed: false }),
-  Object.freeze({ id: "abil-earnausd-lp", reason: "pool liquidity is 0 today; LP distribution attribution UNKNOWN (A-481)", bypassAllowed: false }),
+  Object.freeze({ id: "monday-direct-issuance", reason: "authenticated partner API + unpublished ABI (fork-evidence 2026-09)", bypassAllowed: false }),
+  Object.freeze({ id: "centrifuge-vault", reason: "investor whitelist: maxDeposit=0, deposit reverts (fork-evidence 2026-09)", bypassAllowed: false }),
+  Object.freeze({ id: "abil-earnausd-lp", reason: "pool liquidity is 0 today; LP distribution attribution UNKNOWN (mainnet fork lab)", bypassAllowed: false }),
 ]);
 
 // First Journey 계보. 작동한다고 해서 Second 의 별개 경험으로 세지 않는다.
@@ -528,7 +528,7 @@ export function describeBlockedPath(id) {
 // appear here. Without a row, observedAt stays null and the decision is `unknown`.
 const LIVE_READ_RECORDS = Object.freeze({
   "kintsu-smon": Object.freeze({
-    sourceTask: "A-571",
+    sourceTask: "live-read-2026-09",
     method: "read-only public RPC: eth_chainId / eth_blockNumber / eth_getCode / eth_call(view)",
     chainId: 143,
     block: 107556248,

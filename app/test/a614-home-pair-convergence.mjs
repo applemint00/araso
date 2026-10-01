@@ -3,7 +3,7 @@
 // app/test/a610-chog-walk-start-floor.mjs / app/test/home-character-scale-floor.mjs. Live/
 // measured proof (real screencast + RAF-sampled pixel-ink trajectory at 1440/430/390, before
 // vs after) lives in
-// _private/ops/receipts/A614_parallel_close_wave/home_pair/{HOME_PAIR.md,raw,screenshots}/ —
+// the A-614 home-pair run records (kept outside this repo) —
 // this file locks the math/wiring contract so a future edit can't silently regress the fix or
 // widen it onto 1440.
 //   node app/test/a614-home-pair-convergence.mjs
@@ -79,7 +79,7 @@ check("Chog's walk frame index (move-based) and blend (walkElapsed-based) are un
 // Every OTHER mountChogHome() call site (mountSecondAway/mountAway/mountReturnView) must still
 // compile with the new opt absent — since it defaults false and those sites pass
 // startRect: null (never reach the `if (startRect && !reduced)` branch), they are provably
-// unaffected; this just proves the card's writer didn't touch them.
+// unaffected; this just proves the change didn't touch them.
 check("mountSecondAway/mountAway/mountReturnView chog mounts still pass startRect: null (untouched, unaffected by the new opt)",
   (MAIN_SRC.match(/startRect: null,/g) || []).length >= 3, true);
 

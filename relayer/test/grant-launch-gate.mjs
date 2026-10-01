@@ -1,4 +1,4 @@
-// [A-466 B3] /api/grant launch gate — 오프라인 테스트. 네트워크·실제 키 0.
+// [grant launch gate] /api/grant launch gate — 오프라인 테스트. 네트워크·실제 키 0.
 // 묻는 것 둘:
 //   ① opt-in env 가 없으면 tx 전에 닫히는가 (HARDENED_DEFAULT)
 //   ② 켰을 때 기존 검증(메서드·body schema·주소 형식·키 부재)이 그대로 남아 있는가 (회귀)

@@ -392,7 +392,7 @@ export function homeMoneyTotalsNote(totals) {
 
 // [A-510 Stream A] A-486 의 인라인 `give some` / `bring some home` / `bring all home` 은
 // **Home 이 따로 돈을 가진다**는 옛 모델의 동작이라 걷어냈다(A-508: 현 모델에서 제거).
-// Piggy→Piggy 는 parked 다. 이력·증거는 receipts/A486_ui_runtime 에 그대로 있다.
+// Piggy→Piggy 는 parked 다.
 
 /**
  * 금액 고르기 — 기존 AskCard 식 텍스트 선택지다.

@@ -37,8 +37,8 @@ function respond(res, status, body) {
  * @param {ReturnType<typeof openLedger> | null} opts.ledger  null = 원장 로드 실패, /grant 전부 거부(fail-closed)
  * @param {string | null} opts.ledgerError  ledger 가 null 인 이유(응답에 담을 사유)
  * @param {(msg: string) => void} [opts.log]
- * @param {number | null} [opts.chainId]  [A-439] RPC 로 **검증된** chainId 만. 없으면 health ok:false.
- * @param {ReturnType<typeof createGrantPolicy>} [opts.policy]  [A-439] 실행 한정 지급 정책. null = /grant 전부 거부.
+ * @param {number | null} [opts.chainId]  [relayer safety] RPC 로 **검증된** chainId 만. 없으면 health ok:false.
+ * @param {ReturnType<typeof createGrantPolicy>} [opts.policy]  [relayer safety] 실행 한정 지급 정책. null = /grant 전부 거부.
  */
 export function createRelayServer({ submitter, ledger, ledgerError = null, log = () => {}, chainId = null, policy = null }) {
   const lock = createLock();
@@ -46,7 +46,7 @@ export function createRelayServer({ submitter, ledger, ledgerError = null, log =
   return createHttpServer((req, res) => {
     if (req.url === "/health") {
       if (req.method !== "GET") return respond(res, 405, { ok: false, error: "method not allowed" });
-      // [A-439] 검증 전·다른 chain 값으로 준비 성공을 말하지 않는다.
+      // [relayer safety] 검증 전·다른 chain 값으로 준비 성공을 말하지 않는다.
       const verified = chainId === CHAIN_ID;
       return respond(res, 200, { ok: verified, chainId: verified ? chainId : null, grantPolicy: !!policy });
     }
@@ -93,7 +93,7 @@ export function createRelayServer({ submitter, ledger, ledgerError = null, log =
           log(`grant rejected(ledger unavailable) address=${short}`);
           return respond(res, 500, { ok: false, error: `ledger unavailable: ${ledgerError ?? "unknown"}` });
         }
-        // [A-439] 정책 없음·허용 주소 밖 = 지급 거부(send 호출 0).
+        // [relayer safety] 정책 없음·허용 주소 밖 = 지급 거부(send 호출 0).
         if (!policy) {
           log(`grant rejected(no grant policy) address=${short}`);
           return respond(res, 403, { ok: false, error: "no grant policy" });
@@ -109,7 +109,7 @@ export function createRelayServer({ submitter, ledger, ledgerError = null, log =
             log(`grant rejected(already granted) address=${short}`);
             return respond(res, 409, { ok: false, error: "already granted" });
           }
-          // [A-439] 원장 전체 상한(건수·금액) — lock 안에서 보므로 동시 다른 주소도 1건만.
+          // [relayer safety] 원장 전체 상한(건수·금액) — lock 안에서 보므로 동시 다른 주소도 1건만.
           if (ledger.count() >= policy.maxGrants || ledger.totalWei() + GRANT_WEI > policy.totalCapWei) {
             log(`grant rejected(total cap reached) address=${short}`);
             return respond(res, 403, { ok: false, error: "total grant cap reached" });
@@ -157,7 +157,7 @@ export function createRelayServer({ submitter, ledger, ledgerError = null, log =
   });
 }
 
-/** [A-439] 실험 relayer 는 루프백에만 bind 한다 — host override 없음. */
+/** [relayer safety] 실험 relayer 는 루프백에만 bind 한다 — host override 없음. */
 export const BIND_HOST = "127.0.0.1";
 export function listenLocal(server, port) {
   return new Promise((resolve, reject) => {
@@ -205,7 +205,7 @@ async function main() {
   try {
     ledger = openLedger(ledgerPath);
   } catch (e) {
-    // [A-439] 다른 writer 가 같은 원장을 잡고 있으면 기동 자체를 거부한다(fail-closed, lock 자동삭제 0).
+    // [relayer safety] 다른 writer 가 같은 원장을 잡고 있으면 기동 자체를 거부한다(fail-closed, lock 자동삭제 0).
     if (String(e.message).startsWith("LEDGER_LOCKED")) throw e;
     // 원장이 손상돼 있어도 서버는 뜬다(health 는 살아있어야 운영자가 확인할 수 있다) —
     // 다만 /grant 는 전부 거부하고 사유를 응답에 담는다(fail-closed).
@@ -213,7 +213,7 @@ async function main() {
     console.error(`LEDGER_ERROR: ${e.message} — /grant will reject all requests`);
   }
 
-  // [A-439] 실행 한정 허용 주소(쉼표 구분). 없거나 틀리면 정책 null → /grant 전부 403.
+  // [relayer safety] 실행 한정 허용 주소(쉼표 구분). 없거나 틀리면 정책 null → /grant 전부 403.
   const policy = createGrantPolicy(process.env.ARASO_GRANT_ALLOWLIST ?? "");
   if (!policy) console.error("NO_GRANT_POLICY: ARASO_GRANT_ALLOWLIST missing/invalid — /grant will reject all requests");
 

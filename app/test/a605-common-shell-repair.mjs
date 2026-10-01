@@ -2,7 +2,7 @@
 // "cut the real source and check the contract" pattern as home-arrival.mjs /
 // home-character-scale-floor.mjs. network 0, browser 0. Live/measured proof (pixel rects,
 // overlap %, no-clip/no-overflow) lives in
-// _private/ops/receipts/A605_common_shell_repair/{raw,screenshots}/ + WRITER.md — this file
+// the A-605 run records (raw facts + screenshots, kept outside this repo) — this file
 // only locks the source contract so a future edit can't silently regress it.
 //   node app/test/a605-common-shell-repair.mjs
 import { readFileSync } from "node:fs";

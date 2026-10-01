@@ -2,7 +2,7 @@
 // fix — network 0, browser 0, same "cut the real source and check the contract" pattern as
 // app/test/home-character-scale-floor.mjs / app/test/home-arrival.mjs. Live/measured proof
 // (real screencast + RAF-sampled pixel-ink trajectory at 1440/430/390) lives in
-// _private/ops/receipts/A610_chog_auth_position/{lane_chog,writer}/ — this file locks the
+// the A-610 run records (kept outside this repo) — this file locks the
 // math contract so a future edit can't silently regress it back to the FAIL this card closed.
 //   node app/test/a610-chog-walk-start-floor.mjs
 //

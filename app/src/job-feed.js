@@ -14,7 +14,7 @@ export const STATUS = Object.freeze({
 });
 
 export const FIRST_JOB_RECEIPT = Object.freeze({
-  sourceTask: "A-174",
+  sourceTask: "job-feed-first-receipt",
   flow: "Invite/Birth/Home/Send/Away/File Box",
   action: "first_job_shmon_roundtrip",
   address: "0x4DCDA9fD1B320C36d2B6D3C77bc98a8a4f14e500",
@@ -275,7 +275,7 @@ export function buildDestinationFixtures(runtimeContext = {}, evidenceOptions = 
         jobLevelNah: false,
       },
       evidenceState: {
-        sourceTasks: ["A-216", "A-217"],
+        sourceTasks: ["job-feed-baseline-1", "job-feed-baseline-2"],
         evidence: ["balance read", "allowance read", "supply/withdraw shape"],
         conditions: ["asset funding required"],
       },
@@ -315,7 +315,7 @@ export function buildDestinationFixtures(runtimeContext = {}, evidenceOptions = 
       jobChain: kintsuJobChain,
       executionContext: boundExecutionContext(CURRENT_PIGGY_CONTEXT.chain, kintsuJobChain),
       returnEvidence: kintsuReturnEvidence,
-      evidenceState: boundEvidenceState("kintsu-smon", kintsuReturnEvidence, ["A-216", "A-217", "A-477", "A-480", "A-571", "A-576"]),
+      evidenceState: boundEvidenceState("kintsu-smon", kintsuReturnEvidence, ["job-feed-baseline-1", "job-feed-baseline-2", "undocumented-by-protocol", "fork-evidence-2026-09", "live-read-2026-09", "return-evidence-reader"]),
     },
     {
       id: "monad-swap-like-trade",
@@ -342,7 +342,7 @@ export function buildDestinationFixtures(runtimeContext = {}, evidenceOptions = 
         jobLevelNah: false,
       },
       evidenceState: {
-        sourceTasks: ["A-216", "A-217"],
+        sourceTasks: ["job-feed-baseline-1", "job-feed-baseline-2"],
         evidence: ["quote/read state supports condition only"],
         conditions: ["funding required", "principal return not promised"],
       },
@@ -372,7 +372,7 @@ export function buildDestinationFixtures(runtimeContext = {}, evidenceOptions = 
         jobLevelNah: false,
       },
       evidenceState: {
-        sourceTasks: ["A-216", "A-217"],
+        sourceTasks: ["job-feed-baseline-1", "job-feed-baseline-2"],
         evidence: ["claimable read is evidence, not the Job"],
         conditions: ["claimable reward and proof must exist"],
       },
@@ -381,7 +381,7 @@ export function buildDestinationFixtures(runtimeContext = {}, evidenceOptions = 
   return applyJobBindings(fixtures, CURRENT_PIGGY_CONTEXT, evidenceOptions);
 }
 
-// [A-629] Binds more fixture destinations to real studied Job records (second-job-readiness.js
+// [universal pre-Send binding] Binds more fixture destinations to real studied Job records (second-job-readiness.js
 // FORK_PROVEN_DESTINATIONS), so the same pre-Send decision contract runs on more than one Job
 // family. Only a caller-supplied map { destinationId: jobId } binds. No product caller passes
 // one: main.js forwards it only from a LOCAL_ONLY harness hook. A binding is refused, and the
@@ -407,7 +407,7 @@ function applyJobBindings(destinations, currentPiggyContext, evidenceOptions = {
       jobChain,
       executionContext: boundExecutionContext(currentPiggyContext.chain, jobChain),
       returnEvidence,
-      evidenceState: boundEvidenceState(jobId, returnEvidence, [...(destination.evidenceState?.sourceTasks || []), "A-480", "A-629"]),
+      evidenceState: boundEvidenceState(jobId, returnEvidence, [...(destination.evidenceState?.sourceTasks || []), "fork-evidence-2026-09", "universal-presend-binding"]),
     };
   });
 }
@@ -469,7 +469,7 @@ export function deriveDestinationStatus(destination, context = {}) {
     return deriveSemanticReturnStatus(destination, returnAnswer);
   }
 
-  // [A-629] Universal pre-Send contract: for ANY destination bound to a real Job, whatever its
+  // [universal pre-Send binding] Universal pre-Send contract: for ANY destination bound to a real Job, whatever its
   // family, no agreed meaning exists yet for this selection, so the rule cannot decide. That is
   // `ask` (the one JIT question), action 0. For the delayed Kintsu destination this is the same
   // result the delayed branch below already gave; it no longer depends on the family.
@@ -670,7 +670,7 @@ export function runSecondJourney(options = {}) {
   // [A-579] `requireFreshReturnObservation` = decision-time mode for the destination the user
   // checked. Default false keeps the recorded-read behaviour for every other caller.
   const freshReturnDestinationId = options.requireFreshReturnObservation === true ? options.preferredDestinationId || null : null;
-  // [A-629] `jobBindings` = extra fixture→Job bindings. Only a LOCAL_ONLY harness passes one.
+  // [universal pre-Send binding] `jobBindings` = extra fixture→Job bindings. Only a LOCAL_ONLY harness passes one.
   const destinations = buildDestinationFixtures(runtimeContext, { returnObservations: options.returnObservations, nowMs: options.nowMs, freshReturnDestinationId, jobBindings: options.jobBindings })
     .filter((destination) => destination.errandIds?.some((id) => selection.errandIds.includes(id)))
     .map((destination) => ({ ...destination, ...(destinationOverrides[destination.id] || {}) }));

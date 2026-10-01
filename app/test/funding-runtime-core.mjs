@@ -405,7 +405,7 @@ function testnetPiggy(overrides = {}) {
   check("11. genuine proof -> FundingContext exists", app.state.funding && app.state.funding.context != null);
 }
 {
-  // 7a. the attack the coordinator called out: proof claims piggy.address but is signed by a
+  // 7a. the named attack: proof claims piggy.address but is signed by a
   // DIFFERENT signer (a caller-supplied signerAddress string is not proof — bindSigner-style
   // string equality would have let this through; the signature recovery must not).
   const app = openApp();

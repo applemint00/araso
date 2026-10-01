@@ -1,4 +1,4 @@
-// [A-466 B2] vercel.json 배포 헤더 계약 — 오프라인 static 테스트. 네트워크 0.
+// [deploy headers] vercel.json 배포 헤더 계약 — 오프라인 static 테스트. 네트워크 0.
 // CSP 는 추측이 아니라 실측 inventory 에서 나왔다:
 //   script : dist/index.html 의 module script 1개(same-origin), inline <script> 0, eval/new Function/Worker 0
 //   style  : /assets/*.css 1개 + innerHTML 로 들어가는 inline style 속성(빌드 산출물에서 실측) → 'unsafe-inline' 필요

@@ -415,7 +415,7 @@ async function browserWidth(browser, BASE, w, shots) {
       const s = await selector();
       assert.equal(s.present, true);
       assert.deepEqual(s.labels, ["Piggy decides", "Ask me", "I'll manage"]);
-      assert.deepEqual(s.on, ["ask_me"], "default ask_me (coordinator choice)");
+      assert.deepEqual(s.on, ["ask_me"], "default ask_me (conservative default)");
       honeyId = s.piggy;
       await shot("S5_1piggy_detail_default");
       const m = await measuredModeTap("ill_manage");

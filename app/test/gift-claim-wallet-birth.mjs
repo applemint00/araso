@@ -15,8 +15,7 @@
 // 지키는 것: production rpId 0 · anvil 가장 0 · 비밀/PRF/개인키 출력 0(지문만).
 // 이 스크립트가 만든 비밀은 메모리 안에서만 살고 어디에도 저장되지 않는다.
 //
-// 위치 주의: A-493 하네스는 `_private/ops/harness/` 에 있지만, A-495 dispatch 의
-// write allowlist 에 그 경로가 없어서 이 루프 증명은 `app/test/` 에 둔다(allowlist `app/test/**`).
+// 위치: 이 루프 증명은 공개 테스트로 `app/test/` 에 둔다(A-493 하네스는 로컬 전용).
 import crypto from "node:crypto";
 import { createPasskeyWithPrfOutput, createSecp256k1SigningSession, getEvmAddress } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";

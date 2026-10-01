@@ -1,4 +1,4 @@
-// [A-492 Lane B] `SEND_MONEY` — 고른 Piggy 가 **자기 자유 잔액**을 외부 주소로 보낸다.
+// [SEND_MONEY] 고른 Piggy 가 **자기 자유 잔액**을 외부 주소로 보낸다.
 //
 // 이것은 **Piggy 를 넘기는 일이 아니다.** 정체성·주소·통제권은 **그대로 주인에게 남는다.**
 // 바뀌는 건 **그 Piggy 의 자유 잔액뿐**이다.
@@ -20,7 +20,7 @@ export const ADDRESS_STATUS = Object.freeze({
   EMPTY: "empty",
   SELF: "self_send",           // 그 Piggy 자신에게 보내는 것
   OWN_OTHER_PIGGY: "own_other_piggy", // 내 다른 Piggy 주소
-  // [A-510 Stream A] `HOME: "home_address"` 는 걷어냈다 — Home 은 주소도 돈도 갖지 않는다(A-508).
+  // `HOME: "home_address"` 는 걷어냈다 — Home 은 주소도 돈도 갖지 않는다.
 });
 
 /**

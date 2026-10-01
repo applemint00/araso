@@ -1,11 +1,11 @@
-// Invite Chog — 눈 깜박임 · 손 흔들기 · 해치 올려보기/뒷걸음 (A-312)
+// Invite Chog — 눈 깜박임 · 손 흔들기 · 해치 올려보기/뒷걸음 (invite-idle motion set)
 //
 // 그림과 수식은 확정 보관본 `connected/invite-chog.js` 것이다.
 //   svgMarkup            — 그림 원본 (여기서는 그 파츠를 구운 래스터를 쓴다)
 //   sample(ms)           — 10000ms idle 주기: blink · wave
 //   reaction(ms)         — 해치 반응: 올려보기 + 뒷걸음
 //   character-hooks.js   — actor 레벨 보정(두 레벨 합성이 원본이다)
-// 파츠는 `<private>` 가 구운 2x 래스터(로컬 사본).
+// 파츠는 비공개 디자인 원본에서 구운 2x 래스터.
 //
 // 원본은 변환을 **두 레벨**로 나눠 준다. 한 레벨로 뭉치면 단위가 섞인다:
 //   svg 레벨   : px  — `translate(-10*step px, -3*amount px)`

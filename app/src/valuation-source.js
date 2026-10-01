@@ -1,4 +1,4 @@
-// [A-485 Lane C] 평가(valuation) 경계.
+// [valuation boundary] 평가(valuation) 경계.
 //
 // 결정: **Aave v3 on Monad 의 온체인 오라클**을 유일한 평가 원천으로 둔다.
 //   이유 — 키가 필요 없고, 유료 API 가 아니고, 지갑 연결이 필요 없고, 같은 블록에서 같은 값이 나온다.

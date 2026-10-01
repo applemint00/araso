@@ -14,8 +14,7 @@
 // 저장 규율은 `piggy-registry.js` 를 따른다: 비밀 냄새가 나는 필드는 조용히 지우는 게 아니라
 // **저장 자체를 거부**한다.
 //
-// 파일명 주의: A-495 dispatch 의 write allowlist 가 `app/src/*piggy*.js` 이라서
-// `gift-piggy-claim-link.js` 로 둔다(lane G 의 `gift-*` 규칙도 함께 만족한다).
+// 파일명: `gift-piggy-claim-link.js` (`*piggy*` · `gift-*` 두 이름 규칙을 함께 만족한다).
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const TOKEN = /^[A-Za-z0-9_-]{22,86}$/; // base64url, 16~64 bytes

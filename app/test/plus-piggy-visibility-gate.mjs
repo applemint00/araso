@@ -2,8 +2,7 @@
 //   node app/test/plus-piggy-visibility-gate.mjs
 //
 // 실제 브라우저 render 증거(1-6 매트릭스 스크린샷/DOM 카운트, non-zero per-Piggy HISTORY)는
-// _private/ops/receipts/A544_receipt_owner_visibility/{screenshots,rects}/ 에 있다(RECEIPT.md
-// 참고) — 이 파일은 그 render 증거가 기대는 "코드가 실제로 이렇게 생겼다"는 소스 계약만,
+// A-544 실행 기록(스크린샷·rect, 저장소 밖)에 있다 — 이 파일은 그 render 증거가 기대는 "코드가 실제로 이렇게 생겼다"는 소스 계약만,
 // 네트워크/브라우저 0 으로 빠르게 반복 재는 부분이다(A-048 기법: 실제 소스 텍스트만 자른다).
 import { readFileSync } from "node:fs";
 

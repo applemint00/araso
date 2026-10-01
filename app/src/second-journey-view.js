@@ -198,8 +198,7 @@ function candidatesStepMarkup({ destinations = [], errandLabelById = {}, pickedC
 }
 
 // [A-421 v25] 선택된 행동의 영어 제목. 새 문구 0 — 이미 승인된 표에서만 가져온다.
-// market/order/clean/claim: <private>
-// NOTES_explore_page.md:128-131(§4 화면 문구 열).
+// market/order/clean/claim: 비공개 디자인 노트 NOTES_explore_page.md:128-131(§4 화면 문구 열).
 // grow: APP_HANDOFF.md:15 / CURRENCY_NOTES.md:12 (Owner 확정 "put some money to work").
 // 보상 claim: APP_HANDOFF.md:16 / CURRENCY_NOTES.md:15 ("pick up my rewards") — 단
 // "보상 아닌 수령 대상에 rewards 강제 적용 금지"(CURRENCY_NOTES.md:15)이므로 보상 여부를
@@ -373,7 +372,7 @@ function readinessStepMarkup(model) {
       ? ""
       : `
     <section class="amount">
-      <!-- [A-421] 시안의 이탤릭 label 자리. 시안(index.html:10)에도 보이는 텍스트가 없고
+      <!-- 시안의 이탤릭 label 자리. 시안(index.html:10)에도 보이는 텍스트가 없고
            "바깥 how much? 삭제"(CURRENCY_NOTES.md:2)라 승인된 문구가 없다 — 비워 둔다.
            입력의 접근성 이름은 시안과 같은 aria-label 이 맡는다. -->
       <label for="secondAmount"></label>
@@ -420,7 +419,7 @@ function readinessStepMarkup(model) {
     ${receiveBlock}
     ${conditionBlock}
     <div class="footer">
-      <!-- [A-421] footer 자리는 시안(index.html:10) 그대로지만 버튼 정본은 Owner 확정에
+      <!-- footer 자리는 시안(index.html:10) 그대로지만 버튼 정본은 Owner 확정에
            따라 **기존 오리지널 종이 버튼 하나로 통일**한다("버튼은 다 통일이야 ... 이미
            버튼 네임에 쓰고 있는버튼써"): Send 는 Name 카드 ok/save 와 같은 .pkbtn 껍질
            (send-card.js sendCardButtonMarkup)을 그대로 호출한다. 시안의 .send /

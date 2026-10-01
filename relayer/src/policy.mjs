@@ -17,7 +17,7 @@ export const MAX_BODY_BYTES = 1024;
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 
-/** [A-439] 실행 한정 지급 정책 — 서버가 강제한다. 요청 body 로는 바꿀 수 없다.
+/** [relayer safety] 실행 한정 지급 정책 — 서버가 강제한다. 요청 body 로는 바꿀 수 없다.
  *  허용 주소 목록이 비어 있거나 형식이 틀리면 정책 자체를 만들지 않는다(null = 전부 거부).
  *  전체 상한 = 원장 전체 기준 최대 1건 · 0.1 MON(재시작해도 같은 원장이면 유지). */
 export const MAX_GRANTS_TOTAL = 1;

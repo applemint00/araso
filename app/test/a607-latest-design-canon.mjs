@@ -140,8 +140,12 @@ check("closeRecordsCard() calls stopRecordsAlignLoop() again", /stopRecordsAlign
 check("[A-621] closeRecordsCard() no longer calls the superseded A-618 restoreMobileTwoPaperGroup()",
   /restoreMobileTwoPaperGroup\(\)/.test(closeRecordsCardSrc), false);
 const alignFnSrc = cut("function alignRecordsCardToHomePaper() {", "\n// [A-621 OWNER CONFIRMED");
-check("[A-621] alignRecordsCardToHomePaper() calls stackMobileRecordsOverHome() at narrow (≤640px) — A-618 fitMobileTwoPaperGroup() superseded",
-  /window\.innerWidth <= 640/.test(alignFnSrc) && /stackMobileRecordsOverHome\(\)/.test(alignFnSrc) && !/fitMobileTwoPaperGroup\(\)/.test(alignFnSrc), true);
+// [A-662] the flat ≤640px check is gone — alignRecordsCardToHomePaper() now asks the one shared
+// geometry-fit decision (computeHistoryFitMode(), A-651/A-662 OWNER RESPONSIVE DECISION) instead
+// of testing the raw width itself; stackMobileRecordsOverHome() is unchanged/still superseding
+// A-618's fitMobileTwoPaperGroup().
+check("[A-662] alignRecordsCardToHomePaper() calls stackMobileRecordsOverHome() in stacked mode (computeHistoryFitMode()) — A-618 fitMobileTwoPaperGroup() superseded",
+  /computeHistoryFitMode\(\) === "stacked"/.test(alignFnSrc) && /stackMobileRecordsOverHome\(\)/.test(alignFnSrc) && !/fitMobileTwoPaperGroup\(\)/.test(alignFnSrc), true);
 
 // ── 7. FIRST JOB — the "work?" reaction canvas (Piggy, drawn by piggy-depart.js — outside
 // this card's files) now gets the SAME floor-scale/bottom-anchor treatment
@@ -154,8 +158,19 @@ check("fit()'s floor branch is scoped to clock === \"send\" only (Explore's \"se
   /clock === "send" && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR/.test(workPoseSrc), true);
 check("fit()'s floor branch derives k the same way applyHomeCharacterScaleFloor() does (HOME_CHAR_SCALE_FLOOR / s)",
   /const k = HOME_CHAR_SCALE_FLOOR \/ s;/.test(workPoseSrc), true);
-check("fit()'s floor branch reuses resolveCssLengthVarPx() for the bottom-safe token (not a new hardcoded number)",
-  /resolveCssLengthVarPx\("--mobile-bottom-safe", 20\)/.test(workPoseSrc), true);
+// [A-659 OWNER CORRECTION — 1440 WEB VERTICAL CANON, 2026-10-01] the direct
+// `resolveCssLengthVarPx("--mobile-bottom-safe", 20)` call that used to sit inline in this fit()
+// branch moved into the ONE shared target function every floor/mid-band call site now uses
+// (`computeHomeFootTargetViewportY()`, main.js — applyHomeCharacterScaleFloor() /
+// computeHomeCharScaleFloorPlan() / applyHomeFloorToDepartCanvas() / this fit() all call it, so a
+// walk-start/settle/resize/Away/Return/Departure/First-Job target can never drift apart). The
+// token itself is still read there (not a new hardcoded number) — checked in both places: this
+// fit() branch calls the shared function, and the shared function's own body still reads the
+// token.
+check("fit()'s floor branch computes its target via the SAME shared function every other floor/mid-band call site uses (not a hardcoded number, not a re-derived duplicate)",
+  /const targetFootViewportY = computeHomeFootTargetViewportY\(window\.innerHeight\);/.test(workPoseSrc), true);
+check("the shared computeHomeFootTargetViewportY() function itself reuses resolveCssLengthVarPx() for the bottom-safe token (not a new hardcoded number)",
+  /resolveCssLengthVarPx\("--mobile-bottom-safe", 20\)/.test(cut("function computeHomeFootTargetViewportY(vh) {", "\n}")), true);
 check("fit()'s floor branch does NOT add the card-collision X term (96px) — a repair-pass cluster nudge instead, avoids pushing this wider canvas's ink past the right safe edge",
   !/nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX\.x \+ \(collisionActive/.test(workPoseSrc),
   true);
@@ -192,12 +207,33 @@ check(".pkbtn's own shared base rule is untouched (scoped fix only, same discipl
 // lane_a (crop-box) + lane_b (pixel scan): Hatch/Name Chog's real ink sat flush (0px
 // clearance, pixel-confirmed) on the simulated bottom-safe line — lifted for real breathing
 // room, kept byte-identical between Hatch and Name per canon.
+// [A-662 OWNER DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY, 2026-10-01 option ③] the fixed
+// `+5px above --mobile-bottom-safe` CSS offset is SUPERSEDED — that anchor (≈0.957·vh real ink)
+// was never cross-checked against Home's own resident-floor target (≈0.834·vh), producing a
+// ~107–116px visible-foot jump at the Name→Home cut (A-662 prewrite root cause). `bottom` is no
+// longer a static CSS declaration at all — both re-pins below confirm the OLD literal is gone
+// AND the new shared-contract JS owner (applyOnboardingPhoneFoot(), reusing
+// computeHomeFootTargetViewportY() — Home's own target function, not a second ratio) applies the
+// identical value to both elements, preserving "keep Hatch and Name identical".
 const hatchChogNarrowCss2 = cutCss("@media (max-width: 640px) {\n  .hatchChog {", "\n  }\n}\n");
-check(".hatchChog narrow bottom now adds +5px above --mobile-bottom-safe (was flush; tuned from an initial +10px to land inside A-608's ~12-16px real-clearance band, see WRITER.md)",
-  /bottom:\s*calc\(var\(--mobile-bottom-safe\) \+ 5px\);/.test(hatchChogNarrowCss2), true);
+check(".hatchChog narrow CSS no longer sets a static `bottom` (old +5px-above-safe offset removed)",
+  /bottom:\s*calc\(/.test(hatchChogNarrowCss2), false);
 const nameChogNarrowCss2 = cutCss("@media (max-width: 640px) {\n  .nameScene__chog {", "\n  }\n}\n");
-check(".nameScene__chog narrow bottom is BYTE-IDENTICAL to .hatchChog's own (+5px), per canon (\"keep Hatch and Name identical\")",
-  /bottom:\s*calc\(var\(--mobile-bottom-safe\) \+ 5px\);/.test(nameChogNarrowCss2), true);
+check(".nameScene__chog narrow CSS no longer sets a static `bottom` either (same supersession as .hatchChog)",
+  /bottom:\s*calc\(/.test(nameChogNarrowCss2), false);
+const onboardingFootSrc = cut("function applyOnboardingPhoneFoot() {", "\n}\n");
+check("applyOnboardingPhoneFoot() reuses computeHomeFootTargetViewportY() (Home's own shared floor target, not a new ratio)",
+  /computeHomeFootTargetViewportY\(window\.innerHeight\)/.test(onboardingFootSrc), true);
+check("applyOnboardingPhoneFoot() applies the SAME computed value to BOTH .hatchChog and .nameScene__chog (byte-identical, per canon)",
+  /document\.querySelector\("\.hatchChog"\)/.test(onboardingFootSrc) &&
+  /document\.querySelector\("\.nameScene__chog"\)/.test(onboardingFootSrc) &&
+  (onboardingFootSrc.match(/\.style\.bottom = bottomPx;/g) || []).length === 2, true);
+check("applyOnboardingPhoneFoot() only overrides the anchor at ≤640px (web stays frozen, A-608)",
+  /window\.innerWidth <= 640/.test(onboardingFootSrc), true);
+check("mountHatch() applies + re-applies applyOnboardingPhoneFoot() on resize",
+  /applyOnboardingPhoneFoot\(\);[\s\S]{0,80}sceneListener\(window, "resize", applyOnboardingPhoneFoot\);/.test(cut("async function mountHatch() {", "\n}\n")), true);
+check("fitNameScene() also calls applyOnboardingPhoneFoot() (piggybacks its own existing mount+resize wiring)",
+  /applyOnboardingPhoneFoot\(\);/.test(cut("function fitNameScene() {", "\n}\n")), true);
 
 // lane_d flagged `.cardAnchor` (First Job's card) as centered on WEB, not left-rail — this
 // seat briefly added a web-scoped override, then REVERTED it in the same repair pass once

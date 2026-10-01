@@ -1,6 +1,6 @@
 // 귀환 — 알람 → 포털 → Piggy 등장 → 정면 hold → toss → Receipt 두 번 탭 →
 // 집으로 → Chog 수령 → 파일 정리. 승인 원본:
-//   <private>
+//   확정 모션 디자인 원본의 return 미리보기(비공개, 이 저장소 밖)
 //   (renderer.js sceneSVG/stateAt/rig/nativeState/nativeHand · player.js 의 두 번 탭 게이트)
 // 원본은 읽기만 했다. 좌표·시간 함수는 원본 그대로다.
 //
@@ -23,6 +23,27 @@ const GROUP_SCALE = 150 / 218;
 const GROUP_DX = 966.135 - 862 * GROUP_SCALE;
 const GROUP_DY = 491.75 - 515 * GROUP_SCALE;
 
+// [A-659 OWNER VISUAL REPAIR — E, round 2, 2026-09-30] Receipt paper enlarged (Owner:
+// ".receiptPaper width 196px, too small"). ROUND 1 also bumped style.css's `.receiptPaper`/
+// `.receiptPaper__teeth` CSS `width` 196→228px — coordinator's real-browser recapture caught two
+// breaks: (1) that box's height is content-driven (fixed px padding/font-sizes/line-heights), not
+// tied to `width`, so widening it alone grew width +17% but height only +2.6% ("squat"); (2) the
+// anchor's half-extents grew but the CENTER didn't move, so the wider box's right edge grew
+// straight into Piggy (1440: right edge 817→840, clearance 28px→~5px) and the center wasn't
+// raised enough to read as "moved up" relative to Piggy's head. style.css's `.receiptPaper` is
+// now back to 196px (round-2 comment there) — this factor instead scales ONLY the delivery
+// TARGET box (`rw`/`rh` below) and the anchor's half-extents; return-view.js's `placePaper()`
+// still contain-fits the SAME fixed-196px-wide, fixed-aspect paper into that target via
+// `--paperScale` (a CSS `transform: scale()`, uniform on width AND height together) — so scaling
+// the target uniformly makes the resulting `--paperScale` itself multiply by this same factor,
+// growing the VISIBLE paper uniformly (aspect intact) without touching the paper's own layout.
+// The tiny in-hand carry paper (drawRig()'s `280,225` and the fixed `36,29` post-pickup size,
+// both elsewhere in this file) is NOT part of this — Owner's complaint was about the readable
+// receipt, not the walking-home glimpse.
+const RECEIPT_SIZE_SCALE = 228 / 196;
+const RECEIPT_DELIVERED_W = 280 * RECEIPT_SIZE_SCALE;
+const RECEIPT_DELIVERED_H = 320 * RECEIPT_SIZE_SCALE;
+
 // [A-358 §4 → A-359 §2 교정] 공통 카드 자리(.cardAnchor, style.css) 중심 — 뷰포트
 // 중앙에서 왼쪽32/위48 (CSS px). 옛 `BOARD_W/2-32, BOARD_H/2-48`(=596,338 고정)은 이
 // 32/48 을 **board 단위로 그대로** 뺀 것이었다 — 틀렸다. board 중심은 항상 뷰포트
@@ -35,24 +56,66 @@ const GROUP_DY = 491.75 - 515 * GROUP_SCALE;
 // canvas.width 는 DPR 포함이라 다른 값이다) 로 다시 잰다. 읽기-확대(zoom) 중심과 종이
 // 도착 종착점은 이 값 **하나**로 맞춘다 — 옛 360/325(확대 중심)·220/165(도착 목표)는
 // 같은 자리를 노린 서로 다른 임의 숫자였다.
-function anchorCenter(canvas) {
-  const s = (canvas && (canvas.clientWidth || canvas.width)) / BOARD_W || 1;
-  const cx = BOARD_W / 2 - 32 / s;
-  const cy = BOARD_H / 2 - 48 / s;
+// [A-656 OWNER CORRECTION — WEB-FIRST PROPORTIONAL INVARIANT, 2026-09-30] The prior fix (P3 R1,
+// comment kept below for the record) derived cx/cy from the canvas's REAL on-screen rect via
+// `(window.innerWidth/2 - 32 - left)/s` on every draw. That read the real rect correctly, but the
+// TARGET it read *toward* was still "wherever the shared `.cardAnchor` viewport-centered slot
+// happens to sit this frame" — a target with no relationship to Piggy/Chog's own board anchor
+// (HOME_CENTER/HOME_FLOOR, main.js). Once the floor/mid-band correction moves the character
+// cluster (and this whole canvas — return-view.js `fit()`) away from natural center, that
+// viewport-center target stops tracking the cluster: PROP.md Q2 measured Δ up to −3.66
+// normalized units (456px at 430) between the receipt and Home/Chog. Owner correction: "Receipt
+// card/handoff must preserve the same proportional size and relative position to Piggy/Chog as
+// the 1440 web canon. Do not lower only the returning Piggy while leaving Receipt/hitbox/card
+// geometry on the old coordinate system."
+// Fix: pin cx/cy to the FIXED board-local point the old formula produced at the 1440 reference
+// (`REF_S_1440` — width-constrained at this board's aspect, same derivation main.js
+// `computeHomeMidBandDropPx()` uses for its own 1440×900 reference) instead of re-deriving it
+// from the live viewport every draw. That constant lives in the SAME board-local coordinate frame
+// as every other fixed box in this file (SEAT_RECT/BOX/BELL_BOX) — and this whole draw already
+// runs inside `enterGroup()`'s `ctx.scale(sx())`, which already carries the canvas's actual
+// current on-screen scale (including the floor's k and any mid-band translate, since
+// return-view.js resizes/repositions this ENTIRE canvas by exactly that transform). So a fixed
+// board point rides through it exactly like Piggy/Chog/the receipt paper's other geometry do —
+// proportional at 390/430/700/900, and, because REF_S_1440 equals the natural (floor/mid-band
+// never apply there) 1440 scale exactly, byte-identical (Δ0) at 1440 — same numeric formula the
+// old per-draw computation produced at that one width.
+const REF_S_1440 = Math.min(1440 / BOARD_W, 900 / BOARD_H);
+// [A-659 OWNER VISUAL REPAIR — E, round 2] Both half-extents grow with RECEIPT_SIZE_SCALE (board
+// px, through the same GROUP_SCALE the drawn/reported box itself uses) — round 1 left the CENTER
+// fixed while only the box grew, which pushed the RIGHT edge further right (coordinator-measured:
+// 1440 right edge 817→840 vs Piggy's own left edge ≈845, clearance 28px→~5px) and only kept the
+// BOTTOM edge in its old place (not "visibly higher", as Owner asked).
+//   X: shift the center LEFT by exactly half the width growth, so the RIGHT edge (the side
+//      nearest Piggy) lands EXACTLY where the old, smaller box's right edge did — same horizontal
+//      clearance as before this card, not less, at every width (it's a fixed board-local point,
+//      so it scales through the shared plan like every other fixed box here).
+//   Y: shift the center UP by the FULL height growth (not just half) — the paper's own BOTTOM
+//      edge (the side nearest Piggy/Chog vertically) then lands *above* where it used to (by half
+//      the growth), a real, visible raise, not merely "no worse than before" — with the TOP
+//      extending further up still (by 1.5× the growth).
+const RECEIPT_SIZE_GROW_BOARD_W_PX = (RECEIPT_DELIVERED_W - 280) * GROUP_SCALE / 2;
+const RECEIPT_SIZE_GROW_BOARD_H_PX = (RECEIPT_DELIVERED_H - 320) * GROUP_SCALE;
+const ANCHOR_BOARD_CX = 628 - 32 / REF_S_1440 - RECEIPT_SIZE_GROW_BOARD_W_PX;
+const ANCHOR_BOARD_CY = 386 - 48 / REF_S_1440 - RECEIPT_SIZE_GROW_BOARD_H_PX;
+function anchorCenter() {
+  const cx = ANCHOR_BOARD_CX;
+  const cy = ANCHOR_BOARD_CY;
   // GROUP 변환의 역함수로 이 board 중심을 "엔터그룹 이전" 무대 좌표로 되돌린다.
   const zx = (cx - GROUP_DX) / GROUP_SCALE;
   const zy = (cy - GROUP_DY) / GROUP_SCALE;
-  // delivery=1 시점 종이 크기(무대 단위, 아래 rw/rh 식의 델리버리 종착 크기 280×320
-  // 그대로) 절반만큼 확대 중심에서 물러난 자리를 도착 목표로 둔다 — 그래야 확대 pivot
-  // 과 종이 중심이 같아, zoom 이 1→1.18 로 커지는 동안에도 화면 위치가 안 흔들린다.
-  return { cx, cy, zx, zy, tx: zx - 280 / 2, ty: zy - 320 / 2 };
+  // delivery=1 시점 종이 크기(무대 단위, 아래 rw/rh 식의 델리버리 종착 크기 — [A-659] 이제
+  // RECEIPT_DELIVERED_W/H, 옛 280×320 에 같은 배율을 곱한 값) 절반만큼 확대 중심에서 물러난
+  // 자리를 도착 목표로 둔다 — 그래야 확대 pivot 과 종이 중심이 같아, zoom 이 1→1.18 로
+  // 커지는 동안에도 화면 위치가 안 흔들린다.
+  return { cx, cy, zx, zy, tx: zx - RECEIPT_DELIVERED_W / 2, ty: zy - RECEIPT_DELIVERED_H / 2 };
 }
 
 // 앉은 Piggy — 원본 Return 은 218×218 정사각이지만 캐릭터 원본 비율은 1056×1102.
 // Home 과 같은 비율을 쓴다(무단 squash 0). 차이는 parts.json 에도 남겼다.
 const SEAT_RECT = { x: 862, y: 515, w: 218, h: 218 * 1102 / 1056 };
 
-// 굽힌 배열의 공통 상자(= A320_export.py 가 parts.json 에 적은 origin)
+// 굽힌 배열의 공통 상자(= export 스크립트가 parts.json 에 적은 origin)
 const BOX = {
   body: { x: 63.0154, y: -46.9846, w: 952.4308, h: 1206.2769 },
   arm: { x: -0.2769, y: 422.8, w: 317.4769, h: 461.3231 },
@@ -76,15 +139,12 @@ const NATIVE_STEP_DY = -8 * GROUP_SCALE;
 
 // --- 알람 종 (Owner 지시, 채팅 2026-09-18: "피기 올문 옆에헤 내가 보는 오른쪽
 // 옆에 집그림사이즈로") -------------------------------------------------
-// 자산: <private>
+// 자산: 비공개 디자인 원본의 crayon_bell.svg(이 저장소 밖)
 // sha256 c3b220d862b7195ac9c1c5db9a54217af8572d3686e98f55a1b2f9118fb20b3b, 8785B
 // (대부분 C2PA metadata) — Owner 확인 "그게벨자산이야". 아래 마크업은 그 파일의
 // <metadata> 블록만 뺀 그림 내용 그대로다(재드로우 0, 좌표·색·필터 손대지 않음).
-// [주의] main.js:3554-3559 근처에 "별도 벨/링 그래픽은 canon 에 없다"는 A-413 당시
-// 주석이 남아 있다 — 이 주문(2026-09-18)이 그 뒤에 온 새 Owner 지시다. main.js 는
-// 이 dispatch 의 허용 파일이 아니라 그 주석은 고치지 못했다 — 다음에 main.js 를
-// 만지는 에이전트가 갱신해야 한다(PREMISE_CONFLICT 성격의 정보 전달, 이 파일 수정은
-// 아님).
+// [주의] main.js 에 "별도 벨/링 그래픽은 canon 에 없다"는 예전 주석이 남아 있을 수
+// 있다 — 이 벨(2026-09-18)은 그 뒤에 온 새 Owner 지시다.
 const BELL_KEY = "alarm-bell";
 const BELL_SVG_MARKUP = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
 <defs><filter id="crb" x="-25%" y="-25%" width="150%" height="150%">
@@ -318,9 +378,10 @@ export function createReturnRenderer(canvas, opts) {
     ctx = main;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // [A-359 §2] 이 프레임의 공통 카드 자리 — 매번 실제 canvas CSS 폭으로 다시 잰다
-    // (뷰포트가 바뀌면 board 축척도 바뀐다, 위 anchorCenter() 주석).
-    const anchor = anchorCenter(canvas);
+    // [A-656 OWNER CORRECTION] Fixed board-local anchor (derived from the 1440 canon once, at
+    // module scope) — see anchorCenter() above for why this is no longer a per-draw viewport
+    // read.
+    const anchor = anchorCenter();
 
     let x = mix(210, 520, emerge), y = 250;
     x = mix(x, 880, settle); y = mix(y, 508, settle);
@@ -345,13 +406,16 @@ export function createReturnRenderer(canvas, opts) {
     let rx = mix(x + size * (300 + 1.12 * (480 - 300) - 40 - 80), anchor.tx, delivery);
     let ry = mix(y + size * (530 + 1.12 * (620 - 530) - 55), anchor.ty, delivery)
       - 110 * 4 * delivery * (1 - delivery);
-    let rw = mix(size * 280 * 1.12, 280, delivery);
-    let rh = mix(size * 225 * 1.12, 320, delivery);
+    // [A-659 OWNER VISUAL REPAIR — E] Delivered/read size only (RECEIPT_DELIVERED_W/H = 280×320 ×
+    // RECEIPT_SIZE_SCALE) — the mid-toss intermediate sizes (`size * 280 * 1.12` etc.) and the
+    // post-pickup tiny carry size (`36,29` below) are untouched (see the module-scope comment).
+    let rw = mix(size * 280 * 1.12, RECEIPT_DELIVERED_W, delivery);
+    let rh = mix(size * 225 * 1.12, RECEIPT_DELIVERED_H, delivery);
     if (t >= 8.5 && t < 10.9) {
       rx = mix(anchor.tx, x + size * 480, pickup);
       ry = mix(anchor.ty, y + size * 620, pickup);
-      rw = mix(280, size * 280, pickup);
-      rh = mix(320, size * 225, pickup);
+      rw = mix(RECEIPT_DELIVERED_W, size * 280, pickup);
+      rh = mix(RECEIPT_DELIVERED_H, size * 225, pickup);
     }
     let hand = null;
     if (t >= 10.9) {

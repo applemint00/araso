@@ -84,10 +84,12 @@ check("chog-home toggle(): real tap hides the cue before the pin flips", /const 
 check("cue never calls hover()/requestHover (no auto-open, no reduced snap)", /requestHover|hover\(/.test(fnBody(chog, "startTapCue")), false);
 check("closeCard() hides the cue (no overlap frame with the Send card)", /const closeCard = \(\) => \{\s*hideTapCue\(\);/.test(chog), true);
 const sync = fnBody(code, "syncRecordsViewportState");
-// [A-626 D] superseded: Chog hit is inert while HISTORY is open at EVERY width (HOME mount still mobile-only).
-check("syncRecordsViewportState(): Chog hit inert = open (all widths); HOME mount inert = mobile && open",
+// [A-626 D] superseded: Chog hit is inert while HISTORY is open at EVERY width (HOME mount still
+// stacked-mode-only). [A-662] "mobile" → "stackedMode" (geometry-fit decision, computeHistoryFitMode()),
+// same contract.
+check("syncRecordsViewportState(): Chog hit inert = open (all widths); HOME mount inert = stackedMode && open",
   /const chogHit = document\.querySelector\("#chogHomeHit"\);\s*if \(chogHit && chogHit\.inert !== open\) chogHit\.inert = open;/.test(sync) &&
-  /const background = open && mobile;\s*if \(mount\.inert !== background\) mount\.inert = background;/.test(sync), true);
+  /const background = open && stackedMode;\s*if \(mount\.inert !== background\) mount\.inert = background;/.test(sync), true);
 check("Escape fold handler skips an inert background paper", /if \(!paper\.isConnected \|\| !paper\.classList\.contains\("isResOpen"\)\) return;\s*if \(paper\.closest\("\[inert\]"\)\) return;\s*api\.fold\(\);/.test(code), true);
 check("640px crossing remounts the resident module (open state kept)",
   /if \(mobileNow !== residentsMobile\) \{\s*residentsMobile = mobileNow;\s*remountHomeResidentsForBreakpoint\(\);/.test(mountHome) &&

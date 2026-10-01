@@ -9,7 +9,7 @@
 // `recordSource` is an **injected seam** — main.js's product default is `GIFT_RECORD_SOURCE =
 // null` (same pattern as A-554's `INDEX_BACKUP_ADAPTER = null`). No durable gift record store
 // exists in this repo (no address/ABI for the recovered GiftPiggy contract, no server, no
-// sender-signed-fragment support in the fragment format itself — see lane_a/AUDIT.md). When
+// sender-signed-fragment support in the fragment format itself). When
 // `recordSource` is null, `beginGiftClaim` says so honestly (`record_source_unavailable`)
 // instead of guessing, fabricating a record, or quietly falling back to some other shape.
 //
