@@ -40,7 +40,7 @@ export function receiptPaperMarkup({
     <div class="receiptPaper${empty ? " receiptPaper--empty" : ""}">
       <div class="receiptPaper__sheet">
         <div class="receiptPaper__logoRow">
-          <img class="receiptPaper__logo" src="${CARD_DIR}/arasoo-logo.png" alt="ARASOO" />
+          <img class="receiptPaper__logo" src="${CARD_DIR}/araso-logo.png" alt="ARASO" />
         </div>
         <div class="receiptPaper__date">${escapeHtml(date)}</div>
         <div class="receiptPaper__rule" aria-hidden="true"></div>

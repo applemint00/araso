@@ -299,13 +299,18 @@ export async function admitSequencedPiggy({
   } catch (err) {
     return refuse(authErrorReason(err));                  // n 소모 0 · 줄 0 — 원인별로 구분된 사유
   }
-  // 돌아온 credential 이 우리가 고정한 그 루트인가 — 루트가 조용히 바뀌지 않게.
-  if (!result || result.credentialId !== rootId) return refuse("root_credential_mismatch");
   let address;
   try {
-    address = deriveAddress(result.prfOutput);            // **라이브 파생** — 이 salt 로만
-  } catch {
-    return refuse("derive_failed");
+    // 돌아온 credential 이 우리가 고정한 그 루트인가 — 루트가 조용히 바뀌지 않게.
+    if (!result || result.credentialId !== rootId) return refuse("root_credential_mismatch");
+    try {
+      address = deriveAddress(result.prfOutput);          // **라이브 파생** — 이 salt 로만
+    } catch {
+      return refuse("derive_failed");
+    }
+  } finally {
+    // [A-669] PRF 출력은 주소 파생에만 쓰고 성공·거부·실패 모두 여기서 0 으로 지운다(돌려주거나 보관 0).
+    if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
   }
   if (requireNext) {
     const after = loadMyPiggiesIndex(storage, chainId).index;

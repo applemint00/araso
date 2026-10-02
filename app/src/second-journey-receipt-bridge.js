@@ -31,11 +31,19 @@ export const TERMINAL_OUTCOMES = Object.freeze(["done", "failed"]);
  * (그 모듈을 import 하지 않는 이유: 이 문지기는 판정 테이블이 아니라 계약만 안다).
  * fork 는 실거래가 아니다 — 등급으로 **드러난 채** 저장되고, 승격 경로는 없다.
  */
+// [A-663] PASS_TESTNET_ACTUAL_TX — a real Monad testnet tx, truthfully distinct from both
+// PASS_MAINNET_TX (live mainnet) and the three fork classes (simulation). Per the A-663 Owner
+// correction (2026-10-01, "TESTNET shMON IS PLUMBING PROOF, NOT THE SECOND JOB"): today the
+// only producer of this class is the Second-owned execution plumbing-proof lane
+// (second-execution-adapter.js), which is never Explore-visible/Send-visible and never a
+// Second Journey product destination — this class exists so that lane's real receipt can
+// still pass through the same truthful gate as any future distinct Second product Job would.
 export const PERSISTABLE_EVIDENCE_CLASSES = Object.freeze([
   "PASS_FORK_SIM",
   "PASS_FORK_SIM_WITH_PENDING",
   "PASS_APP_FORK_E2E",
   "PASS_MAINNET_TX",
+  "PASS_TESTNET_ACTUAL_TX",
 ]);
 
 /** 이 등급/모양이 보이면 **즉시 거절**한다. 미리보기는 기록이 아니다. */
@@ -68,7 +76,9 @@ export const REJECTION = Object.freeze({
   FORBIDDEN_FIELD: "forbidden_field_present",
 });
 
-const EXECUTION_MODES = Object.freeze({ FORK: "fork_simulation", LIVE: "live" });
+// [A-663] TESTNET_ACTUAL is its own mode string — never "live" (mainnet) and never
+// "fork_simulation" — so a real testnet tx can never be mistaken for either at this gate.
+const EXECUTION_MODES = Object.freeze({ FORK: "fork_simulation", LIVE: "live", TESTNET_ACTUAL: "testnet_actual" });
 
 const str = (v) => (typeof v === "string" ? v.trim() : "");
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
@@ -139,14 +149,19 @@ export function classifySecondReceipt(candidate, { scope = {}, context = {} } = 
   // ⑥ 등급과 실행 모드가 서로 말이 맞아야 한다. fork 라벨이 live 로 새지 않는다.
   const executionMode = str(candidate.executionMode);
   const isLiveClass = evidenceClass === "PASS_MAINNET_TX";
+  // [A-663] 테스트넷 실거래 등급도 같은 원칙 — 자기 전용 모드 문자열과만 맞는다.
+  const isTestnetActualClass = evidenceClass === "PASS_TESTNET_ACTUAL_TX";
   if (isLiveClass && executionMode !== EXECUTION_MODES.LIVE) {
     return { persistable: false, reason: REJECTION.EVIDENCE_MODE_MISMATCH, receipt: null };
   }
-  if (!isLiveClass && executionMode !== EXECUTION_MODES.FORK) {
+  if (isTestnetActualClass && executionMode !== EXECUTION_MODES.TESTNET_ACTUAL) {
     return { persistable: false, reason: REJECTION.EVIDENCE_MODE_MISMATCH, receipt: null };
   }
-  // 실거래 등급은 **실제 tx 해시** 없이는 성립하지 않는다.
-  if (isLiveClass && outcome === "done" && !TX_HASH.test(str(candidate.txHash))) {
+  if (!isLiveClass && !isTestnetActualClass && executionMode !== EXECUTION_MODES.FORK) {
+    return { persistable: false, reason: REJECTION.EVIDENCE_MODE_MISMATCH, receipt: null };
+  }
+  // 실거래 등급(mainnet live 또는 testnet actual)은 **실제 tx 해시** 없이는 성립하지 않는다.
+  if ((isLiveClass || isTestnetActualClass) && outcome === "done" && !TX_HASH.test(str(candidate.txHash))) {
     return { persistable: false, reason: REJECTION.LIVE_EVIDENCE_WITHOUT_TX, receipt: null };
   }
 

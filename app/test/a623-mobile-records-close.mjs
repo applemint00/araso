@@ -92,8 +92,12 @@ check("openRecordsCard() itself has no blanket already-open return (web identity
   /if \(state\.recordsCardVisible\) return;/.test(fnBody(code, "openRecordsCard")), false);
 
 const mobileBlocks = [...stripComments(CSS).matchAll(/@media \(max-width: 640px\) \{([\s\S]*?)\n\}/g)].map((m) => m[1]).join("\n");
-check("≤640: resident records share the 18px mobile size",
-  /#homeRecordsButton,\s*\n\s*\.homePaper__records\[data-piggy-id\] \{\s*\n\s*font-size:\s*18px;/.test(mobileBlocks), true);
+// [A-666 re-pin, named reason] Owner decision (global mobile type-scale increase,
+// TYPOGRAPHY_SCALE.md): this was already the approved MOBILE value — bumped 18px → 21px
+// in place, same ≈1.15 ratio applied everywhere else. The ::after hit-area inset below is
+// unaffected (padding, not font-size) and stays unchanged.
+check("≤640: resident records share the 21px mobile size (A-666 global mobile type-scale, ≈1.15× the pre-card 18px)",
+  /#homeRecordsButton,\s*\n\s*\.homePaper__records\[data-piggy-id\] \{\s*\n\s*font-size:\s*21px;/.test(mobileBlocks), true);
 check("≤640: resident records hit grows up over its own card, down only into its 18px padding",
   /\.homePaper__records\[data-piggy-id\]::after \{\s*\n\s*inset:\s*-30px -12px -18px -12px;/.test(mobileBlocks), true);
 check("≤640: time/state contrast .62, no size/weight change",

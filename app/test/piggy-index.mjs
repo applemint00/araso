@@ -148,7 +148,9 @@ await check("11. open/recover-style registration uses the actually derived signe
   const code = MAIN.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   const body = (n) => { const i = code.indexOf(`function ${n}(`); return code.slice(i, code.indexOf("\n}\n", i)); };
   assert.match(body("indexControlledPiggy"), /signerAddress: state\.activeSignerAddress/);
-  assert.match(body("recoverPiggy"), /activateSigningSession\(result\.prfOutput\);\n\s+indexControlledPiggy\(\{/);
+  // [A-667 R1/R2 re-pin] 색인은 여전히 신원 저장(이제 commitIdentity — 대조·원자 저장) **뒤에만** 적힌다.
+  // 옛 단언: activateSigningSession(result.prfOutput);\n indexControlledPiggy({
+  assert.match(body("recoverPiggy"), /commitIdentity\(\{[\s\S]*?\}\);\n(?:\s*\/\/[^\n]*\n)*\s+indexControlledPiggy\(\{/);
   assert.match(body("openPiggy"), /indexControlledPiggy\(\{ address, credentialId: result\.credentialId, transports: result\.transports, prfSaltHex: toHex\(result\.prfSalt\) \}\)/);
   assert.equal((body("recoverPiggy").match(/requestPrf\(/g) || []).length, 2); // 기존 두 번(고정 + 한 번 재시도) 그대로 — 추가 요청 0
 });
@@ -157,7 +159,13 @@ await check("12. First single-Piggy flow keeps every original write; the index w
   const code = MAIN.split("\n").filter((l) => !l.trim().startsWith("//")).join("\n");
   const i = code.indexOf("function openPiggy(");
   const open = code.slice(i, code.indexOf("\n}\n", i));
-  const order = ["activateSigningSession(result.prfOutput)", "writeCredential(credential)", 'localStorage.setItem("araso.prfSalt"', "localStorage.setItem(PIGGY_RECEIVED_KEY", "indexControlledPiggy(", "noteRecoverSuccess()"];
+  // [A-667 R2 re-pin] credential·prfSalt·받음 표시 쓰기는 commitIdentity 한 덩어리로 묶였다(키·값 동일 — 아래 commit
+  // 단언). 옛 순서 토큰: writeCredential(credential) → setItem("araso.prfSalt") → setItem(PIGGY_RECEIVED_KEY).
+  const order = ["activateSigningSession(result.prfOutput, { persistAddress: false })", "commitIdentity({ credential, address, prfSaltHex: toHex(result.prfSalt), received: true })", "indexControlledPiggy(", "noteRecoverSuccess()"];
+  const commitSrc = code.slice(code.indexOf("function commitIdentity("), code.indexOf("\n}\n", code.indexOf("function commitIdentity(")));
+  for (const token of ["localStorage.setItem(PASSKEY_STORAGE_KEY, JSON.stringify(credential))", 'localStorage.setItem("araso.address", address)', 'localStorage.setItem("araso.prfSalt", prfSaltHex)', 'localStorage.setItem(PIGGY_RECEIVED_KEY, "1")']) {
+    assert.ok(commitSrc.includes(token), token);
+  }
   let last = -1;
   for (const token of order) { const at = open.indexOf(token); assert.ok(at > last, token); last = at; }
   const idx = code.slice(code.indexOf("function indexControlledPiggy("), code.indexOf("\n}\n", code.indexOf("function indexControlledPiggy(")));

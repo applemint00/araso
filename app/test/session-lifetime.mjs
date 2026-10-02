@@ -125,6 +125,8 @@ function buildApp({ grantThrows = false } = {}) {
     setScene: (...a) => { calls.scenes.push(a); },
     isAllowedPiggyRpId: () => true,
     noteRecoverSuccess() {}, noteRecoverFailure() {}, isCancelledAuthError: () => false,
+    // [A-669] lockAppAfterIdle 가 먼저 부르는 Check/Open 시도 무효화(authAttempt 영역은 이 하네스 밖) — 살아 있는 시도 없음.
+    invalidateLiveAuthAttempt: () => false,
     requestGrant: async () => {
       calls.grant += 1;
       if (grantThrows) throw new Error("relayer unreachable");

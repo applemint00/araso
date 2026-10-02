@@ -434,7 +434,7 @@ async function browserRun(browser, BASE, shots) {
     const HOME_FOOT_NORMALIZED_RATIO = (HOME_FOOT_REF_TOP + HOME_FLOOR * HOME_FOOT_REF_S) / 900;
     const WEB_FOOT_TARGET = (vh) => Math.min(HOME_FOOT_NORMALIZED_RATIO * vh, vh - 42);
     for (const [w, h] of [[390, 844], [430, 900], [700, 900], [1440, 900]]) {
-      await check(`B1 [${w}] one Piggy: no living layer, seat visible, seat foot follows the 1440-canon normalized ratio (Δ0 at 700/1440, moved up at 390/430), name keeps its old relative offset under the seat`, async () => {
+      await check(`B1 [${w}] one Piggy: no living layer, seat visible, seat foot follows the 1440-canon normalized ratio (Δ0 at 700/1440, moved up at 390/430), name stays directly under the seat with no overlap`, async () => {
         await atWidth(w, h);
         const g = await living();
         assert.equal(g.layer, null); assert.equal(g.res.length, 0); assert.equal(g.seatHidden, false);
@@ -443,11 +443,25 @@ async function browserRun(browser, BASE, shots) {
         assert.ok(Math.abs(g.seat[3] - target) < 2, `seat foot ${g.seat[3]} vs target ${target}`);
         const dy = g.seat[3] - old.seat[3];
         assert.ok(near([old.seat[0], old.seat[1] + dy, old.seat[2], old.seat[3] + dy], g.seat), `seat translate-only shape drifted ${g.seat}`);
-        const oldGap = old.name[1] - old.seat[3];
-        const newGap = g.name[1] - g.seat[3];
-        assert.ok(Math.abs(newGap - oldGap) < 0.6, `name→seat relative offset drifted: old ${oldGap} new ${newGap}`);
-        assert.ok(Math.abs((old.name[2] - old.name[0]) - (g.name[2] - g.name[0])) < 0.6, "name width unchanged");
-        assert.ok(Math.abs((old.name[3] - old.name[1]) - (g.name[3] - g.name[1])) < 0.6, "name height unchanged");
+        // [A-666 re-pin, named reason] Owner's global mobile type-scale decision
+        // (TYPOGRAPHY_SCALE.md) raised `.homeChar__name` (#homeName) 13px → 15px at
+        // ≤640px only — this element's own rendered width/height and exact gap-under-seat
+        // are therefore EXPECTED to shift at 390/430 (never at 700/1440, where that ≤640
+        // rule does not apply — those two widths keep the original byte-exact check
+        // below). What still must hold at every width either way: the name sits directly
+        // under the seat (small positive gap) with zero overlap — a geometry invariant,
+        // not a byte-identical box.
+        if (w <= 640) {
+          const gap = g.name[1] - g.seat[3];
+          assert.ok(gap > 0 && gap < 12, `name must sit just under the seat with a small positive gap, got ${gap}`);
+          assert.equal(touch(g.name, g.seat), false, "name must not overlap the seat");
+        } else {
+          const oldGap = old.name[1] - old.seat[3];
+          const newGap = g.name[1] - g.seat[3];
+          assert.ok(Math.abs(newGap - oldGap) < 0.6, `name→seat relative offset drifted: old ${oldGap} new ${newGap}`);
+          assert.ok(Math.abs((old.name[2] - old.name[0]) - (g.name[2] - g.name[0])) < 0.6, "name width unchanged");
+          assert.ok(Math.abs((old.name[3] - old.name[1]) - (g.name[3] - g.name[1])) < 0.6, "name height unchanged");
+        }
         assert.ok(g.sw <= g.iw);
         await shot(`n1_w${w}`);
       });

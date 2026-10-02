@@ -152,6 +152,18 @@ export function mountReturnView(opts) {
 
   // [A-322 교정 2] 종이 버튼·글자·hitbox 는 renderer 가 준 board rect 를
   // canvas 의 실제 client rect 로 옮겨 놓는다. 중앙 고정값 0.
+  // [A-666 OWNER CORRECTION — RECEIPT TEXT MUST ALSO SCALE] 애니메이션 목표 중심/위치(p,
+  // renderer 의 paperBoard)는 그대로 둔다 — Return 기하·게이트 타이밍 전부 무변경. 전에는
+  // `#returnTap` 자신을 이 목표 박스(p.x/p.y/p.w/p.h) 그대로 놓고, 그 안에서 종이를
+  // contain-fit(--paperScale)으로 줄여 넣기만 했다 — 모바일 글자 확대로 종이의
+  // 내용-기반 자연 높이(nh)가 커지면 contain-fit 비율이 바뀌어 실제 그려지는(회전+스케일된)
+  // 종이 바깥 테두리가 이 목표 박스 가장자리에서 떨어진다(한 축에 여유가 남는다) — 그만큼
+  // `#returnTap`(히트박스)과 실제 보이는 종이가 어긋났다. 고치는 자리: --paperScale 을
+  // 정한 "다음" 에 종이의 실제 렌더된 rect(getBoundingClientRect — 회전·스케일 다 반영된
+  // 값)를 **다시 읽어** `#returnTap` 을 그 rect 에 맞춰 다시 앉힌다. `.returnTap__rows`
+  // (style.css) 가 `#returnTap` 안에서 종이를 flex 로 가운데 정렬하므로, 종이의 중심은
+  // 이 재배치 전후로 같다(원래 목표 박스의 중심 그대로) — 바뀌는 것은 눈에 안 보이는 버튼
+  // 테두리뿐, 종이 자신의 위치·회전·애니메이션 경로는 전혀 건드리지 않는다.
   function placePaper(meta) {
     if (!tapBtn) return;
     const p = meta && meta.paperBoard;
@@ -186,6 +198,18 @@ export function mountReturnView(opts) {
       const rh = Math.abs(nw * Math.sin(theta)) + Math.abs(nh * Math.cos(theta));
       const fit = Math.min((p.w * k) / rw, (p.h * k) / rh);
       paperEl.style.setProperty("--paperScale", String(fit > 0 ? fit : 1));
+      // [A-666 OWNER CORRECTION] --paperScale 을 막 바꿨으니 getBoundingClientRect() 는
+      // 그 값을 반영한 레이아웃을 강제로(동기) 다시 계산해 돌려준다 — 그 실제 rect 로
+      // `#returnTap` 자신을 다시 앉힌다. 종이는 위 flex 중앙정렬로 원래 목표 박스
+      // 한가운데 그대로 있으므로, 이 재배치는 중심을 옮기지 않고 테두리만 실제 그려진
+      // 크기에 맞춘다.
+      const paperRect = paperEl.getBoundingClientRect();
+      if (paperRect.width > 0 && paperRect.height > 0) {
+        tapBtn.style.left = `${paperRect.left}px`;
+        tapBtn.style.top = `${paperRect.top}px`;
+        tapBtn.style.width = `${paperRect.width}px`;
+        tapBtn.style.height = `${paperRect.height}px`;
+      }
     }
     if (hint) {
       hint.style.left = `${r.left + (p.x + p.w / 2) * k}px`;

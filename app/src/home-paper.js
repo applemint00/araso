@@ -111,7 +111,7 @@ export function homePaperMarkup({
           >
             <img class="homePaper__stamp" src="${CARD_DIR}/house-stamp.png" alt="" aria-hidden="true" />
           </button>
-          <img class="homePaper__logo" src="${CARD_DIR}/arasoo-logo.png" alt="ARASOO" />
+          <img class="homePaper__logo" src="${CARD_DIR}/araso-logo.png" alt="ARASO" />
         </div>
       </div>
     </div>

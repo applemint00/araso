@@ -203,13 +203,16 @@ function candidatesStepMarkup({ destinations = [], errandLabelById = {}, pickedC
 // 보상 claim: APP_HANDOFF.md:16 / CURRENCY_NOTES.md:15 ("pick up my rewards") — 단
 // "보상 아닌 수령 대상에 rewards 강제 적용 금지"(CURRENCY_NOTES.md:15)이므로 보상 여부를
 // 실제 데이터로 구분할 수 있을 때만 쓴다(아래 secondActionTitle 주석).
-// move/stay 는 승인 영어가 아직 없다(SOURCE_MISSING) — 발명하지 않는다.
+// move/stay: Owner 승인 2026-10-01 (INBOX "A-663 OWNER COPY DECISION — MOVE / STAY").
+// stay 는 Send 카드 "stay home" 과 같은 말 — 새 어휘 0.
 export const SECOND_ACTION_TITLES_EN = Object.freeze({
   market: "go to the market",
   order: "leave an order",
   clean: "tidy the wallet",
   claim: "pick up what is owed",
   grow: "put some money to work",
+  move: "find a better spot",
+  stay: "stay home",
   // Owner 번역 지시(INBOX A-421 "영어로 다바꿔서 보내") — 과거 정본 아님.
   "asset-piece": "pick up a piece of an asset",
 });

@@ -144,6 +144,8 @@ function buildApp() {
     setTimeout: clock.setTimeout,
     clearTimeout: clock.clearTimeout,
     Date: { now: () => clock.now() }, // handleTrustedAppActivity 의 throttle 이 읽는 유일한 "지금" — 가짜 clock 에 묶는다
+    // [A-669] lockAppAfterIdle 가 먼저 부르는 시도 무효화(main.js 의 authAttempt 영역은 이 하네스 밖) — 살아 있는 시도 없음.
+    invalidateLiveAuthAttempt: () => false,
   };
   vm.createContext(ctx);
   vm.runInContext(

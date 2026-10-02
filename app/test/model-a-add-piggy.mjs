@@ -315,8 +315,11 @@ await check("E1. + Piggy product path never calls createPasskeyWithPrfOutput and
   assert.match(begin, /locks: webLocks\(\)/);
   // 첫 Piggy 경로는 그대로 — 생성도, 기본 저장 scope 도
   assert.match(fnBody("openPiggy"), /createPasskeyWithPrfOutput\(\{/);
-  assert.match(fnBody("openPiggy"), /activateSigningSession\(result\.prfOutput\)/);
-  assert.match(fnBody("recoverPiggy"), /activateSigningSession\(result\.prfOutput\);/);
+  // [A-667 R1/R2 re-pin] 첫 Piggy 경로는 서명자만 세우고 주소는 commitIdentity 가 credential 과 한 덩어리로 저장한다.
+  // 옛 단언: openPiggy/recoverPiggy 의 activateSigningSession(result.prfOutput)(기본 persistAddress=true).
+  assert.match(fnBody("openPiggy"), /activateSigningSession\(result\.prfOutput, \{ persistAddress: false \}\)/);
+  assert.match(fnBody("openPiggy"), /commitIdentity\(\{ credential, address, prfSaltHex: toHex\(result\.prfSalt\), received: true \}\)/);
+  assert.match(fnBody("recoverPiggy"), /activateSigningSession\(prfOutput, \{ persistAddress: false \}\);/);
 });
 
 await check("E2. the root credential cannot silently switch: index row and saved credential must agree", () => {

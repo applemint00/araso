@@ -139,12 +139,17 @@ check("web close/back base rule unchanged (12px italic, no padding)",
   /\.recordsCard__back,\s*\n\.recordsCard__close \{[^}]*padding:\s*0;[^}]*font:\s*italic 12px\/1\.2 Georgia/.test(CSS), true);
 
 const recCss = cut(CSS, "/* [A-621] mobile-only readability/touch compensation", "\n}\n\n");
-check("≤640px only: #homeRecordsButton 18px (≈11.5px rendered at ×0.6408) + ::after ≥44 CSS px tall",
-  // [A-623 superseding update] the size rule now also lists the multi-Piggy resident entries.
-  /@media \(max-width: 640px\) \{\s*\n\s*#homeRecordsButton(,\s*\n\s*\.homePaper__records\[data-piggy-id\])? \{\s*\n\s*font-size:\s*18px;/.test(recCss) &&
+// [A-666 re-pin, named reason] Owner decision (INBOX A-666 "GLOBAL MOBILE TYPOGRAPHY OWNER
+// DECISION"): increase ALL existing mobile text from its currently-approved size. This was
+// already the approved MOBILE value (not the 12px web/base value, re-asserted unchanged
+// below) — bumped 18px → 21px, same ≈1.15 ratio TYPOGRAPHY_SCALE.md applies everywhere else.
+// Hit-area math only grows with a larger font (18px already cleared ≥44 CSS px before this
+// card), so the ::after inset itself did not need to change.
+check("≤640px only: #homeRecordsButton 21px (A-666 mobile type-scale, ≈1.15× the pre-card 18px) + ::after ≥44 CSS px tall",
+  /@media \(max-width: 640px\) \{\s*\n\s*#homeRecordsButton(,\s*\n\s*\.homePaper__records\[data-piggy-id\])? \{\s*\n\s*font-size:\s*21px;/.test(recCss) &&
   /#homeRecordsButton::after \{\s*\n\s*inset:\s*-14px -12px -34px -12px;/.test(recCss), true);
-check("records hit math: (18×1.2 + 14 + 34) × 0.6408 ≥ 44 and 18 × 0.6408 ≥ 11",
-  (18 * 1.2 + 14 + 34) * (256.338 / 400) >= 44 && 18 * (256.338 / 400) >= 11, true);
+check("records hit math: (21×1.2 + 14 + 34) × 0.6408 ≥ 44 and 21 × 0.6408 ≥ 11",
+  (21 * 1.2 + 14 + 34) * (256.338 / 400) >= 44 && 21 * (256.338 / 400) >= 11, true);
 check("web .homePaper__records base font stays 12px", /\.homePaper__records \{[^}]*font:\s*italic 12px\/1\.2 Georgia/.test(CSS), true);
 
 // ── 4. [A-662] computeHistoryFitMode() — geometry-fit trigger, no hardcoded width ──────────

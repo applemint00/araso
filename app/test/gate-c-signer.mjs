@@ -211,9 +211,13 @@ await check("reopen reads the stored prfSalt instead of silently defaulting", ()
 });
 
 await check("the First single-Piggy path still persists its address exactly as before", () => {
-  // openPiggy / recoverPiggy 는 기본값(persistAddress=true)으로 부른다 — 한 마리 흐름 무변경.
-  assert.match(fnBody("openPiggy"), /activateSigningSession\(result\.prfOutput\)/);
-  assert.match(fnBody("recoverPiggy"), /activateSigningSession\(result\.prfOutput\)/);
+  // [A-667 R1/R2 re-pin] openPiggy / recoverPiggy 는 이제 서명자만 세우고(persistAddress:false) 주소는
+  // commitIdentity 가 credential 과 **한 덩어리로** 저장한다(R1: 저장 전 신원 대조 · R2: 실패 시 이전 신원 복원).
+  // 저장되는 키(araso.address)와 state.address 갱신 자체는 그대로다. 옛 단언: activateSigningSession(result.prfOutput).
+  assert.match(fnBody("openPiggy"), /activateSigningSession\(result\.prfOutput, \{ persistAddress: false \}\)/);
+  assert.match(fnBody("recoverPiggy"), /activateSigningSession\(prfOutput, \{ persistAddress: false \}\)/);
+  assert.match(fnBody("commitIdentity"), /localStorage\.setItem\("araso\.address", address\);/);
+  assert.match(fnBody("commitIdentity"), /state\.address = address;/);
   assert.match(fnBody("activateSigningSession"), /if \(persistAddress\) \{\n\s+localStorage\.setItem\("araso\.address", address\);\n\s+state\.address = address;/);
 });
 

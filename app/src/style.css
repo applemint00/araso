@@ -96,7 +96,17 @@
 
 body {
   margin: 0;
+  /* [A-666] `.stage`(A-665)/`.stage[data-scene="sendstay"]`(prior card) already carry a
+     `100vh`+`100dvh` pair, but `body` itself never did — on iOS Safari `100vh` resolves to
+     the large/toolbar-retracted viewport even while the toolbar is shown, so this bare box
+     could be taller than the real visible dvh area. Every Home child is absolutely/fixed
+     positioned (DIAGNOSIS.md §1), so `.stage` itself never overflows — the page-level
+     scrollbar Owner saw was purely `body`'s own stale min-height exceeding the visible
+     area, a "wrapper taller than its content." Additive only (same pattern as the other two
+     selectors above): `100dvh` is simply ignored by engines that don't support the unit, so
+     `100vh` remains the fallback there. */
   min-height: 100vh;
+  min-height: 100dvh;
   /* 노트지는 "한 장"이다 — 타일이 아니다. repeat 하면 스프링 구멍과 테이프가 격자로 늘어서서
      무대가 아니라 배경 무늬가 된다. 화면을 한 장으로 덮고, 어둡게 눌러 카드 글자를 살린다. */
   background:
@@ -105,7 +115,13 @@ body {
   background-repeat: no-repeat;
   background-position: center;
   background-size: cover;
-  background-attachment: fixed;
+  /* [A-665] `background-attachment:fixed` 는 iOS Safari 가 동적 툴바로 뷰포트를 리사이즈하는
+     동안 리페인트가 늦거나 이가 어긋나는(seam) 것으로 알려진 패턴이다 — Invite/Received 이후
+     "무대가 계속 수직으로 깨져 보인다"는 Owner 보고와 겹치는 요인. 정적 스크롤 0 화면(모든 씬이
+     `overflow:hidden` 로 한 화면에 맞춰 스케일되는 설계)에서는 `scroll`(기본값)과 픽셀 결과가
+     같다 — 실제로 스크롤이 거의 발생하지 않으므로 정적 모습은 바뀌지 않고, 리사이즈 중 반복되는
+     iOS 리페인트 결함만 제거한다. */
+  background-attachment: scroll;
   background-color: var(--paper);
 }
 
@@ -150,10 +166,20 @@ button:disabled {
   opacity: 0.52;
 }
 
+/* [A-665] real-iPhone-Safari repair — this shared base rule previously had only `min-height:
+   100vh`, unlike `.stage[data-scene="sendstay"]` (:137-142) and `.stage--hatch,.stage--name`
+   (:287-293) which already carry the same `100dvh` fallback (prior card). iOS Safari's `100vh`
+   resolves to the large/toolbar-retracted viewport even while the toolbar is actually shown, so
+   this bare `.stage` (which `.stage--invite` and `.stage--loginCheck` both inherit from, since
+   neither sets its own `min-height`) could be taller than the real visible area. Adding the
+   fallback here, once, propagates it to every bare-`.stage` scene instead of patching each
+   selector again. `100dvh` is simply ignored by engines that don't support the unit, so `100vh`
+   remains the fallback there — this is additive, not a replacement. */
 .stage {
   position: relative;
   display: grid;
   min-height: 100vh;
+  min-height: 100dvh;
   place-items: center;
   overflow: hidden;
   padding: 32px;
@@ -1037,7 +1063,10 @@ h1 {
     top: var(--mobile-top-safe);
     transform: none;
     text-align: left;
-    font-size: 11px;
+    /* [A-666] global mobile type-scale pass (TYPOGRAPHY_SCALE.md, ratio ≈1.15): this IS
+       already the approved mobile value (11px, smaller than the 12px desktop base above) —
+       bumped in place rather than adding a competing ≤640 rule. */
+    font-size: 12.5px;
     letter-spacing: 0.07em;
   }
 
@@ -2057,11 +2086,15 @@ h1 {
    ≥44 CSS px tall, biased DOWNWARD (empty paper below the piggy card) so it steals as little
    as possible of the name/state lines above. Only the single-Piggy `#homeRecordsButton`;
    multi-Piggy `.homePaper__records[data-piggy-id]` entries are unchanged (not in this flow).
-   [A-623] superseded for multi-Piggy: resident entries now share the mobile size (below). */
+   [A-623] superseded for multi-Piggy: resident entries now share the mobile size (below).
+   [A-666] global mobile type-scale pass (TYPOGRAPHY_SCALE.md, Owner decision — "increase ALL
+   existing app text on mobile"): 18px → 21px, same ≈1.15 ratio as every other role. Hit math
+   only grows with a larger font (a621-mobile-records-stack.mjs's own check already proves the
+   smaller 18px passes ≥44 CSS px; re-pinned to 21px, named reason). */
 @media (max-width: 640px) {
   #homeRecordsButton,
   .homePaper__records[data-piggy-id] {
-    font-size: 18px;
+    font-size: 21px;
   }
 
   #homeRecordsButton::after {
@@ -2152,7 +2185,7 @@ h1 {
 }
 
 .homePaper__logo {
-  width: 218px;
+  width: 184px;
   display: block;
 }
 
@@ -3011,10 +3044,25 @@ h1 {
    Main.dc.html(420×840) 좌표 그대로. 봉투 뜯기는 단계는 같은 캔버스의 와이드 아트보드에서 왔다.
    그림을 다시 짜지 않고 판을 통째로 축소한다(scale 은 JS 의 fitInvite 가 넣는다) — 좌표·간격
    비율이 캔버스와 어긋나지 않게 하려는 것이다. --- */
+/* [A-665] 코디네이터 실측(Chromium, 082d410 사본): 390×744(툴바 표시 시뮬)에서 `.stage` 높이가
+   840으로 고정돼 보이는 영역보다 96px 넘침(430×832 에선 8px). 원인은 `.invite` 보드 자신의
+   레이아웃 박스가 420×840 고정(:3025 이하)이고, `fitInvite()`(main.js)가 거는 `transform:
+   scale()` 은 페인트 단계에서만 줄어들 뿐 레이아웃 크기는 그대로라서, 부모 `.stage`(display:grid,
+   암묵 행 = max-content) 가 그 840px 를 그대로 받아 자기 min-height(100vh/100dvh) 보다 커질 수
+   있었다 — 뷰포트가 min-height 아래로 줄어들 때마다(툴바 표시) 840 이 이겨 흘러넘쳤다. 위 공유
+   `.stage` 규칙은 바닥(min-height)만 올려 줄 뿐 위쪽 한도가 없어 이 케이스는 못 막는다. Invite는
+   원래 "판을 통째로 축소해 넣는다"는 설계(위 주석)라 스크롤이 필요 없는 화면이므로, 여기서만
+   명시적 `height`(한도)를 추가해 실제 보이는 동적 뷰포트로 박스 자체를 못박고, 기존
+   `overflow:hidden` 이 넘친 만큼을 자른다 — `fitInvite()`가 이미 같은 `window.innerHeight` 로
+   scale 을 다시 계산하므로(리사이즈 리스너 main.js:9687) 두 값이 같이 움직인다. 전체 높이(기준
+   844)에서는 보드(840)가 이미 더 작아 지금과 동일하게 보인다 — 변경은 축소된(toolbar 표시)
+   경우에만 작동한다. */
 .stage--invite {
   padding: 0;
   align-content: center;
   overflow: hidden;
+  height: 100vh;
+  height: 100dvh;
 }
 
 .invite__faceIcon {
@@ -3784,7 +3832,7 @@ h1 {
   text-align: center;
 }
 .receiptPaper__logo {
-  width: 104px;
+  width: 88px;
   display: block;
   margin: 0 auto;
 }
@@ -3874,6 +3922,30 @@ h1 {
 }
 .secondJourney__dot,
 .recordsCard__dot { width: 5px; height: 5px; margin-top: 1px; border-radius: 50%; background: #141210; }
+/* [A-666] Owner-identified top-left HISTORY control (OWNER ANSWER — INBOX A-666): the dot's
+   own look (size/color/radius, shared rule above) is untouched and `.secondJourney__dot`
+   (Explore's own masthead dot) is completely unaffected — this rule only targets
+   `.recordsCard__dot`. Gives it a real ≥44px invisible hit area (`::before`, absolutely
+   centered, no visible paint) plus a keyboard focus ring; wiring (click + Enter/Space →
+   closeRecordsCard(), the existing #recordsCardClose path) lives in main.js. */
+.recordsCard__dot {
+  position: relative;
+  cursor: pointer;
+}
+.recordsCard__dot::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+.recordsCard__dot:focus-visible {
+  outline: 2px solid rgba(20, 18, 16, 0.55);
+  outline-offset: 3px;
+  border-radius: 50%;
+}
 .secondJourney__page,
 .recordsCard__page { text-align: right; letter-spacing: 0; }
 /* [A-415-k] Owner Figma exact — 날짜 15/10/2px, 요일 10/7.5/1.8px, 먹색 #141210(요일 60%,
@@ -4262,6 +4334,28 @@ h1 {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* [A-667] 대기(waiting) ↔ 확인 중(checking) 구분 — Owner 시각 동결 부분 해제(2026-10-01) 범위 안에서만: 같은 화면·같은
+   글자·같은 글꼴, 확인 중일 때 Chog 얼굴만 위로 108px(얼굴 상자 top 132.5 → 24.5, 아래 끝 375.7 → 267.7) 올려 iOS 패스키
+   시트(화면 아래 약 400pt) 위에 보이게 둔다. 표식은 loginCheckingMarkup() 이 이미 내는 data-app-lock 뿐(마크업 변경 0).
+   unlockApp() 이 requestPrf 호출 **뒤에** 다시 그리므로 새 요소에 keyframes 로 한 번 올라간다. 확인 중 재탭은 no-op
+   (unlockApp 가드)이라 커서도 progress 로 바꾼다. 웹(641+)에는 잠금 자체가 없다. */
+.stage--loginCheck[data-app-lock="checking"] .loginCheck__face {
+  cursor: progress;
+  transform: translateY(-108px);
+  animation: loginCheckLift 280ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes loginCheckLift {
+  from { transform: translateY(0); }
+  to { transform: translateY(-108px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage--loginCheck[data-app-lock="checking"] .loginCheck__face {
+    animation: none;
+  }
+}
+
 .stage--loginCheck .loginCheck__face .chogInvite {
   left: 0;
   top: 0;
@@ -4324,7 +4418,169 @@ h1 {
     top: auto;
     bottom: 628px;
     max-width: none;
-    font-size: 123px;
+    /* [A-666] global mobile type-scale pass (TYPOGRAPHY_SCALE.md): this local px is already
+       the composite-scale-corrected mobile value (123 × ≈0.14633 ≈ 18px visual, this
+       selector's own comment above). Same ≈1.15 ratio applied to the VISUAL target
+       (18→≈20.7px) and re-derived through the same local/composite-scale math, not a raw
+       123×1.15 — 141 × ≈0.14633 ≈ 20.6px visual. */
+    font-size: 141px;
     text-shadow: 0 14px 41px rgba(0, 0, 0, 0.55);
   }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════════════════
+   [A-666 §3] GLOBAL MOBILE TYPOGRAPHY — Owner decision (INBOX A-666 "GLOBAL MOBILE
+   TYPOGRAPHY OWNER DECISION"): increase ALL existing user-visible app text on mobile from
+   the currently-approved sizes, preserving families/weights/italics/casing/hierarchy/
+   spacing-logic; desktop 700/1440 unchanged. style.css had no existing mobile type layer
+   (TYPE_INVENTORY.md: only 3 of ~100 text-sizing rules had any ≤640px override before this
+   card, handled in place above) — every other selector inherits the same literal px at every
+   width. This block is that layer: ONE ratio (≈1.15, picked here per TYPE_INVENTORY's own
+   "likely ~1.1–1.2×" estimate, selected to be visibly more legible without pushing fixed
+   local-box text — .homePaper ×0.275 / .sendCard ×0.65 / receipt --paperScale — into
+   clipping) applied to every remaining shared (non-mobile-scoped) font-size/font-shorthand
+   rule, rounded to a clean px, same relative order preserved exactly (TYPOGRAPHY_SCALE.md
+   has the full before→after table by semantic role). Transform-scaled containers do not need
+   a different ratio — visual = source×k (k = board/paper scale); raising source by ×r raises
+   visual by the same ×r regardless of k (TYPE_INVENTORY.md's own derivation) — so one ratio
+   covers flowing and transformed text alike; only clipping RISK differs per container, which
+   is why the ratio itself was kept moderate rather than per-container.
+   Mechanism: every rule below targets the EXACT base selector text already used earlier in
+   this file, inside `@media (max-width:640px)`. A media query adds no specificity, so each
+   override here ties the base rule's specificity exactly and wins purely by being later in
+   source order — only the `font-size` longhand is set (even for bases declared through the
+   `font:` shorthand), leaving family/weight/style/line-height/letter-spacing/color untouched.
+   No selector is reordered relative to another; no family, weight, italic, case or hierarchy
+   changes; nothing here touches 700/1440 (every rule is inside this one ≤640px query). */
+@media (max-width: 640px) {
+  /* -- cheapest single-point lever: every .pkbtn__word (Send/Stay/primary/secondary button
+     words) reads this one token app-wide. */
+  :root {
+    --btnWordSize: 23px;
+  }
+
+  /* -- Display/hero -- */
+  h1 {
+    font-size: clamp(37px, 9.2vw, 56px);
+  }
+  .nameCard__gotLine { font-size: 39px; }
+  .nameCard__titleText { font-size: 41px; }
+  .sendCard__titleText { font-size: 41px; }
+  .secondJourney__heading { font-size: 41px; }
+  .secondJourney__exploreText { font-size: 41px; }
+
+  /* -- Sub-display -- */
+  .authCard__title { font-size: 35px; }
+  .stage--loginCheck .loginCheck__title { font-size: 32px; }
+  .invite__line2 { font-size: 29px; }
+  .homePaper__heading { font-size: 29px; }
+  .homePaper__num { font-size: 35px; }
+  .homePaper__name { font-size: 24px; }
+
+  /* -- Big number (Second Journey) -- */
+  .secondJourneyCard .job { font-size: 28px; }
+  .secondJourneyCard .field input { font-size: 53px; }
+  .secondJourneyCard .field input::placeholder { font-size: 37px; }
+  .secondJourneyCard .receive { font-size: 53px; }
+  .secondJourneyCard .claim-value--text { font-size: 28px; }
+  .secondJourneyCard .claim-value span { font-size: 37px; }
+  .chogCheckLine { font-size: 28px; }
+
+  /* -- Body/copy -- */
+  .detail { font-size: 18px; }
+  .terms li { font-size: 21px; }
+  .note--quiet .line { font-size: 28px; }
+  .authCard__body { font-size: 15px; }
+  .invite__copy { font-size: 15px; }
+  .invite__face { font-size: 18px; }
+  .invite--wide .invite__face { font-size: 19.5px; }
+  .sendCard__message { font-size: 15px; }
+  .sendCard__stay { font-size: 15px; }
+  .sendCard__termLabel { font-size: 15px; }
+  .sendCard__detail { font-size: 14px; }
+  .nameCard__field input { font-size: 23px; }
+  .secondJourney__hint { font-size: 15px; }
+  .secondJourney__item { font-size: 15px; }
+  .secondJourney__amountRow { font-size: 15px; }
+  .secondJourney__amountRow input { font-size: 15px; }
+  .secondJourney__primary { font-size: 15px; }
+  .secondJourney__candidateTitle { font-size: 15px; }
+  .secondJourneyCard .secondJourney__list--interests .secondJourney__item { font-size: 15px; }
+  .secondJourneyCard .receive label { font-size: 15px; }
+  .secondJourneyCard .condition { font-size: 15px; }
+  .secondJourneyCard .failure { font-size: 15px; }
+  .secondJourneyCard .back { font-size: 15px; }
+  .homePaper__time { font-size: 15px; }
+  .homePaper__state { font-size: 15px; }
+  .homePaper__rowLabel { font-size: 15px; }
+  .homePaper__moneyStatusText { font-size: 15px; }
+  .homePaper__records { font-size: 14px; }
+  .recordsCard__empty { font-size: 15px; }
+  .recordsCard__rowDate { font-size: 15px; }
+  .receipt { font-size: 14px; }
+  .tiny { font-size: 14px; }
+  .recordsCard__detailRows { font-size: 14px; }
+
+  /* -- Label/eyebrow -- */
+  .eyebrow { font-size: 15px; }
+  .authCard__eyebrow { font-size: 11.5px; }
+
+  /* -- Status/notice -- */
+  .notice { font-size: 16px; }
+  .returnTap__hint { font-size: 14px; }
+  .stage--loginCheck .loginCheck__body { font-size: 14px; }
+  .secondJourney__candidateStatus { font-size: 13px; }
+  .secondJourney__reason { font-size: 13px; }
+  .secondJourney__checkBtn { font-size: 14px; }
+  .secondJourney__jitBtn { font-size: 14px; }
+  .secondJourney__mockTag { font-size: 11.5px; }
+  .secondJourneyCard .balance { font-size: 14px; }
+  .secondJourneyCard .claim-bring { font-size: 14px; }
+  .homePaper__statusText { font-size: 19.5px; }
+  .homePaper__unit { font-size: 12.5px; }
+  .homePaper__percent { font-size: 12.5px; }
+  .homePaper__note { font-size: 12.5px; }
+  .recordsCard__rowStatus { font-size: 12.5px; }
+  .recordsFolder__slipRow { font-size: 11.5px; }
+  .recordsFolder__slipStatus { font-size: 11px; }
+  .receipt-check { font-size: 11.5px; }
+  /* [A-666 OWNER CORRECTION — RECEIPT TEXT IS NOT EXEMPT / MUST ALSO SCALE] these 4 roles
+     were briefly left out (see git history) because enlarging them grows `.receiptPaper`'s
+     content-driven natural height (A-659 comment at `.receiptPaper`), which used to drift
+     `#returnTap`'s hitbox off the drawn paper. Per Owner's correction, `return-view.js` is
+     now in this card's allowed_files — `placePaper()` is fixed (below, that file's own
+     comment) to size/position `#returnTap` from the ACTUAL rendered (rotated/scaled)
+     `.receiptPaper` rect every frame, instead of a fixed pre-text-increase target box — so
+     the hitbox tracks whatever size the paper settles to, growth included. */
+  .receiptPaper__date { font-size: 14px; }
+  .receiptPaper__name { font-size: 17px; }
+  .receiptPaper__row { font-size: 15px; }
+  .receiptPaper__status { font-size: 15px; }
+
+  /* -- Names -- */
+  .homeChar__name { font-size: 15px; }
+  .homeLiving__name { font-size: 15px; }
+  .recordsCard__identityName { font-size: 23px; }
+
+  /* -- Timestamp/meta -- */
+  .nameCard__weekday { font-size: 11.5px; }
+  .sendCard__weekday { font-size: 11.5px; }
+  .sendCard__dom { font-size: 11.5px; }
+  .nameCard__day { font-size: 17px; }
+  .sendCard__day { font-size: 17px; }
+  .recordsCard__date { font-size: 17px; }
+  .recordsCard__date small { font-size: 11.5px; }
+  .recordsCard__tier { font-size: 11.5px; }
+
+  /* -- Address/mono -- */
+  .address { font-size: 15px; }
+  .sendCard__address { font-size: 12px; }
+  .recordsCard__identityAddress { font-size: 12.5px; }
+  .stage--loginCheck .arasoBrand { font-size: 18px; }
+
+  /* -- HISTORY back/close -- */
+  .recordsCard__back,
+  .recordsCard__close { font-size: 14px; }
+  .homePaper__amount { font-size: 17px; }
+}
+/* ════════════════════════════════════════════════════════════════════════════════════════ */

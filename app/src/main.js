@@ -96,7 +96,12 @@ import { receiptPaperMarkup, receiptPaperFields } from "./receipt-paper.js";
 import { buildVisibleLaneChoices, runSecondJourney } from "./job-feed.js";
 // [A-579] decision-time read-only observation seam (inactive while RETURN_EVIDENCE_READ_CONFIG is null).
 import { readReturnObservation } from "./second-job-readiness.js";
-import { commitSecondJourneyReceipt } from "./second-journey-receipt-bridge.js";
+import { commitSecondJourneyReceipt, isDevMockReceipt } from "./second-journey-receipt-bridge.js";
+// [A-663] Second-owned testnet execution plumbing proof — LOCAL_ONLY harness call site only
+// (see runLocalSecondPlumbingProofIfHarnessed below). Never imported by Explore/candidates/
+// handleSecondSend/canSend. Per Owner correction: shMON is First-lineage plumbing proof, not a
+// Second Journey product destination.
+import { reconcileSecondPendingOnBoot, runSecondPlumbingProof } from "./second-execution-adapter.js";
 // [A-472] 개인화 학습은 **기존** updatePreference 를 그대로 쓴다 — 새 engine 0.
 import { updatePreference } from "./job-selector.js";
 import {
@@ -670,6 +675,8 @@ function appLockSurface() {
 // 목적지만 정한다: Away 는 그대로(진행 중 결과가 오면 그 결과를 따른다), 그 밖에는 이름이 없으면 Name,
 // 있으면 기존 resting Home. 새 인증·서명자·타이머 0. 잠갔으면 true.
 function lockAppAfterIdle() {
+  // [A-669] 잠그든(모바일) 쉬게 하든(웹) 앱 세션은 이미 끝났다 — 진행 중 인증 시도의 늦은 결과가 이 전환을 덮지 못하게 먼저 무효화.
+  invalidateLiveAuthAttempt();
   if (!appLockSurface() || !state.credential) return false;
   if (state.scene === "received" || state.scene === "birth") return false;
   if (state.scene !== "away") {
@@ -699,19 +706,27 @@ function armSignerExpiry() {
 // [A-556] 성공한 인증 한 번 = 서명자 5분 절대 타이머를 다시 세우고(armSignerExpiry), app-idle
 // 10분도 함께 새로 잰다(touchAppSession) — 카드 PHASE 1 "activateSigningSession() starts/
 // replaces signer expiry and refreshes app idle".
+// [A-667 R3] 서명자를 세운 뒤 어느 단계든(계정 파생·주소 저장) 던지면 그 서명자를 그 자리에서 끝내고 다시 던진다 —
+// 만료 타이머(armSignerExpiry)·app-idle(touchAppSession) 없이 살아 있는 서명자가 남지 않게. 저장 주소는 setItem 이
+// 성공한 뒤에만 state 로 올라간다(실패 시 state.address 불변).
 function activateSigningSession(prfOutput, { persistAddress = true } = {}) {
   endActiveSession();
   activeSession = createSecp256k1SigningSession({ privateKey: prfOutput });
-  activeAccount = toViemAccount(activeSession);
-  const address = getEvmAddress(activeSession.publicKey);
-  state.activeSignerAddress = address;
-  if (persistAddress) {
-    localStorage.setItem("araso.address", address);
-    state.address = address;
+  try {
+    activeAccount = toViemAccount(activeSession);
+    const address = getEvmAddress(activeSession.publicKey);
+    state.activeSignerAddress = address;
+    if (persistAddress) {
+      localStorage.setItem("araso.address", address);
+      state.address = address;
+    }
+    armSignerExpiry();
+    touchAppSession();
+    return { account: activeAccount, address };
+  } catch (error) {
+    endActiveSession();
+    throw error;
   }
-  armSignerExpiry();
-  touchAppSession();
-  return { account: activeAccount, address };
 }
 
 // [A-565 Owner 2026-09-24] "신뢰된 in-app tap/key 활동은 app-idle(10분) 창만 늘린다" — Continue
@@ -798,6 +813,69 @@ function sceneTimeout(fn, ms) {
 function sceneListener(target, type, handler, options) {
   target.addEventListener(type, handler, options);
   onSceneTeardown(() => target.removeEventListener(type, handler, options));
+}
+
+// [A-666 §2, coordinator repair pass] iOS Safari fires `resize` repeatedly, with intermediate
+// window.innerHeight values, WHILE its toolbar chrome is animating open/closed (known iOS
+// behavior, DIAGNOSIS.md §2) — same innerWidth, only innerHeight moving, by an amount far
+// smaller than a real viewport change (orientation flip, split-screen resize). Every Home
+// geometry consumer (fitHomeBoard/fitCardAnchor/applyHomeCharacterScaleFloor, main.js
+// ~7570-7804) reads window.innerWidth/innerHeight live at call time and is unchanged by this
+// card — this wraps only the resize LISTENER call site.
+//
+// First pass of this helper also SKIPPED the handler entirely whenever the final settled
+// delta was toolbar-sized — the coordinator's real-browser run caught two real regressions
+// from that: (a) it added artificial lag even to genuine width-driven resizes (desktop must
+// recompute immediately, no debounce — only a pure-height toolbar-style delta should ever
+// wait), and (b) several EXISTING tests (e.g. a654-living-home.mjs B7) drive this exact
+// listener with `dispatchEvent(new Event("resize"))` and NO real size change at all, relying
+// on the handler's OTHER bundled side effects (remountHomeResidentsForBreakpoint,
+// mountHomeAmbientResidents, alignRecordsCardToHomePaper) always eventually firing — "skip
+// when zero/toolbar-sized" silently dropped those too. Fixed shape: a real resize (width
+// changed, or a height delta at/above the threshold) now recomputes SYNCHRONOUSLY, same as
+// before this card existed — zero added lag. A toolbar-sized (or exactly zero) delta is
+// coalesced via a short trailing debounce so an iOS resize-event burst collapses into one
+// recompute after it settles, but it is NEVER permanently skipped — anything relying on the
+// handler eventually running (including a synthetic no-op resize) still gets it, just after
+// `wait`ms instead of synchronously. Threshold matches the ±100px toolbar-shown simulation
+// the A-665 Part B harness already uses (app/test/a665-real-iphone-safari.mjs
+// TOOLBAR_DELTA=100), with headroom above it.
+const HOME_TOOLBAR_RESIZE_DELTA_PX = 150;
+function isToolbarOnlyResizeDelta(prevW, prevH, nextW, nextH) {
+  if (!Number.isFinite(prevW) || !Number.isFinite(prevH)) return false;
+  if (!Number.isFinite(nextW) || !Number.isFinite(nextH)) return false;
+  if (prevW !== nextW) return false;
+  return Math.abs(nextH - prevH) < HOME_TOOLBAR_RESIZE_DELTA_PX;
+}
+function debouncedHomeResizeListener(handler, wait = 160) {
+  let timer = null;
+  let baseW = window.innerWidth;
+  let baseH = window.innerHeight;
+  const wrapped = () => {
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    if (!isToolbarOnlyResizeDelta(baseW, baseH, w, h)) {
+      // Real resize (width changed, or a height delta at/above the threshold) — recompute
+      // immediately, exactly as before this card. No debounce lag for desktop/orientation.
+      clearTimeout(timer);
+      timer = null;
+      baseW = w;
+      baseH = h;
+      handler();
+      return;
+    }
+    // Toolbar-sized (or zero/no-op) delta — coalesce a burst into ONE call after `wait`ms of
+    // quiet, keyed off whatever the values are once it settles. Always fires eventually.
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      baseW = window.innerWidth;
+      baseH = window.innerHeight;
+      handler();
+    }, wait);
+  };
+  onSceneTeardown(() => clearTimeout(timer));
+  return wrapped;
 }
 
 function prefersReducedMotion() {
@@ -1033,37 +1111,183 @@ function indexControlledPiggy({ address, credentialId, transports = null, prfSal
   }
 }
 
-async function recoverPiggy() {
-  const pinned = state.credential;
+// ── [A-667 R1–R6] 되찾기(Check Piggy)·새로 열기(Open) 공용 안전장치 ─────────────────────────────────────
+// 이름 붙은 오류만 쓴다(화면 문구는 기존 실패 카드 그대로 — 새 문구 0). recordSafeError 는 name 만 남긴다.
+function namedAuthError(name, message, cause = undefined) {
+  const error = new Error(message);
+  error.name = name;
+  if (cause !== undefined) error.cause = cause;
+  return error;
+}
+
+// [R2] 신원 = 이 네 저장값 + state.credential/state.address. 쓰기 전 그대로 떠 두고, 하나라도 실패하면 **이전 값으로
+// 되돌린다**(원래 없던 키는 없던 상태로 — 이번 시도가 막 쓴 것만 되돌리는 것이고, 이전 credential 은 지우지 않는다).
+// 읽지 못한 키(undefined)는 건드리지 않는다.
+function identityStorageKeys() {
+  return [PASSKEY_STORAGE_KEY, "araso.address", "araso.prfSalt", PIGGY_RECEIVED_KEY];
+}
+function snapshotIdentity() {
+  const keys = {};
+  for (const key of identityStorageKeys()) {
+    try { keys[key] = localStorage.getItem(key); } catch { keys[key] = undefined; }
+  }
+  return { keys, credential: state.credential, address: state.address };
+}
+function restoreIdentity(snapshot) {
+  for (const key of identityStorageKeys()) {
+    const prior = snapshot.keys[key];
+    if (prior === undefined) continue;
+    try {
+      if (prior === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, prior);
+    } catch {
+      /* 되돌리기도 실패하면 더 할 수 있는 것이 없다 — 아래 state 는 이전 값으로 돌린다 */
+    }
+  }
+  state.credential = snapshot.credential;
+  state.address = snapshot.address;
+}
+// [R2/R3] 신원 저장은 한 덩어리로만 성공한다. 실패하면 이전 신원으로 되돌리고, 이번 인증이 막 연 서명자를 즉시
+// 끝낸 뒤(endActiveSession) 재시도 가능한 실패로 던진다.
+function commitIdentity({ credential, address, prfSaltHex = null, received = false }) {
+  const snapshot = snapshotIdentity();
+  try {
+    localStorage.setItem(PASSKEY_STORAGE_KEY, JSON.stringify(credential));
+    localStorage.setItem("araso.address", address);
+    if (prfSaltHex !== null) localStorage.setItem("araso.prfSalt", prfSaltHex);
+    if (received) localStorage.setItem(PIGGY_RECEIVED_KEY, "1");
+  } catch (error) {
+    restoreIdentity(snapshot);
+    endActiveSession();
+    throw namedAuthError("PiggyIdentityWriteFailed", "identity write failed", error);
+  }
+  state.credential = credential;
+  state.address = address;
+}
+
+// [R5] Check Piggy / Open 시도 하나 = 토큰 하나(unlockApp 의 attempt 와 같은 모양). 한 번에 하나만 살아 있다.
+// `live` 가 false 가 된 시도의 결과는 서명자·저장·화면 어느 것도 바꾸지 못한다. 상한은 잠금 해제와 같은 값.
+let authAttempt = null;
+// [A-667 CREATE_RETRY_RACE] "화면 시도 끝남"(authAttempt/live)과 "플랫폼 요청 아직 열림"은 다르다. 이 값은 Check Piggy/
+// Open 이 낸 WebAuthn 프라미스가 **실제로 settle 될 때까지** 남는다(시간초과·bfcache 만료와 무관). 남아 있는 동안 새
+// create/get 을 시작하지 않는다. 플랫폼이 끝내 settle 하지 않으면 reload 가 유일한 탈출구(iOS 동작 UNKNOWN/HUMAN).
+let platformAuthInflight = null;
+function trackPlatformAuth(promise) {
+  const token = {};
+  platformAuthInflight = token;
+  const clear = () => { if (platformAuthInflight === token) platformAuthInflight = null; };
+  promise.then(clear, clear);
+  return promise;
+}
+// 시간초과 뒤 늦게 만들어진(앱이 버린) 패스키 — 다음 find-first 가 이것 하나로만 묻게 하는 메모리 표식. 저장 0.
+let lateCreatedCredential = null;
+function beginAuthAttempt(kind) {
+  const attempt = { kind, live: true, timer: null, deadline: Date.now() + UNLOCK_UI_WAIT_MS, expire: null };
+  authAttempt = attempt;
+  return attempt;
+}
+function boundAuthAttempt(attempt, work) {
+  return new Promise((resolve, reject) => {
+    attempt.expire = (error) => {
+      if (!attempt.live) return;
+      attempt.live = false;
+      clearTimeout(attempt.timer);
+      reject(error);
+    };
+    attempt.timer = setTimeout(() => attempt.expire(namedAuthError("AuthWaitTimeout", "auth wait elapsed")), UNLOCK_UI_WAIT_MS);
+    work.then(resolve, reject);
+  });
+}
+// [A-667 R6] 복원·복귀 때 메모리에 남은 인증 시도를 다시 판정한다. 새 WebAuthn 호출 0.
+//  · bfcache 복원(restored=true): 얼어 있던 시도는 결과를 믿을 수 없다 → Check Piggy/Open 시도와 잠금 해제 시도를
+//    모두 기존 실패 카드로 fail-closed(재시도는 사용자가 다시 누를 때만). 늦은 결과는 각 토큰으로 버려진다.
+//  · 백그라운드 → 화면 복귀(restored=false): 백그라운드 동안 타이머가 늦어졌을 수 있다 → 상한이 이미 지난
+//    Check Piggy/Open 시도만 지금 끝낸다. 아직 상한 안이면 그대로 둔다(시트가 아직 떠 있을 수 있다 — 실기기 UNKNOWN).
+function expireStaleAuthState({ restored }) {
+  if (authAttempt && authAttempt.expire && (restored || Date.now() >= authAttempt.deadline)) {
+    authAttempt.expire(namedAuthError("AuthWaitTimeout", restored ? "auth attempt restored from page cache" : "auth wait elapsed"));
+  }
+  const lock = state.appLock;
+  if (restored && lock && lock.attempt) settleUnlock(null, unlockWaitTimeoutError(), state.credential, lock.attempt);
+}
+
+// UI 를 이 시도가 아직 쥐고 있으면 놓는다(true). 이미 다른 시도/정리로 넘어갔으면 false — 호출자는 아무것도 바꾸지 않는다.
+function finishAuthAttempt(attempt) {
+  if (authAttempt !== attempt) return false;
+  attempt.live = false;
+  clearTimeout(attempt.timer);
+  authAttempt = null;
+  return true;
+}
+
+// [A-669 IDLE_AUTH_ORDERING] 앱 세션이 끝나는 순간(app-idle 만료 → lockAppAfterIdle) 살아 있는 Check/Open 시도(authAttempt)를
+// 그 자리에서 무효로 만든다. 화면 소유를 먼저 놓고(authAttempt=null) 시도를 죽인다(live=false · 상한 타이머 해제 ·
+// 대기 중인 호출자에게 StaleAuthAttempt). 그래서 늦게 온 결과는 recoverPiggy 의 isCurrent 에서 서명자·저장 전에 버려지고,
+// 호출자는 finishAuthAttempt=false 로 화면·서명자·저장·돈 흐름을 건드리지 않는다. 새 WebAuthn 0 · 자동 재시도 0.
+// platformAuthInflight 는 건드리지 않는다 — 플랫폼 요청은 실제로 아직 열려 있다(settle 될 때까지 새 create/get 0).
+function invalidateLiveAuthAttempt() {
+  const attempt = authAttempt;
+  if (!attempt) return false;
+  authAttempt = null;
+  if (attempt.expire) attempt.expire(namedAuthError("StaleAuthAttempt", "app session ended"));
+  attempt.live = false;
+  clearTimeout(attempt.timer);
+  return true;
+}
+
+// [R1] 저장된 credential 로 묻다가 실패하면 그 패스키가 사라졌을 수 있다 — 그때만 지정을 빼고 딱 한 번 다시 묻는다.
+// 단, NotAllowedError(사용자 취소 — iOS/Chromium 은 "없음"·WebAuthn 시간초과도 같은 이름)는 다시 묻지 않는다:
+// 그냥 취소한 사람에게 두 번째 선택창을 띄우지 않는다. 어느 응답이든 **저장 전에** 기존 신원과 대조한다 —
+// 이미 알려진 주소가 있으면 파생 주소가 같아야 하고, 저장된 credential 과 다른 패스키인데 대조할 주소가 없으면
+// 거절한다. 불일치 = 신원 쓰기 0 · 방금 연 서명자 즉시 정리. PRF 출력은 파생 직후 0 으로 지우고 돌려주지 않는다(R4).
+// `isCurrent` = 이 결과를 아직 받아도 되는지(Check Piggy 시도 토큰). 돈 경로(sendPiggyOnce)는 인자 없이 부른다.
+async function recoverPiggy(options = {}) {
+  const isCurrent = typeof options.isCurrent === "function" ? options.isCurrent : () => true;
+  // [A-667 CREATE_RETRY_RACE] `pin` = 저장 credential 이 없을 때만 checkPiggy 가 넘기는 "시간초과 뒤 늦게 만들어진 패스키".
+  // 그 하나로만 묻고, 다른 패스키가 오면 아래 대조에서 거절된다(묶이지 않은 신원 채택 0).
+  const pinned = options.pin || state.credential;
+  const expectedAddress = typeof state.address === "string" ? state.address : "";
   const prfSalt = storedPrfSalt();
   let result;
   try {
     result = await requestPrf(pinned, { prfSalt });
   } catch (error) {
-    // 저장된 credential 하나만 지정했다가 실패했다면 그 패스키가 이 기기에서 사라졌을 수 있다.
-    // 지정을 빼고 딱 한 번 다시 묻는다. 둘 다 실패해야 throw —
     // 어느 경우에도 새 패스키를 만들지 않는다. localStorage 가 비어도 마찬가지다.
-    const mayBeGone = isMeraError(error) && error.code === "PASSKEY_OPERATION_FAILED";
-    if (!pinned || !mayBeGone) throw error;
+    const mayBeGone = isMeraError(error) && error.code === "PASSKEY_OPERATION_FAILED" && !isCancelledAuthError(error);
+    if (!pinned || !mayBeGone || !isCurrent()) throw error;
     result = await requestPrf(null, { prfSalt });
   }
-  // 어떤 패스키가 선택됐는지 기억해 둔다. 다음부터는 그 하나로 고정된다.
-  // transports 는 assertion 결과에 없으므로(Result = credentialId + prfOutput)
-  // 같은 credential 로 돌아왔을 때만 이어붙인다.
-  const sameAsPinned = pinned?.credentialId === result.credentialId;
-  writeCredential({
-    credentialId: result.credentialId,
-    ...(sameAsPinned && pinned.transports ? { transports: pinned.transports } : {}),
-  });
-  const { account, address } = activateSigningSession(result.prfOutput);
-  // 저장 salt 로 열었으면 그 salt, 아니면 Mera 기본 salt(= locator 에 salt 필드 없음).
-  indexControlledPiggy({
-    address,
-    credentialId: result.credentialId,
-    transports: sameAsPinned ? pinned?.transports ?? null : null,
-    prfSaltHex: prfSalt ? toHex(prfSalt) : null,
-  });
-  return { ...result, account, address };
+  const prfOutput = result.prfOutput;
+  try {
+    if (!isCurrent()) throw namedAuthError("StaleAuthAttempt", "auth attempt no longer current");
+    // 어떤 패스키가 선택됐는지 기억해 둔다. 다음부터는 그 하나로 고정된다.
+    // transports 는 assertion 결과에 없으므로(Result = credentialId + prfOutput)
+    // 같은 credential 로 돌아왔을 때만 이어붙인다.
+    const sameAsPinned = pinned?.credentialId === result.credentialId;
+    const { account, address } = activateSigningSession(prfOutput, { persistAddress: false });
+    const addressMatches = !expectedAddress || address.toLowerCase() === expectedAddress.toLowerCase();
+    if (!addressMatches || (pinned && !sameAsPinned && !expectedAddress)) {
+      endActiveSession();
+      throw namedAuthError("PiggyIdentityMismatch", "recovered passkey is not the stored Piggy");
+    }
+    commitIdentity({
+      credential: {
+        credentialId: result.credentialId,
+        ...(sameAsPinned && pinned.transports ? { transports: pinned.transports } : {}),
+      },
+      address,
+    });
+    // 저장 salt 로 열었으면 그 salt, 아니면 Mera 기본 salt(= locator 에 salt 필드 없음).
+    indexControlledPiggy({
+      address,
+      credentialId: result.credentialId,
+      transports: sameAsPinned ? pinned?.transports ?? null : null,
+      prfSaltHex: prfSalt ? toHex(prfSalt) : null,
+    });
+    return { credentialId: result.credentialId, account, address };
+  } finally {
+    if (prfOutput instanceof Uint8Array) prfOutput.fill(0);
+  }
 }
 
 function noteRecoverSuccess() {
@@ -1091,6 +1315,18 @@ async function openPiggy() {
     return;
   }
 
+  // [A-667 R5] 한 번에 한 시도만 — 이미 Check Piggy/Open 이 진행 중이면 새 생성 요청을 만들지 않는다.
+  if (authAttempt) return;
+  // [A-667 CREATE_RETRY_RACE] 화면 쪽 시도는 시간초과로 끝났어도 **플랫폼 요청**(이전 create/get)이 아직 settle 되지
+  // 않았으면 두 번째 create 를 시작하지 않는다. 자동 생성 0 — 기존 실패 카드(기존 문구)로 fail-closed, 재시도 가능.
+  if (platformAuthInflight) {
+    state.authPhase = "idle";
+    state.authCancelled = false;
+    recordSafeError("open", namedAuthError("PlatformAuthPending", "previous platform request still pending"));
+    setScene("birth", "Piggy could not open here.", "");
+    return;
+  }
+  const attempt = beginAuthAttempt("open");
   state.authPhase = "checking";
   state.authCancelled = false;
   setScene("birth", "The egg is checking this device.", "Face ID may appear once.");
@@ -1101,9 +1337,10 @@ async function openPiggy() {
   const giftIntent = takePendingGiftClaim();
   const giftPreExisting = giftIntent ? knownPiggyAddresses() : null;
   let giftAttempted = false;
+  let committed = false;
 
   try {
-    const result = await createPasskeyWithPrfOutput({
+    const creating =createPasskeyWithPrfOutput({
       rp: { id: getRpId(), name: "Araso" },
       user: { name: "araso-owner", displayName: "Araso" },
       timeout: 120_000,
@@ -1111,16 +1348,43 @@ async function openPiggy() {
       ...localTestWebAuthnOption(),
       ...localTestPrfSaltOption(),
     });
+    // [A-667 R5] 시간이 다 된(또는 bfcache 복원으로 만료된) 뒤 늦게 온 생성 성공: 화면·서명자·저장 0, PRF 는 지운다.
+    // 남는 부작용(정직 기록): 플랫폼에는 패스키가 **이미 만들어져** 있다. 그래서 이번 세션의 다음 Open 이 곧바로 또
+    // 만들지 않도록 find-first 를 다시 켠다(freshRecoveryTried=false, 메모리만) — 다음 Open 은 먼저 그 패스키를 찾는다.
+    trackPlatformAuth(creating);
+    creating.then((late) => {
+      if (attempt.live) return;
+      if (late?.prfOutput instanceof Uint8Array) late.prfOutput.fill(0);
+      state.freshRecoveryTried = false;
+      // [A-667 CREATE_RETRY_RACE] 다음 find-first 는 **이 패스키 하나로만** 묻는다(메모리만, 비밀 아님) — 아무 패스키나
+      // 묶이지 않은 채 채택하지 않게. 저장·state.credential·색인은 건드리지 않는다.
+      if (late && typeof late.credentialId === "string" && late.credentialId) {
+        lateCreatedCredential = { credentialId: late.credentialId, ...(Array.isArray(late.transports) && late.transports.length ? { transports: late.transports } : {}) };
+      }
+    }, () => {});
+    const result = await boundAuthAttempt(attempt, creating);
 
     const credential = {
       credentialId: result.credentialId,
       transports: result.transports,
     };
-    const { address } = activateSigningSession(result.prfOutput);
-
-    writeCredential(credential);
-    localStorage.setItem("araso.prfSalt", toHex(result.prfSalt));
-    localStorage.setItem(PIGGY_RECEIVED_KEY, "1");
+    let address;
+    try {
+      ({ address } = activateSigningSession(result.prfOutput, { persistAddress: false }));
+      // [A-667 R2] credential·address·prfSalt·받음 표시는 한 덩어리로만 저장된다(실패 시 이전 신원 그대로 + 서명자 정리).
+      commitIdentity({ credential, address, prfSaltHex: toHex(result.prfSalt), received: true });
+    } catch (error) {
+      // 패스키는 플랫폼에 이미 만들어졌다 — 다음 Open 이 또 만들지 않고 **그 패스키로** 먼저 찾게 한다(위와 같은 이유).
+      state.freshRecoveryTried = false;
+      lateCreatedCredential = credential;
+      throw error;
+    } finally {
+      if (result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
+    }
+    // 신원이 온전히 저장된 뒤에는 이 시도의 대기 상한을 거둔다(아래 Gift 정산은 기존 그대로 — 이 상한 밖).
+    committed = true;
+    lateCreatedCredential = null;
+    finishAuthAttempt(attempt);
     indexControlledPiggy({ address, credentialId: result.credentialId, transports: result.transports, prfSaltHex: toHex(result.prfSalt) });
     noteRecoverSuccess();
     // [A-559 PHASE S1 → A-579 Lane G] 방금 **새로 만든** Piggy 가 받는 사람의 Gift Piggy 다 — 시작 때 잡아 둔
@@ -1154,6 +1418,10 @@ async function openPiggy() {
       setScene("hatch");
     }
   } catch (error) {
+    // [A-667 R5] 이 시도가 더는 화면을 쥐고 있지 않으면(이미 정리됨) 아무것도 바꾸지 않는다.
+    if (!committed && !finishAuthAttempt(attempt)) return;
+    // [A-667 R3] 저장까지 끝난 뒤 이어진 단계가 실패했다면 방금 연 서명자를 남기지 않는다(신원은 온전히 저장됨).
+    if (committed) endActiveSession();
     // [A-579 Lane G] 새 Piggy 에 claim 을 시도하기 전에 끝났다 — Gift intent 는 사라지지 않는다.
     if (giftIntent && !giftAttempted) restorePendingGiftClaim(giftIntent);
     state.authPhase = "idle";
@@ -1386,13 +1654,32 @@ async function checkPiggy() {
     return { ok: false, cancelled: false, reason: "rp_not_allowed" };
   }
 
+  // [A-667 R5] 한 번에 한 시도만 — 진행 중이면 두 번째 WebAuthn 요청을 만들지 않는다.
+  if (authAttempt) return { ok: false, cancelled: false, reason: "attempt_active" };
+  // [A-667 CREATE_RETRY_RACE] 앞선 플랫폼 요청(create/get)이 아직 settle 되지 않았으면 새 get 을 겹쳐 내지 않는다.
+  // 기존 실패 카드(기존 문구)로 fail-closed — 재시도 가능, 자동 호출 0.
+  if (platformAuthInflight) {
+    state.authPhase = "idle";
+    state.authCancelled = false;
+    setScene("birth", "Chog could not find Piggy here.", "Couldn't find your Piggy.");
+    return { ok: false, cancelled: false, reason: "platform_pending" };
+  }
+  const attempt = beginAuthAttempt("check");
+  // 시간초과 뒤 늦게 만들어진 패스키가 있고 이 기기에 저장된 credential 이 없으면, find-first 는 그 패스키 하나로만 묻는다.
+  const pin = !state.credential && lateCreatedCredential ? lateCreatedCredential : null;
+  let recovered = false;
+  let released = false;
   // 생성 폴백 없음 — 이 버튼은 절대 새 패스키를 만들지 않는다.
   state.authPhase = "checking";
   state.authCancelled = false;
   setScene("birth", "Chog is checking if this is the same Piggy.", "Face ID may appear once.");
 
   try {
-    await recoverPiggy();
+    // [A-667 R5] 대기 상한 + 시도 토큰: 시간이 다 된 뒤의 늦은 결과는 recoverPiggy 안에서 서명자·저장 전에 버려진다.
+    await boundAuthAttempt(attempt, trackPlatformAuth(recoverPiggy({ isCurrent: () => attempt.live, pin })));
+    recovered = true;
+    if (pin && lateCreatedCredential === pin) lateCreatedCredential = null;
+    clearTimeout(attempt.timer);
     // [A-579 Lane G] 되찾은 Piggy 는 **이미 있던** Piggy 다 — Gift 는 새 Gift Piggy 에만 묶인다(A-567 canon).
     // 그래서 여기서는 claim 을 시도하지 않고 pendingGiftClaim 을 건드리지도 않는다(메모리에 그대로 남는다).
     // [A-554] R1(위 recoverPiggy) 이 이미 성공했다 — 그 위에서만, adapter 가 실제로 설정된
@@ -1424,7 +1711,11 @@ async function checkPiggy() {
       }
     }
     noteRecoverSuccess();
-    localStorage.setItem(PIGGY_RECEIVED_KEY, "1");
+    // [A-667 R2] 받음 표시는 보조 표식이다 — 신원(credential·address)은 recoverPiggy 가 이미 한 덩어리로 저장했다.
+    // 이 쓰기 하나가 실패했다고 되찾은 Piggy 를 "못 찾음" 으로 바꾸고 서명자를 남기지 않는다.
+    try { localStorage.setItem(PIGGY_RECEIVED_KEY, "1"); } catch { /* credential 표식만으로 충분 */ }
+    if (!finishAuthAttempt(attempt)) return { ok: false, cancelled: false, reason: "superseded" };
+    released = true;
     state.authPhase = "idle";
     // 복구는 신규 탄생이 아니다 — 해치·hello 를 다시 재생하지 않는다(§7 checkPiggy 행).
     // 다만 이름이 아직 없으면 그 칸만 마저 채운다. 그때 Piggy 는 숨은 상태다(A-288).
@@ -1435,6 +1726,10 @@ async function checkPiggy() {
     }
     return { ok: true };
   } catch (error) {
+    // [A-667 R5] 이미 정리된(만료·대체된) 시도의 실패는 더 새로운 화면·서명자를 건드리지 않는다.
+    if (!released && !finishAuthAttempt(attempt)) return { ok: false, cancelled: false, reason: "superseded" };
+    // [A-667 R3] 되찾기가 성공한 뒤 이어진 단계가 실패했다면 방금 연 서명자를 남기지 않는다.
+    if (recovered) endActiveSession();
     noteRecoverFailure();
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
@@ -1456,6 +1751,8 @@ async function checkPiggy() {
 //     지우고 어디에도 넘기지 않는다: activateSigningSession·createSecp256k1SigningSession·armSignerExpiry·
 //     activeSignerAddress·permission envelope 0. 풀리면 기존 app-idle 10분(touchAppSession)만 시작한다.
 //   · 돈 동작은 여전히 자기 Face ID/서명 경계(sendPiggyOnce → recoverPiggy 등)를 따로 지난다.
+// [A-667] 한 탭 = 한 시도(attempt 토큰). requestPrf 를 **부른 뒤에만** 화면 대기 상한 타이머를 걸고 확인 중 모습을
+// 그린다(render) — WebAuthn 호출 앞 동기 체인은 그대로다. 시도는 성공 또는 재시도 가능한 실패 카드로 반드시 끝난다.
 function unlockApp() {
   const lock = state.appLock;
   if (!lock || lock.phase === "checking") return;
@@ -1464,19 +1761,38 @@ function unlockApp() {
     settleUnlock(null, null, pinned);
     return;
   }
+  const attempt = { timer: null };
   lock.phase = "checking";
   lock.cancelled = false;
+  lock.attempt = attempt;
   requestPrf(pinned, { prfSalt: storedPrfSalt() }).then(
-    (result) => settleUnlock(result, null, pinned),
-    (error) => settleUnlock(null, error, pinned),
+    (result) => settleUnlock(result, null, pinned, attempt),
+    (error) => settleUnlock(null, error, pinned, attempt),
   );
+  attempt.timer = setTimeout(() => settleUnlock(null, unlockWaitTimeoutError(), pinned, attempt), UNLOCK_UI_WAIT_MS);
+  render();
 }
 
-function settleUnlock(result, error, pinned) {
+// [A-667] 잠금 해제 시도 하나의 화면 대기 상한. iOS Safari 는 WebAuthn publicKey.timeout(120s)을 시트가 아예 안 뜬
+// 경우에 지키지 않을 수 있다(A-665 실기기: 탭 후 "Checking…" 영구 정지). 그래서 앱이 직접 끝을 낸다 — 45s 는
+// Face ID 두 번 실패 → 기기 암호 입력까지 끝낼 만큼 길고, WebAuthn 120s 보다 짧아 앱이 늘 먼저 통제를 되찾는다.
+// 시간이 다 되면 기존 실패 카드(Try again 하나)로 fail-closed. 그 뒤 늦게 온 결과는 attempt 가 달라 무시된다.
+const UNLOCK_UI_WAIT_MS = 45_000;
+function unlockWaitTimeoutError() {
+  const error = new Error("unlock wait elapsed");
+  error.name = "UnlockWaitTimeout";
+  return error;
+}
+
+function settleUnlock(result, error, pinned, attempt = null) {
   const same = !!result && !!pinned && typeof result.credentialId === "string" && result.credentialId === pinned.credentialId;
   if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
   const lock = state.appLock;
   if (!lock) return;
+  // [A-667] 시간이 다 됐거나 새 시도로 대체된 시도의 결과는 잠금을 풀지도, 상태를 바꾸지도 못한다.
+  if ((lock.attempt || null) !== attempt) return;
+  if (attempt) clearTimeout(attempt.timer);
+  lock.attempt = null;
   if (!same) {
     // 기존 정직한 인증 실패 카드(renderAuthCard)로 — 생성 폴백 0 · Hatch 0 · 잠금 유지.
     lock.phase = "failed";
@@ -2104,14 +2420,24 @@ function createEmptySecondJourney() {
   // (저장 스키마 증가 0 · First 의 SEND_PENDING_KEY/TRIP_CLOSED_KEY 는 건드리지 않는다).
   //   null = 아직 나가지도 않음 · "pending" = 나갔고 미확정 · "done" · "failed"
   outcome: null,
+    // [A-499 Lane R / A-663] 실행 어댑터가 채우는 자리 — commitSecondReceiptIfReal() 이 이
+    // 값을 second-journey-receipt-bridge.js 로 넘긴다. 오늘 이 값을 실제로 채우는 유일한
+    // 경로는 A-663 LOCAL_ONLY harness(runLocalSecondPlumbingProofIfHarnessed/
+    // reconcileLocalSecondPlumbingProofIfHarnessed, LOCAL_DEV_ENTRY 밖에서는 존재조차 않음)
+    // 뿐이다 — Explore/candidates/handleSecondSend 는 이 필드를 절대 건드리지 않는다(Owner
+    // 교정: shMON 은 Second 제품 목적지가 아니다). renderSecondReturn() 이 mockReceipt 보다
+    // 우선해서 읽는다 — 있으면 실제 값, 없으면(모든 제품 경로) 기존 동작 그대로.
+    executionReceipt: null,
     awayLine: "",
-    // [A-405/A-405-a] seedStage: "A" | "B" | "done" — 최초 seed(관심0/이벤트0)만 A→B
-    // 두 세트를 거친다. 반복 방문·edit interests 는 항상 "done"(단일 bounded 세트).
-    // 새 persisted 필드를 추가하지 않는다 — ensureSecondJourneyDomainState() 가 이미
-    // 들고 있는 domainState.interests/processedEventIds 에서 매번 다시 유추한다
-    // (inferSeedStage). 그래서 새로고침해도 "이미 관심이 있다/이미 seed A 를 한 번
-    // none 했다"는 사실은 살아남는다 — 다만 "seed B 까지 갔었다"는 이 세션 메모리에만
-    // 있고 새로고침 중간에 끊기면 done(반복 모드)으로 떨어진다(§UNKNOWN, OUTBOX 보고).
+    // [A-405/A-405-a, 라운드 수 일반화 A-663] seedStage: 0 | 1 | … | "done" — 최초 seed
+    // (관심0/이벤트0)만 라운드 0 부터 차례로(한 라운드당 MAX_EXPLORE_VISIBLE개) 거친다.
+    // 반복 방문·edit interests 는 항상 "done"(단일 bounded 세트). 새 persisted 필드를
+    // 추가하지 않는다 — ensureSecondJourneyDomainState() 가 이미 들고 있는
+    // domainState.interests/processedEventIds 에서 매번 다시 유추한다(inferSeedStage).
+    // 그래서 새로고침해도 "이미 관심이 있다/이미 라운드 0 을 한 번 none 했다"는 사실은
+    // 살아남는다 — 다만 "마지막 라운드까지 갔었다"는 이 세션 메모리에만 있고 새로고침
+    // 중간에 끊기면 done(반복 모드)으로 떨어진다(§UNKNOWN, OUTBOX 보고, 라운드가 2→3개로
+    // 늘며 더 뚜렷해진 기존 한계 — PREWRITE_REVIEW §2(f)).
     seedStage: null,
     // interestsNote: seed A none 뒤 같은 interests 화면 위에 얹는 Chog/Paper 한 줄 —
     // 목록은 세트B로 교체되고, 이 노트는 다음 저장/이탈까지 그대로 남는다(타이머 없음).
@@ -2135,9 +2461,11 @@ function createEmptySecondJourney() {
 }
 
 // Explore 에서 한 번에 내놓는 최대 후보 수 — job-feed.js EXPLORE_ERRANDS(8개 정본)는
-// 그대로 두고, 이 view/delivery 경계에서만 최대 5개로 자른다(§success_criteria
-// "표시 개수와 실제 선택가능 ids 일치, all=현재 제시목록"). job-feed.js 는 고치지 않는다.
-const MAX_EXPLORE_VISIBLE = 5;
+// 그대로 두고, 이 view/delivery 경계에서만 자른다(§success_criteria "표시 개수와 실제
+// 선택가능 ids 일치, all=현재 제시목록"). job-feed.js 는 고치지 않는다.
+// [A-663 OWNER UX CORRECTION/DESIGN RESOLUTION, 2026-10-01] 5 → 3 — "이 구현에서는 한 번에
+// 최대 3개"(전체 Job 우주가 3개라는 뜻이 아니다). 옛 A-405 "최대 5개" 는 이 값으로 대체된다.
+const MAX_EXPLORE_VISIBLE = 3;
 // seed B 소진("okay./maybe later.") 및 본편 반복 none 종결 노트가 화면에 머무는 시간 —
 // 기존 filebox 자동전환(A-292, 1200ms)과 같은 값을 재사용한다(새 타이밍 발명 0).
 const EXPLORE_NOTE_MS = 1200;
@@ -2158,38 +2486,72 @@ const RETURN_EVIDENCE_READ_CONFIG = null;
 const LOCAL_TEST_RETURN_READ_HOOK = "__ARASO_LOCAL_TEST_RETURN_READ__";
 const LOCAL_TEST_JOB_BINDINGS_HOOK = "__ARASO_LOCAL_TEST_JOB_BINDINGS__";
 
-// domainState 가 진짜 "한 번도 Explore 선택을 한 적 없는" 상태인지 본다. 새 persisted
-// 필드를 추가하지 않고 이미 있는 두 필드로만 유추한다:
+// [A-663] seedStage 는 이제 **라운드 인덱스**(0, 1, 2, … — 세트 하나당 MAX_EXPLORE_VISIBLE
+// 개) 또는 "done" 이다. 옛 이름("A"/"B" 두 세트짜리 이원 모델)을 그대로 쓰지 않는다 — 8개
+// 정본에 3개 cap 이면 세트가 3개(0/1/2)가 되고, 둘로는 전체 공간을 못 덮는다. 세트 수는
+// job-feed.js 의 8개 정본을 다시 세지 않고 매번 buildVisibleLaneChoices().length 에서
+// 구한다(§A-663 ROTATION CONTRACT "성명/개수를 다시 발명하지 않는다"). 라운드 자체는
+// 새 persisted 필드를 추가하지 않고(Q2 기본값의 "가능하면 기존 필드로" 쪽) 여전히
+// domainState.interests/processedEventIds 에서 매번 다시 유추한다 — 그래서 새로고침해도
+// "이미 관심이 있다/이미 한 세트를 none 했다"는 사실은 살아남는다. 다만 "세트 1 을 넘어
+// 세트 2 까지 갔었다"는 사실 자체는 세션 메모리에만 있고(옛 A/B 때도 같은 한계였다,
+// NOTES_explore_page.md §18.3) 새로고침이 세트 0→1→2 진행 중간에 끊기면 그 라운드부터
+// 다시 유추한다 — processedEventIds.length 가 라운드 수를 그대로 센다(라운드가 늘어난
+// 만큼 더 뚜렷해진 한계일 뿐, 새로 만든 결함은 아니다. PREWRITE_REVIEW §2(f) 참고).
+function exploreRoundCount() {
+  const total = buildVisibleLaneChoices().length;
+  return Math.max(1, Math.ceil(total / MAX_EXPLORE_VISIBLE));
+}
+
+// domainState 가 진짜 "한 번도 Explore 선택을 한 적 없는" 상태인지, 있다면 몇 번째
+// 라운드인지 본다. 새 persisted 필드를 추가하지 않고 이미 있는 두 필드로만 유추한다:
 //   interests.length>0            → 이미 뭔가 골랐다 — seed 대상 아님(done)
 //   processedEventIds.length===0  → 이 계정/체인 scope 에서 저장 이벤트 자체가 0 —
-//                                    최초 seed 세트A
-//   processedEventIds.length===1  → interests 가 비었는데 이벤트가 하나 있다 = 세트A를
-//                                    none 으로 한 번 처리했다(현재 코드 경로에서 interests
-//                                    가 비어 있는 동안 processedEventIds 를 늘리는 곳은
-//                                    applyExploreSelection 의 none/unsure 분기뿐이다) —
-//                                    세트B
-//   그 외                          → 이미 세트A/B 를 다 거쳤거나 반복 방문 — done
+//                                    최초 세트(라운드 0)
+//   processedEventIds.length===N  → interests 가 비었는데 이벤트가 N 개 있다 = 라운드
+//                                    0..N-1 을 차례로 none 으로 처리했다(현재 코드 경로에서
+//                                    interests 가 비어 있는 동안 processedEventIds 를
+//                                    늘리는 곳은 applyExploreSelection 의 none/unsure
+//                                    분기뿐이다) — 라운드 N (N < 전체 라운드 수일 때만)
+//   그 외                          → 이미 모든 라운드를 거쳤거나 반복 방문 — done
 function inferSeedStage(domainState) {
-  if (!domainState) return "A";
+  if (!domainState) return 0;
   if ((domainState.interests || []).length > 0) return "done";
-  const noneEvents = (domainState.processedEventIds || []).length;
-  if (noneEvents <= 0) return "A";
-  if (noneEvents === 1) return "B";
+  // [A-663 state/receipt review fix 2] processedEventIds is a SHARED counter across every
+  // receipt kind this account/chain ever commits — second-journey-state.js's own
+  // markProcessed helper (called from the receipt-bridge's commit path and from
+  // applyExploreSelection alike) pushes the eventId of any receipt — the existing A-579
+  // action-0 decision receipt, and now the A-663 plumbing-proof receipt — into that exact
+  // same array. Counting all of them would let an unrelated receipt commit (e.g. a LOCAL_ONLY
+  // harness plumbing-proof run that has nothing to do with Explore) silently advance the
+  // Explore round the user never asked to leave. Only Explore's own "none" events are counted
+  // here — they are the only events exploreEventId("none", …) ever produces, always prefixed
+  // "explore-none-".
+  const noneEvents = (domainState.processedEventIds || []).filter(
+    (id) => typeof id === "string" && id.startsWith("explore-none-"),
+  ).length;
+  if (noneEvents <= 0) return 0;
+  if (noneEvents < exploreRoundCount()) return noneEvents;
   return "done";
 }
 
 // 지금 이 순간 카드에 실제로 그려질(=선택 가능한) errand 목록. job-feed.js 의 8개 정본
-// 순서(baseScore desc)는 그대로 인용만 하고 여기서 최대 5개로 자른다.
-//   seedStage "A" → 앞 5개(세트A)
-//   seedStage "B" → 나머지 3개(세트B) — 5개를 채우려 다른 걸 더 넣거나 합성하지 않는다
-//                    (§A-405-a "5개를 채우려 중복/합성 0")
+// 순서(baseScore desc)는 그대로 인용만 하고 여기서 최대 MAX_EXPLORE_VISIBLE(3)개로 자른다.
+//   seedStage 가 숫자(라운드 인덱스) → 그 라운드의 연속 슬라이스 — 모자라도(마지막
+//                    라운드가 3개보다 적을 수 있다) 다른 걸 더 넣거나 합성하지 않는다
+//                    ("never fabricate filler", A-663 ROTATION CONTRACT)
 //   그 외("done"/edit) → 이미 선택된 id 를 먼저 지키고, 남는 자리를 정본 순서로 채운다
 //                    (edit interests 로 돌아왔을 때 이미 체크된 항목이 화면 밖으로
 //                    밀려나 "표시id != 선택가능id" 가 되는 것을 막는다)
 function computeExploreDisplayErrands(sj) {
   const all = buildVisibleLaneChoices();
-  if (sj?.seedStage === "A") return all.slice(0, MAX_EXPLORE_VISIBLE);
-  if (sj?.seedStage === "B") return all.slice(MAX_EXPLORE_VISIBLE);
+  if (typeof sj?.seedStage === "number") {
+    const numRounds = exploreRoundCount();
+    // 범위를 벗어난 라운드(손상된 값)는 마지막 라운드로 접는다 — 빈 목록을 내지 않는다.
+    const round = Math.min(Math.max(sj.seedStage, 0), numRounds - 1);
+    const start = round * MAX_EXPLORE_VISIBLE;
+    return all.slice(start, start + MAX_EXPLORE_VISIBLE);
+  }
   const preferredIds = sj?.selectedIds || [];
   const picked = [];
   const seen = new Set();
@@ -2522,12 +2884,17 @@ function applySecondDraftIfAny(sj, domainState) {
   if (import.meta.env.DEV && sj.devPreview === true) return null;
   const { draft } = loadSecondJourneyDraft(safeLocalStorage(), secondJourneyScope());
   if (!draft) return null;
-  const displayedIds = computeExploreDisplayErrands({ ...sj, seedStage: draft.seedStage, selectedIds: draft.selectedIds })
+  // [A-663] 옛 2라운드 시절의 draft.seedStage("A"/"B")를 새 라운드 인덱스(0/1)로만
+  // 치환해서 읽는다 — 저장 포맷 자체는 바꾸지 않는다(second-journey-state.js 는 이
+  // 필드를 불투명하게 그대로 저장/복원한다). `0`은 falsy 라 `||` 로 기본값을 잡으면
+  // 라운드 0 이 사라지므로 `!= null` 로 명시한다.
+  const legacySeedStage = draft.seedStage === "A" ? 0 : draft.seedStage === "B" ? 1 : draft.seedStage;
+  const displayedIds = computeExploreDisplayErrands({ ...sj, seedStage: legacySeedStage, selectedIds: draft.selectedIds })
     .map((errand) => errand.id);
   const known = new Set(buildVisibleLaneChoices().map((choice) => choice.id));
   const selected = (draft.selectedIds || []).filter((id) => known.has(id));
 
-  sj.seedStage = draft.seedStage || sj.seedStage;
+  sj.seedStage = draft.seedStage != null ? legacySeedStage : sj.seedStage;
   if (selected.length) sj.selectedIds = selected;
   sj.amount = draft.amount || "";
   sj.jitAnswer = draft.jitAnswer;
@@ -2554,7 +2921,10 @@ function applySecondDraftIfAny(sj, domainState) {
 // [A-472] 같은 화면에서 같은 선택을 두 번 저장해도 한 번만 학습되게 하는 멱등 키.
 // 랜덤 키였을 때는 중복 가드가 통과돼 preference 가 재강화되고 seed 유추까지 어긋났다.
 function exploreEventId(action, seedStage, ids) {
-  return `explore-${action}-${seedStage || "a"}-${[...ids].sort().join(",")}`;
+  // [A-663] seedStage 가 이제 숫자(라운드 0 포함)일 수 있다 — `||` 는 0 을 falsy 로 접어
+  // "a" 로 뭉개버리므로 null/undefined 일 때만 그 자리표시자를 쓴다.
+  const stage = seedStage === null || seedStage === undefined ? "a" : seedStage;
+  return `explore-${action}-${stage}-${[...ids].sort().join(",")}`;
 }
 
 function handleExploreSave(ids) {
@@ -2613,21 +2983,35 @@ function handleExploreSave(ids) {
   render();
 }
 
-// [A-405-a] none 은 항상 weak hint 만 남긴다(applyExploreSelection 의 addsInterest 는
-// kind:"none" 에서 false — 기존 관심 삭제0/신규 관심 추가0). 그 다음 어디로 가는지만
-// seedStage 로 갈린다:
-//   seed 세트A → Chog "…none?" / Paper "okay. one more." 를 같은 interests 화면에
-//                얹고 세트B 로 목록만 교체(타이머 없음 — 카드 이탈 전까지 그대로 보인다)
-//   seed 세트B → 종결 note("okay."/"maybe later.") 뒤 Home
-//   그 외(반복 방문) → 종결 note 두 걸음("not these?"/"for now." 뒤 "maybe later.") 뒤 Home
+// [A-663 OWNER UX CORRECTION — LEARNING SEMANTICS] none 은 항상 weak hint 만 남긴다
+// (applyExploreSelection 의 addsInterest 는 kind:"none" 에서 false — 기존 관심 삭제0/
+// 신규 관심 추가0). "다른 세트 보기"는 회전 요청이지 취향 비선호가 아니다("Do NOT
+// increment reasonDislike simply because the user asks to see more") — 보여준 세트
+// 전부에 reasonDislike 를 올리던 옛 "none" 신호 대신 중립 신호 "explore_rotation"을
+// updatePreference 에 보낸다. job-selector.js updatePreference()는 "select" 가 아닌
+// kind 를 그대로 통과시키고(normalizeSignal), "none"/"unsure"/"one"/"multi"/"all" 중
+// 어디에도 안 걸리는 kind 는 confidence/explorationWidth/reasonDislike 어디에도 손대지
+// 않는다(job-selector.js 자체는 고치지 않았다 — 새 kind 문자열 하나만 쓴다, 기존 중립
+// 통로 재사용). rule_nah/safety_nah/eligibility_nah/unavailable/unknown 은 애초에 이
+// 함수를 거치지 않는다(§second-job-readiness.js 게이트가 그 전에 걸러낸다) — 취향
+// 학습으로 전혀 섞이지 않는다. applyExploreSelection 의 selection.kind 는 여전히
+// "none"이다 — 저장 스키마·processedEventIds 카운트(라운드 유추의 근거)는 그대로다.
+// 그 다음 어디로 가는지만 seedStage(라운드 인덱스 또는 "done")로 갈린다:
+//   아직 안 보여준 라운드가 있음 → Chog "…none?"(최초 라운드, 정본 그대로) /
+//                "not these?"(그 다음부터) · Paper "okay. one more." 를 같은 interests
+//                화면에 얹고 다음 라운드로 목록만 교체(타이머 없음 — 카드 이탈 전까지
+//                그대로 보인다)
+//   더 볼 라운드가 없음(마지막 라운드) → 종결 note("okay."/"maybe later.") 뒤 Home
+//   그 외(반복 방문, seedStage "done") → 종결 note 두 걸음("not these?"/"for now." 뒤
+//                "maybe later.") 뒤 Home
 function handleExploreNone() {
   const sj = state.secondJourney;
   const domainState = ensureSecondJourneyDomainState();
   const selection = { kind: "none", errandIds: [], errands: [] };
-  // [A-472] none 도 같은 규율 — 보여준 세트만 dislike evidence 로 쓴다(안 보여준 항목 0).
+  // [A-472] none 도 같은 규율 — 보여준 세트만 evidence 로 쓴다(안 보여준 항목 0).
   const displayedNone = computeExploreDisplayErrands(sj);
   const preferenceUpdate = updatePreference(domainState.preference, {
-    kind: "none",
+    kind: "explore_rotation",
     selectedJobs: [],
     offeredJobs: displayedNone,
     offeredCount: displayedNone.length,
@@ -2643,16 +3027,17 @@ function handleExploreNone() {
   sj.chosenDestinationId = null;
   sj.pickedCandidateId = null;
 
-  if (sj.seedStage === "A") {
-    sj.seedStage = "B";
-    sj.interestsNote = { chogLine: "…none?", paperLine: "okay. one more." };
-    sj.step = "interests";
-    recomputeSecondJourneyFlow();
-    render();
-    return;
-  }
-
-  if (sj.seedStage === "B") {
+  if (typeof sj.seedStage === "number") {
+    const numRounds = exploreRoundCount();
+    if (sj.seedStage < numRounds - 1) {
+      const isFirstRound = sj.seedStage === 0;
+      sj.seedStage += 1;
+      sj.interestsNote = { chogLine: isFirstRound ? "…none?" : "not these?", paperLine: "okay. one more." };
+      sj.step = "interests";
+      recomputeSecondJourneyFlow();
+      render();
+      return;
+    }
     beginExploreNoteSequence([{ chogLine: "okay.", paperLine: "maybe later." }]);
     return;
   }
@@ -2761,6 +3146,106 @@ function localTestJobBindings() {
     if (destinationId.length <= 64 && typeof jobId === "string" && jobId.length > 0 && jobId.length <= 64) bindings[destinationId] = jobId;
   }
   return Object.keys(bindings).length ? bindings : undefined;
+}
+
+// [A-663] LOCAL_ONLY harness-only entry point for the Second-owned execution PLUMBING PROOF
+// (second-execution-adapter.js). Same first lock as the two hooks above: outside
+// LOCAL_DEV_ENTRY this is never reachable, so the production/default app never runs it. Unlike
+// the two hooks above (which only ever hand back passive config data the product's own code
+// path reads), this one is itself the entry point a coordinator-driven browser test calls
+// directly (`window.__ARASO_LOCAL_TEST_SECOND_PLUMBING_RUN__`) against a local/mock RPC —
+// there is no product UI path to it (not Explore, not candidates, not handleSecondSend/canSend)
+// because, per the A-663 Owner correction, this lane is never a Second Journey product
+// destination. `request.deps` supplies every live client (account/walletClient/publicClient/
+// signDigest, and optional requestGrant/waitForGrantBalance) — this function opens no network
+// connection and holds no credential of its own. On a real `outcome:"done"` it feeds the result
+// into the existing Second receipt bridge via commitSecondJourneyReceipt() — a new,
+// testnet-actual call site the card asks for (distinct from the existing J2-6 mainnet-fork
+// decision path call site above, untouched; reconcileLocalSecondPlumbingProofIfHarnessed
+// below has its own third call site for the reload/reopen path, same reason First has two —
+// commitSendSuccess is called both from the direct success path and from reconcileSendPending).
+async function runLocalSecondPlumbingProofIfHarnessed(request = {}) {
+  if (!LOCAL_DEV_ENTRY) return { ran: false, reason: "not_local_dev_entry" };
+  const deps = request && typeof request === "object" ? request.deps : null;
+  if (
+    !deps ||
+    typeof deps.walletClient?.sendTransaction !== "function" ||
+    typeof deps.publicClient?.waitForTransactionReceipt !== "function" ||
+    typeof deps.publicClient?.readContract !== "function" ||
+    !deps.account?.address
+  ) {
+    return { ran: false, reason: "invalid_deps" };
+  }
+  const scope = secondJourneyScope();
+  if (validatePersistenceScope(scope).error) return { ran: false, reason: "invalid_scope" };
+  const piggyId = typeof indexedPiggyId === "function" ? indexedPiggyId(deps.account.address) : "";
+  const outcome = await runSecondPlumbingProof({
+    storage: safeLocalStorage(),
+    scope,
+    piggyId,
+    amountWei: request.amountWei,
+    confirm: request.confirm === true,
+    account: deps.account,
+    walletClient: deps.walletClient,
+    publicClient: deps.publicClient,
+    signDigest: deps.signDigest,
+    requestGrant: deps.requestGrant,
+    waitForGrantBalance: deps.waitForGrantBalance,
+  });
+  if (outcome.outcome === "done" && outcome.receipt) {
+    const sj = state.secondJourney;
+    // [A-663 state/receipt review fix 3] set BEFORE the bridge call so a product render of
+    // secondReturn (never triggered by this harness itself — no setScene here) would already
+    // see the real result if something else drove the scene there.
+    sj.executionReceipt = outcome.receipt;
+    const out = commitSecondJourneyReceipt({
+      state: sj.domainState || ensureSecondJourneyDomainState(),
+      receipt: outcome.receipt,
+      scope,
+      storage: safeLocalStorage(),
+      context: { devPreview: false },
+    });
+    sj.domainState = out.state;
+    return { ran: true, outcome, committed: out.persisted, duplicate: out.duplicate, commitReason: out.reason };
+  }
+  return { ran: true, outcome, committed: false, duplicate: false };
+}
+// [A-663] LOCAL_ONLY harness-only reload/reopen reconcile for the same plumbing-proof lane.
+// Read-only (no sendTransaction/signDigest) — a coordinator browser test writes a pending
+// record (simulating a reload mid-flow), reloads, then calls this to prove reconcile never
+// re-broadcasts and only clears the record on a confirmed success.
+async function reconcileLocalSecondPlumbingProofIfHarnessed(request = {}) {
+  if (!LOCAL_DEV_ENTRY) return { ran: false, reason: "not_local_dev_entry" };
+  const deps = request && typeof request === "object" ? request.deps : null;
+  if (!deps || typeof deps.readTxReceipt !== "function" || !deps.account?.address) {
+    return { ran: false, reason: "invalid_deps" };
+  }
+  const scope = secondJourneyScope();
+  if (validatePersistenceScope(scope).error) return { ran: false, reason: "invalid_scope" };
+  const piggyId = typeof indexedPiggyId === "function" ? indexedPiggyId(deps.account.address) : "";
+  const result = await reconcileSecondPendingOnBoot({ storage: safeLocalStorage(), scope, piggyId, readTxReceipt: deps.readTxReceipt });
+  if (result.kind === "success" && result.receipt) {
+    const sj = state.secondJourney;
+    sj.executionReceipt = result.receipt; // [A-663 state/receipt review fix 3], same reasoning as above
+    const out = commitSecondJourneyReceipt({
+      state: sj.domainState || ensureSecondJourneyDomainState(),
+      receipt: result.receipt,
+      scope,
+      storage: safeLocalStorage(),
+      context: { devPreview: false },
+    });
+    sj.domainState = out.state;
+    return { ran: true, result, committed: out.persisted, duplicate: out.duplicate };
+  }
+  return { ran: true, result, committed: false, duplicate: false };
+}
+if (LOCAL_DEV_ENTRY) {
+  try {
+    window.__ARASO_LOCAL_TEST_SECOND_PLUMBING_RUN__ = runLocalSecondPlumbingProofIfHarnessed;
+    window.__ARASO_LOCAL_TEST_SECOND_PLUMBING_RECONCILE__ = reconcileLocalSecondPlumbingProofIfHarnessed;
+  } catch {
+    /* no window (non-browser harness) — nothing to expose */
+  }
 }
 
 // [A-579] 답 하나 = 판정 하나. 이 이벤트를 위해 read-only 로 읽고(설정이 없으면 읽지 않고
@@ -3081,17 +3566,34 @@ function mountSecondAway() {
   playback.start();
 }
 
+// [A-663 state/receipt review fix 3] card success criteria "Return/Receipt consumes actual
+// execution result when present and dev/mock remains isolated". `state.secondJourney.
+// executionReceipt` is set ONLY by the A-663 LOCAL_ONLY harness (never by Explore/candidates/
+// handleSecondSend — shMON stays non-Send-visible per the Owner correction), so on every
+// product path today this is null and the branch below is a no-op: byte-identical mockReceipt
+// behavior. `receiptPaperFields()` is the EXISTING real-receipt formatter First Journey's own
+// Receipt/filebox already use (receipt-paper.js:77) — no new markup/copy, same Receipt slots.
 function renderSecondReturn() {
+  const actual = state.secondJourney.executionReceipt;
+  const hasRealReceipt = !!actual && typeof actual === "object" && !isDevMockReceipt(actual);
   return returnSceneMarkup({
     // [A-421] Owner 승인 "가운데 문구가 남으면 안돼" — First(line: "")와 동일, 발화는 알람 한 줄뿐.
     line: "",
-    receiptRowsMarkup: receiptPaperMarkup(secondJourneyReceiptFields(state.secondJourney.mockReceipt, displayPiggyName())),
+    receiptRowsMarkup: receiptPaperMarkup(
+      hasRealReceipt
+        ? receiptPaperFields({ receipt: actual, name: displayPiggyName() })
+        : secondJourneyReceiptFields(state.secondJourney.mockReceipt, displayPiggyName()),
+    ),
     name: displayPiggyName(),
     // [A-421] First 와 **같은** 귀환 markup 경로 — 알람 발화 span(#returnArrivalAlarm)이
     // 여기서만 붙는다. 이전에는 plain chogHomeMarkup() 이라 Second 는 어떤 상태에서도
     // 알람 DOM 자체가 없었다(감독 OUTBOX 지적). 새 문구/새 자산 0 — 같은 함수 재사용.
     homeChogMarkup: chogHomeMarkupForReturn("return"),
-    devExtra: `<p class="secondJourney__mockTag">UI preview — no transaction</p>${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}`,
+    // 실제 receipt 가 있으면 "UI preview — no transaction" 은 더 이상 사실이 아니다 — 그
+    // 문구만 숨긴다(새 문구를 더하지 않는다, 기존 reset 버튼 줄은 유지).
+    devExtra: hasRealReceipt
+      ? (isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : "")
+      : `<p class="secondJourney__mockTag">UI preview — no transaction</p>${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}`,
   });
 }
 
@@ -3758,20 +4260,41 @@ function renderAuthCard(view = state) {
   const blocked = !isAllowedPiggyRpId();
   const checking = !blocked && view.authPhase === "checking";
   const heading = checking ? view.message || "Checking…" : "Couldn't open Piggy";
+  // [A-667] 실패 카드의 행동은 문맥마다 **하나**다(Owner: 두 버튼을 같은 문맥에 함께 두지 않는다).
+  //  · 잠금 해제 실패/취소/시간초과(view.unlockRetry, renderAppLock 만 켬) → Try again 하나(#unlockRetryButton,
+  //    renderAppLock 이 unlockApp 에 직결). Check Piggy 0.
+  //  · 이 기기에 Piggy 표식(credential·받음·주소 — startPiggyOpen 과 같은 판정)이 있는 복구 문맥 → Check Piggy 하나.
+  //    여기서 옛 Try again(→ Invite → startPiggyOpen)은 결국 같은 checkPiggy 라 같은 의도의 중복이었다.
+  //  · 표식 없는 새 기기(find-first 되찾기 실패·취소 뒤, 또는 새 Piggy 만들기 실패 뒤) → Make new 하나
+  //    (Owner 결정 2026-10-02 "같은 포맷으로 버튼은 하나인데 make new"). id 는 기존 #authTryAgainButton 그대로 —
+  //    render() 의 기존 배선(→ setScene("received") = Invite)을 byte 동일하게 재사용한다. 거기서 사용자가 Open 을
+  //    **다시 눌러야** startPiggyOpen → openPiggy(A-533 의 명시적 새 Piggy 경로)가 돈다. 자동 생성·credential 삭제 0.
+  const recoveryOnly = !view.unlockRetry && !!(readCredential() || hasReceivedPiggy() || state.address);
   const body = checking
     ? view.detail || "Face ID may appear once."
     : view.authCancelled
       ? "Face ID was cancelled."
-      : view.detail || "Try again, or use Check Piggy to recover.";
+      : view.detail || "";
   // [A-391 §2 / A-389-a] Try again 은 실제 auth 호출이 없는 안전한 내비게이션(Invite/Face ID
   // 앞화면 복귀, main.js render() 의 #authTryAgainButton 배선 참고) — !isAllowedPiggyRpId() 로
   // 막을 이유가 없다. Check Piggy 는 실제 복구 호출이라 unsupported origin 에서 계속 막는다.
   const actions = checking
     ? ""
-    : `
+    : view.unlockRetry
+      ? `
         <div class="authCard__actions">
-          ${sendCardButtonMarkup({ id: "authTryAgainButton", label: "Try again", disabled: false })}
+          ${sendCardButtonMarkup({ id: "unlockRetryButton", label: "Try again", disabled: false })}
+        </div>
+      `
+      : recoveryOnly
+        ? `
+        <div class="authCard__actions">
           ${sendCardButtonMarkup({ id: "checkButton", label: "Check Piggy", disabled: blocked })}
+        </div>
+      `
+        : `
+        <div class="authCard__actions">
+          ${sendCardButtonMarkup({ id: "authTryAgainButton", label: "Make new", disabled: false })}
         </div>
       `;
   // [A-606 item3] Invite/Hatch/Name/Home(sendstay) 네 씬은 이미 공유 좌상단
@@ -3811,6 +4334,9 @@ function renderAuthCard(view = state) {
 // 검토 OPEN). 그 Chog 가 탭 대상이다 → unlockApp(). 실패면 같은 카드의 기존 실패 모습(Couldn't open Piggy)을
 // 쓰되, 두 버튼 모두 잠금 해제 경로에만 묶는다: Try again → LOGIN_CHECKING 으로(인증 호출 0), Check Piggy →
 // unlockApp()(탭 안에서 곧장). 생성·Hatch·서명자 0.
+// [A-667] 위 두 버튼 배선은 바뀌었다 — 잠금 실패/취소/시간초과 카드에는 **Try again 하나만**(#unlockRetryButton)
+// 있고, 그 클릭이 곧장 같은 unlockApp() 을 부른다(중간 대기 화면 0 · Piggy 복구/생성 0 · 탭 안에서 동기 호출).
+// Check Piggy 는 이 카드에 그리지 않는다(복구 문맥 전용). 대기/확인 중 구분은 기존 data-app-lock 표식 + CSS 뿐.
 // [A-640/A-642 Lane V] 대기(waiting/checking) 모습만 reentry_preview.html §1 모바일 구도로 바꾼다 — 카드 대신
 // 큰 Chog 얼굴(기존 chogInviteMarkup() 파츠 중 머리+두 눈만, 몸·팔은 CSS 로 숨김) · 그 아래 Araso(기존
 // arasoBrandMarkup(), 이 화면에서만 한 번) · Checking… · Face ID may appear once.(기존 문구 그대로). 탭 대상은
@@ -3836,19 +4362,15 @@ function renderAppLock() {
         authPhase: failed ? "idle" : "checking",
         authCancelled: failed && !!state.appLock.cancelled,
         message: "",
-        detail: "",
+        detail: "Face ID may appear once.",
         appLock: state.appLock.phase,
         chogTap: !failed,
+        unlockRetry: true,
       })
     : loginCheckingMarkup(state.appLock.phase);
   mountInviteChog();
   if (failed) {
-    document.querySelector("#authTryAgainButton")?.addEventListener("click", () => {
-      if (!state.appLock) return;
-      state.appLock = { phase: "waiting", cancelled: false };
-      render();
-    });
-    document.querySelector("#checkButton")?.addEventListener("click", unlockApp);
+    document.querySelector("#unlockRetryButton")?.addEventListener("click", unlockApp);
   } else {
     document.querySelector("#loginChogButton")?.addEventListener("click", unlockApp);
   }
@@ -4712,11 +5234,15 @@ async function proveFundingTargetControl(piggy) {
   const { request, error: authError } = authRequestForPiggy(piggy);
   if (authError) return { proof: null, error: authError };
   let address;
+  let result = null;
   try {
-    const result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
+    result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
     ({ address } = activateSigningSession(result.prfOutput, { persistAddress: false }));
   } catch (error) {
     return { proof: null, error: "passkey_declined" };
+  } finally {
+    // [A-669] PRF 출력은 서명자 파생(activateSigningSession — Mera 가 키를 복사한다)에만 쓰고 성공·실패 모두 여기서 0 으로 지운다.
+    if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
   }
   try {
     // [A-558 Lane B] 파생된 서명자 주소가 **이 Piggy 주소와 같을 때만** 서명한다 — 이미
@@ -4774,9 +5300,10 @@ async function requestMoneyPermission() {
 
   let verifiedAt = null;
   let signerAddress = null;
+  let result = null;
   try {
     // 여기서 실제로 Face ID/passkey 가 뜬다. 이 호출 없이는 봉투가 만들어지지 않는다.
-    const result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
+    result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
     ({ address: signerAddress } = activateSigningSession(result.prfOutput, { persistAddress: false }));
     verifiedAt = Date.now();
   } catch {
@@ -4785,6 +5312,9 @@ async function requestMoneyPermission() {
     state.moneyIntent = { ...intent, status: cancelled.state, permission: null };
     render();
     return;
+  } finally {
+    // [A-669] PRF 출력은 서명자 파생에만 쓰고(Mera 가 키를 복사한다) 성공·실패 모두 여기서 0 으로 지운다. 돌려주거나 보관 0.
+    if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
   }
   // 기다리는 동안 선택이 바뀌었거나, 파생된 서명자가 고른 Piggy 가 아니면 **그 서명자를 버린다.**
   const bound = state.selectedPiggy === sel ? bindSigner(sel, signerAddress) : { ok: false, reason: "selection_changed" };
@@ -7877,7 +8407,11 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
   // narrow, that function's own width guard).
   if (state.recordsCardVisible) alignRecordsCardToHomePaper();
   let residentsMobile = window.innerWidth <= 640;
-  sceneListener(window, "resize", () => {
+  // [A-666 §2] Wrapped in debouncedHomeResizeListener() (defined by sceneListener() above) so
+  // the iOS toolbar collapse/expand resize-event storm collapses into one settle-time
+  // recompute instead of one per intermediate frame — everything inside this handler is
+  // otherwise byte-identical to before this card.
+  sceneListener(window, "resize", debouncedHomeResizeListener(() => {
     const freshFit = fitHomeBoard();
     layoutHomeCharacter();
     fitCardAnchor();
@@ -7897,7 +8431,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
       clearTimeout(homeAmbientResizeTimer);
       homeAmbientResizeTimer = sceneTimeout(mountHomeAmbientResidents, 120);
     }
-  });
+  }));
 
   // Home Chog — Piggy 와 같은 판·같은 발선. 같은 Save 전환에서 함께 출발한다.
   const chogRoot = document.querySelector("#chogHome");
@@ -8903,7 +9437,7 @@ function recordsMastheadMarkup() {
         </p>`;
   return `
       <div class="recordsCard__masthead">
-        <span class="recordsCard__dot" aria-hidden="true"></span>
+        <span class="recordsCard__dot" role="button" tabindex="0" aria-label="back to Home"></span>
         <span class="recordsCard__date">${escapeHtml(dateLabel)}<small>${escapeHtml(weekdayLabel)}</small></span>
         <span class="recordsCard__page" aria-hidden="true"></span>
       </div>
@@ -9495,11 +10029,35 @@ render();
 
 window.addEventListener("resize", fitInvite);
 window.addEventListener("beforeunload", endActiveSession);
+// [A-667 R6] bfcache 복원(pageshow persisted)·백그라운드 복귀 — WebAuthn 을 **새로 부르지 않는다**. 메모리에 남은 인증
+// 시도만 정리한다(아래 expireStaleAuthState). visibilitychange 리스너는 기존 두 개(애니메이션 시계)와 별개다.
+window.addEventListener("pageshow", (event) => { if (event.persisted) expireStaleAuthState({ restored: true }); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") expireStaleAuthState({ restored: false }); });
 // [A-565] 한 번만 붙는 module-scope 캡처 리스너 — render() 안 리스너처럼 씬마다 다시 붙지 않는다.
 // capture:true 는 앱 안 아무 화면에서 눌러도(하위 요소가 stopPropagation 해도) 잡히게 하려는
 // 것뿐이고, passive:true 는 activity 훅이 스크롤/탭을 막을 이유가 없어서다(preventDefault 0).
 window.addEventListener("pointerdown", handleTrustedAppActivity, { capture: true, passive: true });
 window.addEventListener("keydown", handleTrustedAppActivity, { capture: true, passive: true });
+
+// [A-666] Owner-identified top-left HISTORY dot (`.recordsCard__dot`, masthead) is now the
+// obvious Home-return control — same closeRecordsCard() path #recordsCardClose already
+// drives (render()'s own `#recordsCard` click delegation, above), no new navigation family.
+// A module-scope, one-time `document` listener (same shape as handleTrustedAppActivity just
+// above) rather than adding this inside render() itself: render() is byte-identical-pinned by
+// other cards' own regression tests (a642/a653), and `#recordsCard` persists across HISTORY
+// open/close without a re-render anyway (renderRecordsCardBody() only swaps its innerHTML —
+// render()'s own comment on this card), so a document-level delegated listener reaches the
+// dot exactly the same as one scoped to `#recordsCard` would, without touching render().
+function handleRecordsDotActivate(event) {
+  if (!event.target.closest(".recordsCard__dot")) return;
+  if (event.type === "keydown") {
+    if (event.key !== "Enter" && event.key !== " " && event.key !== "Spacebar") return;
+    event.preventDefault();
+  }
+  closeRecordsCard();
+}
+document.addEventListener("click", handleRecordsDotActivate);
+document.addEventListener("keydown", handleRecordsDotActivate);
 
 // @DEV_ONLY — 로컬 검토용 씬 점프. localhost 는 rpId 가 허용 목록 밖이라 실제 패스키를
 // 탈 수 없고(isAllowedPiggyRpId), 그래서 해치·Name it·첫 Home 을 실제 앱에서 눈으로

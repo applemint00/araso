@@ -59,7 +59,10 @@ check("V1 renderAppLock: waiting/checking → loginCheckingMarkup(phase); failed
   assert.ok(/:\s*loginCheckingMarkup\(state\.appLock\.phase\);/.test(body), "waiting branch = loginCheckingMarkup");
   // tap wiring unchanged: the Chog button calls unlockApp directly (no wrapper that could await first)
   assert.ok(body.includes('document.querySelector("#loginChogButton")?.addEventListener("click", unlockApp);'));
-  assert.ok(body.includes('document.querySelector("#checkButton")?.addEventListener("click", unlockApp);'));
+  // [A-667 re-pin] the failed card's single retry is #unlockRetryButton → unlockApp (was #checkButton → unlockApp;
+  // Owner: reentry failure shows only "Try again", wired directly to the same identity-unlock path).
+  assert.ok(body.includes('document.querySelector("#unlockRetryButton")?.addEventListener("click", unlockApp);'));
+  assert.equal(body.includes("#checkButton"), false, "no Check Piggy on the reentry failure card");
   assert.equal((body.match(/mountInviteChog\(\)/g) || []).length, 1, "one existing Chog mount (blink = BLINK_KEYS)");
 });
 
@@ -105,18 +108,28 @@ check("V4 §1 geometry in CSS (reentry_preview.html 390: face 94.5/132.5 202.4×
   assert.equal(decl(title, "top"), "380px");
   assert.equal(decl(title, "font-size"), "28px");
   assert.equal(decl(title, "font-family"), "var(--font-cj)");
-  const sub = cssRule(".stage--loginCheck .loginCheck__body", CSS.lastIndexOf(".stage--loginCheck .loginCheck__body {"));
+  // [A-666 re-pin, named reason] a THIRD `.stage--loginCheck .loginCheck__body {` occurrence
+  // now exists (the A-666 global mobile type-scale ≤640px override, font-size only) — find the
+  // SECOND occurrence specifically (the base geometry/font rule this check is about), not
+  // whichever happens to be last.
+  const firstBodyAt = CSS.indexOf(".stage--loginCheck .loginCheck__body {");
+  const secondBodyAt = CSS.indexOf(".stage--loginCheck .loginCheck__body {", firstBodyAt + 1);
+  assert.ok(secondBodyAt > firstBodyAt, "the base geometry rule (2nd occurrence) must exist");
+  const sub = cssRule(".stage--loginCheck .loginCheck__body", secondBodyAt);
   assert.equal(decl(sub, "top"), "420px");
-  assert.equal(decl(sub, "font-size"), "12px");
+  assert.equal(decl(sub, "font-size"), "12px", "base/source value stays 12px — unchanged by A-666 (which only adds a ≤640px cascading override, below)");
   // passkey-sheet-safe: everything sits above 844 - 380 = 464 at 390
   assert.ok(420 + 12 * 1.5 <= 464 && 132.5 + 243.2 <= 464);
+  // [A-666] the mobile type-scale override itself (≈1.15×, TYPOGRAPHY_SCALE.md) — additive,
+  // ≤640px only, does not touch the base rule above.
+  assert.match(CSS, /@media \(max-width: 640px\) \{[^]*?\.stage--loginCheck \.loginCheck__body \{ font-size: 14px; \}/);
 });
 
 // ─── Away restore line ─────────────────────────────────────────────────────────────────────────
 const HOME_SCALE = Function(`return ${CHOG_HOME.match(/export const HOME_SCALE = ([^;]+);/)[1]}`)();
 const HOME_BOARD_W = Number(MAIN.match(/const HOME_BOARD_W = (\d+);/)[1]);
 
-check("V5 #awayRestoreLine is enlarged only inside @media (max-width: 640px) and renders ≈18px (preview §3) at 390", () => {
+check("V5 #awayRestoreLine is enlarged only inside @media (max-width: 640px) and renders ≈20.6px at 390 (A-666 re-pin, named reason: Owner's global mobile type-scale decision raised this ≈1.15× from the pre-card ≈18px target, same ratio TYPOGRAPHY_SCALE.md applies everywhere else)", () => {
   const at = CSS.indexOf("#awayRestoreLine {");
   assert.ok(at > 0, "rule present");
   assert.equal(CSS.indexOf("#awayRestoreLine", at + 1), -1, "exactly one rule");
@@ -127,8 +140,8 @@ check("V5 #awayRestoreLine is enlarged only inside @media (max-width: 640px) and
   const local = parseFloat(decl(rule, "font-size"));
   const s390 = (390 / HOME_BOARD_W) * HOME_SCALE;
   const s430 = (430 / HOME_BOARD_W) * HOME_SCALE;
-  assert.ok(Math.abs(local * s390 - 18) < 0.3, `390 rendered ${local * s390}`);
-  assert.ok(local * s430 > 18 && local * s430 < 21, `430 rendered ${local * s430}`);
+  assert.ok(Math.abs(local * s390 - 20.6) < 0.3, `390 rendered ${local * s390}`);
+  assert.ok(local * s430 > 20.6 && local * s430 < 24, `430 rendered ${local * s430}`);
   assert.equal(decl(rule, "max-width"), "none", "centering (translateX(-50%)) is not broken by the 260px cap");
   assert.equal(decl(rule, "top"), "auto");
   assert.ok(/^\d+px$/.test(decl(rule, "bottom")), "anchored above the feet");
@@ -157,12 +170,21 @@ check("V7 LOGIN_CHECKING selectors exist only for lock markup (web 641+ never re
 // ─── no logic change vs the A-633 baseline (HEAD 4c51dde) ──────────────────────────────────────
 check("V8 A-633 auth/session/reconcile/return code byte-identical to the A-633 baseline", () => {
   const want = {
-    requestPrf: "766fc57ed63b6009", unlockApp: "09cd6fb5dd4ee0dc", settleUnlock: "c4c353674bc122b3", appLockSurface: "8c31689ea48cf8aa",
-    lockAppAfterIdle: "0083d873b56358ef", touchAppSession: "cd44c821c6781492", endActiveSession: "9cfc316632c9cea8",
-    activateSigningSession: "0a3345ebee6d4bd3", reconcileSendPending: "1caf49b6a16b09df", classifySendPending: "2389cf76d2658fd6",
+    // [A-667 re-pin] unlockApp (attempt token + bounded UI wait timer + checking render, all AFTER requestPrf),
+    // settleUnlock (stale/timed-out attempt ignored), renderAuthCard (one contextual action per failure card).
+    // Previous pins: unlockApp 09cd6fb5dd4ee0dc · settleUnlock c4c353674bc122b3 · renderAuthCard 54e902ad818b1b0a.
+    // renderAuthCard re-pinned again (203645318a1fb561 → 6f1694a9613c1890) for the Owner's 2026-10-02 decision:
+    // markerless fresh-device failure card = one "Make new" (on the existing #authTryAgainButton → Invite wiring).
+    requestPrf: "766fc57ed63b6009", unlockApp: "d4167d7c8fbf1f82", settleUnlock: "b43e5a32b4bf055d", appLockSurface: "8c31689ea48cf8aa",
+    // [A-669 re-pin] lockAppAfterIdle first calls invalidateLiveAuthAttempt() (idle/session end kills a live Check/Open
+    // attempt so a late result cannot re-arm the session or navigate over the lock). Previous pin 0083d873b56358ef.
+    lockAppAfterIdle: "e4ef41131c978a25", touchAppSession: "cd44c821c6781492", endActiveSession: "9cfc316632c9cea8",
+    // [A-667 R3 re-pin] activateSigningSession: a throw after the signer exists now ends it (no timer-less signer).
+    // Previous pin 0a3345ebee6d4bd3.
+    activateSigningSession: "dbd2063392a1068b", reconcileSendPending: "1caf49b6a16b09df", classifySendPending: "2389cf76d2658fd6",
     readSendTxReceipt: "482a1cdc9025ff9f", reconciledSendReceipt: "1de55c29816852f7", commitSendSuccess: "51398edde399ae67",
     finishTrip: "b0ea22dfec3aa006", readSendPending: "ba4e61d4232e4f7f", showAwayRestore: "70ee359576d43fd1",
-    awayRestoreLineMarkup: "027535c3b9c99afb", renderAuthCard: "54e902ad818b1b0a", mountInviteChog: "f894db5c8e334665",
+    awayRestoreLineMarkup: "027535c3b9c99afb", renderAuthCard: "6f1694a9613c1890", mountInviteChog: "f894db5c8e334665",
     arasoBrandMarkup: "2916af023287cf7f", render: "866133cf60711093",
   };
   const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha16(fnBody(n))]));
@@ -175,7 +197,7 @@ check("V8 A-633 auth/session/reconcile/return code byte-identical to the A-633 b
   // (a633 A5 still asserts it).
   assert.equal(sha16(cut("// [A-633 A/C] 모바일/app 표면에서 저장된 credential", "// [A-559 PHASE S1] Gift 링크 fragment")), "23694803737b62f4", "boot lock block");
   assert.equal(sha16(cut("// [A-633 C] First Send 미확정 기록", "async function requestGrant(")), "20b3279a70c7c1eb", "reconcile region");
-  assert.equal(sha16(cut("let activeSession = null;", "function readCredential()") + cut("function endSignerSession() {", "// --- 씬 정리 (A-292 번호 9)")), "1c2a32a1eb2a752f", "session/timer region");
+  assert.equal(sha16(cut("let activeSession = null;", "function readCredential()") + cut("function endSignerSession() {", "// --- 씬 정리 (A-292 번호 9)")), "2e91809fb4741939", "session/timer region"); // [A-667 R3 re-pin] region contains activateSigningSession (signer ended on throw). Previous 1c2a32a1eb2a752f. [A-669 re-pin] region contains lockAppAfterIdle (+ invalidateLiveAuthAttempt() call). Previous ff01455c69dbbb09.
 });
 
 console.log(`\n${pass}/${pass + fail} PASS`);

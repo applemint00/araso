@@ -133,6 +133,10 @@ function device({ adapter = null } = {}) {
     readPiggyName: () => null,
     isCancelledAuthError: () => false,
     PIGGY_RECEIVED_KEY: "araso.piggyReceived",
+    // [A-667 re-pin] checkPiggy now runs one bounded attempt (setTimeout/clearTimeout) and recoverPiggy persists the
+    // identity through commitIdentity (PASSKEY_STORAGE_KEY) — the harness supplies those free variables.
+    PASSKEY_STORAGE_KEY: "araso.passkey",
+    setTimeout, clearTimeout,
     toHex: (bytes) => Buffer.from(bytes).toString("hex"),
     writeCredential: (credential) => { state.credential = credential; },
     activateSigningSession: (prfOutput, opts = {}) => {

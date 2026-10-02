@@ -178,6 +178,8 @@ function buildUnlockApp({ width = 390, allowed = true, credential = { credential
     storedPrfSalt: () => new Uint8Array(32).fill(1),
     isCancelledAuthError: (e) => e?.name === "NotAllowedError" || e?.cause?.name === "NotAllowedError",
     recordSafeError: (phase) => { calls.errors.push(phase); },
+    // [A-669] lockAppAfterIdle 가 먼저 부르는 Check/Open 시도 무효화(authAttempt 영역은 이 하네스 밖) — 살아 있는 시도 없음.
+    invalidateLiveAuthAttempt: () => false,
     requestPrf: (credentialArg, opts) => {
       calls.requestPrf.push({ credentialArg, opts, atTick: clock.now() });
       return prf ? prf(credentialArg) : Promise.resolve({ credentialId: credentialArg?.credentialId, prfOutput: (() => { const b = new Uint8Array(32).fill(7); calls.prfOutputs.push(b); return b; })() });
@@ -208,7 +210,9 @@ await check("B2 success unlocks identity only: signing session 0 · signer timer
   assert.equal(app.state.activeSignerAddress, "");
   assert.equal(app.state.moneyIntent, null);
   assert.ok(app.calls.prfOutputs[0].every((b) => b === 0), "PRF output bytes zeroed");
-  assert.equal(app.calls.render, 1, "destination rendered once");
+  // [A-667 re-pin] was 1. unlockApp now renders the "checking" lock view once right AFTER requestPrf is called
+  // (Chog lifts above the iOS sheet), then settleUnlock renders the destination once → 2 total.
+  assert.equal(app.calls.render, 2, "checking view once + destination once");
   assert.equal(app.state.scene, "sendstay", "destination preserved");
   deq(app.storage.keys().sort(), ["araso.piggyName"], "no storage write");
 });
