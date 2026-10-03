@@ -27,6 +27,10 @@ import {
   SECOND_SEND_PENDING_KEY,
   SECOND_SEND_PENDING_STAGES,
   secondSendPendingBelongsToScope,
+  secondSendPendingKey,
+  inspectSecondSendPending,
+  clearSecondSendPendingIf,
+  writeSecondSendPending,
   SECOND_SIGN_MESSAGE_PREFIX,
 } from "../src/second-execution-adapter.js";
 import { classifySecondReceipt, PERSISTABLE_EVIDENCE_CLASSES } from "../src/second-journey-receipt-bridge.js";
@@ -65,14 +69,15 @@ const ACCOUNT = { address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
 const DEPOSIT_HASH = `0x${"11".repeat(32)}`;
 const REDEEM_HASH = `0x${"22".repeat(32)}`;
 
-function stubClients({ depositHash = DEPOSIT_HASH, redeemHash = REDEEM_HASH, failDeposit = false, failRedeem = false, throwOnDeposit = false, throwOnRedeem = false, requirePendingBeforeSend = true } = {}) {
+function stubClients({ sharesBefore = 0n, minted = 777n, depositHash = DEPOSIT_HASH, redeemHash = REDEEM_HASH, failDeposit = false, failRedeem = false, throwOnDeposit = false, throwOnRedeem = false, requirePendingBeforeSend = true } = {}) {
   const sent = [];
+  let depositSent = false; // [A-693 D8] the vault balance only rises once the deposit has been sent
   const receipts = { [depositHash]: { status: failDeposit ? "reverted" : "success", blockNumber: 100n }, [redeemHash]: { status: failRedeem ? "reverted" : "success", blockNumber: 101n } };
   const storage = createMemoryStorage();
   const walletClient = {
     async sendTransaction(tx) {
       if (requirePendingBeforeSend) {
-        const pending = readSecondSendPending(storage);
+        const pending = readSecondSendPending(storage, SCOPE, PIGGY_ID);
         if (!pending || pending.stage === "unknown") throw new Error("TEST GUARD: sendTransaction called before pending was written");
       }
       sent.push(tx);
@@ -81,6 +86,7 @@ function stubClients({ depositHash = DEPOSIT_HASH, redeemHash = REDEEM_HASH, fai
       const isDeposit = Object.prototype.hasOwnProperty.call(tx, "value");
       if (isDeposit) {
         if (throwOnDeposit) throw new Error("deposit send failed");
+        depositSent = true;
         return depositHash;
       }
       if (throwOnRedeem) throw new Error("redeem send failed");
@@ -92,7 +98,7 @@ function stubClients({ depositHash = DEPOSIT_HASH, redeemHash = REDEEM_HASH, fai
       return receipts[hash] || null;
     },
     async readContract({ functionName }) {
-      if (functionName === "balanceOf") return 777n;
+      if (functionName === "balanceOf") return depositSent ? sharesBefore + minted : sharesBefore;
       throw new Error("unexpected readContract call: " + functionName);
     },
   };
@@ -154,7 +160,7 @@ await check("permission fail-closed: confirm !== true blocks before any client c
   assert.equal(out.outcome, "blocked");
   assert.equal(out.reason, "permission_not_confirmed");
   assert.equal(sent.length, 0);
-  assert.equal(readSecondSendPending(storage), null, "nothing written when permission is missing");
+  assert.equal(readSecondSendPending(storage, SCOPE, PIGGY_ID), null, "nothing written when permission is missing");
 });
 
 await check("missing/invalid scope, account, amount, or clients -> blocked, no side effects", async () => {
@@ -188,11 +194,26 @@ await check("duplicate-send prevention: an existing in-scope pending record bloc
   assert.equal(sent.length, 0);
 });
 
-await check("an out-of-scope pending record (different Piggy) does NOT block a new run", async () => {
+await check("[A-693 D5] an out-of-scope LEGACY (global-key) pending record now BLOCKS a new run; it is left untouched", async () => {
+  const { storage, walletClient, publicClient, sent } = stubClients();
+  const legacy = JSON.stringify({ stage: "deposit-broadcast", address: ACCOUNT.address, accountId: SCOPE.accountId, chainId: SCOPE.chainId, piggyId: "other-piggy", asset: "shMON", depositTxHash: DEPOSIT_HASH });
+  storage.setItem(SECOND_SEND_PENDING_KEY, legacy);
+  const out = await runSecondPlumbingProof({ storage, scope: SCOPE, piggyId: PIGGY_ID, amountWei: "1000", confirm: true, account: ACCOUNT, walletClient, publicClient, signDigest: async () => ({}) });
+  assert.equal(out.outcome, "blocked");
+  assert.equal(out.reason, "legacy_pending_out_of_scope");
+  assert.equal(sent.length, 0);
+  assert.equal(storage.getItem(SECOND_SEND_PENDING_KEY), legacy, "unresolved money of another Piggy is never overwritten");
+});
+
+await check("[A-693 D6] another Piggy's SCOPED pending record does not collide with this run and is never touched", async () => {
   const { storage, walletClient, publicClient } = stubClients();
-  storage.setItem(SECOND_SEND_PENDING_KEY, JSON.stringify({ stage: "deposit-broadcast", address: ACCOUNT.address, accountId: SCOPE.accountId, chainId: SCOPE.chainId, piggyId: "other-piggy", asset: "shMON", depositTxHash: DEPOSIT_HASH }));
+  const otherKey = secondSendPendingKey(SCOPE, "other-piggy");
+  const other = JSON.stringify({ stage: "deposit-broadcast", address: ACCOUNT.address, accountId: SCOPE.accountId, chainId: SCOPE.chainId, piggyId: "other-piggy", asset: "shMON", depositTxHash: DEPOSIT_HASH });
+  storage.setItem(otherKey, other);
   const out = await runSecondPlumbingProof({ storage, scope: SCOPE, piggyId: PIGGY_ID, amountWei: "1000", confirm: true, account: ACCOUNT, walletClient, publicClient, signDigest: async () => ({}) });
   assert.equal(out.outcome, "done", out.reason || "");
+  assert.equal(storage.getItem(otherKey), other);
+  assert.notEqual(secondSendPendingKey(SCOPE, PIGGY_ID), otherKey);
 });
 
 // ── 6. failure paths: pending stays, never auto-cleared on failure ─────────────────────
@@ -201,7 +222,7 @@ await check("deposit send throws -> failed, pending stays at deposit-sending (no
   const out = await runSecondPlumbingProof({ storage, scope: SCOPE, piggyId: PIGGY_ID, amountWei: "1000", confirm: true, account: ACCOUNT, walletClient, publicClient, signDigest: async () => ({}) });
   assert.equal(out.outcome, "failed");
   assert.equal(out.reason, "deposit_send_error");
-  const pending = readSecondSendPending(storage);
+  const pending = readSecondSendPending(storage, SCOPE, PIGGY_ID);
   assert.equal(pending.stage, "deposit-sending");
 });
 
@@ -210,7 +231,7 @@ await check("deposit reverted -> failed, pending stays at deposit-broadcast", as
   const out = await runSecondPlumbingProof({ storage, scope: SCOPE, piggyId: PIGGY_ID, amountWei: "1000", confirm: true, account: ACCOUNT, walletClient, publicClient, signDigest: async () => ({}) });
   assert.equal(out.outcome, "failed");
   assert.equal(out.reason, "deposit_unconfirmed_or_reverted");
-  assert.equal(readSecondSendPending(storage).stage, "deposit-broadcast");
+  assert.equal(readSecondSendPending(storage, SCOPE, PIGGY_ID).stage, "deposit-broadcast");
 });
 
 await check("redeem reverted -> failed, pending stays at redeem-broadcast (both hashes kept)", async () => {
@@ -218,7 +239,7 @@ await check("redeem reverted -> failed, pending stays at redeem-broadcast (both 
   const out = await runSecondPlumbingProof({ storage, scope: SCOPE, piggyId: PIGGY_ID, amountWei: "1000", confirm: true, account: ACCOUNT, walletClient, publicClient, signDigest: async () => ({}) });
   assert.equal(out.outcome, "failed");
   assert.equal(out.reason, "redeem_unconfirmed_or_reverted");
-  const pending = readSecondSendPending(storage);
+  const pending = readSecondSendPending(storage, SCOPE, PIGGY_ID);
   assert.equal(pending.stage, "redeem-broadcast");
   assert.equal(pending.depositTxHash, DEPOSIT_HASH);
   assert.equal(pending.redeemTxHash, REDEEM_HASH);
@@ -265,7 +286,7 @@ await check("success: pending cleared, receipt shape matches the card's evidence
   const { storage, walletClient, publicClient } = stubClients();
   const out = await runSecondPlumbingProof({ storage, scope: SCOPE, piggyId: PIGGY_ID, amountWei: "1000", confirm: true, account: ACCOUNT, walletClient, publicClient, signDigest: async (digest) => { assert.ok(digest instanceof Uint8Array); return { ok: true }; } });
   assert.equal(out.outcome, "done");
-  assert.equal(readSecondSendPending(storage), null, "pending cleared only on confirmed success");
+  assert.equal(readSecondSendPending(storage, SCOPE, PIGGY_ID), null, "pending cleared only on confirmed success");
   const r = out.receipt;
   assert.equal(r.outcome, "done");
   assert.equal(r.evidenceClass, SECOND_PLUMBING_EVIDENCE_CLASS);
@@ -478,6 +499,262 @@ await check("renderSecondReturn: a dev/mock-shaped object placed in executionRec
   const render = makeRenderSecondReturn({ secondJourney: { executionReceipt: { devPreview: true, outcome: "done" }, mockReceipt: { attempted: true, decidedStatus: "JOB_READY" } } });
   const model = render();
   assert.equal(model.receiptRowsMarkup.source, "mock");
+});
+
+// ── 13. [A-693] money-safety M1: D1-D8, R7, T11 (failure injection; no network) ─────────────────────
+// Storage whose reads/writes can be made to fail per key prefix, switchable at any time.
+function faultyStorage() {
+  const base = createMemoryStorage();
+  const f = { getThrows: () => false, setThrows: () => false, setSilentDrop: () => false };
+  return {
+    f,
+    getItem: (k) => { if (f.getThrows(k)) throw new Error("getItem boom"); return base.getItem(k); },
+    setItem: (k, v) => { if (f.setThrows(k, v)) throw new Error("setItem boom"); if (f.setSilentDrop(k, v)) return; base.setItem(k, v); },
+    removeItem: (k) => base.removeItem(k),
+    _dump: base._dump,
+  };
+}
+const JOURNEY_PREFIX = "araso.secondJourney";
+const runArgs = (c, extra = {}) => ({ storage: c.storage, scope: SCOPE, piggyId: PIGGY_ID, amountWei: "1000", confirm: true, account: ACCOUNT, walletClient: c.walletClient, publicClient: c.publicClient, signDigest: async () => ({}), ...extra });
+const withStorage = (c, storage) => ({ ...c, storage, walletClient: { async sendTransaction(tx) { return c.walletClient.sendTransaction(tx); } } });
+const SCOPED_KEY = secondSendPendingKey(SCOPE, PIGGY_ID);
+
+await check("D6: scoped key is per chain+account+Piggy, collision-safe, null on invalid scope", () => {
+  assert.equal(SCOPED_KEY, `araso.secondSendPending.v1.monad-testnet.${SCOPE.accountId}.piggy-1`);
+  assert.notEqual(secondSendPendingKey(SCOPE, "a.b"), secondSendPendingKey({ ...SCOPE, accountId: `${SCOPE.accountId}.a` }, "b"));
+  assert.notEqual(SCOPED_KEY, SECOND_SEND_PENDING_KEY);
+  assert.equal(secondSendPendingKey({}, PIGGY_ID), null);
+  assert.equal(secondSendPendingKey(SCOPE, ""), null);
+  assert.equal(secondSendPendingKey({ accountId: "unknown-account", chainId: "x" }, PIGGY_ID), null);
+});
+
+await check("A4/T11/D4: getItem throws on the pending read -> blocked pending_unreadable, zero sends, nothing written", async () => {
+  const c = stubClients();
+  const storage = faultyStorage();
+  storage.f.getThrows = (k) => k.startsWith("araso.secondSendPending");
+  const out = await runSecondPlumbingProof(runArgs({ ...c, storage }));
+  assert.deepEqual([out.outcome, out.reason], ["blocked", "pending_unreadable"]);
+  assert.equal(c.sent.length, 0);
+  assert.deepEqual(storage._dump(), {});
+  assert.equal(inspectSecondSendPending(storage, SCOPED_KEY).status, "storage_error");
+  assert.deepEqual(readSecondSendPending(storage, SCOPE, PIGGY_ID), { stage: "unknown", error: "storage_error" }, "a throw is never reported as 'no pending'");
+  assert.deepEqual(await reconcileSecondPendingOnBoot({ storage, scope: SCOPE, piggyId: PIGGY_ID, readTxReceipt: async () => ({ kind: "success" }) }), { kind: "unknown", reason: "pending_unreadable" });
+});
+
+await check("A5/D4: corrupt scoped pending -> blocked pending_corrupt, bytes unchanged, zero sends", async () => {
+  const c = stubClients();
+  c.storage.setItem(SCOPED_KEY, "{not json");
+  const out = await runSecondPlumbingProof(runArgs(c));
+  assert.deepEqual([out.outcome, out.reason], ["blocked", "pending_corrupt"]);
+  assert.equal(c.storage.getItem(SCOPED_KEY), "{not json");
+  assert.equal(c.sent.length, 0);
+  assert.deepEqual(await reconcileSecondPendingOnBoot({ storage: c.storage, scope: SCOPE, piggyId: PIGGY_ID, readTxReceipt: async () => ({ kind: "success" }) }), { kind: "unknown", reason: "pending_corrupt" });
+  assert.equal(c.storage.getItem(SCOPED_KEY), "{not json");
+});
+
+await check("T11: corrupt LEGACY key blocks the start too (it used to be overwritten)", async () => {
+  const c = stubClients();
+  c.storage.setItem(SECOND_SEND_PENDING_KEY, "garbage");
+  const out = await runSecondPlumbingProof(runArgs(c));
+  assert.deepEqual([out.outcome, out.reason], ["blocked", "pending_corrupt"]);
+  assert.equal(c.storage.getItem(SECOND_SEND_PENDING_KEY), "garbage");
+  assert.equal(c.sent.length, 0);
+});
+
+await check("A1: setItem throws on the first (reserving) write -> blocked, zero sends, no record", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  const storage = faultyStorage();
+  storage.f.setThrows = (k) => k.startsWith("araso.secondSendPending");
+  const out = await runSecondPlumbingProof(runArgs({ ...c, storage }));
+  assert.deepEqual([out.outcome, out.reason], ["blocked", "pending_write_failed"]);
+  assert.equal(c.sent.length, 0);
+});
+
+await check("A8: setItem 'succeeds' but the bytes are not there (silent drop) -> reserve not verified -> blocked, zero sends", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  const storage = faultyStorage();
+  storage.f.setSilentDrop = (k) => k.startsWith("araso.secondSendPending");
+  const out = await runSecondPlumbingProof(runArgs({ ...c, storage }));
+  assert.deepEqual([out.outcome, out.reason], ["blocked", "pending_write_failed"]);
+  assert.equal(c.sent.length, 0);
+});
+
+await check("no storage -> blocked storage_unavailable (the run no longer proceeds without a pending trail)", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  for (const bad of [null, undefined, { getItem() { return null; } }]) {
+    const out = await runSecondPlumbingProof(runArgs({ ...c, storage: bad }));
+    assert.deepEqual([out.outcome, out.reason], ["blocked", "storage_unavailable"]);
+  }
+  assert.equal(c.sent.length, 0);
+});
+
+await check("reserve is atomic with the check: a record that appears during the async grant wait blocks the send", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  const out = await runSecondPlumbingProof(runArgs(c, { requestGrant: async () => { c.storage.setItem(SCOPED_KEY, JSON.stringify({ stage: "deposit-sending", address: ACCOUNT.address, accountId: SCOPE.accountId, chainId: SCOPE.chainId, piggyId: PIGGY_ID, asset: "shMON", reservationId: "other-tab" })); return { granted: false }; } }));
+  assert.deepEqual([out.outcome, out.reason], ["blocked", "pending_exists"]);
+  assert.equal(c.sent.length, 0);
+  assert.equal(JSON.parse(c.storage.getItem(SCOPED_KEY)).reservationId, "other-tab", "the other record was not overwritten");
+});
+
+await check("authorize: isAppLocked() true -> blocked app_locked before any record or send", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  const out = await runSecondPlumbingProof(runArgs(c, { isAppLocked: () => true }));
+  assert.deepEqual([out.outcome, out.reason], ["blocked", "app_locked"]);
+  assert.equal(c.sent.length, 0);
+  assert.equal(c.storage.getItem(SCOPED_KEY), null);
+});
+
+await check("R7/A3: setItem throws AFTER the deposit broadcast -> no throw, failed deposit_hash_unsaved with the hash in memory, no redeem", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  const storage = faultyStorage();
+  c.walletClient.sendTransaction = ((orig) => async (tx) => { const h = await orig(tx); storage.f.setThrows = (k) => k.startsWith("araso.secondSendPending"); return h; })(c.walletClient.sendTransaction);
+  const out = await runSecondPlumbingProof(runArgs({ ...c, storage }));
+  assert.equal(out.outcome, "failed");
+  assert.equal(out.reason, "deposit_hash_unsaved");
+  assert.equal(out.depositTxHash, DEPOSIT_HASH, "the broadcast hash is returned, not lost");
+  assert.equal(c.sent.length, 1, "no redeem was attempted");
+  assert.equal(JSON.parse(storage.getItem(SCOPED_KEY)).stage, "deposit-sending", "record is still the pre-send reservation (fail-closed)");
+});
+
+await check("R7: setItem throws AFTER the redeem broadcast -> failed redeem_hash_unsaved, both hashes returned, pending not cleared", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  const storage = faultyStorage();
+  c.walletClient.sendTransaction = ((orig) => async (tx) => { const h = await orig(tx); if (!Object.prototype.hasOwnProperty.call(tx, "value")) storage.f.setThrows = (k) => k.startsWith("araso.secondSendPending"); return h; })(c.walletClient.sendTransaction);
+  const out = await runSecondPlumbingProof(runArgs({ ...c, storage }));
+  assert.deepEqual([out.outcome, out.reason, out.depositTxHash, out.redeemTxHash], ["failed", "redeem_hash_unsaved", DEPOSIT_HASH, REDEEM_HASH]);
+  assert.equal(JSON.parse(storage.getItem(SCOPED_KEY)).stage, "redeem-sending");
+});
+
+await check("D1/D2: receipt store write fails -> done_unsaved, pending NOT cleared; reconcile with a working store saves, then clears", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  const storage = faultyStorage();
+  storage.f.setThrows = (k) => k.startsWith(JOURNEY_PREFIX);
+  const out = await runSecondPlumbingProof(runArgs({ ...c, storage }));
+  assert.equal(out.outcome, "done_unsaved");
+  assert.equal(out.receipt.txHash, REDEEM_HASH, "money moved: the receipt is returned even though it was not saved");
+  assert.equal(JSON.parse(storage.getItem(SCOPED_KEY)).stage, "redeem-broadcast", "pending kept");
+  // reconcile while the store is still failing: honest success_unsaved, pending kept
+  const mid = await reconcileSecondPendingOnBoot({ storage, scope: SCOPE, piggyId: PIGGY_ID, readTxReceipt: async () => ({ kind: "success", receipt: { blockNumber: 101n } }) });
+  assert.equal(mid.kind, "success_unsaved");
+  assert.notEqual(storage.getItem(SCOPED_KEY), null);
+  // store recovers
+  storage.f.setThrows = () => false;
+  const fin = await reconcileSecondPendingOnBoot({ storage, scope: SCOPE, piggyId: PIGGY_ID, readTxReceipt: async () => ({ kind: "success", receipt: { blockNumber: 101n } }) });
+  assert.equal(fin.kind, "success");
+  assert.equal(storage.getItem(SCOPED_KEY), null, "cleared only after the save was verified");
+  const saved = JSON.parse(storage.getItem(`${JOURNEY_PREFIX}.${SCOPE.chainId}.${SCOPE.accountId}`));
+  assert.equal(saved.receipts.some((r) => r.eventId === fin.receipt.eventId), true);
+});
+
+await check("A8/D2: the journey store silently drops the write -> not verified -> pending kept (done_unsaved)", async () => {
+  const c = stubClients({ requirePendingBeforeSend: false });
+  const storage = faultyStorage();
+  storage.f.setSilentDrop = (k) => k.startsWith(JOURNEY_PREFIX);
+  const out = await runSecondPlumbingProof(runArgs({ ...c, storage }));
+  assert.equal(out.outcome, "done_unsaved");
+  assert.notEqual(storage.getItem(SCOPED_KEY), null);
+});
+
+await check("D1: an unreadable (corrupt) journey store is never overwritten by the money path; pending kept", async () => {
+  const c = stubClients();
+  const jk = `${JOURNEY_PREFIX}.${SCOPE.chainId}.${SCOPE.accountId}`;
+  c.storage.setItem(jk, "{corrupt");
+  const out = await runSecondPlumbingProof(runArgs(c));
+  assert.equal(out.outcome, "done_unsaved");
+  assert.equal(out.reason, "journey_state_unreadable");
+  assert.equal(c.storage.getItem(jk), "{corrupt");
+  assert.notEqual(c.storage.getItem(SCOPED_KEY), null);
+});
+
+await check("D1 compare-and-clear: a pending record that changed since is NOT cleared (and the bridge-first order holds on success)", async () => {
+  const st = createMemoryStorage();
+  const rec = { stage: "redeem-broadcast", reservationId: "r1", depositTxHash: DEPOSIT_HASH, redeemTxHash: REDEEM_HASH };
+  st.setItem(SCOPED_KEY, JSON.stringify({ ...rec, at: 1 }));
+  assert.deepEqual(clearSecondSendPendingIf(st, SCOPED_KEY, { ...rec, redeemTxHash: `0x${"33".repeat(32)}` }), { cleared: false, reason: "pending_changed" });
+  assert.deepEqual(clearSecondSendPendingIf(st, SCOPED_KEY, { ...rec, reservationId: "r2" }), { cleared: false, reason: "pending_changed" });
+  assert.notEqual(st.getItem(SCOPED_KEY), null);
+  assert.deepEqual(clearSecondSendPendingIf(st, SCOPED_KEY, rec), { cleared: true, reason: null });
+  assert.equal(st.getItem(SCOPED_KEY), null);
+  assert.deepEqual(clearSecondSendPendingIf(st, SCOPED_KEY, rec), { cleared: true, reason: "already_clear" });
+  // order: the receipt is already in the journey store at the moment the pending record disappears
+  const c = stubClients();
+  const jk = `${JOURNEY_PREFIX}.${SCOPE.chainId}.${SCOPE.accountId}`;
+  let journeyHadReceiptWhenCleared = null;
+  const origRemove = c.storage.removeItem;
+  c.storage.removeItem = (k) => { if (k === SCOPED_KEY) journeyHadReceiptWhenCleared = (JSON.parse(c.storage.getItem(jk) || "{}").receipts || []).length === 1; return origRemove(k); };
+  const out = await runSecondPlumbingProof(runArgs(c));
+  assert.equal(out.outcome, "done");
+  assert.equal(journeyHadReceiptWhenCleared, true, "durable save happens BEFORE the pending clear");
+});
+
+await check("D8/E7: pre-existing shares are NOT redeemed; only this deposit's minted delta is", async () => {
+  const c = stubClients({ sharesBefore: 500n, minted: 777n });
+  const redeemed = [];
+  const orig = c.walletClient.sendTransaction;
+  c.walletClient.sendTransaction = async (tx) => { if (!Object.prototype.hasOwnProperty.call(tx, "value")) redeemed.push(tx.data); return orig(tx); };
+  const out = await runSecondPlumbingProof(runArgs(c));
+  assert.equal(out.outcome, "done", out.reason || "");
+  assert.equal(out.shmonReceived, 777n);
+  assert.equal(redeemed[0], makeSecondRedeemTx(777n, ACCOUNT.address, ACCOUNT.address).data);
+  assert.notEqual(redeemed[0], makeSecondRedeemTx(1277n, ACCOUNT.address, ACCOUNT.address).data, "never the whole balance");
+  assert.equal(out.receipt.measuredDelta, "shMON 777 minted then redeemed");
+});
+
+await check("D8: balance unreadable before the deposit -> blocked, no send; delta <= 0 after -> failed no_shares_minted, no redeem, pending stays", async () => {
+  const c1 = stubClients({ requirePendingBeforeSend: false });
+  c1.publicClient.readContract = async () => { throw new Error("rpc down"); };
+  const o1 = await runSecondPlumbingProof(runArgs(c1));
+  assert.deepEqual([o1.outcome, o1.reason], ["blocked", "balance_before_unreadable"]);
+  assert.equal(c1.sent.length, 0);
+  const c2 = stubClients({ minted: 0n });
+  const o2 = await runSecondPlumbingProof(runArgs(c2));
+  assert.deepEqual([o2.outcome, o2.reason], ["failed", "no_shares_minted"]);
+  assert.equal(c2.sent.length, 1, "only the deposit was sent");
+  assert.equal(readSecondSendPending(c2.storage, SCOPE, PIGGY_ID).stage, "deposit-broadcast");
+  const c3 = stubClients();
+  let calls = 0;
+  c3.publicClient.readContract = async () => { calls += 1; if (calls === 1) return 0n; throw new Error("rpc down"); };
+  const o3 = await runSecondPlumbingProof(runArgs(c3));
+  assert.deepEqual([o3.outcome, o3.reason], ["failed", "balance_read_error"]);
+  assert.equal(c3.sent.length, 1);
+});
+
+await check("D5/D6 migration: an in-scope LEGACY record is migrated to the scoped key, reconciled, and the legacy key is deleted only after the verified save + clear", async () => {
+  const st = createMemoryStorage();
+  const legacy = { stage: "redeem-broadcast", address: ACCOUNT.address, accountId: SCOPE.accountId, chainId: SCOPE.chainId, piggyId: PIGGY_ID, asset: "shMON", depositTxHash: DEPOSIT_HASH, redeemTxHash: REDEEM_HASH };
+  st.setItem(SECOND_SEND_PENDING_KEY, JSON.stringify(legacy));
+  // a failing journey store: legacy must survive, scoped copy exists
+  const fs = faultyStorage();
+  fs.setItem(SECOND_SEND_PENDING_KEY, JSON.stringify(legacy));
+  fs.f.setThrows = (k) => k.startsWith(JOURNEY_PREFIX);
+  const bad = await reconcileSecondPendingOnBoot({ storage: fs, scope: SCOPE, piggyId: PIGGY_ID, readTxReceipt: async () => ({ kind: "success", receipt: {} }) });
+  assert.equal(bad.kind, "success_unsaved");
+  assert.notEqual(fs.getItem(SECOND_SEND_PENDING_KEY), null, "legacy NOT deleted before the save cycle completed");
+  assert.notEqual(fs.getItem(SCOPED_KEY), null);
+  // a start is blocked meanwhile
+  const c = stubClients({ requirePendingBeforeSend: false });
+  assert.equal((await runSecondPlumbingProof(runArgs({ ...c, storage: fs }))).reason, "pending_exists");
+  fs.f.setThrows = () => false;
+  const good = await reconcileSecondPendingOnBoot({ storage: fs, scope: SCOPE, piggyId: PIGGY_ID, readTxReceipt: async () => ({ kind: "success", receipt: {} }) });
+  assert.equal(good.kind, "success");
+  assert.equal(fs.getItem(SCOPED_KEY), null);
+  assert.equal(fs.getItem(SECOND_SEND_PENDING_KEY), null, "legacy deleted after the scoped cycle");
+  const again = await reconcileSecondPendingOnBoot({ storage: fs, scope: SCOPE, piggyId: PIGGY_ID, readTxReceipt: async () => ({ kind: "success" }) });
+  assert.deepEqual(again, { kind: "none" });
+});
+
+await check("reconcile: invalid scope -> unknown (never reads or clears anything); zero chain sends during any reconcile", async () => {
+  const st = createMemoryStorage();
+  st.setItem(SCOPED_KEY, JSON.stringify({ stage: "deposit-broadcast", address: ACCOUNT.address, accountId: SCOPE.accountId, chainId: SCOPE.chainId, piggyId: PIGGY_ID, asset: "shMON", depositTxHash: DEPOSIT_HASH }));
+  assert.deepEqual(await reconcileSecondPendingOnBoot({ storage: st, scope: {}, piggyId: PIGGY_ID, readTxReceipt: async () => ({ kind: "success" }) }), { kind: "unknown", reason: "invalid_scope" });
+  assert.notEqual(st.getItem(SCOPED_KEY), null);
+});
+
+await check("source: the adapter has no direct broadcast call and no longer imports a bare global key for writes", () => {
+  const adapterSrc = readFileSync(path.join(REPO, "app/src/second-execution-adapter.js"), "utf8");
+  const code = adapterSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
+  assert.ok(!/\.sendTransaction\(|\.sendRawTransaction\(|executor\.send\(/.test(code), "broadcast only through money-executor.js");
+  assert.ok(/executeMoneyStep\(/.test(code));
 });
 
 console.log(`\n${pass}/${pass + fail} PASS`);

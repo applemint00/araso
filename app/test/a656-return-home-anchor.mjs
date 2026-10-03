@@ -237,7 +237,12 @@ await check("N14 decision 7 — the blanket's own clip is removed (CSS only, no 
 
 await check("N15 decision 7 — name label drops below the settled lying pose for flop-sleep ONLY (every other state keeps the existing seated offset)", () => {
   const place = fnBody("placeHomeAmbientResidents");
-  assert.match(place, /const nameDropPx = projected\.state === "flop-sleep" \? S\.b - anchors\.name\.y \+ 0\.29 \* box\.h \+ 2 : 0;/);
+  // [A-681 iteration — OWNER VISUAL DECISION, MOBILE MULTI-PIGGY HOME] re-pinned S.h (the full
+  // rendered-art height every inner offset in this function is calibrated against) in place of
+  // box.h (the slot's own placement box, now possibly size-reduced for Home's small companions,
+  // M1/M2) — the art itself always mounts at full size and is scaled as one rigid outer unit, so
+  // this offset must stay in that same full-size coordinate space, not the slot's own box.
+  assert.match(place, /const nameDropPx = projected\.state === "flop-sleep" \? S\.b - anchors\.name\.y \+ 0\.29 \* S\.h \+ 2 : 0;/);
   assert.match(place, /tag\.style\.top = `\$\{nameOff\.y \+ nameDropPx\}px`;/);
 });
 
@@ -614,6 +619,27 @@ async function browserRun(browser, BASE) {
         const n2 = norm(gate2.paper, gate2.canvas);
         if (w === 1440) { ref1440 = { n1, n2 }; return; }
         assert.ok(ref1440, "1440 reference captured first");
+        if (w <= 640) {
+          // [A-681 FINAL CLOSEOUT A re-pin — named reason] Owner decision A / SOURCE RECONCILIATION: on
+          // mobile the Receipt target is the viewer-LEFT CONTENT rail, explicitly NO LONGER proportional to
+          // the 1440 canon. The ≤0.03 canvas-normalized check is REPLACED (not weakened) by the rail
+          // contract of piggy-return.js receiptRailTarget(): paper bbox (rotated, as rendered) has
+          // left ≈ --mobile-inset (±4px: the -1.2deg rotation widens the bbox a few px), right ≤ vw -
+          // inset (+1), bottom ≤ Piggy head top - gap(--grid-5 32) (+4 rotation). 700/900/1440 keep the
+          // proportional check below, unchanged.
+          const { RETURN_GEOMETRY } = await import("../src/piggy-return.js");
+          const inset = w <= 400 ? 20 : 24;
+          const gs = RETURN_GEOMETRY.group;
+          const kc = gate1.canvas[2] / 1256;
+          const piggyTop = gate1.canvas[1] + kc * (gs.dy + (250 + (-46.9846) * 0.24) * gs.scale);
+          for (const [name, g] of [["gate1", gate1], ["gate2", gate2]]) {
+            const r = g.paper;
+            assert.ok(Math.abs(r[0] - inset) <= 4, `${name} paper left ${r[0]} vs rail inset ${inset}`);
+            assert.ok(r[2] <= w - inset + 1, `${name} paper right ${r[2]} must be <= ${w - inset}`);
+            assert.ok(r[3] <= piggyTop - 32 + 4, `${name} paper bottom ${r[3]} must clear Piggy head top ${piggyTop} by the 32px gap`);
+          }
+          return;
+        }
         assert.ok(Math.abs(n1.x - ref1440.n1.x) <= 0.03 && Math.abs(n1.y - ref1440.n1.y) <= 0.03, `gate1 norm ${JSON.stringify(n1)} vs 1440 ${JSON.stringify(ref1440.n1)}`);
         assert.ok(Math.abs(n2.x - ref1440.n2.x) <= 0.03 && Math.abs(n2.y - ref1440.n2.y) <= 0.03, `gate2 norm ${JSON.stringify(n2)} vs 1440 ${JSON.stringify(ref1440.n2)}`);
       });

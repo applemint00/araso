@@ -259,6 +259,53 @@ const forkReceipt = (over = {}) => ({
     PERSISTABLE_EVIDENCE_CLASSES.every((c) => !/mock|preview|dev|fixture/i.test(c)));
 }
 
+// ── 7. [A-693] persisted/saved are truthful; the duplicate branch retries a failed save ──────────────
+{
+  const flaky = () => {
+    const base = createMemoryStorage();
+    const f = { setThrows: false, silentDrop: false, sets: 0 };
+    return { f, getItem: (k) => base.getItem(k), setItem: (k, v) => { f.sets += 1; if (f.setThrows) throw new Error("boom"); if (!f.silentDrop) base.setItem(k, v); }, removeItem: (k) => base.removeItem(k) };
+  };
+  const stored = (st) => loadSecondJourneyState(st, scope).state.receipts.map((r) => r.eventId);
+
+  const a = flaky(); a.f.setThrows = true;
+  const failedSave = commitSecondJourneyReceipt({ state: createSecondJourneyState(scope), receipt: forkReceipt(), scope, storage: a });
+  ok("D2 저장이 throw 하면 persisted:false · saved:false · 사유가 남는다 (예전: persisted:true)",
+    failedSave.persisted === false && failedSave.saved === false && failedSave.reason === "storage_write_failed" && failedSave.duplicate === false);
+  ok("  메모리 state 에는 들어가 있다(recorded:true) — 영속과 구별된다", failedSave.recorded === true && failedSave.state.receipts.length === 1);
+
+  const b = flaky(); b.f.silentDrop = true;
+  const dropped = commitSecondJourneyReceipt({ state: createSecondJourneyState(scope), receipt: forkReceipt(), scope, storage: b });
+  ok("D2 setItem 이 조용히 버려지면 읽어서 확인하지 못하므로 saved:false (save_not_verified)",
+    dropped.saved === false && dropped.persisted === false && dropped.reason === REJECTION.SAVE_NOT_VERIFIED);
+
+  const noStore = commitSecondJourneyReceipt({ state: createSecondJourneyState(scope), receipt: forkReceipt(), scope });
+  ok("D2 storage 가 없으면 메모리만: persisted:false · saved:false · recorded:true", noStore.persisted === false && noStore.saved === false && noStore.recorded === true);
+
+  // D3: first save failed -> the same eventId again re-saves and verifies
+  a.f.setThrows = false;
+  const retried = commitSecondJourneyReceipt({ state: failedSave.state, receipt: forkReceipt(), scope, storage: a });
+  ok("D3 첫 저장 실패 후 같은 eventId 재호출은 duplicate 이지만 다시 저장하고 확인한다",
+    retried.duplicate === true && retried.saved === true && retried.persisted === true && retried.reason === null);
+  ok("  저장소에 정확히 한 번 들어 있다", stored(a).length === 1 && stored(a)[0] === "second-fork-1");
+
+  // D3: already stored -> verified, no rewrite (another tab's newer state is not overwritten)
+  const before = a.f.sets;
+  const dup = commitSecondJourneyReceipt({ state: retried.state, receipt: forkReceipt(), scope, storage: a });
+  ok("D3 이미 저장돼 있으면 duplicate · saved:true · persisted:false, 다시 쓰지 않는다",
+    dup.duplicate === true && dup.saved === true && dup.persisted === false && a.f.sets === before && dup.state.receipts.length === 1);
+
+  // D3: duplicate in memory, store still failing -> honest false, nothing claimed
+  const c = flaky(); c.f.setThrows = true;
+  const first = commitSecondJourneyReceipt({ state: createSecondJourneyState(scope), receipt: forkReceipt(), scope, storage: c });
+  const second = commitSecondJourneyReceipt({ state: first.state, receipt: forkReceipt(), scope, storage: c });
+  ok("D3 저장소가 계속 실패하면 duplicate 이어도 saved:false (거짓 확인 없음)", second.duplicate === true && second.saved === false && second.persisted === false && typeof second.reason === "string");
+
+  // main.js harness reads `out.persisted` as "committed": it is now only true for a verified save
+  ok("호환: 반환 모양의 기존 키(state/persisted/duplicate/saved/reason/receipt)가 모두 남아 있다",
+    ["state", "persisted", "duplicate", "saved", "reason", "receipt"].every((k) => k in failedSave && k in dup));
+}
+
 console.log(`\n${pass}/${pass + fail_} PASS`);
 if (fail_ === 0) console.log("PASS_SECOND_RECEIPT_PRODUCT_WIRING  (product wiring + persistence only — NOT J2-6 live/mainnet second Job)");
 process.exit(fail_ === 0 ? 0 : 1);

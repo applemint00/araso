@@ -122,7 +122,11 @@ check("HOME records button still resets the selection to global", () => {
 });
 
 check("a selected Piggy does not borrow the account address in the header", () => {
-  assert.match(MAIN, /state\.historyPiggyId \? "" : \(typeof state\.address/);
+  // [A-685] re-pinned: A-684 no-address masthead (same claim, stricter: the header borrows no address at all)
+  const mast = MAIN.slice(MAIN.indexOf("function recordsMastheadMarkup("));
+  const mastFn = mast.slice(0, mast.indexOf("\n}\n"));
+  assert.ok(mastFn.includes("recordsCard__identityName"));
+  assert.equal(/state\.address|identityAddress/.test(mastFn.replace(/\/\/[^\n]*/g, "")), false);
 });
 
 // ── 7. [A-540] 카드마다 자기 records — 위임 클릭이 historyPiggyId 만 바꾼다 ─────────────

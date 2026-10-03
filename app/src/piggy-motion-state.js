@@ -214,7 +214,7 @@ export function homeSlotBand(width) {
   return "web";
 }
 
-export function planHomeSlots({ width, seat, chog, foot, paper, brand = null, safe }) {
+export function planHomeSlots({ width, seat, chog, foot, paper, brand = null, safe, mobileVisibleCap = 2 }) {
   const band = homeSlotBand(width);
   const gap = band === "mobile" ? HOME_SLOT_GAP.mobile : HOME_SLOT_GAP.web;
   const w = seat.w;
@@ -252,16 +252,49 @@ export function planHomeSlots({ width, seat, chog, foot, paper, brand = null, sa
   // viewport where even ONE slot's h doesn't fit below the obstacles still simply rejects it at
   // runtime (`rectInside(r, safe)`), same as any other candidate — this never forces a placement
   // that would clip.
+  // [A-681 OWNER CLARIFICATION 2026-10-02 / OWNER DIRECTION 2026-10-03 item 1] "Mobile visible
+  // Piggies: maximum 2" originally superseded the A-654/A-659 mobile capacity of 5 (M0 seat +
+  // M1..M4) as a VISIBLE-composition rule — the logical/indexed Piggy count stayed untouched
+  // (indexedResidents(), main.js, is a fully separate data path HISTORY/list reads from; it
+  // never calls this function). That reading is itself now SUPERSEDED below.
+  //
+  // [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03, supersedes the "max 2
+  // visible total" reading] Home may show the main current Piggy+Chog (dominant, full-size,
+  // unchanged, slot M0) PLUS up to TWO additional Piggies as one small, size-reduced companion
+  // cluster near the lower-left floor line — close together, not scattered, with slight size/
+  // vertical variation for an organic feel ("about 10% relative difference, not wildly random").
+  // Action scenes (Explore etc.) still show ONLY the active Piggy — `mobileVisibleCap: 0` is
+  // passed from main.js there (HOME_LIFE_SCENES call site), vs. Home's default of 2. Sizes
+  // relative to the main seat (`w`/`h` above), within the Owner-recommended range, at the higher
+  // end per the Owner's own "the mock extras were a bit too small — implement slightly larger"
+  // correction: extra A (M1) ≈ 0.425× · extra B (M2) ≈ 0.375× (≈12% apart — "about 10%", kept
+  // slightly off round numbers rather than inventing an exact 10.0%). A resident that doesn't
+  // get a slot (beyond `mobileVisibleCap`, or in an action scene) already falls back to
+  // "card-only" (placeHomeAmbientSet()'s own `if (!pick) continue;`, main.js) — i.e. Home/Paper/
+  // list/HISTORY information only, zero new fallback code. `mid`/`web` bands are untouched — this
+  // card is mobile-only (<=640, the same boundary `homeSlotBand()` already draws).
+  //
+  // This replaces the earlier A-659 "M1..M4 two-row grid, staggered to avoid a 5-seat pile-up"
+  // formulas entirely (history above, superseded code removed rather than kept dead — that
+  // design assumed up to 4 FULL-SIZE extras scattered across the viewport, which is exactly what
+  // this Owner decision now forbids: "Do NOT scatter extra Piggies around the viewport"). Floor
+  // line = the lower of the main pair's own feet (`seat.b`/`chog.b`, live-measured, never a
+  // hardcoded screen position) — same "no hardcoded band" discipline the old M3/M4 anchor used.
+  const HOME_EXTRA_A_SCALE = 0.425;
+  const HOME_EXTRA_B_SCALE = 0.375;
+  const atSize = (x, y, ww, hh) => rect(x, y, x + ww, y + hh);
   const candidates = band === "mobile"
     ? (() => {
-      const belowY = Math.max(foot.b, chog.b, seat.b) + gap;
-      const belowSlack = Math.max(0, safe.b - belowY - h - 1);
+      if (mobileVisibleCap <= 0) return [];
+      const wA = w * HOME_EXTRA_A_SCALE, hA = h * HOME_EXTRA_A_SCALE;
+      const wB = w * HOME_EXTRA_B_SCALE, hB = h * HOME_EXTRA_B_SCALE;
+      const floorY = Math.max(seat.b, chog.b);
+      // B sits a touch higher than A (slight vertical variation, organic, not aligned/copies).
+      const bLift = hB * 0.15;
       return [
-        ["M1", at(foot.x, foot.y - gap - h)],
-        ["M2", at(foot.r - w, foot.y - gap - h * 1.6)],
-        ["M3", at(safe.x, belowY)],
-        ["M4", at(safe.r - w, belowY + belowSlack)],
-      ];
+        ["M1", atSize(safe.x, floorY - hA, wA, hA)],
+        ["M2", atSize(safe.x + wA + gap, floorY - bLift - hB, wB, hB)],
+      ].slice(0, Math.min(2, mobileVisibleCap));
     })()
     : band === "mid"
       ? [

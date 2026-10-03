@@ -150,14 +150,22 @@ check("[A-662] alignRecordsCardToHomePaper() calls stackMobileRecordsOverHome() 
 // ── 7. FIRST JOB — the "work?" reaction canvas (Piggy, drawn by piggy-depart.js — outside
 // this card's files) now gets the SAME floor-scale/bottom-anchor treatment
 // applyHomeCharacterScaleFloor() gives #homeChar/#chogHome, only for clock==="send" (First
-// Job) — Explore's clock==="second" is left on its original simple centered fit. ───────────
+// Job) — Explore's clock==="second" used to be left on its original simple centered fit.
+// [A-681 INBOX "EXPLORE PAPER-EDGE PIGGY SOURCE CORRECTION" 2026-10-03] Source-checked: no canon
+// establishes that exclusion as an intended peek — it is the same mobile floor/anchor gap, just
+// never extended to Explore. Mobile-only (this branch is only reachable at s<HOME_CHAR_SCALE_FLOOR,
+// i.e. <=640/653px in practice): now also covers clock==="second", reusing the identical
+// HOME_CENTER/HOME_FLOOR path. The sibling mid-band branch (s>=HOME_CHAR_SCALE_FLOOR, width>=641)
+// stays clock==="send"-only — this card's Explore fix is mobile-only, web is untouched. ───────
 const workPoseSrc = cut("function mountSendCardWorkPose({", "\n  loadWorkAssetsCached()");
 check("mountSendCardWorkPose()'s fit() checks the SAME HOME_CHAR_SCALE_FLOOR condition applyHomeCharacterScaleFloor() uses",
   /s < HOME_CHAR_SCALE_FLOOR/.test(workPoseSrc), true);
-check("fit()'s floor branch is scoped to clock === \"send\" only (Explore's \"second\" clock untouched)",
-  /clock === "send" && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR/.test(workPoseSrc), true);
-check("fit()'s floor branch derives k the same way applyHomeCharacterScaleFloor() does (HOME_CHAR_SCALE_FLOOR / s)",
-  /const k = HOME_CHAR_SCALE_FLOOR \/ s;/.test(workPoseSrc), true);
+check("[A-681] fit()'s floor branch now covers BOTH clock === \"send\" and clock === \"second\" (Explore joins First Job's mobile floor/anchor — mid-band below stays send-only, web untouched)",
+  /\(clock === "send" \|\| clock === "second"\) && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR/.test(workPoseSrc), true);
+check("[A-681] fit()'s mid-band branch (width>=641) is still clock === \"send\" only — Explore's web fit is untouched",
+  /if \(clock === "send" && board && s >= HOME_CHAR_SCALE_FLOOR\)/.test(workPoseSrc), true);
+check("fit()'s floor branch derives k the same way applyHomeCharacterScaleFloor() does (HOME_CHAR_SCALE_FLOOR / s), then applies the A-681 mobile-only size boost on top (kBoosted) for the actual canvas size/position",
+  /const k = HOME_CHAR_SCALE_FLOOR \/ s;/.test(workPoseSrc) && /const kBoosted = k \* homeCharMobileBoost\(\);/.test(workPoseSrc), true);
 // [A-659 OWNER CORRECTION — 1440 WEB VERTICAL CANON, 2026-10-01] the direct
 // `resolveCssLengthVarPx("--mobile-bottom-safe", 20)` call that used to sit inline in this fit()
 // branch moved into the ONE shared target function every floor/mid-band call site now uses
@@ -167,8 +175,8 @@ check("fit()'s floor branch derives k the same way applyHomeCharacterScaleFloor(
 // token itself is still read there (not a new hardcoded number) — checked in both places: this
 // fit() branch calls the shared function, and the shared function's own body still reads the
 // token.
-check("fit()'s floor branch computes its target via the SAME shared function every other floor/mid-band call site uses (not a hardcoded number, not a re-derived duplicate)",
-  /const targetFootViewportY = computeHomeFootTargetViewportY\(window\.innerHeight\);/.test(workPoseSrc), true);
+check("[A-681 iteration 2 re-pin] fit()'s floor branch computes its target via the SAME shared function every other floor/mid-band call site uses, minus the A-681 ink-overhang correction every floor consumer now applies (not a hardcoded number, not a re-derived duplicate)",
+  /const targetFootViewportY = computeHomeFootTargetViewportY\(window\.innerHeight\) - homeCharFloorInkOverhangCorrectionPx\(\);/.test(workPoseSrc), true);
 check("the shared computeHomeFootTargetViewportY() function itself reuses resolveCssLengthVarPx() for the bottom-safe token (not a new hardcoded number)",
   /resolveCssLengthVarPx\("--mobile-bottom-safe", 20\)/.test(cut("function computeHomeFootTargetViewportY(vh) {", "\n}")), true);
 check("fit()'s floor branch does NOT add the card-collision X term (96px) — a repair-pass cluster nudge instead, avoids pushing this wider canvas's ink past the right safe edge",
@@ -178,8 +186,9 @@ check("fit()'s floor branch does NOT add the card-collision X term (96px) — a 
 // pass's own custom cluster-nudge constant is gone — this canvas now uses the exact same
 // base-only nudge `applyHomeCharacterScaleFloor()` uses (no card-state-dependent term of any
 // kind), so Piggy lands in the literal same resident slot regardless of which card is open.
+// [A-681 FINAL CLOSEOUT B re-pin] base nudge now routed through homeFloorNudgeViewportX(s) (right safe rail); still no card-state term.
 check("fit()'s floor branch uses the plain base nudge only — no repair-pass cluster constant, no collision term (Piggy maps into the exact same slot Home settled uses)",
-  /const nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX\.x;\s*\n\s*const nudgeViewportY/.test(workPoseSrc) &&
+  /const nudgeViewportX = homeFloorNudgeViewportX\(s\);\s*\n\s*const nudgeViewportY/.test(workPoseSrc) &&
   !/FIRST_JOB_PIGGY_CLUSTER_NUDGE_X_PX/.test(SRC),
   true);
 check("fit()'s non-floor branch resets left/top/transform to \"\" (falls back to .departStage's own centered CSS — unchanged for desktop/Explore)",

@@ -130,7 +130,10 @@ function runFinish(trip, { autoTimeout = true } = {}) {
   const rememberReceipt = (r) => {
     rememberCalls += 1;
     state.receipts.unshift(r);
+    return true; // [A-699 declared harness update] the real rememberReceipt returns true only when the row is verified in storage
   };
+  const SEND_PENDING_KEY = "araso.sendPending"; // [A-699] finishTrip's success branch compare-and-clears this record
+  const readSendPending = () => { const raw = store.get(SEND_PENDING_KEY); return raw ? JSON.parse(raw) : null; };
   const setScene = (scene, message = "", detail = "") => scenes.push({ scene, message, detail });
   // 실제 finishTrip 은 영수증 없는 완료에서 1200ms 뒤 filebox 로 넘어간다("기존 확인 경로").
   // 그 경로를 검증하려면 콜백을 실제로 실행해야 한다 — 기본은 즉시 실행.

@@ -81,8 +81,12 @@ export function receiptPaperFields({ receipt = null, name = "Piggy" } = {}) {
   return {
     name,
     date: hasAt ? at.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—",
+    // [A-684] wentOut = 출발 시각(A-346). 저장된 출발 시각 필드가 없다 — receipt.at 은 귀환 시각, sent 는 금액이라
+    // 쓰지 않는다. "—" 고정(새 필드 0).
     wentOut: "—",
     cameBack: hasAt ? at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "—",
+    // [A-684] kept = 그 Piggy 의 실현 Job 이익(검증된 이익 원천이 생길 때까지 "—"). receipt.after/sent/gas/
+    // balance/principal 에서 끌어오지 않는다 — 원금 귀환과 이익은 별도 줄이다.
     kept: "—",
     statusLabel: empty ? "Unknown" : "done",
     empty,

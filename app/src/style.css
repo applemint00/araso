@@ -3065,6 +3065,16 @@ h1 {
   height: 100dvh;
 }
 
+/* [A-697] Invite 390 asymmetry (probe P1, baseline: paper left/right margin differ by 30px at 390, 0 with this
+   override). Cause: the grid's implicit column track is auto (min-content = .invite's 420px layout box) > 390
+   viewport, so the board sat off-centre before scale(). Pin the track to the container — MOBILE ONLY. 430 / 700 /
+   1440 measured unchanged; 900 (wide Invite) is a separate pre-existing finding and deliberately NOT touched. */
+@media (max-width: 640px) {
+  .stage--invite {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .invite__faceIcon {
   width: 22px;
   height: 22px;
@@ -4584,3 +4594,13 @@ h1 {
   .homePaper__amount { font-size: 17px; }
 }
 /* ════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* [A-681 FINAL CLOSEOUT F — MULTI-PIGGY HOME, COMPANION LABELS] Owner: the tiny companion name
+   labels (~6px once the resident art is scaled to its small-companion size) are unreadable and
+   duplicate what Home / Paper / HISTORY already show. Hidden on mobile only — display-only: the
+   span stays in the DOM (main.js placeHomeAmbientResidents still creates it), logical/indexed
+   Piggy identities and the seat Piggy's own `#homeName` label are untouched, and web (>640) keeps
+   the label exactly as before. The mobile 15px font rule above is left in place (a666 pins it). */
+@media (max-width: 640px) {
+  .homeLiving__name { display: none; }
+}

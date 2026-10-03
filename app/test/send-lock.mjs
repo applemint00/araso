@@ -96,7 +96,9 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
   const t = makeSend({ storage, settleOutcome: "done" });
   await t.sendPiggy(); await tick(); await tick();
   check("success: araso.txHash = redeem hash", storage.getItem("araso.txHash"), "0xredeem");
-  check("  pending cleared", storage.has("araso.sendPending"), false);
+  // [A-699 M2-alpha] declared expectation update: commitSendSuccess no longer clears the pending record; the clear is in the
+  // REAL finishTrip, behind the verified receipt save (stubbed in this harness; end-to-end in money-safety-first.mjs).
+  check("  pending NOT cleared by commitSendSuccess (clear moved behind the verified receipt save)", storage.has("araso.sendPending"), true);
   check("  lock released after settle", t.isInFlight(), false);
   check("  finishTrip done", t.calls.finished[0], "done");
 }
@@ -164,7 +166,9 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
 {
   const t = makeSend({ storage: mockStorage(), settleOutcome: "done" });
   await t.sendPiggy(); await tick(); await tick();
-  check("A-444 success (pending cleared) -> DOM Send enabled", t.btn.disabled, false);
+  // [A-699 M2-alpha] declared expectation update: with finishTrip stubbed the record is still there, so Send stays locked;
+  // "success -> Send enabled" is asserted end-to-end with the real finishTrip in money-safety-first.mjs (G-series).
+  check("A-444 success (finishTrip stubbed: pending not cleared by commit) -> DOM Send stays locked", t.btn.disabled, true);
 }
 {
   let release;

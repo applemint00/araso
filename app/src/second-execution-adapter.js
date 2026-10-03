@@ -17,6 +17,17 @@
 //      executionMode "testnet_actual" — second-journey-receipt-bridge.js classifies it)
 //   5. reconcile → the existing Second receipt bridge (commitSecondJourneyReceipt)
 //
+// [A-693 / A-680 M1] Durability + chokepoint hardening of this lane (D1-D8, R7, T11):
+//   · every broadcast goes through money-executor.js (authorize -> reserve -> persist-nonce -> sign ->
+//     persist-hash -> broadcast; this lane uses the compat "viem_send" transport, so the hash is persisted
+//     right after the send with bounded retries and a failure is reported as `*_hash_unsaved`, never thrown)
+//   · pending key is scoped per chain/account/Piggy (D6); the old global key is read only for migration (D5)
+//   · pending reads are tri-state none|ok|corrupt|storage_error and only `none` may start a send (D4/T11)
+//   · redeem amount = shares minted by THIS deposit (balance after - balance before), never the whole balance (D8)
+//   · order on success: receipt build -> durable save (bridge) -> verify by re-read -> compare-and-clear pending (D1);
+//     a failed save keeps the pending record and reports `done_unsaved` / `success_unsaved` so reconcile retries
+//   · reconcile never re-broadcasts and never clears a record it did not verify (unchanged)
+//
 // Nothing here is wired into Explore/candidates/handleSecondSend/canSend. The only call site
 // is a LOCAL_ONLY, LOCAL_DEV_ENTRY-gated harness entry point in main.js
 // (window.__ARASO_LOCAL_TEST_SECOND_PLUMBING_RUN__) used by a coordinator-driven browser test
@@ -28,8 +39,16 @@
 // reconcileSendPending, commitSendSuccess, finishTrip — all untouched, all still main.js-only).
 
 import { encodeFunctionData } from "viem";
+import { executeMoneyStep, TRANSPORT_KIND } from "./money-executor.js";
+import { commitSecondJourneyReceipt } from "./second-journey-receipt-bridge.js";
+import { loadSecondJourneyState, validatePersistenceScope } from "./second-journey-state.js";
 
+// LEGACY single global key (A-663 original). Since A-693 it is only READ for migration/blocking; new records
+// are written to secondSendPendingKey(scope, piggyId). It is deleted only after its record was migrated to the
+// scoped key and that scoped record completed a verified save + clear cycle (Owner timing question stays open).
 export const SECOND_SEND_PENDING_KEY = "araso.secondSendPending";
+export const SECOND_SEND_PENDING_LEGACY_KEY = SECOND_SEND_PENDING_KEY;
+export const SECOND_SEND_PENDING_KEY_PREFIX = "araso.secondSendPending.v1";
 export const SECOND_SEND_PENDING_STAGES = Object.freeze([
   "deposit-sending",
   "deposit-broadcast",
@@ -105,34 +124,90 @@ export function makeSecondRedeemTx(shares, receiver, owner) {
   };
 }
 
-// Fail-closed read: a malformed/unparseable record is never treated as "no pending" — it comes
-// back as `{ stage: "unknown" }` so a caller never silently re-broadcasts over it.
-export function readSecondSendPending(storage) {
-  if (!storage) return null;
+const enc = (v) => encodeURIComponent(String(v)).replace(/\./g, "%2E");
+
+/** [A-693 D6] Per chain + account + Piggy key (mirrors mainnet-job-lane laneIntentKey). null when the scope is invalid. */
+export function secondSendPendingKey(scope = {}, piggyId = "") {
+  const valid = validatePersistenceScope(scope);
+  const piggy = typeof piggyId === "string" ? piggyId.trim() : "";
+  if (valid.error || !piggy) return null;
+  return `${SECOND_SEND_PENDING_KEY_PREFIX}.${enc(valid.chainId)}.${enc(valid.accountId)}.${enc(piggy)}`;
+}
+
+/**
+ * [A-693 D4] Tri-state read. A getItem throw is `storage_error` and unparseable/unknown-stage JSON is `corrupt`:
+ * neither is ever "no pending". Only `none` (key absent) may allow a start.
+ * @returns {{status: "none"|"ok"|"corrupt"|"storage_error", pending: object|null}}
+ */
+export function inspectSecondSendPending(storage, key) {
+  if (!storage || typeof storage.getItem !== "function" || !key) return { status: "storage_error", pending: null };
   let raw;
   try {
-    raw = storage.getItem(SECOND_SEND_PENDING_KEY);
+    raw = storage.getItem(key);
   } catch {
-    return null;
+    return { status: "storage_error", pending: null };
   }
-  if (!raw) return null;
+  if (raw === null || raw === undefined) return { status: "none", pending: null };
   try {
     const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object" && SECOND_SEND_PENDING_STAGES.includes(parsed.stage)) return parsed;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && SECOND_SEND_PENDING_STAGES.includes(parsed.stage)) return { status: "ok", pending: parsed };
   } catch {
-    /* fall through to the fail-closed placeholder */
+    /* fall through */
   }
-  return { stage: "unknown" };
+  return { status: "corrupt", pending: null };
 }
 
-export function writeSecondSendPending(storage, entry) {
-  if (!storage) return;
-  storage.setItem(SECOND_SEND_PENDING_KEY, JSON.stringify({ ...entry, at: Date.now() }));
+// Legacy-shaped read: null (absent) | the record | {stage:"unknown"} (corrupt) | {stage:"unknown", error:"storage_error"}.
+// With (scope, piggyId) it reads the scoped key; without, the legacy global key.
+export function readSecondSendPending(storage, scope = null, piggyId = "") {
+  const key = scope ? secondSendPendingKey(scope, piggyId) : SECOND_SEND_PENDING_LEGACY_KEY;
+  if (!key) return { stage: "unknown", error: "invalid_scope" };
+  const r = inspectSecondSendPending(storage, key);
+  if (r.status === "none") return null;
+  if (r.status === "ok") return r.pending;
+  return r.status === "storage_error" ? { stage: "unknown", error: "storage_error" } : { stage: "unknown" };
 }
 
-export function clearSecondSendPending(storage) {
+/** [A-693] Write + read-back verify. Never throws; `ok:true` only when the stored bytes equal what was written. */
+export function writeSecondSendPending(storage, key, entry) {
+  if (!storage || typeof storage.setItem !== "function" || typeof storage.getItem !== "function" || !key) return { ok: false, error: "storage_unavailable" };
+  const serialized = JSON.stringify({ ...entry, at: Date.now() });
+  try {
+    storage.setItem(key, serialized);
+  } catch {
+    return { ok: false, error: "storage_write_failed" };
+  }
+  try {
+    return storage.getItem(key) === serialized ? { ok: true, error: null } : { ok: false, error: "write_not_verified" };
+  } catch {
+    return { ok: false, error: "write_not_verified" };
+  }
+}
+
+// Unconditional removal (kept for the A-663 export surface). Product paths use clearSecondSendPendingIf.
+export function clearSecondSendPending(storage, key = SECOND_SEND_PENDING_LEGACY_KEY) {
   if (!storage) return;
-  storage.removeItem(SECOND_SEND_PENDING_KEY);
+  storage.removeItem(key);
+}
+
+const sameRecord = (a, b) =>
+  !!a && !!b && a.stage === b.stage && a.depositTxHash === b.depositTxHash && a.redeemTxHash === b.redeemTxHash && a.reservationId === b.reservationId;
+
+/**
+ * [A-693] Compare-and-clear: removes `key` only if the stored record is still the expected one (stage + hashes +
+ * reservationId), then re-reads to confirm it is gone. A different or unreadable record is left alone.
+ */
+export function clearSecondSendPendingIf(storage, key, expected) {
+  const cur = inspectSecondSendPending(storage, key);
+  if (cur.status === "none") return { cleared: true, reason: "already_clear" };
+  if (cur.status !== "ok") return { cleared: false, reason: cur.status === "corrupt" ? "pending_corrupt" : "pending_unreadable" };
+  if (!sameRecord(cur.pending, expected)) return { cleared: false, reason: "pending_changed" };
+  try {
+    storage.removeItem(key);
+  } catch {
+    return { cleared: false, reason: "storage_write_failed" };
+  }
+  return inspectSecondSendPending(storage, key).status === "none" ? { cleared: true, reason: null } : { cleared: false, reason: "clear_not_verified" };
 }
 
 // Bound to chain + asset + token(shMON) + Piggy — a reload never cross-reads another Piggy's,
@@ -146,6 +221,43 @@ export function secondSendPendingBelongsToScope(pending, scope = {}) {
     pending.piggyId === scope.piggyId &&
     pending.asset === "shMON"
   );
+}
+
+/**
+ * [A-693 D4/D5/T11] Why a new send must not start, or null when it may. Checked on the scoped key AND the legacy
+ * global key: any readable record blocks (an out-of-scope legacy record is unresolved money of an unknown Piggy),
+ * and so does anything unreadable/corrupt. Synchronous — no await between this and the reserving write.
+ */
+function blockingPendingReason(storage, scope, piggyId, key) {
+  const here = inspectSecondSendPending(storage, key);
+  if (here.status === "storage_error") return "pending_unreadable";
+  if (here.status === "corrupt") return "pending_corrupt";
+  if (here.status === "ok") return "pending_exists";
+  const legacy = inspectSecondSendPending(storage, SECOND_SEND_PENDING_LEGACY_KEY);
+  if (legacy.status === "storage_error") return "pending_unreadable";
+  if (legacy.status === "corrupt") return "pending_corrupt";
+  if (legacy.status === "ok") return secondSendPendingBelongsToScope(legacy.pending, { ...scope, piggyId }) ? "pending_exists" : "legacy_pending_out_of_scope";
+  return null;
+}
+
+// Atomic (single tick) check-then-write of the first record of a run, verified by read-back.
+function reservePending(storage, scope, piggyId, key, record) {
+  const blockedBy = blockingPendingReason(storage, scope, piggyId, key);
+  if (blockedBy) return { ok: false, reason: blockedBy };
+  const w = writeSecondSendPending(storage, key, record);
+  return w.ok ? { ok: true } : { ok: false, reason: "pending_write_failed" };
+}
+
+// Move this run's own record forward (reservationId must still match). Idempotent for executor retries: a record
+// that already is the target counts as done.
+function transitionPending(storage, key, from, next) {
+  const cur = inspectSecondSendPending(storage, key);
+  if (cur.status !== "ok") return { ok: false, reason: cur.status === "none" ? "pending_missing" : cur.status === "corrupt" ? "pending_corrupt" : "pending_unreadable" };
+  if (cur.pending.reservationId !== from.reservationId) return { ok: false, reason: "pending_changed" };
+  if (cur.pending.stage === next.stage && cur.pending.depositTxHash === next.depositTxHash && cur.pending.redeemTxHash === next.redeemTxHash) return { ok: true };
+  if (cur.pending.stage !== from.stage || cur.pending.depositTxHash !== from.depositTxHash) return { ok: false, reason: "pending_changed" };
+  const w = writeSecondSendPending(storage, key, next);
+  return w.ok ? { ok: true } : { ok: false, reason: "pending_write_failed" };
 }
 
 // Stage classifier — mirrors main.js classifySendPending()'s shape (kind:
@@ -201,18 +313,50 @@ function buildPlumbingReceipt(pending, evidence = {}) {
   };
 }
 
-// Boot/reopen reconcile. Read-only — never re-broadcasts, never clears a pending record that
-// is not confirmed success, never touches a record outside the given scope.
+// [A-693 D1/D2] The only way a run or a reconcile may finish: durable save of the receipt through the bridge,
+// verified by a fresh read, THEN a compare-and-clear of the pending record. Any failure keeps the pending record.
+function finalizeSuccess({ storage, scope, key, pending, receipt }) {
+  const loaded = loadSecondJourneyState(storage, scope);
+  // An unreadable journey store is never overwritten here; pending stays and reconcile retries later.
+  if (loaded.error || loaded.repaired) return { saved: false, cleared: false, reason: "journey_state_unreadable" };
+  const out = commitSecondJourneyReceipt({ state: loaded.state, receipt, scope, storage, context: { devPreview: false } });
+  if (out.saved !== true) return { saved: false, cleared: false, reason: out.reason || "receipt_not_saved" };
+  const cleared = clearSecondSendPendingIf(storage, key, pending);
+  if (!cleared.cleared) return { saved: true, cleared: false, reason: cleared.reason };
+  // Legacy cleanup only after the scoped record completed save + clear, and only if the legacy record is the same one.
+  const legacy = inspectSecondSendPending(storage, SECOND_SEND_PENDING_LEGACY_KEY);
+  if (legacy.status === "ok" && sameRecord(legacy.pending, pending)) clearSecondSendPendingIf(storage, SECOND_SEND_PENDING_LEGACY_KEY, legacy.pending);
+  return { saved: true, cleared: true, reason: null };
+}
+
+// Boot/reopen reconcile. Read-only toward the chain — never re-broadcasts, never clears a pending record that
+// is not a confirmed success whose receipt was durably saved, never touches a record outside the given scope.
+// Result kinds: none | out_of_scope | unknown | pending | failed | success | success_unsaved (saved failed, pending kept).
 export async function reconcileSecondPendingOnBoot({ storage, scope = {}, piggyId, readTxReceipt } = {}) {
-  const pending = readSecondSendPending(storage);
-  if (!pending) return { kind: "none" };
-  if (!secondSendPendingBelongsToScope(pending, { ...scope, piggyId })) return { kind: "out_of_scope" };
+  const key = secondSendPendingKey(scope, piggyId);
+  if (!key) return { kind: "unknown", reason: "invalid_scope" };
+  const bind = { ...scope, piggyId };
+  let cur = inspectSecondSendPending(storage, key);
+  if (cur.status === "none") {
+    const legacy = inspectSecondSendPending(storage, SECOND_SEND_PENDING_LEGACY_KEY);
+    if (legacy.status === "none") return { kind: "none" };
+    if (legacy.status !== "ok") return { kind: "unknown", reason: legacy.status === "corrupt" ? "pending_corrupt" : "pending_unreadable" };
+    if (!secondSendPendingBelongsToScope(legacy.pending, bind)) return { kind: "out_of_scope" };
+    // Migrate the in-scope legacy record to the scoped key (verified) before acting on it; legacy is deleted later.
+    if (!writeSecondSendPending(storage, key, { ...legacy.pending, migratedFromLegacy: true }).ok) return { kind: "unknown", reason: "migration_write_failed" };
+    cur = inspectSecondSendPending(storage, key);
+  }
+  if (cur.status !== "ok") return { kind: "unknown", reason: cur.status === "corrupt" ? "pending_corrupt" : "pending_unreadable" };
+  const pending = cur.pending;
+  if (!secondSendPendingBelongsToScope(pending, bind)) return { kind: "out_of_scope" };
   const result = await classifySecondSendPending(pending, { readTxReceipt });
   if (result.kind === "success") {
-    clearSecondSendPending(storage);
     const rawBlock = result.redeemReceipt?.blockNumber;
     const blockNumber = rawBlock !== undefined && rawBlock !== null ? Number(rawBlock) : NaN;
-    return { kind: "success", receipt: buildPlumbingReceipt(pending, { blockNumber }) };
+    const receipt = buildPlumbingReceipt(pending, { blockNumber });
+    const fin = finalizeSuccess({ storage, scope, key, pending, receipt });
+    if (!fin.saved || !fin.cleared) return { kind: "success_unsaved", reason: fin.reason, receipt };
+    return { kind: "success", receipt };
   }
   if (result.kind === "failed") return { kind: "failed" };
   return { kind: result.kind === "unknown" ? "unknown" : "pending" };
@@ -228,9 +372,19 @@ async function waitForTxSuccess(publicClient, hash) {
   return receipt && receipt.status === "success" ? receipt : null;
 }
 
-// The orchestrator. Every side effect (sign/broadcast) is injected — this function itself opens
-// no network connection and holds no credential. Pending is written BEFORE each broadcast
-// (never after), so a thrown/lost send still leaves a fail-closed trail for reconcile to find.
+const newReservationId = () => globalThis.crypto?.randomUUID?.() || `r-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+// Maps a money-executor result to this lane's outcome vocabulary. Nothing here retries.
+function mapExecutor(res, names) {
+  if (res.ok) return null;
+  if (res.status === "blocked") return { outcome: "blocked", reason: res.reason };
+  if (res.status === "unknown_hash_unsaved") return { outcome: "failed", reason: names.hashUnsaved, [names.hashField]: res.hash };
+  return { outcome: "failed", reason: names.sendError };
+}
+
+// The orchestrator. Every side effect is injected and every broadcast goes through money-executor.js; this
+// function itself opens no network connection and holds no credential. The reserving pending write happens
+// BEFORE each broadcast, and a hash is persisted (verified) right after it.
 export async function runSecondPlumbingProof({
   storage,
   scope,
@@ -243,6 +397,7 @@ export async function runSecondPlumbingProof({
   signDigest,
   requestGrant = null,
   waitForGrantBalance = null,
+  isAppLocked = null,
 } = {}) {
   // Fail-closed permission gate — nothing below runs without an explicit, caller-confirmed
   // request. This is the plumbing lane's own analogue of "permission missing/mismatch => action0".
@@ -264,13 +419,17 @@ export async function runSecondPlumbingProof({
     return { outcome: "blocked", reason: "invalid_amount" };
   }
   if (amount <= 0n) return { outcome: "blocked", reason: "invalid_amount" };
-
-  // Duplicate-send prevention: an existing pending record in this exact scope blocks a new
-  // broadcast — the caller should reconcile instead, never start a second one.
-  const existing = readSecondSendPending(storage);
-  if (secondSendPendingBelongsToScope(existing, { ...scope, piggyId })) {
-    return { outcome: "blocked", reason: "pending_exists" };
+  // [A-693] No durable store, no money movement (previously the run proceeded with no pending trail at all).
+  if (!storage || typeof storage.getItem !== "function" || typeof storage.setItem !== "function" || typeof storage.removeItem !== "function") {
+    return { outcome: "blocked", reason: "storage_unavailable" };
   }
+  const key = secondSendPendingKey(scope, piggyId);
+  if (!key) return { outcome: "blocked", reason: "invalid_scope" };
+
+  // Duplicate-send prevention: ANY readable, unreadable or corrupt record (scoped or legacy) blocks a new
+  // broadcast — the caller should reconcile instead, never start a second one. (Re-checked atomically at reserve.)
+  const early = blockingPendingReason(storage, scope, piggyId, key);
+  if (early) return { outcome: "blocked", reason: early };
 
   // Grant is conditional — exactly First's waitForGrantBalance pattern (check/call, then treat
   // "not granted" as non-error, since api/grant.js answers 403-already-funded the same way).
@@ -297,43 +456,76 @@ export async function runSecondPlumbingProof({
     }
   }
 
-  writeSecondSendPending(storage, { stage: "deposit-sending", address: account.address, accountId: scope.accountId, chainId: scope.chainId, piggyId, asset: "shMON" });
-  let depositTxHash;
+  // [A-693 D8] Share balance BEFORE this deposit, so the redeem amount is only what this deposit minted.
+  let shareBefore;
   try {
-    depositTxHash = await walletClient.sendTransaction({ account, ...makeSecondDepositTx(amount, account.address) });
+    shareBefore = BigInt(await publicClient.readContract({ address: SHMON_ADDRESS, abi: SHMON_ABI, functionName: "balanceOf", args: [account.address] }));
   } catch {
-    // Pending stays exactly as written (fail-closed) — a lost send is never retried automatically.
-    return { outcome: "failed", reason: "deposit_send_error" };
+    return { outcome: "blocked", reason: "balance_before_unreadable" };
   }
-  writeSecondSendPending(storage, { stage: "deposit-broadcast", address: account.address, accountId: scope.accountId, chainId: scope.chainId, piggyId, asset: "shMON", depositTxHash });
+
+  const base = { address: account.address, accountId: scope.accountId, chainId: scope.chainId, piggyId, asset: "shMON", reservationId: newReservationId(), shareBefore: shareBefore.toString() };
+  const authorize = () => {
+    if (confirm !== true) return { ok: false, reason: "permission_not_confirmed" };
+    if (typeof isAppLocked === "function" && isAppLocked()) return { ok: false, reason: "app_locked" };
+    return { ok: true };
+  };
+  const transport = { kind: TRANSPORT_KIND.VIEM_SEND, walletClient, account };
+
+  // ── deposit ────────────────────────────────────────────────────────────────────────────────
+  const depositSending = { ...base, stage: "deposit-sending" };
+  const dep = await executeMoneyStep({
+    tx: makeSecondDepositTx(amount, account.address),
+    transport,
+    authorize,
+    reserve: () => reservePending(storage, scope, piggyId, key, depositSending),
+    persistHash: ({ hash }) => transitionPending(storage, key, depositSending, { ...base, stage: "deposit-broadcast", depositTxHash: hash }),
+  });
+  const depStop = mapExecutor(dep, { sendError: "deposit_send_error", hashUnsaved: "deposit_hash_unsaved", hashField: "depositTxHash" });
+  if (depStop) return depStop;
+  const depositTxHash = dep.hash;
+  const depositBroadcast = { ...base, stage: "deposit-broadcast", depositTxHash };
 
   const depositReceipt = await waitForTxSuccess(publicClient, depositTxHash);
   if (!depositReceipt) return { outcome: "failed", reason: "deposit_unconfirmed_or_reverted" };
 
-  let shmonReceived;
+  // [A-693 D8] Redeem only what this deposit minted. Anything else (unreadable, non-positive) stops here with the
+  // pending record still at deposit-broadcast (value stays as shMON; reconcile classifies by the stored hash).
+  let shareAfter;
   try {
-    shmonReceived = await publicClient.readContract({ address: SHMON_ADDRESS, abi: SHMON_ABI, functionName: "balanceOf", args: [account.address] });
+    shareAfter = BigInt(await publicClient.readContract({ address: SHMON_ADDRESS, abi: SHMON_ABI, functionName: "balanceOf", args: [account.address] }));
   } catch {
     return { outcome: "failed", reason: "balance_read_error" };
   }
+  const shmonReceived = shareAfter - shareBefore;
+  if (shmonReceived <= 0n) return { outcome: "failed", reason: "no_shares_minted" };
 
-  writeSecondSendPending(storage, { stage: "redeem-sending", address: account.address, accountId: scope.accountId, chainId: scope.chainId, piggyId, asset: "shMON", depositTxHash });
-  let redeemTxHash;
-  try {
-    redeemTxHash = await walletClient.sendTransaction({ account, ...makeSecondRedeemTx(shmonReceived, account.address, account.address) });
-  } catch {
-    return { outcome: "failed", reason: "redeem_send_error" };
-  }
-  writeSecondSendPending(storage, { stage: "redeem-broadcast", address: account.address, accountId: scope.accountId, chainId: scope.chainId, piggyId, asset: "shMON", depositTxHash, redeemTxHash });
+  // ── redeem ─────────────────────────────────────────────────────────────────────────────────
+  const redeemSending = { ...base, stage: "redeem-sending", depositTxHash, sharesToRedeem: shmonReceived.toString() };
+  const red = await executeMoneyStep({
+    tx: makeSecondRedeemTx(shmonReceived, account.address, account.address),
+    transport,
+    authorize,
+    reserve: () => transitionPending(storage, key, depositBroadcast, redeemSending),
+    persistHash: ({ hash }) => transitionPending(storage, key, redeemSending, { ...redeemSending, stage: "redeem-broadcast", redeemTxHash: hash }),
+  });
+  const redStop = mapExecutor(red, { sendError: "redeem_send_error", hashUnsaved: "redeem_hash_unsaved", hashField: "redeemTxHash" });
+  if (redStop) return { ...redStop, depositTxHash };
+  const redeemTxHash = red.hash;
+  const redeemBroadcast = { ...redeemSending, stage: "redeem-broadcast", redeemTxHash };
 
   const redeemReceipt = await waitForTxSuccess(publicClient, redeemTxHash);
   if (!redeemReceipt) return { outcome: "failed", reason: "redeem_unconfirmed_or_reverted" };
 
-  clearSecondSendPending(storage);
+  // [A-693 D1] execution truth -> receipt build -> durable save -> verify -> compare-and-clear.
   const receipt = {
     ...buildPlumbingReceipt({ accountId: scope.accountId, chainId: scope.chainId, piggyId, depositTxHash, redeemTxHash }),
     blockNumber: Number(redeemReceipt.blockNumber || 0),
     measuredDelta: `shMON ${shmonReceived.toString()} minted then redeemed`,
   };
+  const fin = finalizeSuccess({ storage, scope, key, pending: redeemBroadcast, receipt });
+  if (!fin.saved || !fin.cleared) {
+    return { outcome: "done_unsaved", reason: fin.reason, receipt, depositTxHash, redeemTxHash, shmonReceived };
+  }
   return { outcome: "done", receipt, depositTxHash, redeemTxHash, shmonReceived };
 }

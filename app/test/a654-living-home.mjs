@@ -99,14 +99,17 @@ await check("N3 runtime priority: WORK → AWAY/RETURN → ambient → idle; onl
 
 // Anchors measured by the A-654 geometry lane (HISTORY closed paper, 4 Piggies).
 const R = (x, y, r, b) => M.rect(x, y, r, b);
-function planAt(vw, vh, seat, chog, brand, histRight) {
+// [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03] `mobileVisibleCap`
+// (default 2, matching Home's own default in main.js planHomeAmbient()) threaded through so
+// action-scene cases below can pass 0.
+function planAt(vw, vh, seat, chog, brand, histRight, mobileVisibleCap = 2) {
   const pw = 256.338;
   const px = vw / 2 - 32 - pw / 2;
   const py = vh / 2 - 48 - 182;
   const mobile = vw <= 640;
   const foot = mobile ? R(px, py, histRight, py + 467.8) : R(px - 46, py, px - 46 + 536.676, py + 456.9);
   const safe = mobile ? R(16, 14, vw - 16, vh - 20) : R(16, 16, vw - 16, vh - 16);
-  return M.planHomeSlots({ width: vw, seat, chog, foot, paper: R(px, py, px + pw, py + 364), brand, safe });
+  return M.planHomeSlots({ width: vw, seat, chog, foot, paper: R(px, py, px + pw, py + 364), brand, safe, mobileVisibleCap });
 }
 // [A-659 OWNER CORRECTION — 1440 WEB VERTICAL CANON, 2026-10-01] 390/430's seat/chog anchors
 // below are the OLD (pre-correction) measured rects, dy-shifted by exactly the same amount the
@@ -115,20 +118,39 @@ function planAt(vw, vh, seat, chog, brand, histRight) {
 // pure vertical translates, so x/width/height are byte-identical to the pre-correction rects,
 // only y/b shift). See main.js computeHomeFootTargetViewportY()/HOME_FOOT_NORMALIZED_RATIO for
 // the formula these numbers come from.
-await check("N4 measured slot formulas: 390/430 = M0..M4 (5), 700/900 = SEAT+WN1..3 (4), 1200 = 6, 1440 = W1 W2 WA1 WA2 (4)", () => {
+// [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03, supersedes the earlier
+// "max 2 visible total" OWNER CLARIFICATION 2026-10-02 reading] Home (mobileVisibleCap=2, the
+// default) now shows M0 (main seat, full size, unchanged) PLUS up to two small companions
+// (M1≈0.425×, M2≈0.375× of the seat) near the lower-left floor line — 390/430 = M0+M1+M2 (3
+// slots, not the earlier 2). Action scenes pass mobileVisibleCap=0 from main.js
+// (placeHomeAmbientResidents()) and get M0 only. mid/web bands are untouched (unaffected by
+// this card, still 641+/1200+ as before; `mobileVisibleCap` is only read inside
+// planHomeSlots()'s own `band === "mobile"` branch).
+await check("N4 [A-681 re-pin] measured slot formulas: 390/430 = M0+M1+M2 (main + 2 small companions, mobileVisibleCap=2/Home default), 700/900 = SEAT+WN1..3 (4, unchanged), 1200 = 6 (unchanged), 1440 = W1 W2 WA1 WA2 (4, unchanged)", () => {
   const cases = [
-    [390, 844, R(290.3, 622.49, 368.3, 715.09), R(222.4, 642.19, 286.3, 708.59), R(20, 14, 65.5, 25), 370, ["M0", "M1", "M2", "M3", "M4"]],
-    [430, 900, R(323.5, 669.18, 401.5, 761.78), R(255.5, 688.88, 319.5, 755.28), R(24, 14, 69.5, 25), 406, ["M0", "M1", "M2", "M3", "M4"]],
+    [390, 844, R(290.3, 622.49, 368.3, 715.09), R(222.4, 642.19, 286.3, 708.59), R(20, 14, 65.5, 25), 370, ["M0", "M1", "M2"]],
+    [430, 900, R(323.5, 669.18, 401.5, 761.78), R(255.5, 688.88, 319.5, 755.28), R(24, 14, 69.5, 25), 406, ["M0", "M1", "M2"]],
     [700, 900, R(538.5, 508.9, 622.0, 608.3), R(465.6, 530.1, 534.2, 601.3), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WN2", "WN3"]],
     [900, 900, R(692.3, 525.8, 799.8, 653.5), R(598.7, 553.0, 686.8, 644.5), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WN2", "WN3"]],
     [1200, 900, R(923.0, 551.0, 1066.4, 721.3), R(798.3, 587.3, 915.8, 709.3), R(140, 32, 190.2, 44), 0, ["W1", "W2", "W3", "W4", "WA1", "WA2"]],
     [1440, 900, R(1107.7, 571.2, 1279.6, 775.6), R(957.9, 614.7, 1098.9, 761.2), R(140, 32, 190.2, 44), 0, ["W1", "W2", "WA1", "WA2"]],
   ];
+  const HOME_EXTRA_A_SCALE = 0.425, HOME_EXTRA_B_SCALE = 0.375;
   for (const [vw, vh, seat, chog, brand, hr, want] of cases) {
     const p = planAt(vw, vh, seat, chog, brand, hr);
     assert.deepEqual(p.slots.map((s) => s.name), want, `${vw}: ${JSON.stringify(p.rejected.map((r) => [r.name, r.why]))}`);
     for (const s of p.slots) {
-      assert.ok(s.rect.w === seat.w && s.rect.h === seat.h, `${vw} ${s.name} keeps the approved size (no shrink)`);
+      // [A-681] M1/M2 (Home's small companions) are DELIBERATELY smaller than the seat — every
+      // other slot (M0, and every mid/web name) still keeps the pre-existing "approved scale, no
+      // shrink" contract exactly.
+      const expectScale = s.name === "M1" ? HOME_EXTRA_A_SCALE : s.name === "M2" ? HOME_EXTRA_B_SCALE : 1;
+      const sw = s.rect.r - s.rect.x, sh = s.rect.b - s.rect.y;
+      if (expectScale === 1) {
+        assert.ok(sw === seat.w && sh === seat.h, `${vw} ${s.name} keeps the approved size (no shrink)`);
+      } else {
+        assert.ok(Math.abs(sw / seat.w - expectScale) < 0.01, `${vw} ${s.name} width ratio ${sw / seat.w} vs expected ${expectScale}`);
+        assert.ok(Math.abs(sh / seat.h - expectScale) < 0.01, `${vw} ${s.name} height ratio ${sh / seat.h} vs expected ${expectScale}`);
+      }
       assert.ok(s.rect.x >= 16 - 0.01 && s.rect.r <= vw - 16 + 0.01, `${vw} ${s.name} inside safe x`);
     }
     for (let i = 0; i < p.slots.length; i += 1) for (let j = i + 1; j < p.slots.length; j += 1) {
@@ -141,47 +163,36 @@ await check("N4 measured slot formulas: 390/430 = M0..M4 (5), 700/900 = SEAT+WN1
   assert.ok(Math.abs(byName.WA2.x - 317.9) < 0.2 && Math.abs(byName.WA2.y - 220) < 0.2, "WA2 = measured [317.9,220,…]");
 });
 
-// [A-659 OWNER VISUAL REPAIR — D, round 2] Owner: the old M1..M4 candidate geometry read as an
-// obvious two-row grid (M1/M2 sharing one y, M3/M4 sharing another). Round 1 kept M1/M2 sharing a
-// y (reasoned: `foot.y - gap - h` is the only strip clearing the full-width footprint) and only
-// staggered M3/M4 — coordinator's real-browser recapture showed the visible bug was exactly that
-// untouched upper pair (Bebe/Dumpling ≈5px apart at 390 n=4, still reading as a row). Round 2:
-// M2 now sits higher within that same strip (it has height slack even though it can't move in x).
-//
-// [A-659 OWNER CORRECTION — 1440 WEB VERTICAL CANON, round 3, 2026-10-01] M3/M4 moved from the
-// character's own row (below `foot`, plenty of vertical slack at the OLD baseline) to the NEW
-// open strip below every real obstacle (`foot`/`chog`/`seat`, whichever is lowest — see
-// piggy-motion-state.js planHomeSlots()'s own comment). That strip is only ~5–14px taller than
-// one slot at this baseline (390/430), nowhere near the 0.5×h (≈46px) M1/M2 get in their own,
-// much taller, strip — so M3/M4 can no longer both promise a ≥0.5×h BOTTOM-Y gap; they now stay
-// apart by X instead (opposite ends of `safe`, same mechanism M1/M2 already use to share a
-// vertical strip safely). This re-derives the model's own live inputs (same values as N4's 390/
-// 430 rows, so a drift in one is caught by the other) and checks what the geometry actually
-// guarantees now: M1/M2 keep the ≥0.5×h floor (their strip still has the room), every pair is at
-// least X-disjoint OR ≥0.5×h Y-apart (the actual non-overlap mechanism, not a Y-only proxy for
-// it), and M3/M4 specifically get whatever Y stagger the strip leaves (>0 whenever `safe.b` room
-// allows it — asserted against the live formula, not a hand-typed pixel).
-await check("N4b mobile candidates (390/430) are staggered, not two aligned rows: M1/M2 keep the ≥0.5×h floor, every pair is X-disjoint or ≥0.5×h apart in Y (the actual collision-avoidance the algorithm relies on), M3/M4 take whatever Y stagger their tighter strip leaves", () => {
+// [A-681 re-pin — supersedes the old N4b] The old N4b asserted the ≤2-total "M2/M3/M4 absent"
+// contract. The Owner's 2026-10-03 visual decision supersedes that reading; M1/M2 are now the
+// REAL companion cluster (not dropped), so N4b now checks: (a) Home (cap=2) places both M1 and
+// M2, close together, near the lower-left floor line, correctly sized; (b) action scenes
+// (cap=0) show M0 only — the companion cluster never carries into them; (c) a resident beyond
+// the 2-companion cap at any cap level still falls back to the existing "card-only" path (no new
+// fallback code — this is a planHomeSlots()-level guarantee already covered by N4's own `want`
+// list never exceeding 3 at mobile, not re-tested here).
+await check("N4b [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03] Home's two small companions sit close together near the lower-left floor line with the Owner-recommended size split; action scenes (mobileVisibleCap=0) show only the main seat", () => {
   for (const [vw, vh, seat, chog, brand, hr] of [
     [390, 844, R(290.3, 622.49, 368.3, 715.09), R(222.4, 642.19, 286.3, 708.59), R(20, 14, 65.5, 25), 370],
     [430, 900, R(323.5, 669.18, 401.5, 761.78), R(255.5, 688.88, 319.5, 755.28), R(24, 14, 69.5, 25), 406],
   ]) {
-    const p = planAt(vw, vh, seat, chog, brand, hr);
-    const byName = Object.fromEntries(p.slots.map((s) => [s.name, s.rect]));
-    const names = ["M1", "M2", "M3", "M4"];
-    for (const n of names) assert.ok(byName[n], `${vw}: ${n} present (${JSON.stringify(p.rejected)})`);
-    const minGap = 0.5 * seat.h;
-    const yDiff = (a, b) => Math.abs(byName[a].b - byName[b].b);
-    const xDisjoint = (a, b) => byName[a].r <= byName[b].x + 0.01 || byName[b].r <= byName[a].x + 0.01;
-    assert.ok(yDiff("M1", "M2") >= minGap - 0.01, `${vw}: M1/M2 bottom-Y gap ${yDiff("M1", "M2").toFixed(2)} below the ≥0.5×h floor`);
-    for (let i = 0; i < names.length; i += 1) for (let j = i + 1; j < names.length; j += 1) {
-      const [a, b] = [names[i], names[j]];
-      assert.ok(xDisjoint(a, b) || yDiff(a, b) >= minGap - 0.01, `${vw}: ${a}/${b} share both an X range and a tight Y — would actually overlap`);
-    }
-    // M3/M4 stay inside the bottom safe-area (the model's own belowSlack computation never
-    // pushes a slot past `safe.b`, and never goes negative — see planHomeSlots()'s own comment).
-    assert.ok(byName.M3.b <= vh - 20 + 0.01 && byName.M4.b <= vh - 20 + 0.01, `${vw}: M3/M4 stay inside the bottom safe-area`);
-    assert.ok(xDisjoint("M3", "M4"), `${vw}: M3/M4 are X-disjoint (the mechanism that keeps them apart when Y room is tight)`);
+    const pHome = planAt(vw, vh, seat, chog, brand, hr, 2);
+    const byName = Object.fromEntries(pHome.slots.map((s) => [s.name, s.rect]));
+    assert.ok(byName.M1 && byName.M2, `${vw}: Home places both companions (${JSON.stringify(pHome.rejected)})`);
+    // Close together, not scattered: the gap between M1's right edge and M2's left edge is the
+    // existing mobile slot gap (12px) — not spread to opposite ends of `safe` like the old M1/M2.
+    assert.ok(Math.abs(byName.M2.x - byName.M1.r) < 13, `${vw}: M1/M2 sit close together (gap ${byName.M2.x - byName.M1.r})`);
+    // Near the lower-left floor line: both companions' LEFT edge is the safe-area left edge
+    // (viewer-left), and both bottoms land within one companion-height of the main pair's own
+    // floor line (seat.b/chog.b) — not scattered to the top or opposite corner.
+    assert.ok(Math.abs(byName.M1.x - 16) < 0.5, `${vw}: M1 anchored at the left safe edge`);
+    const floorY = Math.max(seat.b, chog.b);
+    assert.ok(floorY - byName.M1.b < (byName.M1.b - byName.M1.y) && byName.M1.b <= floorY + 0.5, `${vw}: M1 sits on the main pair's own floor line`);
+    // Slight vertical variation (organic, not identical/aligned copies).
+    assert.ok(byName.M1.b !== byName.M2.b, `${vw}: M1/M2 have slight vertical variation, not perfectly aligned`);
+    // Action scenes: only the active Piggy, no companion cluster at all.
+    const pAction = planAt(vw, vh, seat, chog, brand, hr, 0);
+    assert.deepEqual(pAction.slots.map((s) => s.name), ["M0"], `${vw}: action scenes show only the main seat`);
   }
 });
 
@@ -218,7 +229,15 @@ await check("N6 public motion assets: 19 confirmed SVGs present, well-formed, no
 // ═══ Part B ════════════════════════════════════════════════════════════════════════════════════
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const WIDTHS = [[390, 844], [430, 900], [700, 900], [900, 900], [1200, 900], [1440, 900]];
-const CAP = { 390: 5, 430: 5, 700: 4, 900: 4, 1200: 6, 1440: 4 };
+// [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME · 2026-10-03, supersedes the earlier
+// OWNER CLARIFICATION 2026-10-02 "max 2 visible total" reading] Part B's own addPiggy()/living()
+// flow runs against the Home (sendstay) scene, so its capacity is `mobileVisibleCap=2` (the
+// default) — 390/430 re-pinned to 3 (M0 main seat + M1/M2, the two small lower-left companions),
+// not 2. Logical/indexed Piggy count is NOT capped (`indexedResidents()`, main.js, a separate
+// data path never touched by planHomeSlots()) — residents beyond the visible cap fall back to
+// the existing "card-only"/list/HISTORY representation, which B3's own `g.layer.off` assertion
+// below already covers. 700/900/1200/1440 unchanged (Δ0).
+const CAP = { 390: 3, 430: 3, 700: 4, 900: 4, 1200: 6, 1440: 4 };
 // Pre-A-654 one-Piggy Home (measured on the pre tree, same harness): seat and name rects.
 // [A-656 decision 2, 2026-09-30] 700's reference is intentionally superseded: the mid-band
 // (641≤vw<1200) vertical-anchor repair moves the settled cluster down by +154.36px (translate
@@ -433,16 +452,63 @@ async function browserRun(browser, BASE, shots) {
     const HOME_FOOT_REF_TOP = (900 - HOME_BOARD_H * HOME_FOOT_REF_S) / 2;
     const HOME_FOOT_NORMALIZED_RATIO = (HOME_FOOT_REF_TOP + HOME_FLOOR * HOME_FOOT_REF_S) / 900;
     const WEB_FOOT_TARGET = (vh) => Math.min(HOME_FOOT_NORMALIZED_RATIO * vh, vh - 42);
+    // [A-681 OWNER DIRECTION (coordinator chat, 2026-10-03), item 3: "the current Home bottom
+    // breathing room (~128px@390, ~137px@430) is too large — derive an iPhone-safe bottom target
+    // from actual safe-area/viewport geometry; supersedes the earlier 'preserve current bottom
+    // breathing room' note"] 390/430 ONLY: the mobile floor branch now targets
+    // `computeHomeFootTargetViewportY()`'s own mobile-only max() branch (vh - bottomSafeMinPx,
+    // bottomSafeMinPx = --mobile-bottom-safe(20, env(safe-area-inset-bottom)=0 in this Chromium
+    // harness) + HOME_CHAR_BOTTOM_ANCHOR_GAP_PX(22) = 42), MINUS the A-681 ink-overhang
+    // correction (`homeCharFloorInkOverhangCorrectionPx()`, main.js): the floor-wrapped
+    // character's drawn ink extends a measured-constant 12.48px below the anchor point at the
+    // UN-boosted floor scale (exact at both 390/430 — `s·k_raw` is always exactly
+    // HOME_CHAR_SCALE_FLOOR once the floor is active), and that overhang itself grows by the
+    // same HOME_CHAR_MOBILE_GROUP_BOOST(1.5) the rest of the character group does, so it is
+    // subtracted from the anchor target to land the REAL ink-bottom at the planned ~42px gap.
+    // 700/1440 keep the original `WEB_FOOT_TARGET` (1440-canon ratio) formula, byte-identical,
+    // Δ0 — this card's mobile-only changes are explicitly gated `window.innerWidth<=640` in
+    // main.js and do not touch the >640 branch at all.
+    const MOBILE_BOTTOM_SAFE_MIN_PX = 20 + 22; // --mobile-bottom-safe + HOME_CHAR_BOTTOM_ANCHOR_GAP_PX
+    const HOME_CHAR_MOBILE_GROUP_BOOST = 1.5;
+    const HOME_CHAR_FLOOR_INK_OVERHANG_PX = 12.48;
+    const MOBILE_FOOT_TARGET = (vh) => vh - MOBILE_BOTTOM_SAFE_MIN_PX - HOME_CHAR_FLOOR_INK_OVERHANG_PX * HOME_CHAR_MOBILE_GROUP_BOOST;
     for (const [w, h] of [[390, 844], [430, 900], [700, 900], [1440, 900]]) {
-      await check(`B1 [${w}] one Piggy: no living layer, seat visible, seat foot follows the 1440-canon normalized ratio (Δ0 at 700/1440, moved up at 390/430), name stays directly under the seat with no overlap`, async () => {
+      await check(`B1 [${w}] one Piggy: no living layer, seat visible, seat foot follows the iPhone-safe mobile bottom anchor at 390/430 (A-681, Owner direction 2026-10-03) and the 1440-canon normalized ratio unchanged at 700/1440 (Δ0), name stays directly under the seat with no overlap`, async () => {
         await atWidth(w, h);
         const g = await living();
         assert.equal(g.layer, null); assert.equal(g.res.length, 0); assert.equal(g.seatHidden, false);
         const old = PRE_ONE[w];
-        const target = WEB_FOOT_TARGET(h);
+        const target = w <= 640 ? MOBILE_FOOT_TARGET(h) : WEB_FOOT_TARGET(h);
         assert.ok(Math.abs(g.seat[3] - target) < 2, `seat foot ${g.seat[3]} vs target ${target}`);
         const dy = g.seat[3] - old.seat[3];
-        assert.ok(near([old.seat[0], old.seat[1] + dy, old.seat[2], old.seat[3] + dy], g.seat), `seat translate-only shape drifted ${g.seat}`);
+        // [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03 / OWNER DIRECTION
+        // (coordinator chat) 2026-10-03 item 1, "enlarge the whole Chog+Piggy group"] 390/430
+        // ONLY: the seat is no longer a pure translate of the pre-A-681 reference shape — it is
+        // ALSO scaled by HOME_CHAR_MOBILE_GROUP_BOOST (1.5×, main.js homeCharMobileBoost()),
+        // uniformly about the foot pivot (HOME_CENTER horizontally — which the solo final run
+        // confirms stays centered on the reference's own horizontal center, since HOME_CENTER
+        // already sits ~0px from the seat's own center; HOME_FLOOR vertically, already covered by
+        // this check's own `target` assertion above). Expected shape = reference shape × boost:
+        // width/height scale by exactly 1.5×, horizontal center is unchanged (not a left/right
+        // drift), bottom edge is the already-asserted `target`. 700/1440 keep the original
+        // byte-identical pure-translate assertion (boost is an exact no-op there,
+        // homeCharMobileBoost() returns 1 for width>640).
+        if (w <= 640) {
+          const oldW = old.seat[2] - old.seat[0], oldH = old.seat[3] - old.seat[1];
+          const gw = g.seat[2] - g.seat[0], gh = g.seat[3] - g.seat[1];
+          assert.ok(Math.abs(gw - oldW * HOME_CHAR_MOBILE_GROUP_BOOST) < 2, `seat width ${gw} vs reference×boost ${oldW * HOME_CHAR_MOBILE_GROUP_BOOST}`);
+          assert.ok(Math.abs(gh - oldH * HOME_CHAR_MOBILE_GROUP_BOOST) < 2, `seat height ${gh} vs reference×boost ${oldH * HOME_CHAR_MOBILE_GROUP_BOOST}`);
+          // [A-681 FINAL CLOSEOUT B re-pin — RIGHT SAFE RAIL, named reason] the old "center unchanged vs the
+          // pre-A-681 reference" assertion (±2) is REPLACED, not weakened: the Owner's right-safe-rail
+          // decision shifts the whole Piggy+Chog group left (main.js homeFloorNudgeViewportX: -17.8px @390,
+          // -15.0px @430) so the rightmost character leaf (the seat box) lands on the rail. New invariant:
+          // seat right edge == vw - --mobile-inset (20 @<=400, 24 above) within 1px; width/height/foot
+          // rules above are unchanged. 700/1440 keep the original pure-translate check below.
+          const inset = w <= 400 ? 20 : 24;
+          assert.ok(Math.abs(g.seat[2] - (w - inset)) <= 1, `seat right edge ${g.seat[2]} vs rail ${w - inset} (vw - --mobile-inset)`);
+        } else {
+          assert.ok(near([old.seat[0], old.seat[1] + dy, old.seat[2], old.seat[3] + dy], g.seat), `seat translate-only shape drifted ${g.seat}`);
+        }
         // [A-666 re-pin, named reason] Owner's global mobile type-scale decision
         // (TYPOGRAPHY_SCALE.md) raised `.homeChar__name` (#homeName) 13px → 15px at
         // ≤640px only — this element's own rendered width/height and exact gap-under-seat

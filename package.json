@@ -8,6 +8,7 @@
     "build": "vite build app --outDir ../dist --emptyOutDir",
     "preview": "vite preview --host 0.0.0.0",
     "relayer": "node --env-file=.env relayer/src/server.mjs",
+    "test": "node app/test/run-all.mjs",
     "relayer:test": "node relayer/test/smoke.mjs",
     "test:security": "node relayer/test/grant-launch-gate.mjs && node relayer/test/deploy-headers.mjs"
   },

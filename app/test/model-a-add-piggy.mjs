@@ -9,7 +9,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress, MeraError } from "@category-labs/mera";
 import { MODEL_A_NAMESPACE, bytesToHex, modelASalt, modelASaltHex, modelASaltSource } from "../src/piggy-session.js";
-import { admitModelAPiggy, admitSequencedPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, myPiggiesLockName, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
+import { admitModelAPiggy, admitSequencedPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, myPiggiesLockName, registerControlledPiggy, renameIndexedPiggy, markBornPiggyIssuance } from "../src/piggy-index.js";
 import { createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry } from "../src/piggy-registry.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
 
@@ -56,6 +56,7 @@ async function seedFirstPiggy(storage) {
   const address = addressOf(prf);
   const out = registerControlledPiggy(storage, CHAIN, { id: `legacy-${address.toLowerCase()}`, name: "Honeybun", address, signerAddress: address, locator: { credentialId: ROOT_ID }, at: AT });
   assert.equal(out.ok, true);
+  assert.equal(markBornPiggyIssuance(storage, CHAIN, { address }).ok, true);   // [A-695] 생성 경로가 찍는 발급 출처
   return address;
 }
 
@@ -387,6 +388,344 @@ await check("F3. a registry row alone never makes a Piggy owned (no index admiss
   const born = createPiggy({ newPiggy: { id: "piggy-x", address: A }, at: AT });
   saveRegistry(s, { accountId: A, chainId: CHAIN }, { piggies: born.piggies });
   assert.equal(loadMyPiggiesIndex(s, CHAIN).index.piggies.length, 0);
+});
+
+// ── G. [A-695 SEQ-5=A] 원 기기의 유효한 로컬 색인만 다음 번호를 낸다 — 새/없음/손상 기기는 requestPrf 전에 닫힌다 ──
+const countingPrf = () => { const c = { n: 0 }; c.fn = (...a) => { c.n += 1; return requestPrfWith(fakeClient())(...a); }; return c; };
+const idxKey = myPiggiesIndexKey(CHAIN);
+
+await check("G1. SEQ-5 valid origin index (first Piggy row + root match) issues the next unused n; a deleted row never frees its number", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  const a = await run(s);
+  const b = await run(s);
+  assert.deepEqual([a.ok, a.piggy.sequence, b.ok, b.piggy.sequence], [true, 1, true, 2]);
+  const raw = JSON.parse(s.getItem(idxKey));
+  raw.piggies = raw.piggies.filter((r) => r.sequence !== 2);
+  s.setItem(idxKey, JSON.stringify(raw));
+  const c = await run(s);
+  assert.deepEqual([c.ok, c.piggy.sequence], [true, 3]);
+});
+
+await check("G2. SEQ-5 missing index (new device): origin_index_missing, 0 requestPrf, nothing written, n=1 not guessed", async () => {
+  const s = createMemoryStorage();
+  const prf = countingPrf();
+  const out = await run(s, { requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, out.piggy, out.index], [false, "origin_index_missing", null, null]);
+  assert.equal(prf.n, 0);
+  assert.equal(s.getItem(idxKey), null);
+});
+
+await check("G3. SEQ-5 corrupt index (bad JSON / wrong version / wrong chain / non-array piggies / read throws): origin_index_corrupt, 0 requestPrf, raw bytes untouched", async () => {
+  const good = { version: 1, chainId: CHAIN, issuedThrough: 2, piggies: [] };
+  for (const raw of ["{not json", JSON.stringify({ ...good, version: 2 }), JSON.stringify({ ...good, chainId: "other" }), JSON.stringify({ ...good, piggies: "x" })]) {
+    const s = createMemoryStorage();
+    await seedFirstPiggy(s);
+    s.setItem(idxKey, raw);
+    const prf = countingPrf();
+    const out = await run(s, { requestPrf: prf.fn });
+    assert.deepEqual([out.ok, out.reason], [false, "origin_index_corrupt"], raw);
+    assert.equal(prf.n, 0);
+    assert.equal(s.getItem(idxKey), raw);
+  }
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  const throwing = { getItem() { throw new Error("denied"); }, setItem() { throw new Error("denied"); } };
+  const prf = countingPrf();
+  const out = await run(throwing, { requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, prf.n], [false, "origin_index_corrupt", 0]);
+});
+
+await check("G4. SEQ-5 an index that silently drops a row (garbage row, or a sequence row whose salt does not match) is not trusted: origin_index_corrupt, 0 requestPrf (a dropped sequence row would lower the watermark)", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  assert.equal((await run(s)).ok, true);                                        // sequence 1 row exists
+  const raw = JSON.parse(s.getItem(idxKey));
+  const mutations = [
+    (c) => { c.piggies.push({ id: "junk", balance: "1" }); },                                                       // financial-field junk row
+    (c) => { const r = c.piggies.find((x) => x.sequence === 1); r.locator = { ...r.locator, prfSalt: modelASaltHex(9) }; }, // salt != modelASalt(1) → dropped on read
+  ];
+  for (const mutate of mutations) {
+    const copy = JSON.parse(JSON.stringify(raw));
+    mutate(copy);
+    const t = createMemoryStorage();
+    t.setItem(idxKey, JSON.stringify(copy));
+    const prf = countingPrf();
+    const out = await run(t, { requestPrf: prf.fn });
+    assert.deepEqual([out.ok, out.reason, prf.n], [false, "origin_index_corrupt", 0]);
+  }
+});
+
+await check("G5. SEQ-5 index with no first-Piggy (legacy) row — empty piggies, or sequence rows only — is refused: origin_index_no_first_piggy, 0 requestPrf", async () => {
+  const empty = createMemoryStorage();
+  empty.setItem(idxKey, JSON.stringify({ version: 1, chainId: CHAIN, issuedThrough: 0, piggies: [] }));
+  let prf = countingPrf();
+  let out = await run(empty, { requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, prf.n], [false, "origin_index_no_first_piggy", 0]);
+
+  const s = createMemoryStorage();
+  await regSeq(s, "0x00000000000000000000000000000000000000b1", 1);            // restore-style sequence row only
+  prf = countingPrf();
+  out = await run(s, { requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, prf.n], [false, "origin_index_no_first_piggy", 0]);
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).index.issuedThrough, 1);
+});
+
+await check("G6. SEQ-5 first-Piggy row belongs to a different passkey than the pinned root → origin_index_root_mismatch, 0 requestPrf", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  const prf = countingPrf();
+  const out = await run(s, { rootCredential: { credentialId: "b3RoZXI" }, requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, prf.n], [false, "origin_index_root_mismatch", 0]);
+});
+
+await check("G7. SEQ-5 stored watermark above the surviving rows is honored (n = stored+1, never reused); refusals leave the watermark alone", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  const raw = JSON.parse(s.getItem(idxKey));
+  raw.issuedThrough = 4;
+  s.setItem(idxKey, JSON.stringify(raw));
+  const out = await run(s);
+  assert.deepEqual([out.ok, out.piggy.sequence], [true, 5]);
+  const bad = createMemoryStorage();
+  bad.setItem(idxKey, "{bad");
+  await run(bad);
+  assert.equal(bad.getItem(idxKey), "{bad");
+});
+
+await check("G8. SEQ-5 the gate is admitModelAPiggy-only: admitSequencedPiggy (Gate B restore path) and registerControlledPiggy still work on an empty index", async () => {
+  const s = createMemoryStorage();
+  const r = await regSeq(s, "0x00000000000000000000000000000000000000c1", 1);
+  assert.equal(r.ok, true);
+  const t = createMemoryStorage();
+  await seedFirstPiggy(t);
+  assert.equal(loadMyPiggiesIndex(t, CHAIN).index.piggies.length, 1);
+});
+
+// ── H. [A-695 SEQ-5=A] 발급 출처(provenance) — 행이 "있다"가 아니라 "어떻게 생겼나" ─────────────────────────
+// 되찾기가 만든 첫 행 — registerControlledPiggy 만(= recoverPiggy 가 indexControlledPiggy 로 하는 일). 표식 0.
+async function seedRecoveredPiggy(storage) {
+  const prf = (await getPasskeyPrfOutput({ rpId: RP, webAuthnClient: fakeClient() })).prfOutput;
+  const address = addressOf(prf);
+  const out = registerControlledPiggy(storage, CHAIN, { id: `legacy-${address.toLowerCase()}`, name: "Honeybun", address, signerAddress: address, locator: { credentialId: ROOT_ID }, at: AT });
+  assert.equal(out.ok, true);
+  return address;
+}
+await check("H1. normal creation: markBornPiggyIssuance stamps provenance=birth on the already-indexed first row; +Piggy then issues only the next unused n (1, 2)", async () => {
+  const s = createMemoryStorage();
+  const addr = await seedFirstPiggy(s);                          // register + markBorn
+  const rows = loadMyPiggiesIndex(s, CHAIN).index.piggies;
+  assert.deepEqual([rows.length, rows[0].provenance, rows[0].sequence], [1, "birth", undefined]);
+  assert.deepEqual([(await run(s)).piggy.sequence, (await run(s)).piggy.sequence], [1, 2]);
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).index.piggies.find((p) => !p.sequence).address, addr);
+});
+
+await check("H2. recovery-created row (registerControlledPiggy only) has ZERO provenance: +Piggy/Gift path refuses origin_index_no_provenance with 0 requestPrf, nothing written; registerControlledPiggy ignores a smuggled provenance arg", async () => {
+  const s = createMemoryStorage();
+  await seedRecoveredPiggy(s);
+  assert.equal("provenance" in loadMyPiggiesIndex(s, CHAIN).index.piggies[0], false);
+  const prf = countingPrf();
+  const before = s.getItem(idxKey);
+  const out = await run(s, { requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, prf.n, s.getItem(idxKey)], [false, "origin_index_no_provenance", 0, before]);
+  const t = createMemoryStorage();
+  const prf2 = (await getPasskeyPrfOutput({ rpId: RP, webAuthnClient: fakeClient() })).prfOutput;
+  const a2 = addressOf(prf2);
+  registerControlledPiggy(t, CHAIN, { address: a2, signerAddress: a2, locator: { credentialId: ROOT_ID }, at: AT, provenance: "birth" });
+  assert.equal("provenance" in loadMyPiggiesIndex(t, CHAIN).index.piggies[0], false);
+});
+
+await check("H3. recovery re-proof of an existing row keeps what it had: born stays born, an unstamped row stays unstamped (re-registering never creates or strips provenance)", async () => {
+  const born = createMemoryStorage();
+  const a = await seedFirstPiggy(born);
+  await seedRecoveredPiggy(born);                                // same address → update path
+  assert.equal(loadMyPiggiesIndex(born, CHAIN).index.piggies[0].provenance, "birth");
+  const rec = createMemoryStorage();
+  await seedRecoveredPiggy(rec);
+  await seedRecoveredPiggy(rec);
+  assert.equal("provenance" in loadMyPiggiesIndex(rec, CHAIN).index.piggies[0], false);
+  assert.equal(a.length, 42);
+});
+
+await check("H4. index lost, then recovered: the re-created row has no provenance and araso.birthPlayed=1 does not help — n=1 is never re-issued", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  assert.equal((await run(s)).piggy.sequence, 1);
+  s.removeItem(idxKey);                                          // index (and its watermark) gone
+  s.setItem("araso.birthPlayed", "1");                           // creation evidence from the original birth is still there
+  await seedRecoveredPiggy(s);                                   // Check Piggy re-indexes the first Piggy
+  const prf = countingPrf();
+  const out = await run(s, { requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, prf.n], [false, "origin_index_no_provenance", 0]);
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).index.piggies.some((p) => p.sequence), false, "no sequence row, no guessed n");
+});
+
+await check("H5. legacy pre-marker origin install (provenance-less first row, araso.birthPlayed=1, root matches, intact index) is NOT upgraded: origin_index_no_provenance, 0 requestPrf, nothing written (product impact, recorded in VERIFY)", async () => {
+  const s = createMemoryStorage();
+  await seedRecoveredPiggy(s);                                   // row shape of a pre-marker install: no provenance
+  s.setItem("araso.birthPlayed", "1");                           // creation-only evidence — but the ROW's origin is not provable (index loss + old-build recovery gives the same state)
+  s.setItem("araso.piggyReceived", "1");
+  const prf = countingPrf();
+  const before = s.getItem(idxKey);
+  const out = await run(s, { requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, prf.n, s.getItem(idxKey)], [false, "origin_index_no_provenance", 0, before]);
+  assert.equal(Object.keys(s.dump()).filter((k) => k !== idxKey && k !== "araso.birthPlayed" && k !== "araso.piggyReceived").length, 0, "no extra marker key invented");
+});
+
+await check("H6. no provenance value other than \"birth\" is accepted anywhere (legacy_birth_evidence is dropped on load)", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  const raw = JSON.parse(s.getItem(idxKey));
+  raw.piggies[0].provenance = "legacy_birth_evidence";
+  s.setItem(idxKey, JSON.stringify(raw));
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).dropped, 1);
+  assert.equal((await run(s)).reason, "origin_index_corrupt");
+});
+
+await check("H7. born row with a wrong pinned root or a damaged index still fails closed (root match + dropped-row checks kept)", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  assert.equal((await run(s, { rootCredential: { credentialId: "b3RoZXI" } })).reason, "origin_index_root_mismatch");
+  const raw = JSON.parse(s.getItem(idxKey));
+  raw.piggies.push({ id: "junk", balance: "1" });
+  s.setItem(idxKey, JSON.stringify(raw));
+  assert.equal((await run(s)).reason, "origin_index_corrupt");
+});
+
+await check("H8. corrupt/missing provenance: unknown value, non-string, or provenance on a sequence row → that row is dropped on load (counted) and the gate fails closed", async () => {
+  for (const mutate of [
+    (r) => { r.piggies[0].provenance = "recovered"; },
+    (r) => { r.piggies[0].provenance = 1; },
+    (r) => { r.piggies[0].provenance = {}; },
+  ]) {
+    const s = createMemoryStorage();
+    await seedFirstPiggy(s);
+    const raw = JSON.parse(s.getItem(idxKey));
+    mutate(raw);
+    s.setItem(idxKey, JSON.stringify(raw));
+    const loaded = loadMyPiggiesIndex(s, CHAIN);
+    assert.equal(loaded.dropped, 1);
+    const prf = countingPrf();
+    const out = await run(s, { requestPrf: prf.fn });
+    assert.deepEqual([out.ok, out.reason, prf.n], [false, "origin_index_corrupt", 0]);
+  }
+  const s = createMemoryStorage();
+  await seedFirstPiggy(s);
+  assert.equal((await run(s)).ok, true);
+  const raw = JSON.parse(s.getItem(idxKey));
+  raw.piggies.find((r) => r.sequence === 1).provenance = "birth";
+  s.setItem(idxKey, JSON.stringify(raw));
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).dropped, 1, "provenance is first-Piggy only");
+});
+
+await check("H9. markBornPiggyIssuance never creates or moves rows: unknown address / sequence row / corrupt index refused; idempotent on a born row", async () => {
+  const s = createMemoryStorage();
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: "0x00000000000000000000000000000000000000d1" }).reason, "origin_index_corrupt");
+  const addr = await seedRecoveredPiggy(s);
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: "0x00000000000000000000000000000000000000d1" }).reason, "not_indexed");
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: "nope" }).reason, "invalid_address");
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: addr }).ok, true);
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: addr }).ok, true);
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).index.piggies.length, 1);
+  const seq = await run(s);
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: seq.piggy.address }).reason, "sequenced_row_has_no_provenance");
+});
+
+await check("H10. Gate B restore (admitSequencedPiggy) never creates provenance on any row", async () => {
+  const s = createMemoryStorage();
+  await seedRecoveredPiggy(s);
+  await regSeq(s, "0x00000000000000000000000000000000000000e1", 1);
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).index.piggies.every((p) => !p.provenance), true);
+  assert.equal((await run(s)).reason, "origin_index_no_provenance");
+});
+
+// ── F1 (A-695 pre-review): 믿을 수 없는 읽기 위의 다시 쓰기는 발급 자격을 되살리지 않는다 ───────────────────
+async function issueTwo() {
+  const s = createMemoryStorage();
+  const first = await seedFirstPiggy(s);
+  const a = await run(s);
+  const b = await run(s);
+  assert.deepEqual([a.piggy.sequence, b.piggy.sequence], [1, 2]);
+  return { s, first, b };
+}
+const rewriteFirst = (s) => seedRecoveredPiggy(s);             // registerControlledPiggy(first row) = Check Piggy / unlock re-proof (update branch)
+
+await check("H12. F1 exact repro: corrupt stored issuedThrough AND #2's salt → gate refuses; ONE registerControlledPiggy(first row) rewrite does not revive it — gate still refuses and n=2 is never re-issued", async () => {
+  const { s, b } = await issueTwo();
+  const raw = JSON.parse(s.getItem(idxKey));
+  raw.issuedThrough = "bad";
+  raw.piggies.find((r) => r.sequence === 2).locator.prfSalt = modelASaltHex(9);
+  s.setItem(idxKey, JSON.stringify(raw));
+  assert.equal((await run(s)).reason, "origin_index_corrupt");
+  await rewriteFirst(s);                                          // rewrite from a load with dropped>0 + invalid watermark
+  const rewritten = JSON.parse(s.getItem(idxKey));
+  assert.equal(rewritten.issuedThrough, 1, "the rewrite wrote the clean-looking watermark 1 (the F1 hazard)");
+  assert.equal("provenance" in rewritten.piggies.find((r) => !r.sequence), false, "…but stripped provenance from the first row");
+  const prf = countingPrf();
+  const out = await run(s, { requestPrf: prf.fn });
+  assert.deepEqual([out.ok, out.reason, prf.n], [false, "origin_index_no_provenance", 0]);
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).index.piggies.some((p) => p.address === b.piggy.address && p.sequence === 2), false, "#2 row is gone, and no n=2 was re-issued at its address");
+  // permanent: further rewrites (rename, re-proof, stamp attempt) never bring it back
+  await rewriteFirst(s);
+  const row = loadMyPiggiesIndex(s, CHAIN).index.piggies[0];
+  renameIndexedPiggy(s, CHAIN, { id: row.id, name: "Z" });
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: row.address }).ok, true, "a clean index may be stamped by a real birth, but only for that address");
+});
+
+await check("H13. F1 single-corruption variants: dropped row alone, or invalid/missing stored watermark alone, each closes the device through any rewrite path (re-proof, rename)", async () => {
+  const variants = {
+    droppedRowOnly: (raw) => { raw.piggies.find((r) => r.sequence === 2).locator.prfSalt = modelASaltHex(9); },
+    badWatermarkOnly: (raw) => { raw.issuedThrough = -3; },
+    missingWatermarkOnly: (raw) => { delete raw.issuedThrough; },
+    junkRowOnly: (raw) => { raw.piggies.push({ id: "junk", balance: "1" }); },
+  };
+  for (const [name, mutate] of Object.entries(variants)) {
+    for (const rewrite of [(s) => rewriteFirst(s), (s) => { const r = loadMyPiggiesIndex(s, CHAIN).index.piggies[0]; return renameIndexedPiggy(s, CHAIN, { id: r.id, name: "Zed" }); }]) {
+      const { s } = await issueTwo();
+      const raw = JSON.parse(s.getItem(idxKey));
+      mutate(raw);
+      s.setItem(idxKey, JSON.stringify(raw));
+      assert.equal((await run(s)).reason, "origin_index_corrupt", name);
+      await rewrite(s);
+      const prf = countingPrf();
+      const out = await run(s, { requestPrf: prf.fn });
+      assert.equal(out.ok, false, name);
+      assert.ok(["origin_index_no_provenance", "origin_index_corrupt"].includes(out.reason), `${name}: ${out.reason}`);
+      assert.equal(prf.n, 0, name);
+    }
+  }
+});
+
+await check("H14. F1 control: an untouched healthy index (valid watermark, no dropped rows) is not tainted — rewrites keep provenance and issuance continues with the next unused n", async () => {
+  const { s } = await issueTwo();
+  await rewriteFirst(s);
+  const row = loadMyPiggiesIndex(s, CHAIN).index.piggies.find((p) => !p.sequence);
+  renameIndexedPiggy(s, CHAIN, { id: row.id, name: "Zed" });
+  assert.equal(loadMyPiggiesIndex(s, CHAIN).index.piggies.find((p) => !p.sequence).provenance, "birth");
+  assert.equal((await run(s)).piggy.sequence, 3);
+});
+
+await check("H15. F1: markBornPiggyIssuance refuses on a tainted read (does not re-stamp over corruption)", async () => {
+  const { s, first } = await issueTwo();
+  const raw = JSON.parse(s.getItem(idxKey));
+  raw.issuedThrough = "bad";
+  s.setItem(idxKey, JSON.stringify(raw));
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: first }).reason, "origin_index_corrupt");
+});
+
+await check("H11. main.js wiring (source): the born marker is reachable only from the creation path — commitIdentity(received:true) arms an in-memory candidate, indexControlledPiggy consumes it once; recoverPiggy/checkPiggy never arm or call it", () => {
+  const fn = (name) => { const m = new RegExp(`(?:async )?function ${name}\\(`).exec(MAIN); assert.ok(m, name); const body = MAIN.slice(m.index, MAIN.indexOf("\n}\n", m.index)); assert.ok(body.length > 100, name); return body; };
+  assert.equal((MAIN.match(/markBornPiggyIssuance\(/g) || []).length, 1, "single call site");
+  assert.ok(fn("indexControlledPiggy").includes("markBornPiggyIssuance("));
+  assert.equal((MAIN.match(/bornPiggyPending = String\(address\)/g) || []).length, 1, "armed in one place");
+  assert.ok(fn("commitIdentity").includes("if (received) bornPiggyPending"));
+  assert.equal(/received:\s*true/.test(fn("recoverPiggy")), false);
+  assert.equal(fn("recoverPiggy").includes("markBorn"), false);
+  assert.equal(fn("checkPiggy").includes("markBorn"), false);
+  assert.equal(fn("checkPiggy").includes("received: true"), false);
+  assert.equal((MAIN.match(/commitIdentity\(\{[^}]*received: true/g) || []).length, 1, "only openPiggy passes received:true");
+  assert.equal((MAIN.match(/BIRTH_PLAYED_KEY, "1"/g) || []).length, 1, "araso.birthPlayed has one writer (finishHatch)");
+  assert.equal((MAIN.match(/setScene\("hatch"/g) || []).length, 1, "hatch scene (→ finishHatch) entered from one place");
 });
 
 console.log(`\n${pass}/${pass} PASS`);

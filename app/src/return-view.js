@@ -57,6 +57,7 @@ export function returnSceneMarkup(input) {
  *  - onOpenFilebox   : 사용자가 파일을 열었다 — 기존 Receipt 읽기 기능으로
  *  - onError         : 자산 실패 — **정확히 한 번** 불린다
  *  - onIdleEnter     : 재생하지 않는 진입(새로고침·재방문)
+ *  - getReceiptRail  : [A-681] 모바일 전용 — () → Receipt 왼쪽 CONTENT rail 뷰포트 px 사실 | null
  */
 export function mountReturnView(opts) {
   const {
@@ -77,6 +78,10 @@ export function mountReturnView(opts) {
     // 금융도 저장소도 모른다(기존 경계 유지).
     allowSkip = false,
     createPlayback = createReturnPlayback,
+    // [A-681] Mobile (<=640) only: () => viewport-px Receipt rail facts | null. Passed straight
+    // through to the playback; this file still knows nothing about the rail's geometry, and
+    // placePaper() below is untouched — it keeps re-measuring the ACTUAL rendered paper rect.
+    getReceiptRail = null,
   } = opts;
 
   const $ = (id) => root.querySelector("#" + id);
@@ -245,9 +250,37 @@ export function mountReturnView(opts) {
     placeChog(meta);
   }
 
+  // [A-681 D] Rendered-paper aspect for the mobile rail target (see piggy-return.js receiptRailTarget).
+  // Measured once from the real `.receiptPaper` (rotated bbox of its natural layout size — the exact
+  // quantities placePaper() contain-fits), briefly un-hiding #returnTap (sync layout, restored before
+  // any paint). The rail path only; getReceiptRail === null leaves everything untouched.
+  let paperAspect = 0;
+  const measurePaperAspect = () => {
+    if (paperAspect > 0) return paperAspect;
+    const el = tapBtn && tapBtn.querySelector(".receiptPaper");
+    if (!el) return 0;
+    const wasHidden = tapBtn.hidden;
+    tapBtn.hidden = false;
+    const nw = el.offsetWidth, nh = el.offsetHeight;
+    const m = new DOMMatrix(getComputedStyle(el).transform);
+    tapBtn.hidden = wasHidden;
+    if (!(nw > 0 && nh > 0)) return 0;
+    const th = Math.atan2(m.b, m.a);
+    const rw = Math.abs(nw * Math.cos(th)) + Math.abs(nh * Math.sin(th));
+    const rh = Math.abs(nw * Math.sin(th)) + Math.abs(nh * Math.cos(th));
+    paperAspect = rw / rh;
+    return paperAspect;
+  };
+  const railWithPaperAspect = getReceiptRail ? () => {
+    const r = getReceiptRail();
+    if (!r) return r;
+    const a = measurePaperAspect();
+    return a > 0 ? { ...r, paperAspect: a } : r;
+  } : null;
+
   let filed = false;
   const playback = createPlayback({
-    canvas, isValid, schedule, reduced, onFrame,
+    canvas, isValid, schedule, reduced, onFrame, getReceiptRail: railWithPaperAspect,
     onStatus: (st) => {
       const gateOpen = st.phase === "await-first-tap" || st.phase === "await-second-tap";
       // [A-352 §3] 첫 탭 확대(taps===1 && phase==="playing", t≈7.3~7.6s) 동안은 아직

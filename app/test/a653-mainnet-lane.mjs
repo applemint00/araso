@@ -562,8 +562,10 @@ await check("N17 legacy testnet paths sealed off-testnet: state init, send start
   const runRemember = (legacy) => {
     const writes = [];
     const st = { receipts: [], receiptIndex: 0 };
-    new Function("state", "localStorage", "RECEIPTS_KEY", "receiptIdentityKey", "serializeReceiptRow", "LEGACY_TESTNET_PATH", `${remember}\nrememberReceipt({ id: 1 });`)(
-      st, { setItem: (k, v) => writes.push([k, v]) }, "araso.receipts", () => "k1", (r) => r, legacy);
+    // [A-699 declared harness update] rememberReceipt now merges against storage and verifies by a re-read: the stub store reads back what it wrote.
+    const mem = new Map();
+    new Function("state", "localStorage", "RECEIPTS_KEY", "receiptIdentityKey", "serializeReceiptRow", "LEGACY_TESTNET_PATH", "decodeReceiptRow", "RECEIPT_KIND", `${remember}\nrememberReceipt({ id: 1 });`)(
+      st, { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => { writes.push([k, v]); mem.set(k, v); } }, "araso.receipts", () => "k1", (r) => r, legacy, (row) => row, { ADD_MONEY: "add_money" });
     return { writes, st };
   };
   assert.equal(runRemember(true).writes.length, 1);
@@ -589,6 +591,120 @@ await check("N18 render() byte-identical to HEAD (sha256 of its source); the lan
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
     assert.equal(/\b(apy|yield|venue)\b|["'`>](safe|instant)\b/i.test(code), false, `${f}: yield/venue wording`);
   }
+});
+
+// ── Money-safety M1 (lane): D7 fail-open on load error, R6 unchecked saves, executor chokepoint ──────────
+function laneStorage() {
+  const base = createMemoryStorage();
+  const f = { getThrows: false, setThrows: () => false, silentDrop: false, sets: 0 };
+  return { f, getItem: (k) => { if (f.getThrows) throw new Error("getItem boom"); return base.getItem(k); }, setItem: (k, v) => { f.sets += 1; if (f.setThrows(f.sets)) throw new Error("setItem boom"); if (!f.silentDrop) base.setItem(k, v); }, removeItem: (k) => base.removeItem(k), dump: base.dump };
+}
+
+await check("N19 (D7/H5) a stored errand that cannot be read/validated blocks a new start BEFORE authorize: nonce not consumed, nothing stacked", async () => {
+  const cases = {
+    storage_read_failed: (st, key) => { st.f.getThrows = true; },
+    corrupt: (st, key) => st.setItem(key, "{not json"),
+    wrong_schema: (st, key) => st.setItem(key, JSON.stringify({ schema: "something_else" })),
+    token_mismatch: (st, key) => st.setItem(key, JSON.stringify({ ...JSON.parse(st.getItem(key)), token: TESTNET_USDC })),
+    unknown_stage: (st, key) => st.setItem(key, JSON.stringify({ ...JSON.parse(st.getItem(key)), stage: "not_a_stage" })),
+  };
+  for (const [expected, tamper] of Object.entries(cases)) {
+    const world = forkWorld();
+    const storage = laneStorage();
+    const first = await startErrand(world, storage);
+    assert.equal(first.started.error, null, expected);
+    tamper(storage, laneIntentKey(MAINNET, PIGGY.id));
+    const second = await startErrand(world, storage);
+    assert.equal(second.started.error, "existing_intent_unreadable", expected);
+    assert.equal(second.started.detail, expected);
+    assert.equal(second.consumedNonces.size, 0, `${expected}: the envelope nonce was NOT spent`);
+    assert.equal(second.started.intent, null);
+  }
+});
+
+await check("N20 (R6/H6) setItem fails right after the send: no throw, status unknown/unknown_hash_unsaved, hash kept in memory, stored stage stays *_sending, never re-sent, never 'confirmed'", async () => {
+  const world = forkWorld();
+  const storage = laneStorage();
+  const { preview, started } = await startErrand(world, storage);
+  const inner = world.executor.send;
+  world.executor.send = async (tx) => { const r = await inner(tx); storage.f.setThrows = () => true; return r; };
+  const step = await advanceLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: started.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO });
+  assert.equal(step.status, "unknown"); assert.equal(step.reason, "unknown_hash_unsaved"); assert.equal(step.retry, false);
+  assert.match(step.hash, /^0x[0-9a-f]{64}$/); assert.equal(step.intent.steps.approve.hash, step.hash);
+  storage.f.setThrows = () => false;
+  assert.equal(loadLaneIntent(storage, MAINNET, PIGGY).intent.stage, LANE_STAGE.APPROVE_SENDING, "only the pre-send record is on disk");
+  const again = await advanceLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: step.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO });
+  assert.equal(again.status, "reconcile_first");
+  assert.equal(world.sent.length, 1, "exactly one tx ever sent");
+});
+
+await check("N20b (R6) the settle write fails: status 'unsaved' (not confirmed/returned), the hash stays on disk, and a later reconcile completes it", async () => {
+  const world = forkWorld();
+  const storage = laneStorage();
+  const { preview, started } = await startErrand(world, storage);
+  const base = storage.f.sets;
+  storage.f.setThrows = (n) => n === base + 3; // reserve (1), hash (2) succeed; the settle write (3) fails
+  const step = await advanceLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: started.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO });
+  assert.equal(step.status, "unsaved"); assert.equal(step.saved, false); assert.notEqual(step.status, "confirmed");
+  const disk = loadLaneIntent(storage, MAINNET, PIGGY).intent;
+  assert.equal(disk.stage, LANE_STAGE.APPROVE_SENT); assert.match(disk.steps.approve.hash, /^0x/);
+  const rec = await reconcileLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: disk, executor: world.executor, storage, nowIso: NOW_ISO });
+  assert.equal(rec.intent.stage, LANE_STAGE.APPROVED); assert.equal(loadLaneIntent(storage, MAINNET, PIGGY).intent.stage, LANE_STAGE.APPROVED);
+  assert.equal(world.sent.length, 1);
+});
+
+await check("N21 chokepoint: the pre-send record must be written AND read back before any send; a failed/dropped write sends nothing", async () => {
+  for (const mode of ["throws", "silent_drop"]) {
+    const world = forkWorld();
+    const storage = laneStorage();
+    const { preview, started } = await startErrand(world, storage);
+    if (mode === "throws") storage.f.setThrows = () => true; else storage.f.silentDrop = true;
+    const step = await advanceLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: started.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO });
+    assert.equal(step.status, "blocked", mode); assert.equal(step.reason, "storage_write_failed", mode);
+    assert.equal(world.sent.length, 0, `${mode}: nothing sent`);
+  }
+});
+
+await check("N22 chokepoint: a stale in-memory errand (stored stage already moved on) is blocked before reserve/send; double advance sends once", async () => {
+  const world = forkWorld();
+  const storage = createMemoryStorage();
+  const { preview, started } = await startErrand(world, storage);
+  const first = await advanceLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: started.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO });
+  assert.equal(first.status, "confirmed");
+  const stale = await advanceLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: started.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO });
+  assert.equal(stale.status, "blocked"); assert.equal(stale.reason, "stored_intent_changed");
+  assert.equal(world.sent.filter((x) => x.step === "approve").length, 1);
+  storage.removeItem(laneIntentKey(MAINNET, PIGGY.id));
+  const gone = await advanceLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: first.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO });
+  assert.equal(gone.reason, "stored_intent_unavailable");
+  assert.equal(world.sent.length, 1);
+});
+
+await check("N23 (H-1) two advances started in the same tick: exactly one reaches the signer, the other is refused, the stored hash is the one sent", async () => {
+  const world = forkWorld();
+  const storage = createMemoryStorage();
+  const { preview, started } = await startErrand(world, storage);
+  const args = { profile: MAINNET, piggy: PIGGY, intent: started.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO };
+  const [a, b] = await Promise.all([advanceLaneIntent({ ...args }), advanceLaneIntent({ ...args })]);
+  assert.equal(world.sent.filter((x) => x.step === "approve").length, 1, "one approve send for one permission");
+  const refused = [a, b].filter((r) => r.status === "blocked");
+  assert.equal(refused.length, 1); assert.equal(refused[0].reason, "stored_intent_changed");
+  const stored = loadLaneIntent(storage, MAINNET, PIGGY).intent;
+  assert.equal(stored.steps.approve.hash, FORK_TX.approve.hash, "the stored hash is the one actually sent");
+  assert.ok([LANE_STAGE.APPROVED, LANE_STAGE.APPROVE_SENT].includes(stored.stage));
+});
+
+await check("N23b (H-1) persistHash never overwrites: if the stored record moved on before the hash write, the result is unknown_hash_unsaved and the stored record is untouched", async () => {
+  const world = forkWorld();
+  const storage = createMemoryStorage();
+  const { preview, started } = await startErrand(world, storage);
+  const key = laneIntentKey(MAINNET, PIGGY.id);
+  const inner = world.executor.send;
+  let foreign;
+  world.executor.send = async (tx) => { const r = await inner(tx); foreign = JSON.stringify({ ...JSON.parse(storage.getItem(key)), stage: LANE_STAGE.UNKNOWN }); storage.setItem(key, foreign); return r; };
+  const step = await advanceLaneIntent({ profile: MAINNET, piggy: PIGGY, intent: started.intent, preview, executor: world.executor, storage, nowIso: NOW_ISO });
+  assert.equal(step.status, "unknown"); assert.equal(step.reason, "unknown_hash_unsaved");
+  assert.equal(storage.getItem(key), foreign, "not overwritten");
 });
 
 globalThis.fetch = realFetch;

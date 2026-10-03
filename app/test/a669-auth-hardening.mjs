@@ -14,7 +14,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { admitModelAPiggy, admitSequencedPiggy, loadMyPiggiesIndex, myPiggiesIndexKey } from "../src/piggy-index.js";
+import { admitModelAPiggy, admitSequencedPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, registerControlledPiggy, markBornPiggyIssuance } from "../src/piggy-index.js";
 import { modelASaltHex } from "../src/piggy-session.js";
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
@@ -58,7 +58,9 @@ const PRE = {
   requestMoneyPermission: "905ac3b10d261a22" + "bca9ecec3e0c9409" + "371895f782257a09" + "4f408baa1d561dd1",
   proveFundingTargetControl: "75510cd7a119811d" + "a1437fafb7959ab3" + "677c9500ba9d641d" + "23569f868ed6bf72",
   admitSequencedPiggy: "c04fa2bfb30fa441" + "ebc1bf2e40bf8d9b" + "eb3c4f7935856f8b" + "e2b85daa70ff3e29",
-  sendPiggyOnce: "33e13215c9fc55c2" + "a6a57758de638d7f" + "c363231353541cb0" + "d251b7cc7af3a730",
+  sendPiggyOnce: "33e13215c9fc55c2" + "a6a57758de638d7f" + "c363231353541cb0" + "d251b7cc7af3a730", // pre-A-669 (historical; SEND-0 now pins POST_A698 below)
+  // [A-698 M3 re-pin] Owner NEWEST-WINS 2026-10-03: Send recovery shares the Check/Open attempt slot + minimal appLock guard.
+  sendPiggyOnceA698: "b7c47a07852e9718" + "e4e5260b694d9128" + "a3a4089230066fa7" + "497225e712f86ef9",
   render: "866133cf60711093" + "9b5ce2b05ad9ff25" + "3ee7ab77f8448b39" + "77faa974a9d3e27c",
 };
 
@@ -487,6 +489,15 @@ function memStorage() {
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), _m: m };
 }
 const locks = { request: (_n, _o, fn) => fn() };
+// [A-695 SEQ-5=A] 원 기기 = 첫 Piggy(레거시) 행이 ROOT 로 색인된 기기. 이 행이 없으면 +Piggy 는 번호를 내지 않는다.
+function originStorage() {
+  const s = memStorage();
+  const address = "0x" + "a1".repeat(20);
+  const r = registerControlledPiggy(s, CHAIN, { address, signerAddress: address, locator: { credentialId: "ROOT" }, at: "2026-10-03T00:00:00.000Z" });
+  assert.equal(r.ok, true);
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address }).ok, true);
+  return s;
+}
 const ROOT = { credentialId: "ROOT", transports: ["internal"] };
 // deterministic "derivation": address is a function of (passkey, salt) only — PRF output = f(credential, salt).
 function prfProvider({ returnCred = null, log = [] } = {}) {
@@ -504,7 +515,7 @@ function prfProvider({ returnCred = null, log = [] } = {}) {
 }
 
 await check("SEQ-1 one passkey + per-sequence salt: every admission asks the SAME pinned root once with salt modelASalt(n), n = issuedThrough+1; PRF zeroed after derivation", async () => {
-  const storage = memStorage();
+  const storage = originStorage();
   const p = prfProvider();
   const r1 = await admitModelAPiggy({ storage, chainId: CHAIN, locks, rootCredential: ROOT, requestPrf: p.requestPrf, deriveAddress: p.deriveAddress });
   const r2 = await admitModelAPiggy({ storage, chainId: CHAIN, locks, rootCredential: ROOT, requestPrf: p.requestPrf, deriveAddress: p.deriveAddress });
@@ -517,7 +528,7 @@ await check("SEQ-1 one passkey + per-sequence salt: every admission asks the SAM
 });
 
 await check("SEQ-2 no sequence reuse: a deleted row does not free its number (watermark), an explicit re-admit of an issued n is refused, nothing written", async () => {
-  const storage = memStorage();
+  const storage = originStorage();
   const p = prfProvider();
   for (let i = 0; i < 2; i += 1) await admitModelAPiggy({ storage, chainId: CHAIN, locks, rootCredential: ROOT, requestPrf: p.requestPrf, deriveAddress: p.deriveAddress });
   const k = myPiggiesIndexKey(CHAIN);
@@ -536,7 +547,7 @@ await check("SEQ-2 no sequence reuse: a deleted row does not free its number (wa
 });
 
 await check("SEQ-3 no unbound derived address: a different passkey answering is refused (root_credential_mismatch), derive failure refused; PRF zeroed on both; no row, no watermark move", async () => {
-  const storage = memStorage();
+  const storage = originStorage();
   const other = prfProvider({ returnCred: "OTHER" });
   const r = await admitModelAPiggy({ storage, chainId: CHAIN, locks, rootCredential: ROOT, requestPrf: other.requestPrf, deriveAddress: other.deriveAddress });
   deq([r.ok, r.reason], [false, "root_credential_mismatch"]);
@@ -547,7 +558,7 @@ await check("SEQ-3 no unbound derived address: a different passkey answering is 
   deq([bad.ok, bad.reason], [false, "derive_failed"]);
   assert.ok(seen.every((x) => x === 0), "derive-failure path zeroed");
   const { index } = loadMyPiggiesIndex(storage, CHAIN);
-  deq([index.issuedThrough, index.piggies.length], [0, 0]);
+  deq([index.issuedThrough, index.piggies.length], [0, 1], "only the seeded first-Piggy row; no sequence row, no watermark move");
 });
 
 await check("SEQ-4 missing index authority (new device, INDEX_BACKUP_ADAPTER = null): Check Piggy recovers the root only — one WebAuthn request, no sequence guessing, no salt scan, no additional-Piggy rows", async () => {
@@ -565,21 +576,26 @@ await check("SEQ-4 missing index authority (new device, INDEX_BACKUP_ADAPTER = n
   assert.equal((INDEX_SRC.match(/await modelASalt\(/g) || []).length, 1, "piggy-index.js derives exactly one salt per admission");
 });
 
-await check("SEQ-5 BLOCKED residual (recorded, not fixed): on a device with no local index, +Piggy issues n=1 again — it re-derives the SAME bound address as the other device's #1 (same passkey+salt), never an unbound or foreign one", async () => {
-  const deviceA = memStorage();
-  const deviceB = memStorage();
+await check("SEQ-5=A fail-closed (A-695): a device with no valid local index cannot issue n (no guessing, no reuse); the valid origin device keeps issuing the next unused n", async () => {
+  const deviceA = originStorage();
+  const deviceB = memStorage();                                  // new/missing-index device
   const p = prfProvider();
   const a1 = await admitModelAPiggy({ storage: deviceA, chainId: CHAIN, locks, rootCredential: ROOT, requestPrf: p.requestPrf, deriveAddress: p.deriveAddress });
   const b1 = await admitModelAPiggy({ storage: deviceB, chainId: CHAIN, locks, rootCredential: ROOT, requestPrf: p.requestPrf, deriveAddress: p.deriveAddress });
-  deq([a1.piggy.sequence, b1.piggy.sequence], [1, 1], "number re-issued across devices — needs an authoritative index (Gate B, OWNER/infra)");
-  assert.equal(a1.piggy.address, b1.piggy.address, "same identity, bound by live derivation — not a new unbound Piggy");
+  assert.equal(a1.ok, true);
+  assert.equal(a1.piggy.sequence, 1);
+  deq([b1.ok, b1.reason], [false, "origin_index_missing"], "no n=1 re-issue on the other device");
+  deq(p.log.length, 1, "device B asked the platform 0 times");
+  assert.equal(deviceB.getItem(myPiggiesIndexKey(CHAIN)), null, "nothing written on device B");
 });
 
 // ═══ SEND lane — OWNER_INPUT_REQUIRED, left pre-A-669 ══════════════════════════════════════════
-await check("SEND-0 Send lane left exactly pre-A-669 (OWNER_INPUT_REQUIRED): sendPiggyOnce byte-identical, recoverPiggy() called without an attempt token", () => {
+await check("SEND-0 [re-pinned by A-698 M3: Owner newest-wins 'Send recovery slot A + minimal lock guard'] sendPiggyOnce == A-698 shape: shared attempt slot, bounded recovery, appLock guard before requestGrant", () => {
   const once = fnBody("sendPiggyOnce");
-  assert.equal(sha(once), PRE.sendPiggyOnce, "sendPiggyOnce unchanged");
-  assert.ok(once.includes("      await recoverPiggy();\n"), "unbounded money-path recovery is the recorded residual");
+  assert.equal(sha(once), PRE.sendPiggyOnceA698, "sendPiggyOnce == A-698 pin (any further edit must re-pin with a named reason)");
+  assert.ok(!once.includes("      await recoverPiggy();\n"), "the unbounded money-path recovery residual is closed");
+  assert.ok(once.includes("recoverPiggy({ isCurrent: () => attempt.live })"), "recovery carries the attempt token");
+  assert.ok(once.indexOf("if (state.appLock)") > 0 && once.indexOf("if (state.appLock)") < once.indexOf("requestGrant("), "lock guard precedes requestGrant");
 });
 
 finished = true;

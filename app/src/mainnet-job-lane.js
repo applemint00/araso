@@ -31,6 +31,7 @@ import {
 import { DECISION_RECEIPT_SCHEMA, validateDecisionReceipt } from "./second-journey-state.js";
 import { authorize, consume, onUnknownOutcome, permissionNonce } from "./permission-envelope.js";
 import { CHAIN_PROFILE_ID, bindRecordToProfile, checkRecordBinding, isProfileActive } from "./chain-profile.js";
+import { executeMoneyStep, TRANSPORT_KIND } from "./money-executor.js";
 
 export const LANE_JOB_ID = "aave-usdc";
 export const LANE_ACTION = "grow_stable_roundtrip";
@@ -473,6 +474,18 @@ function saveIntent(storage, profile, intent) {
   try { storage.setItem(key, JSON.stringify(intent)); return true; } catch { return false; }
 }
 
+// [money-safety M1] setItem + read-back: true only when the stored bytes are exactly what was written. Used for the writes the
+// money path depends on (the "about to send" record and the post-send hash), where "setItem did not throw" is not enough.
+function saveIntentVerified(storage, profile, intent) {
+  const key = laneIntentKey(profile, intent.piggyId);
+  if (!storage || !key || typeof storage.getItem !== "function") return false;
+  try {
+    const serialized = JSON.stringify(intent);
+    storage.setItem(key, serialized);
+    return storage.getItem(key) === serialized;
+  } catch { return false; }
+}
+
 /** Loads and re-validates the stored errand for this Piggy. Anything that does not bind is refused. */
 export function loadLaneIntent(storage, profile, piggy = {}) {
   const key = laneIntentKey(profile, piggy.id);
@@ -508,6 +521,9 @@ export function startLaneIntent({ profile, piggy = {}, preview, envelope, signer
     return { intent: null, error: "preview_binding_mismatch" };
   }
   const existing = loadLaneIntent(storage, profile, piggy);
+  // [money-safety M1 D7] A stored errand that cannot be read or re-validated is NOT "no errand": refuse before authorize/consume,
+  // so the envelope nonce is not spent and no second errand is stacked over an unknown one.
+  if (existing.error) return { intent: null, error: "existing_intent_unreadable", detail: existing.error };
   if (existing.intent && !TERMINAL.has(existing.intent.stage)) return { intent: null, error: "errand_in_flight" };
   const auth = authorize(envelope, preview.request, { nowMs, consumedNonces, context: signerContext });
   if (!auth.ok) return { intent: null, error: auth.reason };
@@ -569,19 +585,55 @@ export async function advanceLaneIntent({ profile, piggy = {}, intent, preview, 
 
   const mode = executor.kind === "local_fork" ? EXECUTION_MODE.FORK_SIMULATION : EXECUTION_MODE.LIVE;
   const label = executor.kind === "local_fork" ? EVIDENCE_LABEL.FORK_SIM : EVIDENCE_LABEL.MAINNET_TX;
-  let current = stamp(intent, next.sending, nowIso, { executionMode: mode, evidenceClass: label });
-  if (!saveIntent(storage, profile, current)) return { intent, status: "blocked", reason: "storage_write_failed" };
-  let hash;
-  try {
-    const sent = await executor.send(tx);
-    hash = sent?.hash;
-  } catch {
-    return { intent: current, status: "unknown", reason: "send_outcome_unknown", retry: false };
+  const current = stamp(intent, next.sending, nowIso, { executionMode: mode, evidenceClass: label });
+  let withHash = current;
+  // [money-safety M1] The send goes through the one chokepoint (money-executor.js): authorize -> reserve -> persist-nonce -> send ->
+  // persist-hash. The local-fork executor cannot expose a hash before send, so the hash is persisted right after it.
+  const step = await executeMoneyStep({
+    tx,
+    transport: { kind: TRANSPORT_KIND.LANE_EXECUTOR, executor },
+    // The stored errand must still be the one this call was handed (same stage + nonce): a stale in-memory intent
+    // (reload, other tab, double tap) never reaches a signer. An unreadable/absent record also stops here.
+    authorize: () => {
+      const stored = loadLaneIntent(storage, profile, piggy);
+      if (stored.error || !stored.intent) return { ok: false, reason: "stored_intent_unavailable" };
+      if (stored.intent.stage !== intent.stage || stored.intent.nonce !== intent.nonce) return { ok: false, reason: "stored_intent_changed" };
+      return { ok: true };
+    },
+    // Compare-and-write in ONE synchronous tick (no await between the re-load and the write): if another advance reserved
+    // first, the stored stage/nonce no longer match and this one is refused before it can reach a signer.
+    reserve: () => {
+      const stored = loadLaneIntent(storage, profile, piggy);
+      if (stored.error || !stored.intent) return { ok: false, reason: "stored_intent_unavailable" };
+      if (stored.intent.stage !== intent.stage || stored.intent.nonce !== intent.nonce) return { ok: false, reason: "stored_intent_changed" };
+      return saveIntentVerified(storage, profile, current) ? { ok: true } : { ok: false, reason: "storage_write_failed" };
+    },
+    // The consumed permission nonce lives in the persisted errand; confirm the record we just wrote carries it.
+    persistNonce: () => {
+      const stored = loadLaneIntent(storage, profile, piggy);
+      return stored.intent && stored.intent.nonce === preview.nonce && stored.intent.stage === next.sending
+        ? { ok: true } : { ok: false, reason: "nonce_not_persisted" };
+    },
+    // Write only while the stored record is still THIS call's sending record; never overwrite another advance's hash.
+    persistHash: ({ hash }) => {
+      const stored = loadLaneIntent(storage, profile, piggy);
+      if (stored.error || !stored.intent) return { ok: false, reason: "stored_intent_unavailable" };
+      if (stored.intent.nonce !== intent.nonce) return { ok: false, reason: "stored_intent_changed" };
+      const have = stored.intent.steps?.[next.step]?.hash;
+      if (stored.intent.stage === next.sent && have === hash) return { ok: true }; // idempotent retry of our own write
+      if (stored.intent.stage !== next.sending || have) return { ok: false, reason: "stored_intent_changed" };
+      withHash = stamp(current, next.sent, nowIso, { steps: { ...current.steps, [next.step]: { hash, status: "pending" } } });
+      return saveIntentVerified(storage, profile, withHash) ? { ok: true } : { ok: false, reason: "storage_write_failed" };
+    },
+  });
+  if (step.status === "blocked") return { intent, status: "blocked", reason: step.reason };
+  if (step.status === "send_outcome_unknown") return { intent: current, status: "unknown", reason: "send_outcome_unknown", retry: false };
+  if (step.status === "unknown_hash_unsaved") {
+    // Sent, hash known only in memory: keep it on the returned intent so the caller can retry the write; never re-send.
+    const inMemory = stamp(current, next.sent, nowIso, { steps: { ...current.steps, [next.step]: { hash: step.hash, status: "pending" } } });
+    return { intent: inMemory, status: "unknown", reason: "unknown_hash_unsaved", hash: step.hash, saved: false, retry: false };
   }
-  if (!TX.test(hash || "")) return { intent: current, status: "unknown", reason: "send_outcome_unknown", retry: false };
-  current = stamp(current, next.sent, nowIso, { steps: { ...current.steps, [next.step]: { hash, status: "pending" } } });
-  saveIntent(storage, profile, current);
-  return settleSent({ profile, intent: current, executor, storage, nowIso });
+  return settleSent({ profile, intent: withHash, executor, storage, nowIso });
 }
 
 async function settleSent({ profile, intent, executor, storage, nowIso }) {
@@ -601,11 +653,13 @@ async function settleSent({ profile, intent, executor, storage, nowIso }) {
       steps: { ...intent.steps, [step]: { ...stepRow, revertData: typeof r.revertData === "string" && /^0x[0-9a-fA-F]{0,8}$/.test(r.revertData) ? r.revertData : null } },
       failedStep: step,
     });
-    saveIntent(storage, profile, next);
+    // [money-safety M1 R6] A failed save is reported, never swallowed: the stored stage is still `*_sent` (hash kept) and the
+    // next reconcile re-reads the receipt.
+    if (!saveIntent(storage, profile, next)) return { intent: next, status: "unsaved", reason: "storage_write_failed", saved: false, retry: false };
     return { intent: next, status: "reverted", reason: `${step}_reverted` };
   }
   const next = stamp(intent, meta.ok, nowIso, { steps: { ...intent.steps, [step]: stepRow } });
-  saveIntent(storage, profile, next);
+  if (!saveIntent(storage, profile, next)) return { intent: next, status: "unsaved", reason: "storage_write_failed", saved: false, retry: false };
   return { intent: next, status: meta.ok === LANE_STAGE.RETURNED ? "returned" : "confirmed", reason: `${step}_confirmed` };
 }
 
@@ -621,8 +675,9 @@ export async function reconcileLaneIntent({ profile, piggy = {}, intent, executo
   if (SENDING_STAGES.has(intent.stage)) {
     // No hash was recorded: whether anything was broadcast cannot be known from here.
     const next = stamp(intent, LANE_STAGE.UNKNOWN, nowIso, { unknownReason: "broadcast_unknown", unknownStep: intent.stage.replace(/_sending$/, "") });
-    saveIntent(storage, profile, next);
-    return { intent: next, status: "unknown", reason: "broadcast_unknown", retry: false };
+    // [money-safety M1 R6] If this write fails the stored stage stays `*_sending`, which resolves to the same unknown next time.
+    const saved = saveIntent(storage, profile, next);
+    return { intent: next, status: "unknown", reason: "broadcast_unknown", retry: false, ...(saved ? {} : { saved: false }) };
   }
   if (!SENT_STAGES[intent.stage]) {
     return { intent, status: intent.stage === LANE_STAGE.UNKNOWN ? "unknown" : "idle", reason: intent.unknownReason || null, retry: false };

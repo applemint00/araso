@@ -25,7 +25,16 @@ const ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 // 한 줄에 담을 수 있는 필드 — **이것 말고는 받지 않는다.** 잔액·평가·권한·영수증·draft·선호가 들어오면 그 줄은 버린다.
 // [A-531] `sequence` = 모델 A 추가 Piggy 의 순번 n(1 이상 정수). **선택 필드** — 첫 Piggy(레거시) 행에는 없다.
 // 순번은 파생 메타데이터이지 권한도, 사용자에게 보이는 정체성도 아니다.
-const ROW_FIELDS = Object.freeze(["id", "name", "address", "locator", "createdAt", "lastControlProofAt", "sequence"]);
+//
+// [A-695 SEQ-5=A] `provenance` = **새 번호를 낼 자격의 출처**(첫 Piggy 행에만). 값은 하나뿐: "birth".
+//   openPiggy 가 이 기기에서 패스키를 **만든** 직후(commitIdentity received:true → indexControlledPiggy) markBornPiggyIssuance 가 찍는다.
+// 되찾기(Check Piggy/recoverPiggy)·복원·백업은 이 필드를 **만들지도 옮기지도 않는다**: registerControlledPiggy 는 provenance 를
+// 받지 않고, 새 행은 항상 provenance 없이 들어가며, 백업 봉투는 순번·시각만 담는다.
+// 표식 이전 설치의 "승급"은 **없다**: 행의 출처(원 기기 행인가)를 배타적으로 증명하는 증거가 없다
+// (araso.birthPlayed 는 생성 전용이지만, 색인이 사라졌다 옛 빌드의 되찾기로 다시 만들어진 행도 같은 birthPlayed=1 을 가진다).
+const ROW_FIELDS = Object.freeze(["id", "name", "address", "locator", "createdAt", "lastControlProofAt", "sequence", "provenance"]);
+export const ISSUANCE_PROVENANCE = Object.freeze({ BIRTH: "birth" });
+const PROVENANCE_VALUES = new Set(Object.values(ISSUANCE_PROVENANCE));
 const SECRET_LIKE = /private|secret|seed|mnemonic|prfoutput|sessionkey|signingkey|keymaterial|authorization/i;
 
 export function myPiggiesIndexKey(chainId) {
@@ -64,7 +73,12 @@ function normalizeRow(row) {
     if (locator.prfSalt !== modelASaltHex(row.sequence)) return null;
     sequence = row.sequence;
   }
-  return { id, name, address: row.address, locator, createdAt, lastControlProofAt, ...(sequence ? { sequence } : {}) };
+  let provenance = null;
+  if (row.provenance !== undefined && row.provenance !== null) {
+    if (!PROVENANCE_VALUES.has(row.provenance) || row.sequence !== undefined && row.sequence !== null) return null;   // 모르는 출처/순번 행의 출처 = 줄 버림
+    provenance = row.provenance;
+  }
+  return { id, name, address: row.address, locator, createdAt, lastControlProofAt, ...(sequence ? { sequence } : {}), ...(provenance ? { provenance } : {}) };
 }
 
 // [A-531] `issuedThrough` = 성공적으로 입장한 순번의 최댓값(워터마크). 없으면 0 — 기존 v1 데이터와 호환.
@@ -102,9 +116,15 @@ export function loadMyPiggiesIndex(storage, chainId) {
     if (clean.sequence) seenSeq.add(clean.sequence);
     piggies.push(clean);
   }
-  const stored = Number.isSafeInteger(parsed.issuedThrough) && parsed.issuedThrough >= 0 ? parsed.issuedThrough : 0;
+  const storedValid = Number.isSafeInteger(parsed.issuedThrough) && parsed.issuedThrough >= 0;
+  const stored = storedValid ? parsed.issuedThrough : 0;
   const maxSeq = piggies.reduce((m, p) => Math.max(m, p.sequence || 0), 0);
-  return { index: { version: INDEX_VERSION, chainId, issuedThrough: Math.max(stored, maxSeq), piggies }, error: null, dropped };
+  // [A-695 F1] 이 읽기가 **믿을 수 없는 상태**를 봤다 = 버려진 줄이 있거나 저장된 워터마크가 없다/깨졌다. 워터마크가 낮아졌을 수 있으니
+  // 이후 어떤 쓰기(재증명·이름 바꾸기 등)가 깨끗한 색인으로 다시 써도 발급 자격이 되살아나지 않게 — 돌려주는 줄에서 provenance 를 **벗긴다**.
+  // 그 줄이 다음 쓰기로 저장되면 이 기기는 영구히 닫힌다(origin_index_no_provenance). 읽기만 하는 되찾기 경로는 영향 0.
+  const tainted = dropped > 0 || !storedValid;
+  const outRows = tainted ? piggies.map(({ provenance, ...rest }) => rest) : piggies;
+  return { index: { version: INDEX_VERSION, chainId, issuedThrough: Math.max(stored, maxSeq), piggies: outRows }, error: null, dropped, tainted };
 }
 
 function writeIndex(storage, chainId, index) {
@@ -217,6 +237,28 @@ function writeControlledPiggy(storage, chainId, { id = null, name = null, addres
 }
 
 /**
+ * [A-695 SEQ-5=A] **생성 경로 전용 표식.** openPiggy 가 이 기기에서 패스키를 방금 만들고 첫 Piggy 행을 색인한 직후에만 부른다.
+ * 이미 색인된 그 주소의 첫 행(순번 없음)에 provenance="birth" 를 찍는다 — 행을 새로 만들지 않는다, 다른 행/주소를 바꾸지 않는다.
+ * 되찾기 경로(recoverPiggy/checkPiggy)는 이 함수를 부르지 않는다.
+ */
+export function markBornPiggyIssuance(storage, chainId, { address } = {}) {
+  if (!myPiggiesIndexKey(chainId)) return refuse("invalid_chain");
+  if (!storage) return refuse("no_storage");
+  if (!ADDR.test(address || "")) return refuse("invalid_address");
+  const loaded = loadMyPiggiesIndex(storage, chainId);
+  if (loaded.error || loaded.tainted) return refuse("origin_index_corrupt");   // 믿을 수 없는 읽기 위에 표식을 새로 찍지 않는다
+  const at = loaded.index.piggies.findIndex((p) => lower(p.address) === lower(address));
+  if (at < 0) return refuse("not_indexed");
+  const row = loaded.index.piggies[at];
+  if (row.sequence) return refuse("sequenced_row_has_no_provenance");
+  if (row.provenance) return { ok: true, reason: null, index: loaded.index, piggy: row };
+  const piggies = loaded.index.piggies.map((p, i) => (i === at ? { ...p, provenance: ISSUANCE_PROVENANCE.BIRTH } : { ...p }));
+  const next = { ...loaded.index, piggies };
+  if (!writeIndex(storage, chainId, next)) return refuse("storage_write_failed");
+  return { ok: true, reason: null, index: next, piggy: piggies[at] };
+}
+
+/**
  * 이미 색인에 있는 Piggy 의 **이름만** 바꾼다. 없는 id 는 거부 — 이름 바꾸기로 새 주소를 등록할 수 없다.
  * 순서는 바뀌지 않는다.
  */
@@ -243,6 +285,31 @@ export function myPiggiesLockName(chainId) {
   return key ? `${key}.admit` : null;
 }
 
+/**
+ * [A-695 SEQ-5=A] **이 기기가 새 번호를 낼 자격(발급 출처)이 있나.** 행이 "있다"는 사실이 아니라 행의 **출처**를 본다. 순수 읽기.
+ * 통과 = 모두 만족:
+ *   ① 색인 키가 있고 읽힌다 — 아니면 origin_index_missing(absent) / origin_index_corrupt(깨짐·버전·체인·읽기 실패).
+ *   ② 버려진 줄이 없다 — 버려진 줄이 순번 행이었다면 워터마크가 낮아져 번호가 재사용될 수 있다(origin_index_corrupt).
+ *   ③ 첫 Piggy(순번 없음) 행이 있다 — origin_index_no_first_piggy.
+ *   ④ 그 행의 locator.credentialId 가 고정한 루트와 같다 — origin_index_root_mismatch.
+ *   ⑤ 그 행이 provenance("birth")를 가졌다 — 없으면 origin_index_no_provenance.
+ *      되찾기가 만든 행은 provenance 가 없다 → 번호 0 · +Piggy/Gift 닫힘.
+ */
+export function checkOriginDeviceIndex(storage, chainId, rootCredential) {
+  if (!myPiggiesIndexKey(chainId)) return { ok: false, reason: "invalid_chain", index: null };
+  if (!storage) return { ok: false, reason: "no_storage", index: null };
+  const loaded = loadMyPiggiesIndex(storage, chainId);
+  if (loaded.error === "absent") return { ok: false, reason: "origin_index_missing", index: null };
+  if (loaded.error) return { ok: false, reason: "origin_index_corrupt", index: null };
+  if (loaded.tainted) return { ok: false, reason: "origin_index_corrupt", index: null };   // 버려진 줄 또는 워터마크 저장값 없음/깨짐
+  const first = loaded.index.piggies.find((p) => !p.sequence);
+  if (!first) return { ok: false, reason: "origin_index_no_first_piggy", index: null };
+  const rootId = typeof rootCredential?.credentialId === "string" ? rootCredential.credentialId : "";
+  if (!rootId || first.locator?.credentialId !== rootId) return { ok: false, reason: "origin_index_root_mismatch", index: null };
+  if (!first.provenance) return { ok: false, reason: "origin_index_no_provenance", index: null };
+  return { ok: true, reason: null, index: loaded.index };
+}
+
 export async function admitModelAPiggy({ storage, chainId, locks, rootCredential, requestPrf, deriveAddress, now = () => new Date().toISOString() } = {}) {
   const lockName = myPiggiesLockName(chainId);
   if (!lockName) return refuse("invalid_chain");
@@ -255,7 +322,10 @@ export async function admitModelAPiggy({ storage, chainId, locks, rootCredential
   const pinned = { credentialId: rootId, ...(Array.isArray(rootCredential.transports) && rootCredential.transports.length ? { transports: rootCredential.transports } : {}) };
 
   return locks.request(lockName, { mode: "exclusive" }, async () => {
-    const before = loadMyPiggiesIndex(storage, chainId).index;
+    // [A-695 SEQ-5=A] 번호를 정하기 **전에**, requestPrf 를 부르기 전에 — 이 기기의 첫 Piggy 행이 **발급 출처(provenance)** 를 가졌는지 본다.
+    const gate = checkOriginDeviceIndex(storage, chainId, pinned);
+    if (!gate.ok) return refuse(gate.reason);
+    const before = gate.index;
     const n = (before.issuedThrough || 0) + 1;
     return admitSequencedPiggy({ storage, chainId, sequence: n, rootCredential: pinned, requestPrf, deriveAddress, now, requireNext: true });
   });

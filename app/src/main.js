@@ -78,7 +78,7 @@ import {
   switchSelection,
   verifyFundingTargetProof,
 } from "./piggy-session.js";
-import { admitModelAPiggy, loadMyPiggiesIndex, registerControlledPiggy, renameIndexedPiggy } from "./piggy-index.js";
+import { admitModelAPiggy, loadMyPiggiesIndex, markBornPiggyIssuance, registerControlledPiggy, renameIndexedPiggy } from "./piggy-index.js";
 import { recoverProductList } from "./gate-b-recovery.js";
 import { listFundingMethods, startFunding, applyFundingResult, FUNDING_STATE } from "./funding-entry.js";
 import { checkIntentFunding, fundingRequestForShortfall, resumeAfterFunding, markPlanApproved } from "./funding-intent-bridge.js";
@@ -540,17 +540,73 @@ function rememberReceipt(receipt) {
     : -1;
   if (existingIndex >= 0) {
     state.receiptIndex = existingIndex;
-    return;
+  } else {
+    state.receipts = [receipt, ...state.receipts];
+    state.receiptIndex = 0;
   }
-  const kept = [receipt, ...state.receipts];
-  state.receipts = kept;
-  state.receiptIndex = 0;
   // The legacy receipt store holds testnet rows (the legacy rows carry no chain id). Off the
   // testnet profile it is never read (state init) and never rewritten here, so a testnet row is
   // neither shown as this chain's nor dropped. `typeof`: existing tests run this function cut
   // out on stubs where the module const does not exist; in the app it always does.
-  if (typeof LEGACY_TESTNET_PATH === "boolean" && LEGACY_TESTNET_PATH !== true) return;
-  localStorage.setItem(RECEIPTS_KEY, JSON.stringify(kept.map(serializeReceiptRow)));
+  if (typeof LEGACY_TESTNET_PATH === "boolean" && LEGACY_TESTNET_PATH !== true) return true;
+  // [A-699 M2-alpha] Durable save, merged against STORAGE (not this tab's memory), never over a store it
+  // cannot fully read, and verified by a re-read. Returns true only when the row is provably in storage;
+  // throws otherwise (callers that need a boolean — finishTrip — catch). The pending Send record is
+  // never cleared on a throw here.
+  const unsound = () => new Error("receipt_store_unsound");
+  let raw;
+  try {
+    raw = localStorage.getItem(RECEIPTS_KEY);
+  } catch {
+    throw unsound();
+  }
+  let stored = [];
+  if (raw) {
+    try {
+      stored = JSON.parse(raw);
+    } catch {
+      throw unsound(); // unparseable store: never overwrite it with a one-row array
+    }
+    if (!Array.isArray(stored)) throw unsound();
+  }
+  let present = false;
+  for (const row of stored) {
+    let decoded;
+    try {
+      decoded = decodeReceiptRow(row);
+    } catch {
+      // Same tolerance as readReceipts: a broken add_money row alone is skipped (and kept verbatim below);
+      // a broken legacy row means the store is not fully readable -> refuse to rewrite it.
+      if (row && row.kind === RECEIPT_KIND.ADD_MONEY) continue;
+      throw unsound();
+    }
+    if (key && receiptIdentityKey(decoded) === key) present = true;
+  }
+  // Already durable (live settle + reconcile + another tab all converge here): nothing to write.
+  if (present) return true;
+  const json = JSON.stringify([serializeReceiptRow(receipt), ...stored]);
+  try {
+    localStorage.setItem(RECEIPTS_KEY, json);
+  } catch {
+    throw unsound();
+  }
+  let back;
+  try {
+    back = localStorage.getItem(RECEIPTS_KEY);
+  } catch {
+    throw unsound();
+  }
+  if (back === json) return true;
+  // Another tab wrote in between: accept only if this receipt's identity is provably in what is stored now.
+  if (key) {
+    try {
+      const rows = JSON.parse(back);
+      if (Array.isArray(rows) && rows.some((row) => { try { return receiptIdentityKey(decodeReceiptRow(row)) === key; } catch { return false; } })) return true;
+    } catch {
+      /* falls through */
+    }
+  }
+  throw unsound();
 }
 
 function writeCredential(credential) {
@@ -615,6 +671,25 @@ function localTestPrfSaltOption() {
   const salt = client?.prfSalt;
   if (!(salt instanceof Uint8Array) || salt.length !== 32) return {};
   return { prfSalt: salt };
+}
+
+// [A-687] 시도 **전** 능력 점검 — 동기·읽기 전용. `kind` = 그 경로가 실제로 부르는 WebAuthn 함수("get": 잠금
+// 해제·Check Piggy / "create": Open). 보안 컨텍스트·PublicKeyCredential·navigator.credentials·필요한 함수 중
+// 하나라도 없으면 true(= 이 기기에선 시도할 수 없다). 하네스가 자기 지원 client 를 직접 넘긴 로컬 테스트
+// 경로(localTestWebAuthnClient)는 막지 않는다. 브라우저 컨텍스트 증거가 없으면(window/document/navigator 없음) false —
+// 모르면 막지 않고 기존 경로에 맡긴다. credential 을 만들거나 묻지 않고, await·타이머·상태 변경이 없다.
+function webAuthnUnsupported(kind) {
+  try {
+    if (localTestWebAuthnClient()) return false;
+    if (typeof window === "undefined" || typeof navigator === "undefined") return false;
+    if (!window.document) return false; // 실제 브라우저 창이 아니다(비브라우저 하네스/스텁) — 양의 증거 없음
+    if (window.isSecureContext === false) return true;
+    if (typeof window.PublicKeyCredential !== "function") return true;
+    const creds = navigator.credentials;
+    return !creds || typeof creds[kind === "create" ? "create" : "get"] !== "function";
+  } catch {
+    return false;
+  }
 }
 
 function toHex(bytes) {
@@ -882,7 +957,28 @@ function prefersReducedMotion() {
   return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
+// [A-684] 실패 문구의 증거 등급 매핑 — 고정(pin)된 송금/인증 함수를 건드리지 않으려고 문구를 그리는 자리(setScene)에서
+// 붙인다. 기존 등급만: nothing moved / still out. / can't tell yet. 사용자 화면에 "relayer" 낱말 0. 새 재시도 0.
+function sendFailureCopy(scene, message, detail) {
+  if (scene !== "sendstay" || detail) return { message, detail };
+  if (message === "relayer unreachable") return { message: "Piggy can't go out yet.", detail: "nothing moved." };
+  if (message === "Piggy can't go out yet.") return { message, detail: "nothing moved." };
+  if (message === "Piggy could not get ready.") {
+    // 전송이 시작되지 않았으면(미확정 기록 없음) nothing moved. · deposit 확정 뒤 redeem 이 나간 기록만 still out. ·
+    // 그 밖(deposit 전송/미확정 — 돈이 움직였을 수 있다)은 can't tell yet.
+    const pending = typeof readSendPending === "function" ? readSendPending() : { stage: "unknown" };
+    return { message, detail: !pending ? "nothing moved." : pending.stage === "redeem-broadcast" ? "still out." : "can't tell yet." };
+  }
+  if (message === "couldn't finish this one.") {
+    // finishTrip 이 setScene 직전에 세운 state.tripReason: deposit 확정 뒤 redeem 미확정·실패만 still out.,
+    // 그 밖(reverted 포함 — 어느 단계인지 모름)은 can't tell yet. reverted deposit 도 broadcast 됐으므로 nothing moved 아님.
+    return { message, detail: state.tripReason === "redeem-unconfirmed-or-reverted" ? "still out." : "can't tell yet." };
+  }
+  return { message, detail };
+}
+
 function setScene(scene, message = "", detail = "") {
+  ({ message, detail } = sendFailureCopy(scene, message, detail));
   // [A-383 §4] "닫으면 원래 Home 그대로" — 기록 카드는 render() 를 부르지 않는 직접 DOM
   // 토글로만 열린다(openRecordsCard, §5 주석). 그래서 어떤 이유로든 씬을 다시 그리면
   // (Send/Stay 결과, 재방문 등) 기록 카드는 항상 닫힌 채로 새로 시작한다 — 다른 씬 전환에
@@ -1092,9 +1188,14 @@ function indexedPiggyId(address) {
   return `legacy-${String(address).toLowerCase()}`;
 }
 
+// [A-695 SEQ-5=A] 메모리뿐(저장 0) — commitIdentity(received:true) = 생성 경로가 세우고, indexControlledPiggy 가 한 번 쓰고 지운다.
+let bornPiggyPending = null;
+
 function indexControlledPiggy({ address, credentialId, transports = null, prfSaltHex = null }) {
+  const born = bornPiggyPending !== null && bornPiggyPending === String(address).toLowerCase();
+  bornPiggyPending = null;
   try {
-    return registerControlledPiggy(safeLocalStorage(), secondJourneyScope().chainId, {
+    const out = registerControlledPiggy(safeLocalStorage(), secondJourneyScope().chainId, {
       id: indexedPiggyId(address),
       name: readPiggyName() || null,
       address,
@@ -1106,6 +1207,9 @@ function indexControlledPiggy({ address, credentialId, transports = null, prfSal
       },
       at: new Date().toISOString(),
     });
+    // 발급 출처 표식은 **생성 경로가 방금 만든 그 주소**의 행에만 — 되찾기(born=false)는 표식을 만들지 않는다.
+    if (born && out.ok) markBornPiggyIssuance(safeLocalStorage(), secondJourneyScope().chainId, { address });
+    return out;
   } catch {
     return { ok: false, reason: "index_write_failed" };
   }
@@ -1163,6 +1267,8 @@ function commitIdentity({ credential, address, prfSaltHex = null, received = fal
   }
   state.credential = credential;
   state.address = address;
+  // [A-695 SEQ-5=A] `received: true` 는 openPiggy 생성 경로만 넘긴다(checkPiggy/recoverPiggy 는 false) → 생성 직후 표식 후보를 메모리에만 둔다.
+  if (received) bornPiggyPending = String(address).toLowerCase();
 }
 
 // [R5] Check Piggy / Open 시도 하나 = 토큰 하나(unlockApp 의 attempt 와 같은 모양). 한 번에 하나만 살아 있다.
@@ -1324,6 +1430,13 @@ async function openPiggy() {
     state.authCancelled = false;
     recordSafeError("open", namedAuthError("PlatformAuthPending", "previous platform request still pending"));
     setScene("birth", "Piggy could not open here.", "");
+    return;
+  }
+  // [A-687 capability preflight] create 를 못 쓰는 기기면 beginAuthAttempt 전에 기존 실패 카드로 — 토큰·타이머 0, 생성·fallback 0.
+  if (typeof webAuthnUnsupported === "function" && webAuthnUnsupported("create")) {
+    state.authPhase = "idle";
+    state.authCancelled = false;
+    setScene("birth", "Not from here.", "This device can't use Face ID or a passkey here.");
     return;
   }
   const attempt = beginAuthAttempt("open");
@@ -1664,6 +1777,13 @@ async function checkPiggy() {
     setScene("birth", "Chog could not find Piggy here.", "Couldn't find your Piggy.");
     return { ok: false, cancelled: false, reason: "platform_pending" };
   }
+  // [A-687 capability preflight] get 을 못 쓰는 기기면 beginAuthAttempt 전에 기존 실패 카드로 — 토큰·요청 0, 생성 폴백 0.
+  if (typeof webAuthnUnsupported === "function" && webAuthnUnsupported("get")) {
+    state.authPhase = "idle";
+    state.authCancelled = false;
+    setScene("birth", "Not from here.", "This device can't use Face ID or a passkey here.");
+    return { ok: false, cancelled: false, reason: "webauthn_unsupported" };
+  }
   const attempt = beginAuthAttempt("check");
   // 시간초과 뒤 늦게 만들어진 패스키가 있고 이 기기에 저장된 credential 이 없으면, find-first 는 그 패스키 하나로만 묻는다.
   const pin = !state.credential && lateCreatedCredential ? lateCreatedCredential : null;
@@ -1759,6 +1879,14 @@ function unlockApp() {
   const pinned = state.credential;
   if (!pinned || typeof pinned.credentialId !== "string" || !pinned.credentialId || !isAllowedPiggyRpId()) {
     settleUnlock(null, null, pinned);
+    return;
+  }
+  // [A-687 capability preflight] get 을 못 쓰는 기기면 lock.phase/attempt/requestPrf 전에 같은 fail-closed 실패 카드(Try again 하나)로.
+  // 취소가 아니다 — 이름이 NotAllowedError 가 아니므로 cancelled 로 읽히지 않는다.
+  if (typeof webAuthnUnsupported === "function" && webAuthnUnsupported("get")) {
+    const unsupported = new Error("webauthn unsupported");
+    unsupported.name = "WebAuthnUnsupported";
+    settleUnlock(null, unsupported, pinned);
     return;
   }
   const attempt = { timer: null };
@@ -2122,14 +2250,42 @@ async function settleSend({ before, address, piggyId = "", grantTxHash = "", dep
 function finishTrip(trip) {
   state.tripOutcome = trip.outcome;
   state.tripReason = trip.reason;
-  if (trip.receipt) rememberReceipt(trip.receipt);
+  // [A-699 M2-alpha] The receipt save is verified (rememberReceipt re-reads storage) and can no longer throw out of
+  // here: money that already moved must not turn into "couldn't finish" because a storage write failed.
+  let receiptSaved = false;
+  if (trip.receipt) {
+    try {
+      receiptSaved = rememberReceipt(trip.receipt) === true;
+    } catch {
+      receiptSaved = false;
+    }
+  }
   if (trip.outcome !== "done") {
     // 돌아왔다고 말하지 않는다 — 실패 경로에서는 "성공 귀환" 쪽 상태를 하나도 세우지 않는다.
     setScene("sendstay", "couldn't finish this one.");
     return;
   }
+  // [A-699 M2-alpha] State order on success: execution truth (done) -> durable receipt -> verified re-read -> pending clear.
+  // The pending Send record is cleared only after the receipt is verified in storage AND only if it is still the very
+  // record this receipt belongs to (stage redeem-broadcast with the same redeem hash) — compare-and-clear. No verified
+  // receipt (none could be built, save/verify failed) = pending stays; the lock holds and the next reconcile retries.
+  if (receiptSaved) {
+    try {
+      const stored = readSendPending();
+      const doneHash = trip.receipt.redeemTxHash || trip.receipt.txHash;
+      if (stored && stored.stage === "redeem-broadcast" && doneHash && stored.redeemTxHash === doneHash) {
+        localStorage.removeItem(SEND_PENDING_KEY);
+      }
+    } catch {
+      /* the record stays; reconcile will compare again */
+    }
+  }
   state.tripClosed = true;
-  localStorage.setItem(TRIP_CLOSED_KEY, "1");
+  try {
+    localStorage.setItem(TRIP_CLOSED_KEY, "1");
+  } catch {
+    /* in-memory flag stands; the verified receipt / pending record carry the durable truth */
+  }
   // [이번 dispatch, Owner GO 2026-09-18 "다른 건 지우라고. 지금 승인한 최신 게 확정"]
   // 여기 있던 `state.awayLine = "It's back.";` 를 지웠다 — 이 값은 어디에서도 렌더되지
   // 않는 죽은 대입이었다(renderReturn() 은 `line: ""` 만 넘긴다 — 3611행 근방 A-411-i
@@ -2139,7 +2295,7 @@ function finishTrip(trip) {
   // [A-320] 실제 영수증이 있는 성공에서만 귀환 연출로 들어간다.
   // 영수증이 없으면 기존 「확인 중」 경로를 그대로 둔다 — 없는 값을 만들지 않는다.
   // transient 플래그라 새로고침·재방문에서는 다시 재생되지 않는다.
-  if (trip.receipt) {
+  if (trip.receipt && receiptSaved) {
     state.returnArrival = true;
     // [A-413 §4] 단수 실제 귀환 — 표만 세운다(이름은 그릴 때 displayPiggyName() 을 다시
     // 읽는다, 위 state 선언부 주석 참고). 문구의 생명주기는 mountReturn()/
@@ -2164,7 +2320,9 @@ function readSendPending() {
   try {
     raw = localStorage.getItem(SEND_PENDING_KEY);
   } catch {
-    return null;
+    // [A-699 M2-alpha] An unreadable store is NOT "nothing in flight" (that let a second Send start with a possibly
+    // live record behind the read error). Unreadable = unconfirmed, same fail-closed shape as an unrecognizable record.
+    return { stage: "unknown" };
   }
   if (!raw) return null;
   try {
@@ -2178,7 +2336,18 @@ function readSendPending() {
 }
 
 function writeSendPending(entry) {
-  localStorage.setItem(SEND_PENDING_KEY, JSON.stringify({ ...entry, at: Date.now() }));
+  const json = JSON.stringify({ ...entry, at: Date.now() });
+  // [A-699 M2-alpha] Verified write: a record that did not land must not be treated as written. A throw here is
+  // the existing "stop" contract (before the deposit it means nothing is sent). One retry, then read back.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      localStorage.setItem(SEND_PENDING_KEY, json);
+      if (localStorage.getItem(SEND_PENDING_KEY) === json) return;
+    } catch (error) {
+      if (attempt === 1) throw error;
+    }
+  }
+  throw new Error("send_pending_unverified");
 }
 
 function computeTripClosed({ tripClosedFlag, txHash, pending }) {
@@ -2191,11 +2360,16 @@ function sendBusy() {
   return sendInFlight || !!readSendPending();
 }
 
-// 확정 성공 뒤에만: txHash 확정값 저장 → 미확정 기록 제거. tripClosed 는 finishTrip 이 세운다.
+// 확정 성공 뒤에만: txHash 확정값 저장. 미확정 기록 제거는 finishTrip 이 영수증 저장·재읽기 확인 뒤에 한다([A-699]). tripClosed 는 finishTrip 이 세운다.
 function commitSendSuccess(redeemTxHash) {
-  localStorage.setItem("araso.txHash", redeemTxHash);
+  // [A-699 M2-alpha] No longer clears the pending record: the clear moved behind the verified receipt save
+  // (finishTrip success branch, compare-and-clear). A storage failure here must not read as a failed trip.
+  try {
+    localStorage.setItem("araso.txHash", redeemTxHash);
+  } catch {
+    /* durable truth stays in the pending record until the receipt is saved */
+  }
   state.txHash = redeemTxHash;
-  localStorage.removeItem(SEND_PENDING_KEY);
 }
 
 // [A-444] 실제 Send 버튼 상태는 이 한 곳에서 정한다 — origin 막힘·진행 중·미확정 기록 중 하나라도
@@ -2259,11 +2433,23 @@ async function sendPiggyOnce(markSettling) {
 
   // 생성 폴백 없음 — 저장된 credential 이 없으면 기존 패스키로 복구를 시도한다.
   if (!activeAccount || !activeSession) {
+    // [A-698 M3] Send 복구는 Check/Open 과 같은 시도 칸(authAttempt)·플랫폼 요청 표(platformAuthInflight)를 나눠 쓴다 —
+    // 이미 살아 있는 시도나 아직 안 끝난 플랫폼 요청이 있으면 두 번째 WebAuthn get 을 겹쳐 내지 않고 기존 실패 문구로
+    // fail-closed(자동 재시도 0 · 새 문구 0). get 을 못 쓰는 기기도 시도 토큰 전에 같은 실패로(A-687).
+    if (authAttempt || platformAuthInflight || (typeof webAuthnUnsupported === "function" && webAuthnUnsupported("get"))) {
+      state.authPhase = "idle";
+      state.authCancelled = false;
+      setScene("birth", "Chog could not wake Piggy.", "");
+      return;
+    }
+    const attempt = beginAuthAttempt("send");
     setScene("sendstay", "Piggy is waking up.", "Face ID may appear once.");
     try {
-      await recoverPiggy();
-      noteRecoverSuccess();
+      // 대기 상한 + 시도 토큰: 앱 세션이 끝난(idle 잠금) 뒤 늦게 온 패스키는 recoverPiggy 안에서 서명자·저장 전에 버려진다.
+      await boundAuthAttempt(attempt, trackPlatformAuth(recoverPiggy({ isCurrent: () => attempt.live })));
     } catch (error) {
+      // 이미 무효가 된(idle 잠금·대체) 시도의 실패는 화면·서명자·돈 흐름을 건드리지 않는다.
+      if (!finishAuthAttempt(attempt)) return;
       noteRecoverFailure();
       state.authPhase = "idle";
       state.authCancelled = isCancelledAuthError(error);
@@ -2271,6 +2457,19 @@ async function sendPiggyOnce(markSettling) {
       setScene("birth", "Chog could not wake Piggy.", "");
       return;
     }
+    // 늦은 성공도 마찬가지 — 시도가 이미 무효면 grant·simulate·서명으로 넘어가지 않는다.
+    if (!finishAuthAttempt(attempt)) return;
+    noteRecoverSuccess();
+  }
+
+  // [A-698 M3] 최소 잠금 가드: 앱이 잠겨 있으면 돈 실행(grant·simulate·서명·broadcast)으로 넘어가지 않는다.
+  // 기존 실패 경로·기존 문구 그대로. 남은 서명자가 있으면 함께 정리한다.
+  if (state.appLock) {
+    endActiveSession();
+    state.authPhase = "idle";
+    state.authCancelled = false;
+    setScene("birth", "Chog could not wake Piggy.", "");
+    return;
   }
 
   setScene("sendstay", "Piggy is asking to go out.", "Checking with home base.");
@@ -3671,6 +3870,8 @@ function mountSecondReturn() {
       const plan = applyHomeFloorToReturnCluster(fit);
       return { ...fit, floor: computeHomeFloorViewportNudge(plan, fit.s) };
     },
+    // [A-681 FINAL CLOSEOUT A] mobile-only Receipt rail target (null at >640 -> legacy anchor).
+    getReceiptRail: homeReturnReceiptRail,
     mountHomeChog: (chogRoot, o) => {
       homeChog = mountChogHome(chogRoot, {
         startRect: null,
@@ -3957,10 +4158,21 @@ function shortHash(hash) {
   return hash ? `${hash.slice(0, 10)}…${hash.slice(-6)}` : "";
 }
 
+// [A-684] 옛 First/testnet 영수증의 값은 MON(wei)이다 — USD 평가 근거가 없으므로 "$" 를 붙이지 않고
+// 정확한 토큰 단위로 그대로 보인다(없는 달러 환산 0). USD 평가가 생기는 최종 제품 정본(USD/USDC 우선)을
+// 대체하지 않는 임시 fallback 이다. 값이 읽히지 않으면 "Unknown".
 function formatMoney(wei) {
-  const value = Number(formatEther(wei));
-  const decimals = value !== 0 && Math.abs(value) < 0.001 ? 6 : 3;
-  return `$${value.toFixed(decimals)}`;
+  // 자기 완결(다른 함수에 기대지 않는다) — 이 구역은 텍스트로 잘려 격리 컨텍스트에서도 돈다.
+  let value;
+  try {
+    value = Number(formatEther(wei));
+  } catch {
+    return "Unknown";
+  }
+  if (!Number.isFinite(value)) return "Unknown";
+  const fixed = value.toFixed(value !== 0 && Math.abs(value) < 0.001 ? 6 : 4);
+  const trimmed = fixed.includes(".") ? fixed.replace(/0+$/, "").replace(/\.$/, "") : fixed;
+  return `${trimmed} MON`;
 }
 
 // File Box 3칸: settle() receipt 위에서만 그린다. 화면은 숫자를 따로 계산하지 않는다.
@@ -4857,12 +5069,58 @@ function renderName() {
 // `raw/*_facts.json`): 카드 우측 가장자리 390 폭에서도 뷰포트보다 13px 이상 안쪽,
 // Chog 좌측 가장자리 390/430 모두 뷰포트 안쪽 8px 이상 — 자세한 표는 WRITER.md.
 const NAME_SCENE_SCALE_FLOOR = 0.42;
+// [A-681 FINAL CLOSEOUT E — NAME IT: enlarge the COMPOSITION, not just the card] On a phone the whole
+// 1280x800 board sits at the 0.42 floor, so the 460x300 card reads ~193x126 — far lighter than the
+// First Send / Explore card (285x364). The card and the motion Piggy live in ONE scaled board
+// (#nameScene) with authored coordinates (Piggy wrapper left 380 — name-piggy.html inline;
+// card `.nameScene__pad` left 612 width 460 — style.css), and the peek/clip line, the arrival
+// "standing" slide and the Save->Home start rect (read LIVE from `#namePiggy .pgsvg`) all depend on
+// that relation. So the fix is a single mobile-only OUTER transform on the board — scale up and
+// re-anchor — and NO internal coordinate or per-part size changes: card and Piggy grow by the
+// same factor, Piggy stays the same secondary peek behind the card (ratio unchanged).
+//   Fit rule (derived, not a px constant): the composition's authored horizontal extent
+//   [NAME_COMP_LEFT, NAME_COMP_RIGHT] = [Piggy wrapper left, card right] must fit the mobile
+//   content rail [--mobile-inset, vw - --mobile-inset]: scale = (vw - 2*inset)/(RIGHT-LEFT)
+//   (390: 0.506, 430: 0.552 vs the old 0.42), capped by the board's natural HEIGHT fit (vh/800)
+//   so short landscape phones never exceed the screen. Left-anchored on the rail
+//   (tx = inset - LEFT*scale) so the card's right edge lands on the right rail margin. Only used
+//   when it beats the existing floor scale; above 640 this whole block is skipped (identity).
+//   Chog is a stage-level sibling on the separate onboarding anchor (applyOnboardingPhoneFoot): if
+//   the grown card's bottom edge would run into Chog's box, the board is lifted by exactly the
+//   overlap + one grid step (--grid-2), never above the Piggy wrapper's top reaching the top-safe.
+const NAME_COMP_LEFT = 380;
+const NAME_COMP_RIGHT = 612 + 460;
+const NAME_CARD_BOTTOM = 292 + 300;
+const NAME_PIGGY_WRAP_TOP = 252;
+function nameCompositionFit(base) {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  if (!(vw <= 640)) return null;
+  const inset = resolveCssLengthVarPx("--mobile-inset", 20);
+  const comp = Math.min((vw - 2 * inset) / (NAME_COMP_RIGHT - NAME_COMP_LEFT), vh / 800);
+  if (!(comp > base)) return null;
+  const out = { scale: comp, tx: inset - NAME_COMP_LEFT * comp, ty: (vh - 800 * comp) / 2 };
+  applyOnboardingPhoneFoot();
+  const chog = document.querySelector(".nameScene__chog");
+  const cr = chog ? chog.getBoundingClientRect() : null;
+  if (cr && cr.width > 0 && cr.right > out.tx + 612 * comp) {
+    const overlap = out.ty + NAME_CARD_BOTTOM * comp - (cr.top - resolveCssLengthVarPx("--grid-2", 8));
+    if (overlap > 0) {
+      const topSafe = resolveCssLengthVarPx("--mobile-top-safe", 14);
+      out.ty = Math.max(out.ty - overlap, Math.min(out.ty, topSafe - NAME_PIGGY_WRAP_TOP * comp));
+    }
+  }
+  return out;
+}
 function fitNameScene() {
   const board = document.querySelector("#nameScene");
   if (!board) return;
   const natural = Math.min(window.innerWidth / 1280, window.innerHeight / 800);
   const scale = Math.max(natural, NAME_SCENE_SCALE_FLOOR);
   board.style.transform = `translate(${(window.innerWidth - 1280 * scale) / 2}px, ${(window.innerHeight - 800 * scale) / 2}px) scale(${scale})`;
+  // [A-681 FINAL CLOSEOUT E] mobile-only composition override of the line above (null = identity).
+  const composed = nameCompositionFit(scale);
+  if (composed) board.style.transform = `translate(${composed.tx}px, ${composed.ty}px) scale(${composed.scale})`;
   // [A-662 OWNER DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY] see applyOnboardingPhoneFoot().
   // `.nameScene__chog` is a `.stage`-level sibling of `#nameScene` (not inside this scaled board),
   // so it needs its own placement call here — piggybacking this function's existing mount+resize
@@ -4968,6 +5226,71 @@ const HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX = { x: 6, y: 8 };
 // roughly bottom-safe + 20~24px above the physical bottom" — 20~24 의 중간값.
 const HOME_CHAR_BOTTOM_ANCHOR_GAP_PX = 22;
 
+// [A-681 OWNER DIRECTION 2026-10-03 item 1 — "enlarge the whole Chog+Piggy group"] Mobile-only
+// (<=640) multiplier applied ON TOP of the existing HOME_CHAR_SCALE_FLOOR-derived k, everywhere
+// that k feeds a transform/canvas size for the character group (applyHomeCharacterScaleFloor(),
+// its read-only twin computeHomeCharScaleFloorPlan(), applyHomeFloorToDepartCanvas(), and
+// mountSendCardWorkPose()'s fit()). HOME_CHAR_SCALE_FLOOR itself (0.52) is left untouched — three
+// independent pre-existing contract tests (home-character-scale-floor.mjs, a605, a607, a610,
+// a620, a656) lock its exact source text and value, and rewriting that shared literal is outside
+// this card's scope. This boost is a separate, additive layer instead: every one of those
+// consumers derives its own foot-anchor target via computeHomeFootTargetViewportY()
+// independently of k (see each site's own `nudgeViewportY = target - natural`), so multiplying k
+// by a constant factor cannot move the foot away from its already-correct target — only the
+// cluster's size grows from that fixed foot ("foot anchor, grow upward", unchanged). Candidate
+// value only — Iteration 1, picked as a conservative middle of a 0.70-0.90-equivalent effective-
+// floor search range (0.52*1.5=0.78) pending the coordinator's real-browser measurement (this
+// writer has no browser access); see receipts/A681_mobile_scale/VERIFY.md for the derivation and
+// any later re-tune.
+const HOME_CHAR_MOBILE_GROUP_BOOST = 1.5;
+function homeCharMobileBoost() {
+  return window.innerWidth <= 640 ? HOME_CHAR_MOBILE_GROUP_BOOST : 1;
+}
+
+// [A-681 iteration 2 — coordinator AFTER1 real-browser measurement] The floor transform anchors
+// at the LOCAL point (HOME_CENTER,HOME_FLOOR), but the actually-drawn ink extends measurably
+// BELOW that point (shoe/shadow) — empirically **12.48px, exactly consistent at both 390 and
+// 430** in the pre-A-681 BEFORE capture (844-corrected: 716.17−703.69=12.48; 900-corrected:
+// 762.86−750.38=12.48 — identical because `s·k_raw` is always exactly `HOME_CHAR_SCALE_FLOOR`
+// whenever the floor is active, regardless of viewport). This overhang is part of the same
+// scaled group `homeCharMobileBoost()` grows, so iteration 1's un-corrected
+// `vh-bottomSafeMinPx` anchor target measured a 23.3px real ink-bottom gap instead of the
+// planned ~42px (AFTER1: Home 23px, matches 42−12.48·1.5=23.3 algebraically). Subtracting the
+// BOOSTED overhang from the anchor target cancels exactly this growth for any boost value
+// (verified: at boost=1 it reduces to 42−12.48+12.48=42, i.e. a no-op had this always been
+// here — it is only introduced now because only now does a boost make the gap drift).
+// Zero at width>640, matching `homeCharMobileBoost()`'s own gate exactly, so the pre-existing
+// 641–653 ratio-branch sliver is untouched.
+const HOME_CHAR_FLOOR_INK_OVERHANG_PX = 12.48;
+// [A-681 FINAL CLOSEOUT B — RIGHT SAFE RAIL] Coordinator pixel measure: the rightmost character
+// ink sat 2px (390) / 12px (430 Home) / 9px (430 First Send, Explore) from the right edge vs the
+// mobile rail (--mobile-inset 20/24). Owner: no <=5px edge kiss; solve by GROUP PLACEMENT, not by
+// shrinking. The floor transform puts a board-local point P at viewport
+//   x(P) = fitLeft + s*HOME_CENTER*(1-kb) + s*kb*P + nudgeX      (kb = k*boost, s*kb = FLOOR*boost)
+// The rightmost character leaf is Piggy's seat box, P = HOME_SEAT_L + HOME_SEAT_W (un-trimmed
+// leaf box, the same seatB edge placeHomeAmbientResidents uses; measured leaf right 387.8 @390
+// == x(P) with nudgeX 6, so box ≈ ink). The nudge is therefore
+//   nudgeX = min(HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x, (vw - --mobile-inset) - x(P)|nudgeX=0)
+// i.e. never right of the old 6px, only pulled left as far as needed (≈ -18px @390 -> nudge -11.8,
+// ≈ -15px @430 -> nudge -9.1). ONE helper feeds every consumer of the floor transform (Home, Chog-only
+// Away/Return, Return cluster + canvas via computeHomeFloorViewportNudge, depart canvas, work-pose
+// canvas) so continuity and the seat->Home foot relation hold. Scale untouched; y untouched. Identity
+// when boost===1 (every width >640 / 641-653 sliver) -> returns the old constant exactly.
+function homeFloorNudgeViewportX(s) {
+  const base = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x;
+  const boost = homeCharMobileBoost();
+  if (!(boost > 1) || !(s > 0) || !(s < HOME_CHAR_SCALE_FLOOR)) return base;
+  const kb = (HOME_CHAR_SCALE_FLOOR / s) * boost;
+  const vw = window.innerWidth;
+  const fitLeft = (vw - HOME_BOARD_W * s) / 2;
+  const rightAtZeroNudge = fitLeft + s * HOME_CENTER * (1 - kb) + s * kb * (HOME_SEAT_L + HOME_SEAT_W);
+  const inset = resolveCssLengthVarPx("--mobile-inset", 20);
+  return Math.min(base, vw - inset - rightAtZeroNudge);
+}
+function homeCharFloorInkOverhangCorrectionPx() {
+  return window.innerWidth <= 640 ? HOME_CHAR_FLOOR_INK_OVERHANG_PX * homeCharMobileBoost() : 0;
+}
+
 // production 은 계속 env() 기반(`--mobile-bottom-safe` 등, style.css :root)이다 — 이
 // 함수는 그 토큰의 **실제 계산된 px 값**을 읽을 뿐, 새 하드코딩 값을 만들지 않는다.
 // (리뷰 하네스가 이 토큰을 오버라이드하면 이 함수도 오버라이드된 값을 그대로 읽는다 —
@@ -5004,7 +5327,7 @@ function homePaperEffectiveMode(scene) {
 }
 
 // [A-412 §3] MON/shMON 값 하나를 사람이 읽는 자릿수로 줄인다. 기존 formatMoney()(receiptRows
-// 등)는 "$" 를 붙이는 옛 화면 전용 표기라 여기서 재사용하지 않는다 — MON 을 USD 로 쓰지
+// 등)는 옛 화면 전용 표기(A-684 이후 "MON" 단위 접미, "$" 아님)라 여기서 재사용하지 않는다 — MON 을 USD 로 쓰지
 // 않는다(§forbidden). 값이 없으면(null/undefined) null 을 그대로 돌려줘 호출부가 미확인으로
 // 그린다 — 0 을 대신 넣지 않는다.
 function formatHomeMoneyAmount(wei) {
@@ -5399,12 +5722,12 @@ function moneyIntentMarkup(piggy) {
   const choices = amountChoices(availability);
   const valid = intent.amount !== null && intent.amount !== undefined && intent.amount !== "custom" && Number(intent.amount) > 0;
   const permissionLine = intent.status === PERMISSION_STATE.AWAITING
-    ? `<p class="homePaper__note">확인이 필요해 — 아직 아무것도 보내지 않았어.</p>
-       <button class="homePaper__records" id="homePermissionApprove" type="button">&gt; Face ID 로 확인</button>`
+    ? `<p class="homePaper__note">Needs your OK — nothing has been sent yet.</p>
+       <button class="homePaper__records" id="homePermissionApprove" type="button">&gt; Confirm with Face ID</button>`
     : intent.status === PERMISSION_STATE.PERMITTED
-      ? `<p class="homePaper__note">확인됐어. 이 한 번에만 쓸 수 있어.</p>`
+      ? `<p class="homePaper__note">Confirmed. Good for this one time only.</p>`
       : intent.status === PERMISSION_STATE.CANCELLED
-        ? `<p class="homePaper__note">확인을 멈췄어 — 아무것도 바뀌지 않았어.</p>`
+        ? `<p class="homePaper__note">Confirmation stopped — nothing changed.</p>`
         : "";
   return `<div class="homePaper__intent">
     ${amountChoiceMarkup(choices, { selected: intent.amount })}
@@ -6070,8 +6393,13 @@ function placeHomeAmbientSet(plan, anchors, ids, sceneId, nonce, keep = null) {
 // (card rule: a runtime change invalidates only that Piggy's own ambient projection). Slots are
 // still placed for the Piggies actually present. A wide pose that no longer fits at a Piggy's
 // present slot falls back to Idle for that Piggy only.
-function planHomeAmbient(anchors, residents, runtime, sceneId, nonce) {
-  const plan = planHomeSlots({ width: anchors.vw, seat: anchors.seat, chog: anchors.chog, foot: anchors.foot, paper: anchors.paper, brand: anchors.brand, safe: anchors.safe });
+// [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03] `mobileVisibleCap` (default
+// 2, matching Home) is threaded straight through to planHomeSlots() — Explore/action scenes pass
+// 0 from their own call site (placeHomeAmbientResidents() below) so they show only the active
+// Piggy, never the left-side companion cluster this card adds for Home. Mid/web bands ignore the
+// parameter entirely (planHomeSlots() only reads it inside its own `band === "mobile"` branch).
+function planHomeAmbient(anchors, residents, runtime, sceneId, nonce, mobileVisibleCap = 2) {
+  const plan = planHomeSlots({ width: anchors.vw, seat: anchors.seat, chog: anchors.chog, foot: anchors.foot, paper: anchors.paper, brand: anchors.brand, safe: anchors.safe, mobileVisibleCap });
   const everyone = residents.map((r) => r.id);
   const present = everyone.filter((id) => !isRuntimeMotionState(runtime.get(id)));
   const full = placeHomeAmbientSet(plan, anchors, everyone, sceneId, nonce);
@@ -6149,7 +6477,19 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
   }
   const runtime = homeResidentRuntimeStates(residents);
   const sceneId = currentScenePiggyId();
-  const planned = planHomeAmbient(anchors, residents, runtime, sceneId, homeLife.nonce);
+  // [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03] Only PLAIN Home (sendstay,
+  // no First-Send card open) gets the small left-side companion cluster (up to 2). Every action
+  // scene — Explore ("second", the other HOME_LIFE_SCENES member), AND First Send itself (still
+  // `state.scene === "sendstay"`, just with `state.sendCardVisible` true — the "send?" card is an
+  // overlay on the SAME scene, not a separate one, so it needs its own explicit check here) —
+  // shows only the active Piggy, no companions. Away/Return/Receipt need no separate check: their
+  // own scene names ("away"/"secondAway"/"return"/"secondReturn") are not in HOME_LIFE_SCENES at
+  // all, so mountHomeAmbientResidents() never mounts the companion layer there in the first place
+  // (main.js, `if (!HOME_LIFE_SCENES.includes(state.scene)) return;`) — structurally zero
+  // companions, confirmed by reading that early-return, not assumed. Mid/web bands are unaffected
+  // either way (planHomeSlots() only reads this inside its mobile branch).
+  const mobileVisibleCap = (state.scene === "sendstay" && !state.sendCardVisible) ? 2 : 0;
+  const planned = planHomeAmbient(anchors, residents, runtime, sceneId, homeLife.nonce, mobileVisibleCap);
   homeAmbient.assignment = planned.assignment;
   // The paper cards mirror the same projection (visual attribute only).
   const paper = document.querySelector('.homePaper[data-paper-mode="home"]');
@@ -6180,6 +6520,18 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
     const fit = planned.wide.get(`${id}|${projected.state}`) || null;
     const dx = fit ? fit.dx : 0;
     const box = slot.rect;
+    // [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03] Home's small left-side
+    // companions (`piggy-motion-state.js` M1/M2) now carry a SMALLER `slot.rect` than the main
+    // seat's own box (0.425×/0.375×) so `planHomeSlots()`'s own collision/placement math treats
+    // their TRUE smaller footprint as "close together" near the floor line. The rendered art
+    // itself still mounts at the full natural seat size (`S.w`/`S.h` — every inner offset below,
+    // `seatOff`/`q`/`AMB_SEATED`/the name tag, is calibrated against that full size and stays
+    // completely unchanged) and is wrapped in one outer `scale(sizeFrac)` from its own top-left
+    // corner, so the WHOLE already-correct subtree (art + name tag) shrinks together as a rigid
+    // unit to exactly fill the smaller slot box — no risk of the art/name drifting apart from
+    // each other. `sizeFrac` is read back from whatever `box.w` the slot actually got, not a
+    // second hardcoded ratio, so the seat (box.w === S.w) is an exact no-op (sizeFrac=1).
+    const sizeFrac = S.w > 0 ? box.w / S.w : 1;
     const el = document.createElement("div");
     el.className = "homeLiving";
     el.dataset.piggyId = id;
@@ -6189,8 +6541,12 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
     if (fit) el.dataset.ambientAlign = fit.align;
     el.style.left = `${box.x - stageBox.left}px`;
     el.style.top = `${box.y - stageBox.top}px`;
-    el.style.width = `${box.w}px`;
-    el.style.height = `${box.h}px`;
+    el.style.width = `${S.w}px`;
+    el.style.height = `${S.h}px`;
+    if (Math.abs(sizeFrac - 1) > 0.001) {
+      el.style.transform = `scale(${sizeFrac})`;
+      el.style.transformOrigin = "0 0";
+    }
     el.style.visibility = "hidden";
     const stageEl = document.createElement("div");
     stageEl.className = "homeLiving__stage";
@@ -6209,7 +6565,10 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
       // 15–77px, A-656 P45 raw/p5_measure.json) — this puts the label just below the
       // settled-sleep ink bottom (≤.287h), measured overlap 0 once combined with the widened
       // `flop-sleep` footprint above and `.homeAmbient__flop{overflow:visible}` (style.css).
-      const nameDropPx = projected.state === "flop-sleep" ? S.b - anchors.name.y + 0.29 * box.h + 2 : 0;
+      // [A-681] uses S.h (the full rendered-art height every inner offset here is calibrated
+      // against), not box.h (the slot's own, possibly size-reduced, placement box) — the art
+      // itself always mounts at full size and is scaled as one rigid unit (see sizeFrac above).
+      const nameDropPx = projected.state === "flop-sleep" ? S.b - anchors.name.y + 0.29 * S.h + 2 : 0;
       tag.style.top = `${nameOff.y + nameDropPx}px`;
       tag.style.transform = `scale(${nameScale})`;
       el.append(tag);
@@ -8001,6 +8360,20 @@ const HOME_FOOT_NORMALIZED_RATIO = computeHomeFootNormalizedRatio();
 // one shared target function now, not a duplicated formula per call site.
 function computeHomeFootTargetViewportY(vh) {
   const bottomSafeMinPx = resolveCssLengthVarPx("--mobile-bottom-safe", 20) + HOME_CHAR_BOTTOM_ANCHOR_GAP_PX;
+  // [A-681 OWNER DIRECTION 2026-10-03 item 3] "the current ~128/137px Home bottom gap is too
+  // large, derive an iPhone-safe bottom from actual geometry — do not invent a universal pixel
+  // constant." Root cause: the min() below (frozen, still used at every width >640) always picks
+  // the proportional-ratio branch, because HOME_FOOT_NORMALIZED_RATIO*vh is smaller than
+  // vh-bottomSafeMinPx at any realistic viewport height — the tighter safe-min branch never wins,
+  // on mobile or web. Mobile-only (<=640): flip to max() so the ALREADY-EXISTING safe-min target
+  // (`--mobile-bottom-safe`, itself `env(safe-area-inset-bottom, 0px) + 20px` per style.css :root
+  // — 0 in this Chromium harness, the real nonzero home-indicator inset on an actual iPhone Safari
+  // per app/test/a665-real-iphone-safari.mjs) wins instead, closing the gap to ~42px here (20+22,
+  // both pre-existing tokens) without inventing any new constant. HOME_FOOT_NORMALIZED_RATIO
+  // itself is NOT re-derived (still frozen, still the fallback below for width>640) — only WHICH
+  // of the two already-existing targets wins changes, and only under the same <=640 boundary this
+  // card's other mobile-only changes use.
+  if (window.innerWidth <= 640) return Math.max(HOME_FOOT_NORMALIZED_RATIO * vh, vh - bottomSafeMinPx);
   return Math.min(HOME_FOOT_NORMALIZED_RATIO * vh, vh - bottomSafeMinPx);
 }
 
@@ -8021,13 +8394,35 @@ function computeHomeFootTargetViewportY(vh) {
 // force identical character size" — only the anchor's distance from the viewport bottom moves.
 // Hatch and Name stay byte-identical to each other (canon: "keep Hatch and Name identical") —
 // same function call, same result, applied to both. Web (>640px) is untouched (frozen, A-608).
+// [A-681 iteration 2 — coordinator AFTER1 report] Hatch/Name's Chog box was left at its
+// pre-A-681 apparent size (107.6×139.9, `.chogInvite` crop unchanged) while Home's own Chog
+// grew by homeCharMobileBoost() — exactly the Name→Home visible-size jump A-662 was written to
+// close (shared foot anchor only fixes the Y jump; it never claimed to fix a SIZE mismatch,
+// because until A-681 there wasn't one). Fix: scale the whole `.hatchChog`/`.nameScene__chog`
+// box by the SAME boost, mobile-only, pivoted at its own bottom-center (`transform-origin:
+// center bottom`) so it grows upward from the already-correct foot anchor, same "foot anchor,
+// grow upward" principle as every other consumer in this card — `--paperScale`-style box, not a
+// re-crop, so `.chogInvite`'s own internal crop offsets stay byte-identical. Only an INLINE
+// override when boost>1; cleared (empty string) otherwise so the base CSS rule's own
+// `transform: translate(-260%,-6%)` (web) or the narrow rule's `transform: none` (mobile,
+// boost===1 case) keeps applying exactly as before A-681.
+// NOT done here: the separate `#namePiggy` rig (`.nameScene__piggy`, full 1280×800 clip-masked
+// container) already carries its OWN active `transform:translateX()` slide/hide choreography
+// (A-415, `.is-standing`/`:has(#piggyNameInput:disabled)` toggles) — setting an inline
+// `transform` here would silently replace that mechanism, and part of its styling
+// (`.nameScene__piggy .pgwrap`) is in `name.css`, outside this card's allowlist. Flagged in
+// VERIFY.md as a known scope boundary, not attempted blind without a browser to verify the
+// slide/hide sequence still works.
 function applyOnboardingPhoneFoot() {
   const narrow = window.innerWidth <= 640;
   const bottomPx = narrow ? `${Math.max(0, window.innerHeight - computeHomeFootTargetViewportY(window.innerHeight))}px` : "";
+  const boost = homeCharMobileBoost();
+  const scaleTransform = narrow && boost !== 1 ? `scale(${boost})` : "";
+  const scaleOrigin = narrow && boost !== 1 ? "center bottom" : "";
   const hatch = document.querySelector(".hatchChog");
-  if (hatch) hatch.style.bottom = bottomPx;
+  if (hatch) { hatch.style.bottom = bottomPx; hatch.style.transform = scaleTransform; hatch.style.transformOrigin = scaleOrigin; }
   const name = document.querySelector(".nameScene__chog");
-  if (name) name.style.bottom = bottomPx;
+  if (name) { name.style.bottom = bottomPx; name.style.transform = scaleTransform; name.style.transformOrigin = scaleOrigin; }
 }
 const HOME_MID_BAND_MIN_VW = 641;
 function computeHomeMidBandDropPx(fit, boardRect, s) {
@@ -8118,7 +8513,9 @@ function applyHomeCharacterScaleFloor(fit) {
   // nudge is byte-identical across the whole walk→settle sequence, same as before.
   const boardTop = fit && Number.isFinite(fit.top) ? fit.top : boardRect.top;
   const naturalFootViewportY = boardTop + originLocalY * s;
-  const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight);
+  // [A-681 iteration 2] subtract the boosted ink-overhang so the REAL ink-bottom (not just the
+  // anchor point) lands at the planned gap — see homeCharFloorInkOverhangCorrectionPx() above.
+  const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight) - homeCharFloorInkOverhangCorrectionPx();
   // [A-608 OWNER CORRECTION — MOBILE HOME CHARACTER CLUSTER MUST NOT MOVE BETWEEN CARDS,
   // 2026-09-27] the collision term used to add 96px here whenever First Job's card was up,
   // shifting Chog (and, before it was split out, Piggy) right to dodge the card. The Owner's
@@ -8132,14 +8529,20 @@ function applyHomeCharacterScaleFloor(fit) {
   // occlusion A-605 originally fixed; it only removes an now-unnecessary position shift.
   // `collisionActive`/`data-collision-reflow` are kept (harmless, informational — some other
   // reader may still want to know a card is up) but no longer feed the nudge itself.
-  const nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x;
+  const nudgeViewportX = homeFloorNudgeViewportX(s);
   const nudgeViewportY = targetFootViewportY - naturalFootViewportY;
   const nudgeLocalX = nudgeViewportX / s;
   const nudgeLocalY = nudgeViewportY / s;
+  // [A-681] Mobile-only size boost on top of the floor's own k — see HOME_CHAR_MOBILE_GROUP_BOOST
+  // above. The foot anchor is unaffected: transform-origin stays the LOCAL foot point, and nudge*
+  // above were derived from `s` (not `k`), so scaling by ANY k here still lands the origin exactly
+  // at targetFootViewportY (algebraic proof: A-681 VERIFY.md) — this only changes how much the
+  // group grows upward from that fixed foot.
+  const kBoosted = k * homeCharMobileBoost();
   group.style.transformOrigin = `${originLocalX}px ${originLocalY}px`;
-  group.style.transform = `translate(${nudgeLocalX}px, ${nudgeLocalY}px) scale(${k})`;
+  group.style.transform = `translate(${nudgeLocalX}px, ${nudgeLocalY}px) scale(${kBoosted})`;
 
-  return { applied: true, s, k, effectiveScale: s * k, collisionActive };
+  return { applied: true, s, k: kBoosted, effectiveScale: s * kBoosted, collisionActive };
 }
 
 // [A-610 repair] Read-only twin of the k/nudge math inside applyHomeCharacterScaleFloor()
@@ -8173,12 +8576,18 @@ function computeHomeCharScaleFloorPlan(fit) {
   const originLocalY = HOME_FLOOR;
   const boardTop = fit && Number.isFinite(fit.top) ? fit.top : boardRect.top;
   const naturalFootViewportY = boardTop + originLocalY * s;
-  const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight);
-  const nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x;
+  // [A-681 iteration 2] same ink-overhang correction as applyHomeCharacterScaleFloor()'s twin above.
+  const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight) - homeCharFloorInkOverhangCorrectionPx();
+  const nudgeViewportX = homeFloorNudgeViewportX(s);
   const nudgeViewportY = targetFootViewportY - naturalFootViewportY;
   const nudgeLocalX = nudgeViewportX / s;
   const nudgeLocalY = nudgeViewportY / s;
-  return { applied: true, s, k, originLocalX, originLocalY, nudgeLocalX, nudgeLocalY };
+  // [A-681] same boost as applyHomeCharacterScaleFloor()'s own copy above — this twin's `k` must
+  // report the SAME boosted value its callers (applyHomeFloorToChogOnly/applyHomeFloorToReturnCluster/
+  // chogWalkStartBoardRect) actually render with, or A-610's walk-start inverse-math desyncs from
+  // the real transform.
+  const kBoosted = k * homeCharMobileBoost();
+  return { applied: true, s, k: kBoosted, originLocalX, originLocalY, nudgeLocalX, nudgeLocalY };
 }
 
 // [A-656 decision 3 — CANON "Away does NOT move Chog"] Away/Return render `#chogHome` as a direct
@@ -8249,11 +8658,86 @@ function applyHomeFloorToReturnCluster(fit) {
 // through the `fitBoard()` injection below) and the First Job work canvas (main.js, "apply the
 // same anchor... for mid-band"). `k=1`/`nudgeViewportX=0` for mid-band mirrors the fact that
 // mid-band never rescales, only translates.
+// [A-681 iteration 3 — HISTORICAL, the compensation part is superseded by the FINAL CLOSEOUT note
+// below; the `k` boost sharing stays] coordinator requires Away/Return/Receipt to share the group boost for
+// A-656 Return→Receipt→File→Home continuity, superseding iteration 2's full revert] `plan.k`
+// carries the A-681 mobile group-size boost. Iteration 2 divided it back out here to stop the
+// Receipt paper clipping off-screen (root cause: piggy-return.js's own fixed board-local receipt
+// anchor, `ANCHOR_BOARD_CX/CY` — NOT editable from this file — sits far from the
+// (HOME_CENTER,HOME_FLOOR) pivot this whole canvas scales around, so inflating `k` drags that
+// anchor proportionally off-screen) — but that also stopped the paper/in-canvas Piggy from
+// growing with the rest of the cluster, which the coordinator's iteration-3 report says breaks
+// continuity instead. Fix: keep `k` boosted (so the canvas, including the paper, grows), and ADD
+// a compensating nudge that cancels (most of) the drift of a chosen board-local point, so it
+// keeps close to the SAME viewport position it had at the un-boosted k while everything scales
+// around it. Derivation: a board-local point P keeps its viewport position EXACTLY under any k
+// once the nudge includes `HOME_CHAR_SCALE_FLOOR * (PIVOT - P) * (boost-1)` — HOME_CHAR_SCALE_FLOOR
+// because `s·k_raw` is always exactly that constant whenever the floor is active, independent of
+// viewport (the same identity item 2's ink-overhang fix relies on). Zero at boost=1 (web/641-653
+// sliver), so non-mobile widths are an exact no-op, unchanged from pre-A-681.
+//
+//   [A-681 FINAL CLOSEOUT — anchor/bell point-compensation REMOVED] Iterations 3-6 added an extra
+//   nudge `HOME_CHAR_SCALE_FLOOR * (PIVOT - P) * (boost-1)` here to pin ONE board-local point P (the
+//   old fixed receipt anchor, piggy-return.js ANCHOR_BOARD_CX/CY) to its un-boosted viewport spot.
+//   That translated the WHOLE return canvas (portal ring, bell, returning Piggy, folder) by ~119/88px
+//   (390, boost 1.5) while Chog's wrapper (`applyHomeFloorToReturnCluster`, a pure floor transform)
+//   did not move — so the bell and the returning Piggy slid out of Chog's frame and the bell
+//   collided with Chog's yellow "...is coming home" line (coordinator-measured). The Owner's
+//   closeout (A): "Bell + returning Piggy + Receipt canvas must use ONE mobile transform/pivot".
+//   Now the canvas rides EXACTLY the transform Chog's group rides (same HOME_CENTER/HOME_FLOOR
+//   pivot, same k, same nudge) — every canvas element keeps its un-boosted position RELATIVE to Chog
+//   (the relationship confirmed non-colliding before the boost), and the seat still lands on Home's
+//   foot (A-656). The Receipt no longer depends on any board-local anchor on mobile: piggy-return.js
+//   re-targets it from live viewport facts (`homeReturnReceiptRail()` below ->
+//   `receiptRailTarget()`), so nothing here has to keep it on-screen. Web / 641-653 sliver:
+//   `plan.applied` is false there or the extra term was already exactly 0 — unchanged.
 function computeHomeFloorViewportNudge(plan, s) {
   if (!plan || !(s > 0)) return null;
-  if (plan.applied) return { k: plan.k, nudgeViewportX: plan.nudgeLocalX * s, nudgeViewportY: plan.nudgeLocalY * s };
+  if (plan.applied) {
+    return { k: plan.k, nudgeViewportX: plan.nudgeLocalX * s, nudgeViewportY: plan.nudgeLocalY * s };
+  }
   if (plan.midBand) return { k: 1, nudgeViewportX: 0, nudgeViewportY: plan.midBandDy };
   return null;
+}
+
+// [A-681 FINAL CLOSEOUT A — mobile Receipt target = viewer-LEFT CONTENT rail] Live viewport facts
+// handed to piggy-return.js (via return-view.js `getReceiptRail`), which converts them through the
+// return canvas's own on-screen rect into the Receipt's throw/settled/read target
+// (`receiptRailTarget()`, pure + unit-tested in a681-return-receipt-bell-anchor.mjs). Returns null
+// at width >640 -> piggy-return.js keeps its legacy fixed anchor (1440 / 700 / 900 byte-identical).
+// Nothing here is an invented universal px — every term is an existing token or constant:
+//   inset    --mobile-inset (style.css :root; 20 @<=400, 24 above) — the rail's left edge, and the
+//            symmetric right margin the read (zoomed) paper must respect
+//   topBound --mobile-top-safe + --grid-3 (16) — same top token Chog/brand/cards use, plus a grid step
+//   cardCy   vh/2 - 48 — .cardAnchor's vertical centre line (style.css top:50% + translateY(-50% - 48px);
+//            fitCardAnchor()'s own offY = 48)
+//   cardW    285 — .cardAnchor width (style.css; fitCardAnchor() w) — Receipt never exceeds the
+//            First Send / Explore card's own width
+//   gap      --grid-5 (32) — clearance under the read paper to Piggy's head box (holds return-view's
+//            8px-offset hint line too)
+// TUNE HERE (coordinator): RECEIPT_RAIL_GAP_TOKEN / RECEIPT_RAIL_TOP_EXTRA_TOKEN / the two card
+// constants. The size itself is DERIVED in piggy-return.js (min of card width, rail width / zoom,
+// free band height / zoom), not stored.
+const RECEIPT_RAIL_CARD_W = 285;
+const RECEIPT_RAIL_CARD_OFF_Y = 48;
+const RECEIPT_RAIL_GAP_TOKEN = "--grid-5";
+const RECEIPT_RAIL_TOP_EXTRA_TOKEN = "--grid-3";
+let receiptRailMemo = null;
+function homeReturnReceiptRail() {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  if (!(vw <= 640)) return null;
+  if (receiptRailMemo && receiptRailMemo.vw === vw && receiptRailMemo.vh === vh) return receiptRailMemo.rail;
+  const rail = {
+    vw, vh,
+    inset: resolveCssLengthVarPx("--mobile-inset", 20),
+    topBound: resolveCssLengthVarPx("--mobile-top-safe", 14) + resolveCssLengthVarPx(RECEIPT_RAIL_TOP_EXTRA_TOKEN, 16),
+    cardCy: vh / 2 - RECEIPT_RAIL_CARD_OFF_Y,
+    cardW: RECEIPT_RAIL_CARD_W,
+    gap: resolveCssLengthVarPx(RECEIPT_RAIL_GAP_TOKEN, 32),
+  };
+  receiptRailMemo = { vw, vh, rail };
+  return rail;
 }
 
 // [A-610 repair] `applyHomeCharacterScaleFloor()` re-parents `#chogHome` into
@@ -8321,13 +8805,17 @@ function applyHomeFloorToDepartCanvas(canvas) {
     const fitLeft = (window.innerWidth - HOME_BOARD_W * s) / 2;
     const fitTop = (window.innerHeight - HOME_BOARD_H * s) / 2;
     const naturalFootViewportY = fitTop + HOME_FLOOR * s;
-    const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight);
-    const nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x;
+    // [A-681 iteration 2] same ink-overhang correction as applyHomeCharacterScaleFloor().
+    const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight) - homeCharFloorInkOverhangCorrectionPx();
+    const nudgeViewportX = homeFloorNudgeViewportX(s);
     const nudgeViewportY = targetFootViewportY - naturalFootViewportY;
-    const effW = HOME_BOARD_W * s * k;
-    const effH = HOME_BOARD_H * s * k;
-    const left = fitLeft + s * HOME_CENTER * (1 - k) + nudgeViewportX;
-    const top = fitTop + s * HOME_FLOOR * (1 - k) + nudgeViewportY;
+    // [A-681] same mobile-only size boost as applyHomeCharacterScaleFloor() — foot-anchor-safe,
+    // see that function's own comment.
+    const kBoosted = k * homeCharMobileBoost();
+    const effW = HOME_BOARD_W * s * kBoosted;
+    const effH = HOME_BOARD_H * s * kBoosted;
+    const left = fitLeft + s * HOME_CENTER * (1 - kBoosted) + nudgeViewportX;
+    const top = fitTop + s * HOME_FLOOR * (1 - kBoosted) + nudgeViewportY;
     canvas.width = Math.round(effW * (window.devicePixelRatio || 1));
     canvas.height = Math.round(effH * (window.devicePixelRatio || 1));
     canvas.style.width = `${effW}px`;
@@ -8602,9 +9090,22 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
 
   // 화면 rect → 판 좌표계. 승인 `beginHome()` 의 세 식 그대로.
   const { s, left, top } = fit;
-  const ENTER_X = (startRect.left + startRect.width * 0.5133 - left) / s - HOME_CENTER;
-  const entryScale = startRect.width / s / HOME_WALK_W;
-  const entryY = (startRect.bottom - top) / s - HOME_FLOOR;
+  // [A-681 FINAL CLOSEOUT D-1 — Name->Home first-frame pop] `walk` lives INSIDE the mobile floor group
+  // (applyHomeCharacterScaleFloor(fit) below wraps #homeChar in translate(nudge) scale(k), k = floor
+  // k * A-681 boost), so the local transform below is composed ON TOP of that group: a start rect
+  // converted with the bare board scale `s` renders k times too big and displaced (measured 390: peek
+  // ~45px -> first frame ~100px at the left edge; HEAD had the same bug at k=1.675: 35 -> 60px). Map the
+  // screen rect through the INVERSE of the group — the same closed form Chog's walk start already uses
+  // (chogWalkStartBoardRect: left'/top'/width' with s' = s*k) — so local(first frame) o group == the
+  // visible Name peek Piggy rect. Mobile (<=640) only; >640 keeps the bare fit exactly.
+  const floorPlan = window.innerWidth <= 640 ? computeHomeCharScaleFloorPlan(fit) : null;
+  const inv = floorPlan && floorPlan.applied ? chogWalkStartBoardRect(fit, floorPlan) : null;
+  const sW = inv ? inv.width / HOME_BOARD_W : s;
+  const leftW = inv ? inv.left : left;
+  const topW = inv ? inv.top : top;
+  const ENTER_X = (startRect.left + startRect.width * 0.5133 - leftW) / sW - HOME_CENTER;
+  const entryScale = startRect.width / sW / HOME_WALK_W;
+  const entryY = (startRect.bottom - topW) / sW - HOME_FLOOR;
 
   // 동결한 포즈를 Name it 에 있던 **그 화면 자리에** 그대로 얹는다. 판 안에 넣되
   // 좌표는 판 기준으로 환산해 두 번 이동하지 않게 한다. 120ms 동안 이것이 사라지고
@@ -8614,10 +9115,13 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     snapshot = startPose;
     Object.assign(snapshot.style, {
       position: "absolute",
-      left: `${(startRect.left - left) / s}px`,
-      top: `${(startRect.top - top) / s}px`,
-      width: `${startRect.width / s}px`,
-      height: `${startRect.height / s}px`,
+      // [A-681 FINAL CLOSEOUT D-1b] host (#homeChar) is INSIDE the floor group too, so the frozen pose
+      // is composed with translate(nudge) scale(k) like the walker — same inverse mapping (sW/leftW/
+      // topW; identical to s/left/top when no group applies, i.e. >640) puts it exactly on the peek rect.
+      left: `${(startRect.left - leftW) / sW}px`,
+      top: `${(startRect.top - topW) / sW}px`,
+      width: `${startRect.width / sW}px`,
+      height: `${startRect.height / sW}px`,
       pointerEvents: "none",
       opacity: "1",
     });
@@ -8782,18 +9286,32 @@ function mountSendCardWorkPose({
   // transparent buffer — pixel-sampled, confirmed) so the SAME board point that anchors
   // Piggy/Chog's own group (HOME_CENTER, HOME_FLOOR) maps to the SAME viewport target
   // `applyHomeCharacterScaleFloor()` computes — same `k`/bottom-anchor/collision-nudge
-  // formulas, not reinvented. Scoped to `clock === "send"` only (First Job) — Explore's
-  // `clock === "second"` reaction doesn't share `#homeBoard`/this collision concept, and is
-  // left on its original simple centered fit to avoid touching an out-of-scope flow.
+  // formulas, not reinvented. Originally scoped to `clock === "send"` only (First Job) —
+  // Explore's `clock === "second"` reaction was left on its original simple centered fit as an
+  // out-of-scope flow.
+  // [A-681 INBOX "EXPLORE PAPER-EDGE PIGGY SOURCE CORRECTION" 2026-10-03] Source-checked: that
+  // "second" exclusion is NOT a documented peek canon (no A-401/A-415 source establishes an
+  // intended "Explore paper-edge Piggy" placement) — it is this same floor/anchor gap, just never
+  // extended to the Explore work canvas. Mobile-only (this whole branch is only reachable at
+  // s<HOME_CHAR_SCALE_FLOOR, i.e. <=640/653px in practice, same boundary every other mobile-only
+  // change in this card uses): extend to `clock === "second"` too, reusing the exact same
+  // HOME_CENTER/HOME_FLOOR path, so the Explore/Second work-pose Piggy joins the Chog/Piggy
+  // lower-right group instead of floating at the paper edge. The work? animation itself
+  // (piggy-depart.js) is untouched — only this canvas's outer size/position changes. The sibling
+  // mid-band branch below (s>=HOME_CHAR_SCALE_FLOOR, width>=641) stays `clock === "send"` only —
+  // this card is mobile-only, so web's Explore canvas is intentionally left exactly as before.
   const fit = () => {
     const s = Math.min(window.innerWidth / HOME_BOARD_W, window.innerHeight / HOME_BOARD_H);
     const board = document.querySelector("#homeBoard");
-    if (clock === "send" && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR) {
+    if ((clock === "send" || clock === "second") && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR) {
       const k = HOME_CHAR_SCALE_FLOOR / s;
+      // [A-681] same mobile-only size boost as applyHomeCharacterScaleFloor() — foot-anchor-safe.
+      const kBoosted = k * homeCharMobileBoost();
       const fitLeft = (window.innerWidth - HOME_BOARD_W * s) / 2;
       const fitTop = (window.innerHeight - HOME_BOARD_H * s) / 2;
       const naturalFootViewportY = fitTop + HOME_FLOOR * s;
-      const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight);
+      // [A-681 iteration 2] same ink-overhang correction as applyHomeCharacterScaleFloor().
+      const targetFootViewportY = computeHomeFootTargetViewportY(window.innerHeight) - homeCharFloorInkOverhangCorrectionPx();
       // [A-608 OWNER CORRECTION — MOBILE HOME CHARACTER CLUSTER MUST NOT MOVE BETWEEN CARDS,
       // 2026-09-27] earlier attempts here tried to compensate for the fact that the REAL
       // group (Chog) got a +96px "collision" push while this canvas (Piggy) did not (or got a
@@ -8807,12 +9325,12 @@ function mountSendCardWorkPose({
       // origin (HOME_CENTER/HOME_FLOOR), same bottom-anchor target — so Piggy's canvas lands
       // in the literal same resident slot `#homeSeat` itself would occupy, not a
       // separately-tuned approximation of it. No card-state-dependent term of any kind.
-      const nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x;
+      const nudgeViewportX = homeFloorNudgeViewportX(s);
       const nudgeViewportY = targetFootViewportY - naturalFootViewportY;
-      const effW = HOME_BOARD_W * s * k;
-      const effH = HOME_BOARD_H * s * k;
-      const left = fitLeft + s * HOME_CENTER * (1 - k) + nudgeViewportX;
-      const top = fitTop + s * HOME_FLOOR * (1 - k) + nudgeViewportY;
+      const effW = HOME_BOARD_W * s * kBoosted;
+      const effH = HOME_BOARD_H * s * kBoosted;
+      const left = fitLeft + s * HOME_CENTER * (1 - kBoosted) + nudgeViewportX;
+      const top = fitTop + s * HOME_FLOOR * (1 - kBoosted) + nudgeViewportY;
       canvas.width = Math.round(effW * (window.devicePixelRatio || 1));
       canvas.height = Math.round(effH * (window.devicePixelRatio || 1));
       canvas.style.width = `${effW}px`;
@@ -8825,7 +9343,8 @@ function mountSendCardWorkPose({
     // [A-656 decision 4 → A-659 OWNER VISUAL REPAIR] "Also apply the same anchor to the First Job
     // work canvas" — so Home → work (this canvas) → Away → Return has no jump at any web width
     // (vw≥641, no upper bound since A-659). Translate-only (no scale change, mirrors decision 2's
-    // own web-drop branch).
+    // own web-drop branch). [A-681] Deliberately still `clock === "send"` only — this card's
+    // Explore/"second" fix is mobile-only (<=640/653); web keeps Explore's original simple fit.
     if (clock === "send" && board && s >= HOME_CHAR_SCALE_FLOOR) {
       const fitLeftMid = (window.innerWidth - HOME_BOARD_W * s) / 2;
       const fitTopMid = (window.innerHeight - HOME_BOARD_H * s) / 2;
@@ -8841,9 +9360,11 @@ function mountSendCardWorkPose({
         return;
       }
     }
-    // Desktop / floor-not-active / Explore's "second" clock: unchanged simple centered fit
-    // (`.departStage`'s own CSS left:50%/top:50%/translate(-50%,-50%) still applies whenever
-    // these inline overrides are cleared — same as before this card for these paths).
+    // Desktop / floor-not-active (any width where neither branch above fired — includes
+    // Explore's "second" clock at web widths, which keeps its pre-A-681 simple centered fit;
+    // mobile "second" is handled by the first branch above as of A-681): unchanged simple
+    // centered fit (`.departStage`'s own CSS left:50%/top:50%/translate(-50%,-50%) still applies
+    // whenever these inline overrides are cleared — same as before this card for these paths).
     canvas.style.left = "";
     canvas.style.top = "";
     canvas.style.transform = "";
@@ -9245,6 +9766,8 @@ function mountReturn() {
       const plan = applyHomeFloorToReturnCluster(fit);
       return { ...fit, floor: computeHomeFloorViewportNudge(plan, fit.s) };
     },
+    // [A-681 FINAL CLOSEOUT A] mobile-only Receipt rail target (null at >640 -> legacy anchor).
+    getReceiptRail: homeReturnReceiptRail,
     mountHomeChog: (chogRoot, o) => {
       homeChog = mountChogHome(chogRoot, {
         startRect: null, startSrc: null, board: o.board,
@@ -9427,13 +9950,11 @@ function recordsMastheadMarkup() {
   // [A-485 Lane A] 머리글의 이름은 **지금 보고 있는 기록의 주인**이다.
   // 전체 경로면 지금까지처럼 현재 Piggy 이름이 나온다.
   const name = historyIdentityName();
-  // 주소가 아직 없으면(무계정 DEV 등) 줄 자체를 비운다 — 가짜 값 0.
-  // 특정 Piggy 를 보고 있을 때는 **그 Piggy 가 아닌 주소를 빌려 쓰지 않는다**.
-  const address = state.historyPiggyId ? "" : (typeof state.address === "string" ? state.address : "");
+  // [A-684] 기본 HISTORY 머리글은 이름만 보인다 — 원시 주소는 올리지 않는다. 주소는 tx/증거 상세가
+  // 이미 보여주는 자리에만 남는다(새 노출 0).
   const identityMarkup = `
         <p class="recordsCard__identity">
           <span class="recordsCard__identityName">${escapeHtml(name)}</span>
-          ${address ? `<span class="recordsCard__identityAddress">${escapeHtml(address)}</span>` : ""}
         </p>`;
   return `
       <div class="recordsCard__masthead">
@@ -9987,6 +10508,19 @@ if (state.scene === "received" && (readCredential() || state.address)) {
   state.scene = "birth";
 }
 
+// [A-699 M2-alpha R4] 앱 잠금이 없는 표면(웹 641+ · 인증 불가 origin)에서도 First Send 미확정 기록이 있으면 같은 읽기 전용
+// 조회를 건다 — 예전엔 아래 잠금 블록(≤640)에서만 돌아서, 그 밖의 표면은 영원히 확인 없이 잠겨 있었다. 목적지는 같은 Away
+// (checking…)이고 잠금(appLock)만 없다. 서명·전송·grant·인증 0 · 새 문구 0.
+if (state.credential && state.scene === "sendstay" && LEGACY_TESTNET_PATH && !appLockSurface()) {
+  const bootPendingOpen = readSendPending();
+  if (bootPendingOpen) {
+    state.scene = "away";
+    state.homeQuietForExplore = false;
+    state.awayRestore = "checking";
+    reconcileSendPending(bootPendingOpen);
+  }
+}
+
 // [A-633 A/C] 모바일/app 표면에서 저장된 credential 로 돌아온 사람(목적지 Name/Home)은 목적지를 보존한 채
 // LOGIN_CHECKING 으로 연다 — 부팅 때 WebAuthn 호출 0(사용자가 Chog 를 눌러야 한다). 첫 Invite·새 기기·
 // 웹(641+)·인증 불가 origin 은 지금 그대로다. First Send 미확정 기록이 있으면 목적지는 Away(checking…)이고,
@@ -10027,7 +10561,10 @@ homeLifeLeft = !HOME_LIFE_SCENES.includes(state.scene);
 
 render();
 
-window.addEventListener("resize", fitInvite);
+// [A-697] Invite fit rides the same debounce as Home (A-666 §2): a real width/orientation change
+// recomputes synchronously (so the wide<->mobile `render()` switch in fitInvite is immediate), an
+// iOS toolbar-sized height burst is coalesced into one trailing call.
+window.addEventListener("resize", debouncedHomeResizeListener(fitInvite));
 window.addEventListener("beforeunload", endActiveSession);
 // [A-667 R6] bfcache 복원(pageshow persisted)·백그라운드 복귀 — WebAuthn 을 **새로 부르지 않는다**. 메모리에 남은 인증
 // 시도만 정리한다(아래 expireStaleAuthState). visibilitychange 리스너는 기존 두 개(애니메이션 시계)와 별개다.

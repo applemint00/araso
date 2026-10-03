@@ -175,15 +175,18 @@ check("V8 A-633 auth/session/reconcile/return code byte-identical to the A-633 b
     // Previous pins: unlockApp 09cd6fb5dd4ee0dc · settleUnlock c4c353674bc122b3 · renderAuthCard 54e902ad818b1b0a.
     // renderAuthCard re-pinned again (203645318a1fb561 → 6f1694a9613c1890) for the Owner's 2026-10-02 decision:
     // markerless fresh-device failure card = one "Make new" (on the existing #authTryAgainButton → Invite wiring).
-    requestPrf: "766fc57ed63b6009", unlockApp: "d4167d7c8fbf1f82", settleUnlock: "b43e5a32b4bf055d", appLockSurface: "8c31689ea48cf8aa",
+    requestPrf: "766fc57ed63b6009", unlockApp: "6ecb373c36ec657f", /* [A-687] re-pinned: capability preflight in unlockApp (d4167d7c8fbf1f82 -> 6ecb373c36ec657f); body-minus-guard == old hash pinned in a687 test */ settleUnlock: "b43e5a32b4bf055d", appLockSurface: "8c31689ea48cf8aa",
     // [A-669 re-pin] lockAppAfterIdle first calls invalidateLiveAuthAttempt() (idle/session end kills a live Check/Open
     // attempt so a late result cannot re-arm the session or navigate over the lock). Previous pin 0083d873b56358ef.
     lockAppAfterIdle: "e4ef41131c978a25", touchAppSession: "cd44c821c6781492", endActiveSession: "9cfc316632c9cea8",
+    // [A-699 M2-alpha re-pin] commitSendSuccess (no longer clears pending; non-throwing) 51398edde399ae67 -> 9d3ac854b6df8ff3 ·
+    // finishTrip (verified receipt save -> compare-and-clear -> UI) b0ea22dfec3aa006 -> 60edd8708e77d531 ·
+    // readSendPending (unreadable store = unconfirmed, not "none") ba4e61d4232e4f7f -> 065bbae2d4bb516e.
     // [A-667 R3 re-pin] activateSigningSession: a throw after the signer exists now ends it (no timer-less signer).
     // Previous pin 0a3345ebee6d4bd3.
     activateSigningSession: "dbd2063392a1068b", reconcileSendPending: "1caf49b6a16b09df", classifySendPending: "2389cf76d2658fd6",
-    readSendTxReceipt: "482a1cdc9025ff9f", reconciledSendReceipt: "1de55c29816852f7", commitSendSuccess: "51398edde399ae67",
-    finishTrip: "b0ea22dfec3aa006", readSendPending: "ba4e61d4232e4f7f", showAwayRestore: "70ee359576d43fd1",
+    readSendTxReceipt: "482a1cdc9025ff9f", reconciledSendReceipt: "1de55c29816852f7", commitSendSuccess: "9d3ac854b6df8ff3",
+    finishTrip: "60edd8708e77d531", readSendPending: "065bbae2d4bb516e", showAwayRestore: "70ee359576d43fd1",
     awayRestoreLineMarkup: "027535c3b9c99afb", renderAuthCard: "6f1694a9613c1890", mountInviteChog: "f894db5c8e334665",
     arasoBrandMarkup: "2916af023287cf7f", render: "866133cf60711093",
   };

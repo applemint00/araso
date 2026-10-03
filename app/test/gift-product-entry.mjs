@@ -40,7 +40,7 @@ import { readFileSync } from "node:fs";
 import { createPasskeyWithPrfOutput, getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress, isMeraError } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
 import { recoverMessageAddress } from "viem";
-import { admitModelAPiggy, loadMyPiggiesIndex, registerControlledPiggy } from "../src/piggy-index.js";
+import { admitModelAPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, registerControlledPiggy, markBornPiggyIssuance } from "../src/piggy-index.js";
 import { createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry } from "../src/piggy-registry.js";
 import { prfSaltFromHex, modelASalt } from "../src/piggy-session.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
@@ -209,6 +209,7 @@ async function seedFirstPiggy(storage, client, { name = "Honeybun" } = {}) {
     locator: { credentialId: client.credentialIdString }, at: "2026-09-24T09:00:00.000Z",
   });
   assert.equal(out.ok, true);
+  assert.equal(markBornPiggyIssuance(storage, CHAIN, { address }).ok, true);   // [A-695] 생성 경로 시드
   storage.setItem("araso.passkey", JSON.stringify({ credentialId: client.credentialIdString }));
   return address;
 }
@@ -265,7 +266,7 @@ function openApp(storage, { href = `${ORIGIN}/`, credential, address = null, sec
   const ctx = {
     state, console, Buffer, Map, Set, Array, Object, String, Number, Boolean, Date, JSON, Promise, RegExp,
     isMeraError, getEvmAddress, createSecp256k1SigningSession, toViemAccount, prfSaltFromHex,
-    admitModelAPiggy, loadMyPiggiesIndex, registerControlledPiggy,
+    admitModelAPiggy, loadMyPiggiesIndex, registerControlledPiggy, markBornPiggyIssuance,
     createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry,
     beginGiftClaim, settleGiftClaim, GIFT_ENTRY_STATUS, readClaimFragment, CLAIM_RESULT,
     bindGiftToNewPiggy, isGiftBinding, createGiftClaimSubmitter, createPasskeyWithPrfOutput,
@@ -584,6 +585,31 @@ await check("7c. beginGiftPiggy() without a pinned root credential → missing_r
   assert.ok(app.getPendingGiftClaim());
 });
 
+for (const [label, damage, reason] of [
+  ["missing index", (st) => st.removeItem(myPiggiesIndexKey(CHAIN)), "origin_index_missing"],
+  ["corrupt index", (st) => st.setItem(myPiggiesIndexKey(CHAIN), "{not json"), "origin_index_corrupt"],
+]) {
+  await check(`7e. [A-695 SEQ-5=A] beginGiftPiggy() on a device with a ${label} fails closed: ${reason}, 0 requestPrf, 0 Piggies written, pending Gift kept, record untouched`, async () => {
+    const storage = createMemoryStorage();
+    const client = fakeClient(crypto.randomBytes(32));
+    const first = await seedFirstPiggy(storage, client);     // saved passkey stays (araso.passkey) — only the local index is lost
+    damage(storage);
+    const giftId = `gift-7e-${reason}`;
+    const { record, url, token } = await makeLink({ giftId });
+    const recordSource = memoryRecordSource({ [giftId]: record });
+    const app = openApp(storage, { href: url, address: first, giftRecordSource: recordSource });
+    let prf = 0;
+    app.setRequestPrf(async (...a) => { prf += 1; return requestPrfWith(client)(...a); });
+    const before = storage.getItem(myPiggiesIndexKey(CHAIN));
+    const out = await app.beginGiftPiggy();
+    assert.deepEqual([out.started, out.reason], [false, reason]);
+    assert.equal(prf, 0);
+    assert.equal(storage.getItem(myPiggiesIndexKey(CHAIN)), before);
+    assert.equal(app.getPendingGiftClaim()?.token, token);
+    assert.equal(recordSource.map.get(giftId).status, CLAIM_STATUS.UNCLAIMED);
+  });
+}
+
 await check("7d. a look-alike binding (same fields, not minted by bindGiftToNewPiggy) is refused by settleBoundGiftClaim: binding_invalid", async () => {
   const storage = createMemoryStorage();
   const app = openApp(storage, { href: urlMain, giftRecordSource: recordSourceMain });
@@ -671,6 +697,51 @@ await check("9b. openPiggy() (fresh device first birth) with a pending Gift: REA
   assert.equal(app.getPendingGiftClaim(), null);
   assert.deepEqual(plain(settlement.valueSubmission), { status: "claim_transport_unavailable" });
   assert.deepEqual(app.calls.setScene.at(-1), ["hatch"]); // scene flow unchanged
+});
+
+await check("9b2. [A-695] the real openPiggy create path stamps provenance=\"birth\" on the row it just indexed (and only that row)", async () => {
+  const storage = createMemoryStorage();
+  const app = openApp(storage, { href: `${ORIGIN}/`, giftRecordSource: memoryRecordSource({}), webAuthnHook: fakeCreateClient(crypto.randomBytes(32)) });
+  await app.openPiggy();
+  const rows = loadMyPiggiesIndex(storage, CHAIN).index.piggies;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].provenance, "birth");
+  assert.equal(rows[0].address, app.state.address);
+});
+
+await check("9d. [A-695] Check Piggy (recoverPiggy) on a device whose index is gone indexes the Piggy with ZERO provenance; beginGiftPiggy then fails closed: origin_index_no_provenance, no extra requestPrf, pending Gift kept", async () => {
+  const storage = createMemoryStorage();
+  const client = fakeClient(crypto.randomBytes(32));
+  const first = await seedFirstPiggy(storage, client);
+  storage.removeItem(myPiggiesIndexKey(CHAIN));                      // index lost; saved passkey (araso.passkey) remains
+  const giftId = "gift-9d-recovered";
+  const { record, url, token } = await makeLink({ giftId });
+  const recordSource = memoryRecordSource({ [giftId]: record });
+  const app = openApp(storage, { href: url, giftRecordSource: recordSource });
+  let prf = 0;
+  app.setRequestPrf(async (...a) => { prf += 1; return requestPrfWith(client)(...a); });
+  assert.equal((await app.checkPiggy()).ok, true);
+  const rows = loadMyPiggiesIndex(storage, CHAIN).index.piggies;
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].address.toLowerCase(), first.toLowerCase());
+  assert.equal("provenance" in rows[0], false, "recovery creates zero provenance");
+  const before = prf;
+  const out = await app.beginGiftPiggy();
+  assert.deepEqual([out.started, out.reason], [false, "origin_index_no_provenance"]);
+  assert.equal(prf, before, "no requestPrf for the refused +Piggy/Gift");
+  assert.equal(app.getPendingGiftClaim()?.token, token);
+  assert.equal(recordSource.map.get(giftId).status, CLAIM_STATUS.UNCLAIMED);
+});
+
+await check("9e. [A-695] after Check Piggy re-indexes an EXISTING born row (update path) the provenance is kept — recovery neither adds nor strips it", async () => {
+  const storage = createMemoryStorage();
+  const client = fakeClient(crypto.randomBytes(32));
+  const first = await seedFirstPiggy(storage, client);                 // born
+  const app = openApp(storage, { href: `${ORIGIN}/`, giftRecordSource: memoryRecordSource({}) });
+  app.setRequestPrf(requestPrfWith(client));
+  assert.equal((await app.checkPiggy()).ok, true);
+  const rows = loadMyPiggiesIndex(storage, CHAIN).index.piggies;
+  assert.deepEqual([rows.length, rows[0].provenance, rows[0].address.toLowerCase()], [1, "birth", first.toLowerCase()]);
 });
 
 await check("9c. openPiggy() cancelled at create → no Piggy, pending Gift restored; openPiggy() with no pending → settlement stays null", async () => {

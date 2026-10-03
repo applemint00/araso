@@ -12,7 +12,7 @@ import { getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress, Mera
 import {
   authRequestForPiggy, bindSigner, selectionContext, switchSelection,
 } from "../src/piggy-session.js";
-import { admitModelAPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
+import { admitModelAPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, registerControlledPiggy, renameIndexedPiggy, markBornPiggyIssuance } from "../src/piggy-index.js";
 import { authorize, consume, issuePermission, permissionNonce } from "../src/permission-envelope.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
 
@@ -60,6 +60,7 @@ async function seedFirstPiggy(storage) {
     locator: { credentialId: ROOT_ID }, at: AT,
   });
   assert.equal(out.ok, true);
+  assert.equal(markBornPiggyIssuance(storage, CHAIN, { address }).ok, true);   // [A-695] 생성 경로가 찍는 발급 출처
   return address;
 }
 

@@ -111,6 +111,83 @@ function anchorCenter() {
   return { cx, cy, zx, zy, tx: zx - RECEIPT_DELIVERED_W / 2, ty: zy - RECEIPT_DELIVERED_H / 2 };
 }
 
+// [A-681 MOBILE RETURN/RECEIPT — OWNER FINAL MOBILE CLOSEOUT A, 2026-10-03] On a phone (<=640)
+// the Receipt's throw/hand-off target and its settled/read position are the viewer-LEFT CONTENT
+// rail (same rail First Send / Explore / HISTORY use: left edge = `--mobile-inset`), larger and
+// readable, instead of the fixed 1440-reference anchor above (ANCHOR_BOARD_CX/CY — root cause
+// confirmed by the Owner note: the A-659 web repair raises CY by the full height growth, and that
+// fixed board-local raise propagates proportionally into mobile, so the enlarged paper read too
+// high and, after the A-681 character boost, drifted off the left edge).
+// DESIGN: the target is NOT a board-local constant. main.js hands `renderOpts.receiptRail` — the
+// live viewport-px facts only the DOM knows (see `RECEIPT_RAIL` shape below) — and this file
+// converts them through the canvas's own on-screen rect (the SAME rect return-view.js placePaper()
+// reads), so the paper lands in the same viewport rail no matter what transform the canvas rides.
+// `receiptRail === null` (every width >640, and any caller that does not opt in) takes the legacy
+// `anchorCenter()` + RECEIPT_DELIVERED_W/H path unchanged — an exact identity.
+//
+//   RECEIPT_RAIL = { vw, vh, inset, topBound, cardCy, cardW, gap }   (all CSS px, viewport space)
+//     inset    : `--mobile-inset` (20 @390 family / 24 @430 family) — the rail's left edge and the
+//                right-hand margin (symmetric, same shell inset every mobile scene uses)
+//     topBound : `--mobile-top-safe` + `--grid-3` — highest the READ (zoomed) paper may reach
+//     cardCy   : the shared card slot's centre line, vh/2 - 48 (style.css .cardAnchor, offY=48) —
+//                preferred vertical centre; used when nothing forces the paper higher
+//     cardW    : 285 (style.css .cardAnchor width) — the paper never grows past the First
+//                Send/Explore card's own width ("comparable weight", not larger)
+//     gap      : `--grid-5` (32) — clearance between the READ paper's bottom edge and the returning
+//                Piggy's head box; also holds return-view.js's 8px-offset "Receipt/File it" hint.
+//   Why the paper rides ABOVE Piggy and not beside it: at the two-tap gate (t 7.0-8.5) Piggy stands
+//   at stage (PIGGY_GATE_STAGE_Y, PIGGY_GATE_SIZE) — with the boosted canvas she occupies viewport
+//   x≈95-218 at 390 — i.e. INSIDE the 20..vw-20 rail horizontally, so the rail's only free band is
+//   above her head. Piggy/Chog/bell all keep riding the ONE canvas transform (Home floor + boost,
+//   main.js computeHomeFloorViewportNudge, no per-point compensation), so they stay coherent with
+//   Chog's own "…is coming home" line; only the paper is re-targeted.
+//
+// Zoom: the first tap enlarges the paper to 1+READ_ZOOM_GAIN about a pivot (drawAt zoom). On the
+// rail path the pivot is the paper's LEFT-CENTRE point (not its centre) so the settled paper's left
+// edge sits exactly on the rail inset at zoom 1 AND the read (zoomed) paper still ends at
+// <= vw - inset: baseW is sized so baseW*(1+READ_ZOOM_GAIN) <= vw - 2*inset.
+const READ_ZOOM_GAIN = 0.18;                    // drawAt `zoom = 1 + READ_ZOOM_GAIN * …` (was literal 0.18)
+const READ_ZOOM_MAX = 1 + READ_ZOOM_GAIN;
+const PIGGY_GATE_STAGE_Y = 250;                 // drawAt `y = 250` (Piggy at the gate; settle===0)
+const PIGGY_GATE_SIZE = 0.24;                   // drawAt `mix(0.24, 0.20, settle)` at settle===0
+/**
+ * Pure: viewport-space rail facts + the canvas's on-screen placement -> stage-unit Receipt target.
+ * @param {{vw:number,vh:number,inset:number,topBound:number,cardCy:number,cardW:number,gap:number}|null} rail
+ * @param {{left:number,top:number,k:number}|null} view  canvas rect left/top (CSS px) and CSS px per board unit
+ * @returns {{tx:number,ty:number,zx:number,zy:number,w:number,h:number,vp:object}|null}
+ */
+export function receiptRailTarget(rail, view) {
+  if (!rail || !view || !(view.k > 0)) return null;
+  // [A-681 D] The box must have the DOM paper's OWN rendered aspect (rotated bbox w/h, measured by
+  // return-view.js and passed as rail.paperAspect): placePaper() contain-fits the paper into this box
+  // and CENTRES it, so a box wider than the paper pushed the rendered left edge inward by
+  // (boxW - paperW)/2 (browser: +9.3px @390 and @430, paper 266.4 wide in a 285 box). Same aspect =>
+  // contain-fit fills the box exactly => rendered left edge == rail inset. Falls back to the legacy
+  // 280:320 delivered aspect when unmeasured.
+  const aspect = rail.paperAspect > 0 ? rail.paperAspect : RECEIPT_DELIVERED_W / RECEIPT_DELIVERED_H;
+  const piggyTopVp = view.top + view.k * (GROUP_DY + (PIGGY_GATE_STAGE_Y + BOX.body.y * PIGGY_GATE_SIZE) * GROUP_SCALE);
+  const bottomBound = piggyTopVp - rail.gap;
+  const availH = bottomBound - rail.topBound;
+  const railW = rail.vw - 2 * rail.inset;
+  const baseW = Math.min(rail.cardW, railW / READ_ZOOM_MAX, (availH / READ_ZOOM_MAX) * aspect);
+  if (!(baseW > 0)) return null;
+  const baseH = baseW / aspect;
+  const readH = baseH * READ_ZOOM_MAX;
+  const cyLo = rail.topBound + readH / 2;
+  const cyHi = bottomBound - readH / 2;
+  const cyVp = Math.max(cyLo, Math.min(cyHi, rail.cardCy));
+  const toStageX = (vx) => ((vx - view.left) / view.k - GROUP_DX) / GROUP_SCALE;
+  const toStageY = (vy) => ((vy - view.top) / view.k - GROUP_DY) / GROUP_SCALE;
+  const w = baseW / (view.k * GROUP_SCALE);
+  const h = baseH / (view.k * GROUP_SCALE);
+  const tx = toStageX(rail.inset);
+  const zy = toStageY(cyVp);
+  return {
+    tx, ty: zy - h / 2, zx: tx, zy, w, h,
+    vp: { left: rail.inset, cy: cyVp, baseW, baseH, readH, readW: baseW * READ_ZOOM_MAX, piggyTop: piggyTopVp, bottomBound },
+  };
+}
+
 // 앉은 Piggy — 원본 Return 은 218×218 정사각이지만 캐릭터 원본 비율은 1056×1102.
 // Home 과 같은 비율을 쓴다(무단 squash 0). 차이는 parts.json 에도 남겼다.
 const SEAT_RECT = { x: 862, y: 515, w: 218, h: 218 * 1102 / 1056 };
@@ -360,7 +437,8 @@ export function createReturnRenderer(canvas, opts) {
   /**
    * 한 시각을 그린다. 원본 `sceneSVG(t)` 의 순서 그대로다.
    * @param {number} time  0…15.6 (애니메이션 시계 — 탭 대기 시간은 여기 들어오지 않는다)
-   * @param {{hidePaper?:boolean}} renderOpts
+   * @param {{hidePaper?:boolean, receiptRail?:object|null}} renderOpts
+   *   [A-681] receiptRail — mobile viewer-left CONTENT rail facts (see receiptRailTarget); null = legacy anchor.
    *   [A-348 §3] gate 대기(await-first-tap/await-second-tap) 구간에서는 controller 가
    *   `hidePaper:true` 를 넘긴다 — canvas 는 그 프레임에 옛 receipt-paper 를 그리지 않고
    *   DOM(receiptPaperMarkup)에 자리를 **명시적으로** 넘긴다. paperBoard 좌표 계산은
@@ -368,7 +446,7 @@ export function createReturnRenderer(canvas, opts) {
    *   단순히 DOM 을 canvas 위에 얹어 "덮었으니 중복 0" 이라 선언하지 않기 위한 장치다.
    */
   function drawAt(time, renderOpts = {}) {
-    const { hidePaper = false } = renderOpts;
+    const { hidePaper = false, receiptRail = null } = renderOpts;
     const t = Math.max(0, Math.min(RETURN_TOTAL_S, time));
     const s = stateAt(t);
     const { opening, emerge, turn, present, delivery, settle } = s;
@@ -381,7 +459,15 @@ export function createReturnRenderer(canvas, opts) {
     // [A-656 OWNER CORRECTION] Fixed board-local anchor (derived from the 1440 canon once, at
     // module scope) — see anchorCenter() above for why this is no longer a per-draw viewport
     // read.
-    const anchor = anchorCenter();
+    // [A-681] Mobile: viewer-left CONTENT rail target (receiptRailTarget above); null -> legacy.
+    let railTarget = null;
+    if (receiptRail) {
+      const cr = canvas.getBoundingClientRect();
+      railTarget = receiptRailTarget(receiptRail, { left: cr.left, top: cr.top, k: cr.width / BOARD_W });
+    }
+    const anchor = railTarget || anchorCenter();
+    const delW = railTarget ? railTarget.w : RECEIPT_DELIVERED_W;
+    const delH = railTarget ? railTarget.h : RECEIPT_DELIVERED_H;
 
     let x = mix(210, 520, emerge), y = 250;
     x = mix(x, 880, settle); y = mix(y, 508, settle);
@@ -397,7 +483,7 @@ export function createReturnRenderer(canvas, opts) {
     const carryHome = t >= 8.85 && t < 10.9;
     const seated = smooth((t - 10.9) / 0.5);
     const folderAlpha = smooth((t - 12.2) / 0.25);
-    const zoom = 1 + 0.18 * smooth((t - 7.3) / 0.3) * (1 - pickup);
+    const zoom = 1 + READ_ZOOM_GAIN * smooth((t - 7.3) / 0.3) * (1 - pickup);
     const sitDrop = 6 * Math.sin(Math.PI * clamp((t - 10.9) / 0.5));
 
     // 영수증 자리 — 던짐 궤적 식(시작점·타이밍)은 원본 그대로다. 종착점만 [A-358 §4 →
@@ -409,13 +495,13 @@ export function createReturnRenderer(canvas, opts) {
     // [A-659 OWNER VISUAL REPAIR — E] Delivered/read size only (RECEIPT_DELIVERED_W/H = 280×320 ×
     // RECEIPT_SIZE_SCALE) — the mid-toss intermediate sizes (`size * 280 * 1.12` etc.) and the
     // post-pickup tiny carry size (`36,29` below) are untouched (see the module-scope comment).
-    let rw = mix(size * 280 * 1.12, RECEIPT_DELIVERED_W, delivery);
-    let rh = mix(size * 225 * 1.12, RECEIPT_DELIVERED_H, delivery);
+    let rw = mix(size * 280 * 1.12, delW, delivery);
+    let rh = mix(size * 225 * 1.12, delH, delivery);
     if (t >= 8.5 && t < 10.9) {
       rx = mix(anchor.tx, x + size * 480, pickup);
       ry = mix(anchor.ty, y + size * 620, pickup);
-      rw = mix(RECEIPT_DELIVERED_W, size * 280, pickup);
-      rh = mix(RECEIPT_DELIVERED_H, size * 225, pickup);
+      rw = mix(delW, size * 280, pickup);
+      rh = mix(delH, size * 225, pickup);
     }
     let hand = null;
     if (t >= 10.9) {
@@ -646,6 +732,9 @@ export function createReturnPlayback(opts) {
     onSecondTap = () => {},
     // [A-322 교정 1] 매 프레임 renderer 의 값을 화면에 넘긴다 — 지금까지 버리고 있었다.
     onFrame = () => {},
+    // [A-681] Optional: () => RECEIPT_RAIL | null (viewport-px facts, see receiptRailTarget()).
+    // Absent / returns null -> the legacy fixed anchor (web, and every width >640).
+    getReceiptRail = null,
   } = opts;
 
   let renderer = null;
@@ -687,9 +776,14 @@ export function createReturnPlayback(opts) {
   // 무효가 된 재생은 바깥에 알리지 않는다(A-320 교정 14 와 같은 규율).
   const quiet = (next) => { if (phase !== "stopped") phase = next; return status(); };
 
+  const drawOpts = () => ({
+    hidePaper: isDomPaperPhase(phase),
+    receiptRail: getReceiptRail ? getReceiptRail() : null,
+  });
+
   function paint() {
     if (!renderer || !alive()) return false;
-    onFrame(renderer.drawAt(t, { hidePaper: isDomPaperPhase(phase) }));
+    onFrame(renderer.drawAt(t, drawOpts()));
     drawCount += 1;
     return true;
   }
@@ -706,7 +800,7 @@ export function createReturnPlayback(opts) {
     // gate 도달 직전 마지막 프레임까지는 아직 "playing" — taps===1 구간(첫 탭 확대)은
     // isDomPaperPhase 로 DOM 소유가 이어진다. settle() 이 그 다음에 await-*-tap 으로 넘기며
     // 한 번 더 hidePaper:true 로 다시 그린다(위 settle 참조).
-    onFrame(renderer.drawAt(t, { hidePaper: isDomPaperPhase(phase) }));
+    onFrame(renderer.drawAt(t, drawOpts()));
     drawCount += 1;
     if (t >= gate) {
       running = false;

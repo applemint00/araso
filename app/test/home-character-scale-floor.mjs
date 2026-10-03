@@ -67,15 +67,16 @@ check("resolveCssLengthVarPx() reads the LIVE computed px value of a CSS custom 
 // (computeHomeFootTargetViewportY(), main.js) as a MINIMUM clearance only, not the primary
 // target. The token is still read (inside that shared function, checked separately by
 // a656-return-home-anchor.mjs's own N2) — this branch now just calls the shared target function.
-check("Y nudge target now comes from the SAME shared, 1440-canon-derived target function the web mid-band branch uses (not a fixed bottom-safe offset re-derived inline)",
-  /const targetFootViewportY = computeHomeFootTargetViewportY\(window\.innerHeight\);/.test(applyFnSrc), true);
+check("[A-681 iteration 2 re-pin] Y nudge target now comes from the SAME shared, 1440-canon-derived target function the web mid-band branch uses, minus the A-681 ink-overhang correction (not a fixed bottom-safe offset re-derived inline, not a hardcoded number)",
+  /const targetFootViewportY = computeHomeFootTargetViewportY\(window\.innerHeight\) - homeCharFloorInkOverhangCorrectionPx\(\);/.test(applyFnSrc), true);
 check("Y nudge = target - natural (replaces the old fixed .y sum entirely)",
   /const nudgeViewportY = targetFootViewportY - naturalFootViewportY;/.test(applyFnSrc), true);
 // [A-608 pass 2 — MOBILE HOME CHARACTER CLUSTER MUST NOT MOVE BETWEEN CARDS] the collision
 // term this test used to lock is gone — Chog's own slot no longer depends on card state (see
 // a605-common-shell-repair.mjs's own updated assertion for the detailed reasoning).
+// [A-681 FINAL CLOSEOUT B re-pin] X nudge is now homeFloorNudgeViewportX(s) = min(base 6, right-rail target) so the rightmost ink clears --mobile-inset; still card-state-independent, base constant itself unchanged (pinned above).
 check("X nudge is base-only now — no collision term (Chog's own slot is card-state-independent)",
-  /const nudgeViewportX = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX\.x;/.test(applyFnSrc), true);
+  /const nudgeViewportX = homeFloorNudgeViewportX\(s\);/.test(applyFnSrc), true);
 check("transform-origin is still the foot's own LOCAL point (HOME_CENTER/HOME_FLOOR) — foot anchor stable, only the translate's Y derivation changed",
   /group\.style\.transformOrigin = `\$\{originLocalX\}px \$\{originLocalY\}px`;/.test(applyFnSrc), true);
 

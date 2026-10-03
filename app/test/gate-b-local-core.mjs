@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress } from "@category-labs/mera";
 import { authRequestForPiggy, bindSigner, bytesToHex, modelASalt, modelASaltHex, sha256Sync } from "../src/piggy-session.js";
-import { admitModelAPiggy, admitSequencedPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, myPiggiesLockName, registerControlledPiggy } from "../src/piggy-index.js";
+import { admitModelAPiggy, admitSequencedPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, myPiggiesLockName, registerControlledPiggy, markBornPiggyIssuance } from "../src/piggy-index.js";
 import { backupBaselineKey, buildBackupPayload, indexBackupSalt, publishIndexBackup, readBackupBaseline, restoreFromBackup, sealBackup } from "../src/index-backup.js";
 import {
   DISCOVERY_RECORD_FIELDS,
@@ -67,6 +67,10 @@ async function originDevice(user, n) {
   const s = createMemoryStorage();
   const locks = fifoLocks();
   const addresses = {};
+  // [A-695 SEQ-5=A] 원 기기 = 첫 Piggy(레거시) 행이 이 사용자의 루트로 색인된 기기.
+  const firstAddress = "0x" + crypto.createHash("sha256").update(`first/${user.id}`).digest("hex").slice(0, 40);   // 통계(asked)를 건드리지 않는 고정 주소
+  assert.equal(registerControlledPiggy(s, CHAIN, { address: firstAddress, signerAddress: firstAddress, locator: { credentialId: user.id }, at: AT }).ok, true);
+  assert.equal(markBornPiggyIssuance(s, CHAIN, { address: firstAddress }).ok, true);
   for (let i = 1; i <= n; i += 1) {
     const out = await admitModelAPiggy({ storage: s, chainId: CHAIN, locks, rootCredential: user.root, requestPrf: user.requestPrf, deriveAddress: addressOf, now: () => AT });
     assert.equal(out.ok, true, out.reason);
@@ -522,8 +526,10 @@ await check("C14. concurrent discovery-driven restore + local +Piggy (both n=1) 
     admitModelAPiggy({ storage: s, chainId: CHAIN, locks, rootCredential: alice.root, requestPrf: alice.requestPrf, deriveAddress: addressOf, now: () => AT }),
   ]);
   assert.equal(r.status, "ok");
-  assert.equal(a.ok, true);
-  // both race for n=1 (same root → same address); exactly one row, watermark advanced once
+  // [A-695 SEQ-5=A] 새 기기(첫 Piggy 행 없음)의 +Piggy 는 번호를 내지 않는다 — 복원이 이기든 +Piggy 가 먼저 오든 닫힌다.
+  assert.equal(a.ok, false);
+  assert.ok(["origin_index_missing", "origin_index_no_first_piggy"].includes(a.reason), a.reason);
+  // restore alone fills n=1; exactly one row, watermark advanced once
   assert.deepEqual(seq(s), [1]);
   assert.equal(loadMyPiggiesIndex(s, CHAIN).index.piggies.filter((p) => p.sequence === 1).length, 1);
   assert.equal(loadMyPiggiesIndex(s, CHAIN).index.issuedThrough, 1);

@@ -108,7 +108,8 @@ function makeSend({
   check("1. success: settle finished (done)", t.calls.finished[0], "done");
   check("1. success: endActiveSession NOT called — signer session survives a completed send", t.calls.endSession, 0);
   check("1. success: touchAppSession called (app-idle refreshed by ordinary send activity)", t.calls.touchApp, 1);
-  check("1. success: pending cleared as before", t.env.localStorage.has("araso.sendPending"), false);
+  // [A-699 M2-alpha] declared expectation update: the clear moved from commitSendSuccess into the real finishTrip (behind the verified receipt save); finishTrip is a stub here.
+  check("1. success: pending not cleared by commitSendSuccess ([A-699]: finishTrip clears after the verified receipt)", t.env.localStorage.has("araso.sendPending"), true);
 }
 
 // ── 2. settle 실패/미확정: 세션은 여전히 살아 있다, pending 은 유지 ─────────────────────────
@@ -201,7 +202,7 @@ function makeSend({
   const t = makeSend({ storage: mockStorage(), settleOutcome: "done" });
   await t.sendPiggy(); await tick(); await tick();
   check("9. success still writes txHash exactly once (unchanged)", t.env.localStorage.getItem("araso.txHash"), "0xredeem");
-  check("9. success still clears pending (unchanged)", t.env.localStorage.has("araso.sendPending"), false);
+  check("9. [A-699 declared update] commitSendSuccess no longer clears pending (finishTrip does, behind the verified receipt)", t.env.localStorage.has("araso.sendPending"), true);
   check("9. success still releases the lock (unchanged)", t.isInFlight(), false);
 }
 {

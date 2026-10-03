@@ -381,10 +381,10 @@ await check("D4 redeem-broadcast + receipt pending → still out. + read-only wa
   assert.equal(r.calls.finish.length, 0);
   noMoney(r);
 });
-await check("D5 redeem-broadcast + success → commitSendSuccess (pending cleared, txHash set) → existing finishTrip with a chain-pinned Receipt", async () => {
+await check("D5 redeem-broadcast + success → commitSendSuccess (txHash set, pending NOT cleared — [A-699] the clear moved into finishTrip behind the verified receipt save) → existing finishTrip with a chain-pinned Receipt", async () => {
   const { r, result } = await stage({ stage: "redeem-broadcast", depositTxHash: D, redeemTxHash: E }, { dep: "success", red: "success" });
   assert.equal(result.kind, "success");
-  assert.equal(r.storage.getItem("araso.sendPending"), null);
+  assert.ok(r.storage.getItem("araso.sendPending"), "[A-699] commitSendSuccess no longer clears; finishTrip (stubbed here, real one in money-safety-first.mjs) does after the receipt is verified");
   assert.equal(r.storage.getItem("araso.txHash"), E);
   assert.equal(r.calls.finish.length, 1);
   const t = r.calls.finish[0];
@@ -399,7 +399,7 @@ await check("D5 redeem-broadcast + success → commitSendSuccess (pending cleare
 await check("D5b redeem success but historical reads unavailable → existing done/balance-unavailable (no fabricated numbers)", async () => {
   const { r } = await stage({ stage: "redeem-broadcast", depositTxHash: D, redeemTxHash: E }, { dep: "success", red: "success", histFail: true });
   deq(r.calls.finish, [{ outcome: "done", reason: "balance-unavailable", receipt: null }]);
-  assert.equal(r.storage.getItem("araso.sendPending"), null);
+  assert.ok(r.storage.getItem("araso.sendPending"), "[A-699] commitSendSuccess does not clear; with receipt:null the real finishTrip keeps the record too (money-safety-first F1)");
   noMoney(r);
 });
 await check("D5c redeem pending then later mined → the one read-only follow-up re-classifies and bridges once", async () => {
@@ -416,7 +416,7 @@ await check("D5c redeem pending then later mined → the one read-only follow-up
   for (let i = 0; i < 10; i += 1) await flush();
   assert.equal(r.calls.finish.length, 1);
   assert.equal(r.calls.finish[0].outcome, "done");
-  assert.equal(r.storage.getItem("araso.sendPending"), null);
+  assert.ok(r.storage.getItem("araso.sendPending"), "[A-699] not cleared by commitSendSuccess (finishTrip stubbed)");
   noMoney(r);
 });
 await check("D5d follow-up wait resolves but the re-read still says pending (inconsistent RPC) → no second wait, no read loop", async () => {

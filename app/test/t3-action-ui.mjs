@@ -96,7 +96,8 @@ check("the UI never sets executionPermission anywhere", () => {
 });
 
 check("the awaiting state says plainly that nothing was sent", () => {
-  assert.match(MAIN, /아직 아무것도 보내지 않았어/);
+  // [A-685] re-pinned: A-684 N8 English (same claim: awaiting state says nothing was sent)
+  assert.match(MAIN, /Needs your OK — nothing has been sent yet\./);
 });
 
 // ── 5. 두 장 문법과 기존 동작 ───────────────────────────────────────────────────

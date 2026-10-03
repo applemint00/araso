@@ -21,7 +21,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
-import { admitModelAPiggy, loadMyPiggiesIndex, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
+import { admitModelAPiggy, loadMyPiggiesIndex, registerControlledPiggy, renameIndexedPiggy, markBornPiggyIssuance } from "../src/piggy-index.js";
 import { createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry } from "../src/piggy-registry.js";
 import { authRequestForPiggy, bindSigner, selectionContext, switchSelection } from "../src/piggy-session.js";
 import { issuePermission, authorize, consume, permissionNonce, cancel as cancelPermission, PERMISSION_STATE } from "../src/permission-envelope.js";
@@ -132,6 +132,7 @@ async function seedFirstPiggy(storage, { name = "Honeybun" } = {}) {
     locator: { credentialId: ROOT_ID }, at: AT,
   });
   assert.equal(out.ok, true);
+  assert.equal(markBornPiggyIssuance(storage, CHAIN, { address }).ok, true);   // [A-695] 생성 경로가 찍는 발급 출처
   return address;
 }
 

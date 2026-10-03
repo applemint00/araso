@@ -21,7 +21,8 @@ check("no total row when any piggy lacks a sourced valuation", () => {
   const totals = projectRegistryTotals({ piggies });
   const rows = homeMoneyPiggyRows({ totals, piggies });
   assert.equal(rows.some((r) => r.label === "total"), false);
-  assert.match(homeMoneyTotalsNote(totals), /모든 Piggy/);
+  // [A-685] re-pinned: A-684 N8 English (same claim: total waits for every Piggy's value)
+  assert.match(homeMoneyTotalsNote(totals), /The total shows once every Piggy's value has been read\./);
 });
 
 check("a total row appears only when every valuation is sourced", () => {

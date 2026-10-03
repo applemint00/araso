@@ -162,6 +162,10 @@ function buildApp({ grantThrows = false } = {}) {
       // 흉내낸다: 같은 고정 prfOutput 으로 실제 activateSigningSession() 을 부른다(같은 Piggy가
       // 매번 같은 서명자로 돌아온다는 뜻 — item 2 의 "같은 Piggy" 전제).
       `async function recoverPiggy() { __authCalls.count += 1; activateSigningSession(__prfOutput); }\n` +
+      // [A-698 M3] harness wiring: Send recovery now takes the shared Check/Open attempt slot (real helpers live in main.js; a698 test runs them).
+      `let authAttempt = null; let platformAuthInflight = null; const UNLOCK_UI_WAIT_MS = 45000;\n` +
+      `function trackPlatformAuth(p) { return p; }\nfunction beginAuthAttempt(kind) { authAttempt = { kind, live: true }; return authAttempt; }\n` +
+      `function boundAuthAttempt(a, work) { return work; }\nfunction finishAuthAttempt(a) { if (authAttempt !== a) return false; authAttempt = null; return true; }\n` +
       `${constsSrc}\n${lockSrc}\n${onceSrc}\n` +
       `const consumedPermissionNonces = new Set();\n${CORE_SRC}\n` +
       `this.__api = { sendPiggy, readSendPending, sendBusy, authorizeMoneyAction, applyPiggySelection, consumeMoneyPermission };\n` +

@@ -402,6 +402,20 @@ await check("B-lock. restoreFromBackup and admitModelAPiggy share the same lock 
   assert.ok(oneSucceeded);
 });
 
+await check("[A-695 SEQ-5=A] a fresh device with no local index cannot +Piggy (origin_index_missing, 0 auth) but the Gate B restore path is unaffected", async () => {
+  const { adapter } = await seededRemote({ sequences: [1] });
+  const fresh = createMemoryStorage();                                       // no index at all
+  let asked = 0;
+  const counting = async (...args) => { asked += 1; return liveRequestPrf(...args); };
+  const refused = await admitModelAPiggy({ storage: fresh, chainId: CHAIN, locks: fifoLocks(), rootCredential: ROOT, requestPrf: counting, deriveAddress: addressOf });
+  assert.deepEqual([refused.ok, refused.reason, asked], [false, "origin_index_missing", 0]);
+  assert.equal(fresh.getItem(myPiggiesIndexKey(CHAIN)), null);
+  await seedFirstPiggy(fresh);
+  const out = await recoverProductList({ adapter, storage: fresh, chainId: CHAIN, rootCredential: ROOT, requestPrf: counting, deriveAddress: addressOf, locks: fifoLocks() });
+  assert.notEqual(out.status, "refused", JSON.stringify(out));
+  assert.equal(loadMyPiggiesIndex(fresh, CHAIN).index.issuedThrough, 1);
+});
+
 await check("[A-554 repair] adapter present but Web Locks absent → refused lock_unsupported, zero auth, zero admissions", async () => {
   const { adapter } = await seededRemote({ sequences: [1, 2] });
   const fresh = createMemoryStorage();

@@ -55,7 +55,8 @@ const threeReceipts = [
   const html = list();
   check("masthead 는 정확히 1회", (html.match(/recordsCard__masthead/g) || []).length, 1);
   check("identity 줄은 정확히 1회", (html.match(/recordsCard__identity"/g) || []).length, 1);
-  check("주소는 정확히 1회 (Job 마다 반복 0)", (html.match(new RegExp(ADDRESS, "g")) || []).length, 1);
+  // [A-684] 기본 HISTORY 머리글에는 원시 주소 0 — 이름만. (이전 계약 "주소 정확히 1회" 를 대체)
+  check("기본 HISTORY 에 원시 주소 0 (A-684)", (html.match(new RegExp(ADDRESS, "g")) || []).length, 0);
   checkTrue("HISTORY 계층 표식 있음", html.includes('class="recordsCard__tier">HISTORY<'));
   checkTrue("HISTORY 는 좁은 page 칸에 넣지 않는다(격자 안 벌림)", !/recordsCard__page"[^>]*>HISTORY/.test(html));
   checkTrue("Piggy 이름 표시", html.includes("Harness"));
@@ -79,7 +80,7 @@ const threeReceipts = [
   const html = list();
   checkTrue("빈 상태에도 masthead", html.includes("recordsCard__masthead"));
   checkTrue("빈 상태에도 identity", html.includes("recordsCard__identity"));
-  checkTrue("빈 상태에도 주소 1회", (html.match(new RegExp(ADDRESS, "g")) || []).length === 1);
+  checkTrue("빈 상태에도 원시 주소 0 (A-684)", (html.match(new RegExp(ADDRESS, "g")) || []).length === 0);
   checkTrue("빈 상태 문구 유지", html.includes("No records yet"));
   checkTrue("가짜 receipt row 0", !html.includes("recordsCard__row"));
   checkTrue("빈 상태에도 folder 그림 0", !html.includes("recordsFolder") && !html.includes("folder-back") && !html.includes("folder-front"));
@@ -101,7 +102,7 @@ const threeReceipts = [
 {
   const { list } = build({ receipts: [], address: ADDRESS, name: "Harness" });
   const html = list();
-  checkTrue("주소 원문 그대로(…·省略 0)", html.includes(ADDRESS));
+  checkTrue("기본 HISTORY DOM 에 주소 원문 0 (A-684)", !html.includes(ADDRESS) && !html.includes("recordsCard__identityAddress"));
   checkTrue("줄임표 0", !html.includes("…") && !html.includes("..."));
 }
 

@@ -386,7 +386,7 @@ export function homeMoneyPiggyRows({ totals = null, piggies = [], selectedPiggyI
 export function homeMoneyTotalsNote(totals) {
   if (!totals || totals.totalUsd) return "";
   if (totals.reason === "no_piggies") return "";
-  if (totals.reason === "incomplete_valuation") return "총액은 모든 Piggy 의 값을 읽은 뒤에 보여줘.";
+  if (totals.reason === "incomplete_valuation") return "The total shows once every Piggy's value has been read.";
   return "";
 }
 
@@ -430,13 +430,13 @@ export function confirmButtonMarkup({ id = "homeActionOk", label = "ok", enabled
 // 사용자에게 보이는 것은 **돈이 어디서 오는지**이지 네트워크·브리지·스왑이 아니다.
 
 const FUNDING_METHOD_LABEL = Object.freeze({
-  bank_card_apple_pay: "은행 · 카드 · Apple Pay",
-  from_another_wallet: "다른 지갑에서",
-  other_options: "다른 방법",
+  bank_card_apple_pay: "Bank · card · Apple Pay",
+  from_another_wallet: "From another wallet",
+  other_options: "Other ways",
 });
 
 const FUNDING_UNAVAILABLE_NOTE = Object.freeze({
-  no_provider_selected: "아직 준비 중이야",
+  no_provider_selected: "Not ready yet",
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -547,7 +547,7 @@ export function fundingMethodsMarkup(methods, { idPrefix = "homeFundingMethod" }
       return `<button class="homePaper__records" id="${escapeHtml(idPrefix)}--${escapeHtml(m.method)}" type="button">&gt; ${escapeHtml(label)}</button>`;
     }
     // 쓸 수 없는 방법은 **비활성으로 보이되 이유를 단다** — 있는 척하지 않는다.
-    const note = FUNDING_UNAVAILABLE_NOTE[m.unavailableReason] || "아직 준비 중이야";
+    const note = FUNDING_UNAVAILABLE_NOTE[m.unavailableReason] || "Not ready yet";
     return `<button class="homePaper__records" type="button" disabled>${escapeHtml(label)} · ${escapeHtml(note)}</button>`;
   }).join("");
   return `<div class="homePaper__choices homePaper__choices--funding">${body}</div>`;

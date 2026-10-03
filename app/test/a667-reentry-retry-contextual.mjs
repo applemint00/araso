@@ -104,7 +104,8 @@ const LOCK_VIEW_SRC = [fnBody("renderAuthCard"), fnBody("loginCheckingMarkup"), 
 // Previous R1–R6 pins: checkPiggy faae8c966693d0c1 · recoverPiggy abaacc8b8ad11065 · openPiggy a9a45bc537ea8c89.
 // [A-669 re-pin] lockAppAfterIdle now first calls invalidateLiveAuthAttempt() (idle/session end kills live Check/Open/Send
 // attempts — behaviour pinned in a669-auth-hardening.mjs). Previous pin: lockAppAfterIdle 0083d873b56358ef.
-const PIN = { checkPiggy: "e4d707461903f924", recoverPiggy: "8809320780061f3d", openPiggy: "bb4d577044f8e7b9", startPiggyOpen: "68f68a54ac604c7e", isCancelledAuthError: "69419866a83768d3", appLockSurface: "8c31689ea48cf8aa", lockAppAfterIdle: "e4ef41131c978a25", getRpId: "a4de6277279db63f" };
+// [A-687] re-pinned: capability preflight in checkPiggy (e4d707461903f924 -> 5ec37f4dd967ec66) and openPiggy (bb4d577044f8e7b9 -> 1cfd3dd4c142f8bf); body-minus-guard == old hash is pinned in a687-auth-capability-preflight.mjs; every other pin unchanged.
+const PIN = { checkPiggy: "5ec37f4dd967ec66", recoverPiggy: "8809320780061f3d", openPiggy: "1cfd3dd4c142f8bf", startPiggyOpen: "68f68a54ac604c7e", isCancelledAuthError: "69419866a83768d3", appLockSurface: "8c31689ea48cf8aa", lockAppAfterIdle: "e4ef41131c978a25", getRpId: "a4de6277279db63f" };
 const WAIT_MS = Number((MAIN.match(/const UNLOCK_UI_WAIT_MS = ([\d_]+);/) || [])[1]?.replace(/_/g, ""));
 
 // A deferred promise per requestPrf call so each test controls when (and whether) WebAuthn settles.

@@ -18,6 +18,7 @@
 // 영속되지 않는다 — J2-6(live/fork 실행) 이 붙어 evidenceClass 가 실려 오기 전까지는.
 
 import {
+  loadSecondJourneyState,
   recordSecondJourneyReceipt,
   saveSecondJourneyState,
   validatePersistenceScope,
@@ -74,6 +75,8 @@ export const REJECTION = Object.freeze({
   EVIDENCE_MODE_MISMATCH: "evidence_mode_mismatch",
   LIVE_EVIDENCE_WITHOUT_TX: "live_evidence_without_tx",
   FORBIDDEN_FIELD: "forbidden_field_present",
+  // [A-693 D2] setItem returned but the stored bytes do not contain the receipt (or cannot be read back).
+  SAVE_NOT_VERIFIED: "save_not_verified",
 });
 
 // [A-663] TESTNET_ACTUAL is its own mode string — never "live" (mainnet) and never
@@ -201,45 +204,90 @@ export function classifySecondReceipt(candidate, { scope = {}, context = {} } = 
 }
 
 /**
+ * [A-693 D2/D3] Read the STORED second-journey state back and ask whether this event is in it.
+ * `true` only when a fresh getItem -> decode shows the receipt row (or, for a non-row event, its id).
+ * Any read/parse/scope problem is `false`: unknown stays unsaved.
+ */
+function storedHasReceipt(storage, scope, eventId) {
+  if (!storage || typeof storage.getItem !== "function") return false;
+  try {
+    const loaded = loadSecondJourneyState(storage, scope);
+    if (loaded.error || loaded.repaired) return false;
+    return (loaded.state.receipts || []).some((row) => row && row.eventId === eventId);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * **제품이 부르는 유일한 함수.** 완료 경계에서 한 번만 부른다.
  *
  * 통과하지 못하면 `state` 를 **입력 그대로** 돌려준다(부분 변경 0, 저장 0).
- * 통과하면 recordSecondJourneyReceipt → saveSecondJourneyState 순으로 나간다.
- * 같은 eventId 두 번째 호출은 `duplicate:true` 이고 state 는 늘지 않는다.
+ * 통과하면 recordSecondJourneyReceipt → saveSecondJourneyState → 다시 읽어 확인 순으로 나간다.
+ *
+ * [A-693] 반환 모양은 그대로이되 의미가 정직해졌다:
+ *   · `saved`     저장소를 **다시 읽어** 이 receipt 가 들어 있음을 확인했을 때만 true (D2)
+ *   · `persisted` 이번 호출이 새 기록을 **실제로 저장 확인**했을 때만 true (= saved 이면서 duplicate 아님).
+ *                 저장이 실패하면 false — 예전처럼 "메모리에만 있는데 persisted:true" 가 없다.
+ *   · `recorded`  (신규) 메모리 state 에 이 receipt 가 들어갔는가
+ * 같은 eventId 두 번째 호출은 `duplicate:true` 이고 state 는 늘지 않는다. 저장소에 이미 확인되면
+ * `saved:true`(다시 쓰지 않는다 — 다른 탭 상태를 덮지 않기 위해), 아직 없으면 **다시 저장해서 확인**한다 (D3).
  *
  * @param {object} p
  * @param {object} p.state   현재 second journey 도메인 state
  * @param {object} p.receipt 후보 receipt (mock 이면 거절된다)
  * @param {object} p.scope   { accountId, chainId }
- * @param {object} [p.storage] localStorage 호환. 없으면 메모리 state 만 갱신한다.
+ * @param {object} [p.storage] localStorage 호환. 없으면 메모리 state 만 갱신한다 (saved:false).
  * @param {object} [p.context] { devPreview, now }
  */
 export function commitSecondJourneyReceipt({ state, receipt: candidate, scope = {}, storage = null, context = {} } = {}) {
   if (!state || typeof state !== "object") {
-    return { state, persisted: false, duplicate: false, saved: false, reason: REJECTION.NO_RECEIPT, receipt: null };
+    return { state, persisted: false, duplicate: false, saved: false, recorded: false, reason: REJECTION.NO_RECEIPT, receipt: null };
   }
   const verdict = classifySecondReceipt(candidate, { scope, context });
   if (!verdict.persistable) {
-    return { state, persisted: false, duplicate: false, saved: false, reason: verdict.reason, receipt: null };
+    return { state, persisted: false, duplicate: false, saved: false, recorded: false, reason: verdict.reason, receipt: null };
   }
   // state 자신의 소유자와도 맞아야 한다 — 다른 Piggy/계정의 state 에 얹지 않는다.
   if (state.accountId !== verdict.receipt.accountId || state.chainId !== verdict.receipt.chainId) {
-    return { state, persisted: false, duplicate: false, saved: false, reason: REJECTION.SCOPE_MISMATCH, receipt: null };
+    return { state, persisted: false, duplicate: false, saved: false, recorded: false, reason: REJECTION.SCOPE_MISMATCH, receipt: null };
   }
 
   const applied = recordSecondJourneyReceipt(state, verdict.receipt, { eventId: verdict.receipt.eventId });
+  const eventId = verdict.receipt.eventId;
+
   if (applied.duplicate) {
-    return { state: applied.state, persisted: false, duplicate: true, saved: false, reason: null, receipt: verdict.receipt };
+    // [A-693 D3] 메모리에 이미 있다 ≠ 저장됐다. 첫 저장이 실패했을 수 있으니 저장소를 확인하고, 없으면 다시 쓴다.
+    if (!storage) {
+      return { state: applied.state, persisted: false, duplicate: true, saved: false, recorded: false, reason: null, receipt: verdict.receipt };
+    }
+    if (storedHasReceipt(storage, scope, eventId)) {
+      return { state: applied.state, persisted: false, duplicate: true, saved: true, recorded: false, reason: null, receipt: verdict.receipt };
+    }
+    const retry = saveSecondJourneyState(storage, scope, applied.state);
+    const retryVerified = retry.saved === true && storedHasReceipt(storage, scope, eventId);
+    return {
+      state: applied.state,
+      persisted: retryVerified,
+      duplicate: true,
+      saved: retryVerified,
+      recorded: false,
+      reason: retryVerified ? null : retry.error || REJECTION.SAVE_NOT_VERIFIED,
+      receipt: verdict.receipt,
+    };
   }
 
   let saved = false;
   let saveError = null;
   if (storage) {
     const result = saveSecondJourneyState(storage, scope, applied.state);
-    saved = result.saved === true;
     saveError = result.error || null;
+    if (result.saved === true) {
+      saved = storedHasReceipt(storage, scope, eventId);
+      if (!saved) saveError = REJECTION.SAVE_NOT_VERIFIED;
+    }
   }
-  return { state: applied.state, persisted: true, duplicate: false, saved, reason: saveError, receipt: verdict.receipt };
+  return { state: applied.state, persisted: saved, duplicate: false, saved, recorded: true, reason: saveError, receipt: verdict.receipt };
 }
 
 /**
