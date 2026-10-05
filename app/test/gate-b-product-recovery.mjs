@@ -12,7 +12,7 @@ import vm from "node:vm";
 import { readFileSync } from "node:fs";
 import { getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress, isMeraError } from "@category-labs/mera";
 import { bytesToHex, modelASalt, prfSaltFromHex } from "../src/piggy-session.js";
-import { admitSequencedPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, myPiggiesLockName, registerControlledPiggy, admitModelAPiggy } from "../src/piggy-index.js";
+import { admitSequencedPiggy, loadMyPiggiesIndex, markBornPiggyIssuance, myPiggiesIndexKey, myPiggiesLockName, registerControlledPiggy, admitModelAPiggy } from "../src/piggy-index.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
 import { buildBackupPayload, createMemoryBackupAdapter, indexBackupSalt, openBackup, publishIndexBackup, restoreFromBackup, sealBackup } from "../src/index-backup.js";
 import { recoverProductList } from "../src/gate-b-recovery.js";
@@ -428,6 +428,36 @@ await check("[A-554 repair] adapter present but Web Locks absent → refused loc
   assert.equal(asked, 0);
   assert.deepEqual(out.restored, []);
   assert.equal(loadMyPiggiesIndex(fresh, CHAIN).index.issuedThrough || 0, 0);
+});
+
+await check("[A-711] live scope (monad-mainnet): Gate B restore of already-known Piggies stays ungated (no authority, nothing asked of one) while a NEW +Piggy on the same device with a null authority is refused before any assertion", async () => {
+  const LIVE = "monad-mainnet";
+  const firstOn = async (storage) => {
+    const address = addressOf((await getPasskeyPrfOutput({ rpId: RP, webAuthnClient: fakeClient() })).prfOutput);
+    assert.equal(registerControlledPiggy(storage, LIVE, { id: `legacy-${address.toLowerCase()}`, name: "Honeybun", address, signerAddress: address, locator: { credentialId: ROOT_ID }, at: AT }).ok, true);
+    return address;
+  };
+  const origin = createMemoryStorage();
+  await firstOn(origin);
+  const known = {};
+  for (const n of [1, 2]) {
+    const out = await admitSequencedPiggy({ storage: origin, chainId: LIVE, sequence: n, rootCredential: ROOT, requestPrf: liveRequestPrf, deriveAddress: addressOf, now: () => AT });
+    assert.equal(out.ok, true);
+    known[n] = out.piggy.address;
+  }
+  const adapter = createMemoryBackupAdapter({ [myPiggiesIndexKey(LIVE)]: await sealBackup(buildBackupPayload(loadMyPiggiesIndex(origin, LIVE).index), await indexPrfOutput()) });
+  const fresh = createMemoryStorage();
+  await firstOn(fresh);
+  const restored = await recoverProductList({ adapter, storage: fresh, chainId: LIVE, rootCredential: ROOT, requestPrf: liveRequestPrf, deriveAddress: addressOf, locks: fifoLocks() });
+  assert.equal(restored.status, "ok", JSON.stringify(restored));
+  assert.deepEqual(restored.restored.map((r) => [r.sequence, r.address]), [[1, known[1]], [2, known[2]]]);
+  // the same device cannot ISSUE a new number without a verified authority (and the refusal costs no assertion)
+  assert.equal(markBornPiggyIssuance(fresh, LIVE, { address: loadMyPiggiesIndex(fresh, LIVE).index.piggies.find((p) => !p.sequence).address }).ok, true);
+  let asked = 0;
+  const counting = async (...args) => { asked += 1; return liveRequestPrf(...args); };
+  const refused = await admitModelAPiggy({ storage: fresh, chainId: LIVE, locks: fifoLocks(), rootCredential: ROOT, requestPrf: counting, deriveAddress: addressOf });
+  assert.deepEqual([refused.ok, refused.reason, asked], [false, "issuance_authority_unconfigured", 0]);
+  assert.equal(loadMyPiggiesIndex(fresh, LIVE).index.issuedThrough, 2);
 });
 
 console.log(`\n${pass}/${pass} PASS`);

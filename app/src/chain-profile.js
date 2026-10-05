@@ -101,6 +101,19 @@ export function profileScope(profile) {
   return isProfileActive(profile) ? profile.scope : "";
 }
 
+/**
+ * Issuance-authority profile gate: does issuing a NEW Piggy sequence number (+Piggy / Gift Piggy) on this
+ * index chain scope require a verified per-chain write-once registry?
+ *   · testnet scope ("monad-testnet")  -> false. The origin-device provenance gate stays the only issuance gate.
+ *   · every other value -> true (fail closed): the live scope "monad-mainnet", its numeric "143", and any
+ *     unknown / misspelt / non-string scope. Issuance there refuses BEFORE any passkey prompt unless an
+ *     authority is injected (main.js ships it null). A blocked profile's "" is also refused upstream (invalid_chain).
+ * Only the exact testnet scope is exempt. It reads no network and enables nothing.
+ */
+export function issuanceAuthorityRequiredForScope(scope) {
+  return scope !== PROFILES[CHAIN_PROFILE_ID.TESTNET].scope;
+}
+
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const lower = (v) => String(v || "").toLowerCase();
 

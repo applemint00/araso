@@ -12,7 +12,8 @@
 // Test-plan mapping (A-680 TEST_PLAN -> what is applicable to M2-alpha; the rest needs M2-beta reservation / sign-before-send):
 //   A1/A2 (reserved / *-signed writes)  N/A (no such stages in alpha)  -> A1x: the existing pre-money write is now verified; a failed or
 //                                         silently dropped `deposit-sending` write is a throw (sendPiggyOnce's existing catch -> nothing more is sent)
-//   A3    (post-broadcast hash write)   N/A (needs sign-before-send)    -> FLOW-5 pins the CURRENT, unchanged behaviour (stage stays *-sending, Send locked)
+//   A3    (post-broadcast hash write)   [A-707 M2-beta] now covered: the signed record (hash + nonce) is written BEFORE the broadcast; FLOW-5 pins both
+//                                         the failing signed write (0 broadcast) and the best-effort phase-sent write (flow continues). Full matrix: money-safety-m2b.mjs
 //   A4 A5 A6 A7 A8                      applicable
 //   A9    (Second bridge)               N/A (card M1, other files)
 //   B1 B2 B4                            applicable (+ B5 stale-tab overwrite = T5, B6 compare-and-clear)
@@ -26,7 +27,8 @@
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
-import { TransactionReceiptNotFoundError } from "viem";
+import { TransactionReceiptNotFoundError, keccak256 } from "viem";
+import { preparedSignProblem } from "../src/money-executor.js";
 import { decodeReceiptRow, encodeReceiptRow, receiptIdentityKey as codecReceiptIdentityKey, RECEIPT_KIND } from "../src/receipt-codec.js";
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
@@ -68,7 +70,8 @@ const CONSTS = [
   'const RECEIPTS_KEY = "araso.receipts";',
   'const TRIP_CLOSED_KEY = "araso.tripClosed";',
   'const SEND_PENDING_KEY = "araso.sendPending";',
-  'const SEND_PENDING_STAGES = ["deposit-sending", "deposit-broadcast", "redeem-sending", "redeem-broadcast"];',
+  // [A-707 M2-beta re-pin, named reason] "reserved" joins the stage list (cross-tab reservation record); the legacy hash-less stages stay readable.
+  'const SEND_PENDING_STAGES = ["reserved", "deposit-sending", "deposit-broadcast", "redeem-sending", "redeem-broadcast"];',
 ];
 for (const c of CONSTS) assert.ok(MAIN.includes(c), `const line still in main.js: ${c}`);
 const SHMON_ADDRESS = MAIN.match(/const SHMON_ADDRESS = "(0x[0-9a-fA-F]{40})";/)[1];
@@ -161,9 +164,20 @@ const neverFailedCopy = (calls) => calls.scenes.every((s) => !(s[0] === "sendsta
 
 // ═══ source invariants ═══════════════════════════════════════════════════════════════════════
 await check("S1 pending is removed only in finishTrip (after the receipt save) and the DEV reset — never in commitSendSuccess / sendPiggyOnce / reconcile", () => {
+  // [A-707 M2-beta re-pin, named reason] two more removal sites exist, both compare-and-clear of a record that proves nothing was sent:
+  // clearOwnSendPending (this tab's `reserved`, or its just-written signed deposit record whose broadcast call never happened) and
+  // sweepStaleSendReservation (a `reserved` record whose owner tab's lifetime lock is provably gone). Every other function still must not clear.
+  // [A-707 r2 re-pin, named reason: tab-scoped reservation + lock held through] one more site: promoteSendReservation (runs only inside the
+  // exclusive lock) rolls back its OWN just-written `reserved` bytes when the read-back did not verify. It cannot remove any other record.
   const sites = [...MAIN.matchAll(/localStorage\.removeItem\(SEND_PENDING_KEY\)/g)].length;
-  assert.equal(sites, 2, "exactly two removal sites: finishTrip + DEV resetLocalTest");
+  assert.equal(sites, 5, "exactly five removal sites: finishTrip + clearOwnSendPending + sweepStaleSendReservation + promoteSendReservation (own-bytes rollback) + DEV resetLocalTest");
+  assert.ok(/if \(localStorage\.getItem\(SEND_PENDING_KEY\) === reservation\.json\) localStorage\.removeItem\(SEND_PENDING_KEY\)/.test(fnBody("promoteSendReservation")), "promote only removes its own exact bytes");
+  assert.ok(/if \(!sendLockHeldBy\(reservation\)\) return false;/.test(fnBody("clearOwnSendPending")), "clearOwnSendPending touches the shared record only while holding the exclusive lock");
   assert.ok(fnBody("finishTrip").includes("localStorage.removeItem(SEND_PENDING_KEY)"));
+  assert.ok(fnBody("clearOwnSendPending").includes("localStorage.removeItem(SEND_PENDING_KEY)"));
+  assert.ok(fnBody("sweepStaleSendReservation").includes("localStorage.removeItem(SEND_PENDING_KEY)"));
+  assert.ok(/stage !== "reserved" && !unsentSigned/.test(fnBody("clearOwnSendPending")), "clearOwnSendPending only clears reserved / proven-unsent-signed");
+  assert.ok(/again\.stage !== "reserved"/.test(fnBody("sweepStaleSendReservation")), "the sweep only clears a reserved record");
   for (const name of ["commitSendSuccess", "sendPiggyOnce", "reconcileSendPending", "classifySendPending", "reconciledSendReceipt", "readSendPending", "writeSendPending", "rememberReceipt"]) {
     assert.equal(fnBody(name).includes("removeItem(SEND_PENDING_KEY)"), false, `${name} must not clear pending`);
   }
@@ -222,10 +236,10 @@ await check("A6 receipt store setItem throws at the durable save -> done_unsaved
   assert.equal(t.api.sendBusy(), true, "Send stays locked");
   assert.equal(t.state.tripOutcome, "done");
 });
-await check("A7 receipt store corrupt (unparseable / not an array / one undecodable legacy row) -> save refuses, stored bytes unchanged (T4), pending kept", () => {
-  const goodRow = encodeReceiptRow(receipt({ redeemTxHash: F, txHash: F }));
-  const badLegacy = { ...goodRow, before: "not-a-number" };
-  for (const raw of ["{broken", JSON.stringify({ a: 1 }), JSON.stringify([goodRow, badLegacy])]) {
+// [A-768 M-F-3 · declared expectation update] "one undecodable legacy row" moved out of A7: per 99e M-F-3 a single bad row must not
+// poison the whole store (permanent receipt_store_unsound). It is now skipped and kept VERBATIM, like a broken add_money row (A7c below).
+await check("A7 receipt store corrupt (unparseable / not an array) -> save refuses, stored bytes unchanged (T4), pending kept", () => {
+  for (const raw of ["{broken", JSON.stringify({ a: 1 })]) {
     const t = build({ pendingRecord: pend(), receiptsRaw: raw });
     assert.throws(() => t.api.rememberReceipt(receipt()), /receipt_store_unsound/);
     assert.equal(t.storage.raw(RECEIPTS_KEY), raw, "bytes unchanged");
@@ -245,6 +259,17 @@ await check("A7b a broken add_money row alone does not block the save and is pre
   assert.equal(rows.length, 3);
   assert.deepEqual(rows[1], goodAdd);
   assert.deepEqual(rows[2], badAdd);
+  assert.equal(rows[0].redeemTxHash, E);
+});
+await check("A7c [A-768 M-F-3] one undecodable LEGACY row no longer poisons the store: the save succeeds, the bad row and the healthy row are kept verbatim, readReceipts shows the healthy history", () => {
+  const goodRow = encodeReceiptRow(receipt({ redeemTxHash: F, txHash: F }));
+  const badLegacy = { ...goodRow, before: "not-a-number" };
+  const t = build({ pendingRecord: pend(), receiptsRaw: JSON.stringify([goodRow, badLegacy]) });
+  assert.equal(t.api.rememberReceipt(receipt()), true);
+  const rows = storedRows(t.storage);
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[1], goodRow);
+  assert.deepEqual(rows[2], badLegacy);
   assert.equal(rows[0].redeemTxHash, E);
 });
 await check("A8 verify mismatch (setItem 'succeeds' but the row is not in storage) -> not saved, pending kept", () => {
@@ -497,29 +522,47 @@ await check("G2 receipt from/to mismatch -> unknown (never trusted as success)",
 });
 
 // ═══ flow: real sendPiggy + sendPiggyOnce + real finishTrip / rememberReceipt ═══════════════════
+const HASH_DEPOSIT = keccak256("0xa0");
+const HASH_REDEEM = keccak256("0xa1");
 function makeFlow({ storage = makeStorage(), settleOutcome = "done", depositThrows = false, simThrows = false } = {}) {
-  const calls = { grant: 0, sign: 0, sendTx: 0, scenes: [] };
+  const calls = { grant: 0, sign: 0, sendTx: 0, prepared: 0, scenes: [] };
   const btn = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   const state = { address: "0xabc", txHash: "", mark: "", grantTxHash: "", receipts: [], receiptIndex: 0, tripClosed: false, tripOutcome: "", tripReason: "" };
+  // [A-707 M2-beta] harness wiring: sign-before-send (fake account signs "0xa<nonce>"; the fake node returns keccak256(raw)) + fake Web Locks.
+  const held = new Map();
+  const navigatorStub = {
+    locks: {
+      async request(name, opts, cb) {
+        if (held.has(name)) return opts.ifAvailable ? cb(null) : new Promise(() => {});
+        held.set(name, true);
+        try { return await cb({ name, mode: "exclusive" }); } finally { held.delete(name); }
+      },
+      async query() { return { held: [...held.keys()].map((name) => ({ name })), pending: [] }; },
+    },
+  };
   const env = {
     localStorage: storage, state,
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     isAllowedPiggyRpId: () => true,
-    activeAccount: { address: "0xabc" },
+    activeAccount: { address: "0xabc", signTransaction: async (prepared) => `0xa${prepared.nonce}` },
+    navigator: navigatorStub, keccak256,
     activeSession: { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } },
     setScene: (...a) => { calls.scenes.push(a); btn.disabled = true; btn.attrs["aria-disabled"] = "true"; /* a rendered scene starts locked; syncSendButton frees it */ },
     recoverPiggy: async () => {}, noteRecoverSuccess() {}, noteRecoverFailure() {}, isCancelledAuthError: () => false,
     requestGrant: async () => { calls.grant += 1; return { txHash: "0xgrant" }; },
     simulateSend: async () => { if (simThrows) throw new Error("sim reverted"); return { depositTx: {}, before: 1n, beforeShares: 0n }; },
     touchAppSession() {},
-    createWalletClient: () => ({ sendTransaction: async () => { calls.sendTx += 1; if (depositThrows && calls.sendTx === 1) throw new Error("rpc"); return calls.sendTx === 1 ? "0xdeposit" : "0xredeem"; } }),
+    // [A-768 M-C-1/M-L-1 harness wiring] the fake prepare returns a well-formed Monad-testnet eip1559 request (the pre-sign guard now checks it),
+    // the REAL preparedSignProblem is injected, and the fake node answers the deposit-block nonce read (deposit nonce + 1).
+    createWalletClient: () => ({ prepareTransactionRequest: async () => ({ type: "eip1559", chainId: 10143, gas: 21000n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, nonce: calls.prepared++ }) }),
+    preparedSignProblem,
     MONAD_TESTNET: {}, MONAD_TESTNET_RPC: "", http: () => ({}),
-    crypto: { subtle: { digest: async () => new ArrayBuffer(32) } }, TextEncoder, toHex: () => "00",
+    crypto: { subtle: { digest: async () => new ArrayBuffer(32) }, getRandomValues: (a) => globalThis.crypto.getRandomValues(a) }, TextEncoder, toHex: () => "00",
     waitForSuccess: async () => ({ status: "success", gasUsed: 1n, effectiveGasPrice: 1n, blockNumber: 1n }),
     readShmonBalance: async () => 5n, makeRedeemTx: () => ({}),
-    publicClient: { estimateGas: async () => 1n },
+    publicClient: { estimateGas: async () => 1n, getTransactionCount: async () => calls.prepared, sendRawTransaction: async ({ serializedTransaction }) => { calls.sendTx += 1; if (depositThrows && calls.sendTx === 1) throw new Error("rpc"); return keccak256(serializedTransaction); } },
     settleSend: async () => (settleOutcome === "done"
-      ? { outcome: "done", reason: "ok", receipt: receipt({ txHash: "0xredeem", redeemTxHash: "0xredeem", depositTxHash: "0xdeposit" }) }
+      ? { outcome: "done", reason: "ok", receipt: receipt({ txHash: HASH_REDEEM, redeemTxHash: HASH_REDEEM, depositTxHash: HASH_DEPOSIT }) }
       : { outcome: "failed", reason: "redeem-unconfirmed-or-reverted", receipt: null }),
     formatError: (e) => String(e), recordSafeError: () => {}, waitForGrantBalance: async () => true, endActiveSession() {},
     setTimeout: () => 0,
@@ -527,9 +570,11 @@ function makeFlow({ storage = makeStorage(), settleOutcome = "done", depositThro
     authAttempt: null, platformAuthInflight: null,
   };
   const names = Object.keys(env);
-  const body = `${CONSTS.join("\n")}\n${RECEIPT_FNS_SRC}\n${PENDING_SRC}\n${FINISH_SRC}\n${ONCE_SRC}\nreturn { sendPiggy, readSendPending, sendBusy, isInFlight: () => sendInFlight };`;
+  const body = `${CONSTS.join("\n")}\n${RECEIPT_FNS_SRC}\n${PENDING_SRC}\n${FINISH_SRC}\n${ONCE_SRC}\nreturn { sendPiggy, readSendPending, sendBusy, holdSendTabLock, isInFlight: () => sendInFlight };`;
   const factory = new Function(...names, body);
-  return { ...factory(...names.map((n) => env[n])), calls, btn, state, storage };
+  const made = factory(...names.map((n) => env[n]));
+  made.holdSendTabLock(); // boot step: tab lifetime lock (the fake locks grant it synchronously)
+  return { ...made, calls, btn, state, storage };
 }
 const tick = () => new Promise((r) => setTimeout(r, 0));
 await check("FLOW-1 live success end to end: receipt stored + verified, pending cleared AFTER it, lock released, Send enabled (replaces the old stub-level 'pending cleared')", async () => {
@@ -537,9 +582,9 @@ await check("FLOW-1 live success end to end: receipt stored + verified, pending 
   const t = makeFlow({ storage });
   await t.sendPiggy(); await tick(); await tick(); await tick();
   assert.equal(storedRows(storage).length, 1);
-  assert.equal(storedRows(storage)[0].redeemTxHash, "0xredeem");
+  assert.equal(storedRows(storage)[0].redeemTxHash, HASH_REDEEM);
   assert.equal(storage.has(SEND_PENDING_KEY), false);
-  assert.equal(storage.raw("araso.txHash"), "0xredeem");
+  assert.equal(storage.raw("araso.txHash"), HASH_REDEEM);
   assert.equal(t.isInFlight(), false);
   assert.equal(t.btn.disabled, false);
   const iSet = storage.log.findIndex((x) => x[0] === "set" && x[1] === RECEIPTS_KEY);
@@ -570,7 +615,7 @@ await check("FLOW-3 A4 end to end: unreadable pending store -> Send starts nothi
   assert.equal(`${t.calls.grant}/${t.calls.sign}/${t.calls.sendTx}`, "0/0/0");
   assert.equal(t.calls.scenes.at(-1)[2], "Confirmation is still catching up.");
 });
-await check("FLOW-4 A1x end to end: the pre-money pending write is dropped by the store -> nothing is sent", async () => {
+await check("FLOW-4 A1x end to end: the pre-money (reservation) write is dropped by the store -> nothing is sent", async () => {
   const storage = makeStorage();
   storage.fx.dropSet.add(SEND_PENDING_KEY);
   const t = makeFlow({ storage });
@@ -578,16 +623,26 @@ await check("FLOW-4 A1x end to end: the pre-money pending write is dropped by th
   assert.equal(t.calls.sendTx, 0);
   assert.equal(t.isInFlight(), false);
 });
-await check("FLOW-5 A3x (unchanged, M2-beta territory): post-broadcast hash write failing leaves the stage at *-sending and Send locked", async () => {
-  const storage = makeStorage();
-  const orig = storage.setItem.bind(storage);
-  storage.setItem = (k, v) => { if (k === SEND_PENDING_KEY && JSON.parse(v).stage === "deposit-broadcast") throw new Error("quota"); orig(k, v); };
-  const t = makeFlow({ storage });
-  await t.sendPiggy(); await tick();
-  assert.equal(JSON.parse(storage.raw(SEND_PENDING_KEY)).stage, "deposit-sending");
-  assert.equal(t.calls.sendTx, 1);
-  assert.equal(t.btn.disabled, true);
-  assert.equal(t.sendBusy(), true);
+await check("FLOW-5 A2/A3 [A-707 M2-beta]: the signed-record write failing -> 0 broadcast; the post-broadcast phase write failing -> flow continues (hash already durable)", async () => {
+  // (a) the signed deposit record cannot be written: sign happened, persist failed -> broadcast never called, reservation released, Send usable.
+  const s1 = makeStorage();
+  const orig1 = s1.setItem.bind(s1);
+  s1.setItem = (k, v) => { if (k === SEND_PENDING_KEY && JSON.parse(v).phase === "signed") throw new Error("quota"); orig1(k, v); };
+  const t1 = makeFlow({ storage: s1 });
+  await t1.sendPiggy(); await tick();
+  assert.equal(t1.calls.sendTx, 0, "sendRawTransaction never called");
+  assert.equal(s1.has(SEND_PENDING_KEY), false, "reservation released: nothing moved");
+  assert.equal(t1.sendBusy(), false);
+  assert.equal(t1.isInFlight(), false);
+  // (b) the phase-sent write fails after each broadcast: best-effort, the signed record already carries the identity -> the run completes.
+  const s2 = makeStorage();
+  const orig2 = s2.setItem.bind(s2);
+  s2.setItem = (k, v) => { if (k === SEND_PENDING_KEY && JSON.parse(v).phase === "sent") throw new Error("quota"); orig2(k, v); };
+  const t2 = makeFlow({ storage: s2 });
+  await t2.sendPiggy(); await tick(); await tick(); await tick();
+  assert.equal(t2.calls.sendTx, 2, "deposit and redeem both broadcast once");
+  assert.equal(storedRows(s2).length, 1, "receipt saved");
+  assert.equal(s2.has(SEND_PENDING_KEY), false, "pending cleared after the verified receipt");
 });
 await check("FLOW-6 failed settle: unchanged contract (pending kept at redeem-broadcast, no receipt, no txHash)", async () => {
   const storage = makeStorage();

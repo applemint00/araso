@@ -264,10 +264,12 @@ export function commitSecondJourneyReceipt({ state, receipt: candidate, scope = 
     if (storedHasReceipt(storage, scope, eventId)) {
       return { state: applied.state, persisted: false, duplicate: true, saved: true, recorded: false, reason: null, receipt: verdict.receipt };
     }
+    // [A-710 S1 · A-693 M-3] this retry used to write the in-memory state over the whole store; the save now
+    // merges with what is stored and reads back, and the caller gets the verified merged state.
     const retry = saveSecondJourneyState(storage, scope, applied.state);
     const retryVerified = retry.saved === true && storedHasReceipt(storage, scope, eventId);
     return {
-      state: applied.state,
+      state: retryVerified && retry.state ? retry.state : applied.state,
       persisted: retryVerified,
       duplicate: true,
       saved: retryVerified,
@@ -279,15 +281,18 @@ export function commitSecondJourneyReceipt({ state, receipt: candidate, scope = 
 
   let saved = false;
   let saveError = null;
+  let mergedState = null;
   if (storage) {
+    // [A-710 S1 · A-693 M-3] merge-on-save: rows another tab stored since `state` was loaded are kept.
     const result = saveSecondJourneyState(storage, scope, applied.state);
     saveError = result.error || null;
     if (result.saved === true) {
       saved = storedHasReceipt(storage, scope, eventId);
       if (!saved) saveError = REJECTION.SAVE_NOT_VERIFIED;
+      else mergedState = result.state || null;
     }
   }
-  return { state: applied.state, persisted: saved, duplicate: false, saved, recorded: true, reason: saveError, receipt: verdict.receipt };
+  return { state: mergedState || applied.state, persisted: saved, duplicate: false, saved, recorded: true, reason: saveError, receipt: verdict.receipt };
 }
 
 /**

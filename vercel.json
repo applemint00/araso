@@ -7,6 +7,9 @@
       "includeFiles": "relayer/src/policy.mjs"
     }
   },
+  "rewrites": [
+    { "source": "/claim", "destination": "/index.html" }
+  ],
   "headers": [
     {
       "source": "/(.*)",

@@ -60,7 +60,20 @@ const PRE = {
   admitSequencedPiggy: "c04fa2bfb30fa441" + "ebc1bf2e40bf8d9b" + "eb3c4f7935856f8b" + "e2b85daa70ff3e29",
   sendPiggyOnce: "33e13215c9fc55c2" + "a6a57758de638d7f" + "c363231353541cb0" + "d251b7cc7af3a730", // pre-A-669 (historical; SEND-0 now pins POST_A698 below)
   // [A-698 M3 re-pin] Owner NEWEST-WINS 2026-10-03: Send recovery shares the Check/Open attempt slot + minimal appLock guard.
-  sendPiggyOnceA698: "b7c47a07852e9718" + "e4e5260b694d9128" + "a3a4089230066fa7" + "497225e712f86ef9",
+  sendPiggyOnceA698: "b7c47a07852e9718" + "e4e5260b694d9128" + "a3a4089230066fa7" + "497225e712f86ef9", // historical (A-698 shape)
+  // [A-707 M2-beta re-pin] First pre-broadcast safety: cross-tab reservation before the attempt slot (sync), confirm under the short exclusive lock,
+  // pre-sign appLock re-check, sign-before-send (hash + nonce persisted and verified BEFORE sendRawTransaction), release on every pre-sign exit.
+  sendPiggyOnceA707: "c73057d76f4f5195" + "fdbc13f6bf329f47" + "97fee6ae39c669c8" + "b553c6feac4e6c22", // historical (A-707 r1 shape)
+  // [A-707 r2 re-pin] security-review MEDIUM fix (cross-tab confirm race): confirm holds the exclusive lock through persist + both broadcasts,
+  // lock re-asserted before sign and before each sendRawTransaction, busy copy (existing) when another record holds the shared slot.
+  sendPiggyOnceA707r2: "6430b5e025ebbc69" + "a1bd9ac56ef2daf0" + "80edcd524edc5db1" + "fd44139078165fa8",
+  // [A-756 re-pin, named reason: Owner decision lock (A) copy only] the away line "Can go out once, up to $5." -> "Can go out once."; proven: the
+  // A-707 r2 body with exactly that one string replaced hashes to this value (WRITER_NOTES.md). No logic change.
+  sendPiggyOnceA756: "6feadb018b233017" + "0f31cc65243bd70c" + "d6291b40098727fb" + "f75712586ef1263a",
+  // [A-768 re-pin, named reason: 99e M-L-1] after the confirmed deposit, the redeem reads/sign moved into prepareRedeemAfterDeposit
+  // (deposit-block-pinned shMON/nonce/gas reads + bounded retry); an unresolved reader lag now keeps the existing Away "still out."
+  // instead of the failure scene. The A-698/A-707 shape pinned below (attempt slot, recovery, appLock, lock re-asserts) is unchanged.
+  sendPiggyOnceA768: "01ee727da9fc2def" + "3d057d939c42b9cf" + "69a95ace97f4c9af" + "81500bd3fef9646b",
   render: "866133cf60711093" + "9b5ce2b05ad9ff25" + "3ee7ab77f8448b39" + "77faa974a9d3e27c",
 };
 
@@ -590,12 +603,19 @@ await check("SEQ-5=A fail-closed (A-695): a device with no valid local index can
 });
 
 // ═══ SEND lane — OWNER_INPUT_REQUIRED, left pre-A-669 ══════════════════════════════════════════
-await check("SEND-0 [re-pinned by A-698 M3: Owner newest-wins 'Send recovery slot A + minimal lock guard'] sendPiggyOnce == A-698 shape: shared attempt slot, bounded recovery, appLock guard before requestGrant", () => {
+await check("SEND-0 [re-pinned by A-707 M2-beta: reservation + confirm + sign-before-send on top of the A-698 shape] sendPiggyOnce keeps the A-698 shape: shared attempt slot, bounded recovery, appLock guard before requestGrant", () => {
   const once = fnBody("sendPiggyOnce");
-  assert.equal(sha(once), PRE.sendPiggyOnceA698, "sendPiggyOnce == A-698 pin (any further edit must re-pin with a named reason)");
+  assert.equal(sha(once), PRE.sendPiggyOnceA768, "sendPiggyOnce == A-768 pin (A-756 + 99e M-L-1 post-deposit reads only; any further edit must re-pin with a named reason)");
+  assert.notEqual(PRE.sendPiggyOnceA768, PRE.sendPiggyOnceA756, "the A-756 pin was superseded, not silently reused");
+  assert.notEqual(PRE.sendPiggyOnceA756, PRE.sendPiggyOnceA707r2, "the A-707 r2 pin was superseded, not silently reused");
+  assert.notEqual(PRE.sendPiggyOnceA707, PRE.sendPiggyOnceA698, "the A-698 pin was superseded, not silently reused");
+  assert.notEqual(PRE.sendPiggyOnceA707r2, PRE.sendPiggyOnceA707, "the A-707 r1 pin was superseded, not silently reused");
+  assert.equal((once.match(/assertSendLockHeld\(reservation\)/g) || []).length, 3, "lock re-asserted before sign and before each of the two broadcasts");
   assert.ok(!once.includes("      await recoverPiggy();\n"), "the unbounded money-path recovery residual is closed");
   assert.ok(once.includes("recoverPiggy({ isCurrent: () => attempt.live })"), "recovery carries the attempt token");
   assert.ok(once.indexOf("if (state.appLock)") > 0 && once.indexOf("if (state.appLock)") < once.indexOf("requestGrant("), "lock guard precedes requestGrant");
+  assert.ok(once.indexOf("reserveSend()") > 0 && once.indexOf("reserveSend()") < once.indexOf('beginAuthAttempt("send")'), "reservation is written before the attempt slot is taken");
+  assert.ok(once.indexOf("writeOwnedSendPending(reservation, { stage: \"deposit-broadcast\", phase: \"signed\"") < once.indexOf("publicClient.sendRawTransaction("), "the signed hash is persisted before the first broadcast");
 });
 
 finished = true;

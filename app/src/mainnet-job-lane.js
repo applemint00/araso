@@ -19,7 +19,7 @@
 // lifecycle, and no product code constructs one.
 
 import { decodeFunctionResult, encodeFunctionData, maxUint256 } from "viem";
-import { ACTION, RESULT, decideRules, decideSemanticReturnRule } from "./rule-decision.js";
+import { ACTION, RESULT, decideRule, decideRules, decideSemanticReturnRule } from "./rule-decision.js";
 import {
   EVIDENCE_LABEL,
   EXECUTION_MODE,
@@ -30,95 +30,31 @@ import {
 } from "./second-job-readiness.js";
 import { DECISION_RECEIPT_SCHEMA, validateDecisionReceipt } from "./second-journey-state.js";
 import { authorize, consume, onUnknownOutcome, permissionNonce } from "./permission-envelope.js";
-import { CHAIN_PROFILE_ID, bindRecordToProfile, checkRecordBinding, isProfileActive } from "./chain-profile.js";
+import { bindRecordToProfile, checkRecordBinding } from "./chain-profile.js";
 import { executeMoneyStep, TRANSPORT_KIND } from "./money-executor.js";
+// Protocol-neutral helpers (move-only) and the Aave Job's own facts (move-only). Every public Aave
+// name stays exported from this module, so existing imports of mainnet-job-lane.js keep working.
+import {
+  ADDR, DECISION_WORD, TX, executorRefusal, foldDecisions, formatUnits, isDigits, lower, saveRecord, saveRecordVerified, stampRecord,
+} from "./mainnet-job-common.js";
+import {
+  ERC20_ABI, LANE_ACTION, LANE_AMOUNT_CAP_RAW, LANE_DESTINATION_ID, LANE_ERRAND_IDS, LANE_FORK_EVIDENCE, LANE_JIT_QUESTION_ID,
+  LANE_JOB_ID, LANE_RECEIPT_TOKEN, LANE_SELECTORS, POOL_ABI, decodeReserveConfiguration, isAaveLaneProfile,
+} from "./mainnet-job-aave.js";
 
-export const LANE_JOB_ID = "aave-usdc";
-export const LANE_ACTION = "grow_stable_roundtrip";
-// The Explore destination this Job stands behind (job-feed.js fixture with an immediate return model).
-export const LANE_DESTINATION_ID = "aave-like-grow-supply";
-const LANE_ERRAND_IDS = Object.freeze(["grow"]);
-const LANE_JIT_QUESTION_ID = "return_tolerance";
-
-// The Pool's receipt token for USDC, re-derived on chain from getReserveData(USDC).aTokenAddress
-// at the pinned fork block and equal to the recorded value.
-export const LANE_RECEIPT_TOKEN = Object.freeze({
-  symbol: "aMonUSDC",
-  address: "0x35a73BAcb179d3740395A3ceCc87FF2e581d6042",
-  decimals: 6,
-});
-
-// Fork evidence this lane was built from (mainnet fork, chain 143, no time warp).
-export const LANE_FORK_EVIDENCE = Object.freeze({
-  label: EVIDENCE_LABEL.FORK_SIM,
-  chainId: 143,
-  block: 108999816,
-  blockTimestamp: "2026-09-29T09:24:32Z",
-  sentRaw: "5000000",
-  returnedRaw: "4999999",
-  deltaRaw: "-1",
-  gasUsed: Object.freeze({ approve: 55437, supply: 197122, withdraw: 177464 }),
-  exit: "immediate",
-  revertProbe: Object.freeze({ step: "withdraw with zero position", selector: "0x47bc4b2c", name: "NotEnoughAvailableUserBalance()" }),
-  unmeasured: Object.freeze(["supplyApr", "gasUsd"]),
-});
-
-// The only size proven end to end on the fork. A different cap is an Owner decision.
-export const LANE_AMOUNT_CAP_RAW = "5000000";
+export {
+  LANE_ACTION, LANE_AMOUNT_CAP_RAW, LANE_DESTINATION_ID, LANE_FORK_EVIDENCE, LANE_JOB_ID, LANE_RECEIPT_TOKEN, LANE_SELECTORS,
+  decodeReserveConfiguration,
+};
 
 // Product config for this lane: no reader, no writer. Both stay off until a separate Owner step.
 export const MAINNET_LANE_CONFIG = Object.freeze({ reader: null, liveExecution: false });
 
-const ADDR = /^0x[0-9a-fA-F]{40}$/;
-const TX = /^0x[0-9a-fA-F]{64}$/;
-const lower = (v) => String(v || "").toLowerCase();
-const isDigits = (v) => typeof v === "string" && /^\d+$/.test(v);
-
-const ERC20_ABI = Object.freeze([
-  { type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ type: "uint256" }] },
-  { type: "function", name: "allowance", stateMutability: "view", inputs: [{ name: "owner", type: "address" }, { name: "spender", type: "address" }], outputs: [{ type: "uint256" }] },
-  { type: "function", name: "approve", stateMutability: "nonpayable", inputs: [{ name: "spender", type: "address" }, { name: "amount", type: "uint256" }], outputs: [{ type: "bool" }] },
-]);
-
-const POOL_ABI = Object.freeze([
-  { type: "function", name: "supply", stateMutability: "nonpayable", inputs: [{ name: "asset", type: "address" }, { name: "amount", type: "uint256" }, { name: "onBehalfOf", type: "address" }, { name: "referralCode", type: "uint16" }], outputs: [] },
-  { type: "function", name: "withdraw", stateMutability: "nonpayable", inputs: [{ name: "asset", type: "address" }, { name: "amount", type: "uint256" }, { name: "to", type: "address" }], outputs: [{ type: "uint256" }] },
-  { type: "function", name: "getReserveData", stateMutability: "view", inputs: [{ name: "asset", type: "address" }], outputs: [{ type: "tuple", components: [
-    { name: "configuration", type: "uint256" }, { name: "liquidityIndex", type: "uint128" }, { name: "currentLiquidityRate", type: "uint128" },
-    { name: "variableBorrowIndex", type: "uint128" }, { name: "currentVariableBorrowRate", type: "uint128" }, { name: "currentStableBorrowRate", type: "uint128" },
-    { name: "lastUpdateTimestamp", type: "uint40" }, { name: "id", type: "uint16" }, { name: "aTokenAddress", type: "address" },
-    { name: "stableDebtTokenAddress", type: "address" }, { name: "variableDebtTokenAddress", type: "address" }, { name: "interestRateStrategyAddress", type: "address" },
-    { name: "accruedToTreasury", type: "uint128" }, { name: "unbacked", type: "uint128" }, { name: "isolationModeTotalDebt", type: "uint128" }] }] },
-]);
-
-export const LANE_SELECTORS = Object.freeze({
-  approve: "0x095ea7b3",
-  supply: "0x617ba037",
-  withdraw: "0x69328dec",
-  getReserveData: "0x35ea6a75",
-  balanceOf: "0x70a08231",
-  allowance: "0xdd62ed3e",
-});
-
-function isLaneProfile(profile) {
-  return isProfileActive(profile) && profile.id === CHAIN_PROFILE_ID.MAINNET && profile.jobId === LANE_JOB_ID
-    && !!profile.usdc && ADDR.test(profile.usdc.address);
-}
+const isLaneProfile = isAaveLaneProfile;
 
 function lanePlan(profile, piggyAddress) {
   const out = buildExecutionPlan(LANE_JOB_ID, { context: { address: piggyAddress, chain: profile.scope }, executionMode: EXECUTION_MODE.LIVE });
   return out.plan && ADDR.test(out.plan.destination || "") ? out.plan : null;
-}
-
-/** Reserve configuration bitmap: decimals bits 48-55, active 56, frozen 57, paused 60. */
-export function decodeReserveConfiguration(word) {
-  if (typeof word !== "bigint" || word < 0n) return null;
-  return {
-    decimals: Number((word >> 48n) & 0xffn),
-    active: ((word >> 56n) & 1n) === 1n,
-    frozen: ((word >> 57n) & 1n) === 1n,
-    paused: ((word >> 60n) & 1n) === 1n,
-  };
 }
 
 class LaneReadError extends Error {
@@ -246,15 +182,7 @@ function ruleWhy(decision, readBlock) {
   return `${ev.field}: ${decision.reason}`;
 }
 
-function fold(decisions) {
-  for (const result of [RESULT.UNKNOWN, RESULT.NAH, RESULT.ASK]) {
-    const first = decisions.find((d) => d.result === result);
-    if (first) return { result, deciding: first };
-  }
-  return { result: RESULT.DO_IT, deciding: null };
-}
-
-const DECISION_WORD = Object.freeze({ [RESULT.NAH]: "nah", [RESULT.ASK]: "ask", [RESULT.UNKNOWN]: "unknown", [RESULT.DO_IT]: "match" });
+const fold = foldDecisions;
 
 /**
  * One decision for one event. Rules come from the live read; the return meaning comes from the
@@ -366,11 +294,6 @@ export function decideLane({
   return out;
 }
 
-function formatUnits(raw, decimals) {
-  const s = raw.toString().padStart(decimals + 1, "0");
-  return `${s.slice(0, s.length - decimals)}.${s.slice(s.length - decimals)}`;
-}
-
 /**
  * The exact permission the Piggy's owner is asked for, after a match only. Approval is exactly
  * the amount (never unlimited), the supply is on behalf of this Piggy, and the exit returns to
@@ -469,21 +392,13 @@ export function laneIntentKey(profile, piggyId) {
 }
 
 function saveIntent(storage, profile, intent) {
-  const key = laneIntentKey(profile, intent.piggyId);
-  if (!storage || !key) return false;
-  try { storage.setItem(key, JSON.stringify(intent)); return true; } catch { return false; }
+  return saveRecord(storage, laneIntentKey(profile, intent.piggyId), intent);
 }
 
-// [money-safety M1] setItem + read-back: true only when the stored bytes are exactly what was written. Used for the writes the
-// money path depends on (the "about to send" record and the post-send hash), where "setItem did not throw" is not enough.
+// [money-safety M1] setItem + read-back (mainnet-job-common.js saveRecordVerified). Used for the writes the money path depends
+// on (the "about to send" record and the post-send hash), where "setItem did not throw" is not enough.
 function saveIntentVerified(storage, profile, intent) {
-  const key = laneIntentKey(profile, intent.piggyId);
-  if (!storage || !key || typeof storage.getItem !== "function") return false;
-  try {
-    const serialized = JSON.stringify(intent);
-    storage.setItem(key, serialized);
-    return storage.getItem(key) === serialized;
-  } catch { return false; }
+  return saveRecordVerified(storage, laneIntentKey(profile, intent.piggyId), intent);
 }
 
 /** Loads and re-validates the stored errand for this Piggy. Anything that does not bind is refused. */
@@ -502,9 +417,7 @@ export function loadLaneIntent(storage, profile, piggy = {}) {
   return { intent: parsed, error: null };
 }
 
-function stamp(intent, stage, nowIso, extra = {}) {
-  return { ...intent, ...extra, stage, updatedAt: nowIso, history: [...(intent.history || []), { stage, at: nowIso }].slice(-24) };
-}
+const stamp = stampRecord;
 
 /**
  * Starts the one errand for this Piggy. Requires an envelope issued by the passkey path
@@ -551,12 +464,7 @@ export function startLaneIntent({ profile, piggy = {}, preview, envelope, signer
 }
 
 // Live execution has no path here: only a local fork executor on the same chain id is accepted.
-function executorAllowed(profile, executor) {
-  if (!executor || typeof executor.send !== "function" || typeof executor.receipt !== "function") return "no_executor";
-  if (executor.kind !== "local_fork") return "live_execution_disabled";
-  if (executor.chainId !== profile.numericChainId || !Number.isInteger(executor.forkBlock)) return "executor_chain_mismatch";
-  return null;
-}
+const executorAllowed = executorRefusal;
 
 function stepTx(intent, step, preview) {
   const s = preview.steps.find((row) => row.step === step);
@@ -763,4 +671,395 @@ export function laneReceiptCandidate(receipt) {
     ...(receipt.outcome === "failed" ? { failureReason: `${receipt.failedStep || "unknown"}_reverted` } : {}),
     evidencePointer: { ...receipt, gasUsed: { ...receipt.gasUsed }, unmeasured: [...receipt.unmeasured] },
   };
+}
+
+// ── [E1] current-reader output → candidate decision (action 0 unless an exact permission follows) ──
+// Input: ONE row of second-current-reader.js readSecondCurrent().candidates, plus the rule the user agreed for
+// THIS event (if any). Output: a decision and, for nah / ask / unknown, an action-0 decision Receipt in the
+// existing grammar (second_journey_decision_receipt_v1: expected · found · block N, executable:false).
+//
+// Four things that are NOT the same and are never converted into each other here:
+//   · Preference   (learned taste; second-journey-state preference)  → never a rule
+//   · Permission   (an issued envelope, permission-envelope.js)      → never a rule, never produced here
+//   · Agreed Rule  (what the user said for this one event)            → the only thing a reading is compared to
+//   · READY        (runtime readiness for execution)                  → never produced here; no field carries it
+// A reading alone decides nothing: without an agreed rule the answer is `unknown`. A match is `action: "ask"`
+// (the exact permission is still required, through buildLanePermissionPreview → permission-envelope.js →
+// money-executor.js); nothing in this function can execute.
+// Evidence that is missing, stale (by an evidence-side signal only — no clock constant, no freshness window:
+// the freshness definition is an open Owner question, E8), or conflicting decides `unknown`, never `nah`.
+// The candidate universe is whatever the reader reports: every row gets a decision (no top-3 cut here).
+
+const CURRENT_READ_JOB_CHAIN = Object.freeze({ chain: "monad-mainnet", chainId: LANE_FORK_EVIDENCE.chainId });
+const asRaw = (v) => (typeof v === "string" && /^\d+$/.test(v) ? BigInt(v) : null);
+const asBool = (v) => (typeof v === "boolean" ? v : null);
+const asInt = (v) => (Number.isInteger(v) ? v : null);
+
+// Rule fields a reading can be compared on, per candidate. Values come only from what the reader read.
+const CURRENT_FIELDS = Object.freeze({
+  "aave-usdc": Object.freeze({
+    piggyUsdcRaw: (r) => asRaw(r.holdings?.usdcRaw),
+    receiptTokenRaw: (r) => asRaw(r.holdings?.receiptRaw),
+    allowanceToPoolRaw: (r) => asRaw(r.holdings?.allowanceToPoolRaw),
+    reserveAcceptsSupply: (r) => (r.reserve && typeof r.reserve.active === "boolean" ? r.reserve.active && !r.reserve.frozen && !r.reserve.paused : null),
+  }),
+  "neverland-usdc": Object.freeze({
+    piggyUsdcRaw: (r) => asRaw(r.holdings?.usdcRaw),
+    receiptTokenRaw: (r) => asRaw(r.holdings?.receiptRaw),
+    allowanceToPoolRaw: (r) => asRaw(r.holdings?.allowanceToPoolRaw),
+  }),
+  "curvance-usdc": Object.freeze({
+    sharesRaw: (r) => asRaw(r.holdings?.sharesRaw),
+    assetsRaw: (r) => asRaw(r.holdings?.assetsRaw),
+  }),
+  "protect-revoke-allowance": Object.freeze({
+    allowanceRaw: (r) => asRaw(r.allowanceRaw),
+  }),
+  "kintsu-smon": Object.freeze({
+    exitFeeBips: (r) => asInt(r.exitFeeBips),
+    codePresent: (r) => asBool(r.codePresent),
+  }),
+});
+const SEMANTIC_FIELD = "returnSemantic";
+const SEMANTIC_CANDIDATES = Object.freeze(["kintsu-smon"]);
+// Reader statuses that mean "values were read" (second-current-reader.js CURRENT_READER_STATUS; literal strings
+// here to keep this module free of a load-time import cycle with the reader).
+const READ_OK_STATUS = Object.freeze(["aave_buildable", "neverland_derived_assumed", "curvance_erc4626", "protect_caller_supplied", "kintsu_observation"]);
+const COMPARATORS = Object.freeze(["lte", "lt", "gte", "gt", "eq", "is"]);
+
+/**
+ * Is `rule` an agreed rule for THIS event? A preference, a permission envelope, a READY flag or a code constant
+ * (e.g. LANE_RULES `agreed:true`) is not. Returns { rule } (decide-ready) or { error }.
+ */
+export function acceptAgreedRule(input, { candidateId, eventId } = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return { error: "rule_not_agreed" };
+  if (input.kind === "preference" || "reasonDislike" in input || "explorationWidth" in input) return { error: "preference_is_not_agreed_rule" };
+  if (input.kind === "permission" || "nonce" in input || "signature" in input || "envelope" in input) return { error: "permission_is_not_agreed_rule" };
+  if (input.kind !== "agreed_rule" || input.agreedBy !== "user") return { error: "rule_not_agreed" };
+  if (typeof eventId !== "string" || !eventId || input.eventId !== eventId) return { error: "rule_not_for_this_event" };
+  if (input.candidateId !== candidateId) return { error: "rule_not_for_this_candidate" };
+  const fields = CURRENT_FIELDS[candidateId] || {};
+  if (input.field === SEMANTIC_FIELD) {
+    if (!SEMANTIC_CANDIDATES.includes(candidateId) || typeof input.expected !== "string" || !input.expected) return { error: "rule_field_not_readable" };
+    return { rule: { id: input.id || "return_semantic", field: SEMANTIC_FIELD, expected: input.expected, agreed: true }, semantic: true };
+  }
+  if (!Object.prototype.hasOwnProperty.call(fields, input.field)) return { error: "rule_field_not_readable" };
+  if (!COMPARATORS.includes(input.comparator)) return { error: "rule_comparator_unknown" };
+  let expected = input.expected;
+  if (/Raw$/.test(input.field)) {
+    expected = asRaw(typeof input.expected === "bigint" ? input.expected.toString() : input.expected);
+    if (expected === null) return { error: "rule_expected_not_exact" };
+  } else if (typeof expected !== "boolean" && !Number.isFinite(expected)) {
+    return { error: "rule_expected_not_exact" };
+  }
+  return { rule: { id: input.id || input.field, field: input.field, comparator: input.comparator, expected, agreed: true, requiresBlock: true }, semantic: false };
+}
+
+// Evidence gate. A reading that cannot be compared is unknown with a named reason, never nah.
+function currentEvidenceProblem(row, nowMs) {
+  if (!row || typeof row !== "object") return "evidence_missing";
+  if (!READ_OK_STATUS.includes(row.status) || !row.read || typeof row.read !== "object") return `evidence_unavailable:${row.status || "UNKNOWN"}`;
+  const r = row.read;
+  if (r.conflict === true || r.sourceConflict === true) return "source_conflict";
+  if (r.chainId !== CURRENT_READ_JOB_CHAIN.chainId) return "source_conflict";
+  if (r.codePresent === false) return "source_conflict";
+  if (row.id === "aave-usdc" && r.receiptToken && r.receiptToken.matchesRecorded === false) return "source_conflict";
+  if (r.stale === true) return "stale_evidence";
+  // A reader-supplied expiry can only be honoured against a clock the caller supplies. Without one the reading's
+  // freshness cannot be shown, so it is stale (unknown) — never compared into a nah.
+  if (r.expiresAtMs !== undefined && r.expiresAtMs !== null) {
+    if (typeof r.expiresAtMs !== "number" || !Number.isFinite(r.expiresAtMs)) return "stale_evidence";
+    if (typeof nowMs !== "number" || !Number.isFinite(nowMs) || r.expiresAtMs <= nowMs) return "stale_evidence";
+  }
+  if (typeof r.source !== "string" || !r.source || typeof r.observedAt !== "string" || !Number.isFinite(Date.parse(r.observedAt))) return "missing_evidence";
+  if (!Number.isInteger(r.block) || r.block < 0) return "missing_block";
+  return "";
+}
+
+const CURRENT_DECISION_WORD = Object.freeze({ [RESULT.NAH]: "nah", [RESULT.ASK]: "ask", [RESULT.UNKNOWN]: "unknown", [RESULT.DO_IT]: "match" });
+
+/**
+ * One candidate, one event. Never throws, never executes, never issues permission, never marks READY.
+ * @returns {{kind, candidateId, eventId, decision, result, action, reason, executionPermission:false, decisions, receipt, receiptError}}
+ */
+export function decideCurrentCandidate({ row, agreedRule = null, scope = {}, eventId, selectionSource, nowMs, nowIso } = {}) {
+  const candidateId = typeof row?.id === "string" ? row.id : "UNKNOWN_CANDIDATE";
+  const event = typeof eventId === "string" && eventId ? eventId.slice(0, 120) : "UNKNOWN_EVENT";
+  const accepted = acceptAgreedRule(agreedRule, { candidateId, eventId: event });
+  const problem = currentEvidenceProblem(row, nowMs);
+  const r = row?.read || null;
+  let decided;
+  if (accepted.error) {
+    decided = { result: RESULT.UNKNOWN, action: ACTION.NONE, reason: accepted.error, evidence: { field: agreedRule?.field ?? "UNKNOWN", comparator: agreedRule?.comparator ?? "UNKNOWN", expected: "UNKNOWN", found: "UNKNOWN", block: null } };
+  } else if (problem) {
+    decided = { result: RESULT.UNKNOWN, action: ACTION.NONE, reason: problem, evidence: { field: accepted.rule.field, comparator: accepted.rule.comparator ?? "semantic_return_match", expected: String(accepted.rule.expected), found: "UNKNOWN", block: null } };
+  } else if (accepted.semantic) {
+    const observation = { source: r.source, observedAt: r.observedAt, block: r.block, chainId: r.chainId, codePresent: r.codePresent, ...(Number.isInteger(r.exitFeeBips) ? { exitFeeBips: r.exitFeeBips } : {}) };
+    const evidence = readDestinationReturnEvidence(candidateId, { observation, nowMs, requireObservation: true });
+    const semantic = decideSemanticReturnRule(accepted.rule, evidence);
+    // nah needs the block its evidence was read at; a semantic nah cites the reader's pinned block.
+    decided = { ...semantic, evidence: { ...semantic.evidence, block: semantic.result === RESULT.UNKNOWN ? null : r.block } };
+  } else {
+    const found = CURRENT_FIELDS[candidateId][accepted.rule.field](r);
+    decided = decideRule(accepted.rule, { found, block: r.block, source: r.source });
+  }
+  const result = decided.result;
+  const out = {
+    kind: "second_candidate_decision",
+    candidateId,
+    eventId: event,
+    decision: CURRENT_DECISION_WORD[result],
+    result,
+    // A match is still not execution: the exact permission is asked for next. Everything else is action 0.
+    action: result === RESULT.DO_IT ? ACTION.ASK : ACTION.NONE,
+    reason: decided.reason,
+    executionPermission: false,
+    decisions: [decided],
+    receipt: null,
+    receiptError: null,
+  };
+  if (result === RESULT.DO_IT) return out;
+
+  const ev = decided.evidence || {};
+  const runtimeChain = typeof scope.chainId === "string" ? scope.chainId : "UNKNOWN";
+  const evidenceOk = !problem && !accepted.error;
+  const receipt = {
+    schema: DECISION_RECEIPT_SCHEMA,
+    eventId: `current:${event}:${candidateId}`,
+    accountId: scope.accountId,
+    chainId: scope.chainId,
+    destinationId: candidateId,
+    jobId: candidateId,
+    decision: CURRENT_DECISION_WORD[result],
+    reason: decided.reason,
+    category: accepted.semantic ? "return_semantic" : `rule_${CURRENT_DECISION_WORD[result]}`,
+    expected: String(ev.expected ?? "UNKNOWN"),
+    found: String(ev.found ?? "UNKNOWN"),
+    did: "nothing",
+    why: typeof ev.why === "string" && ev.why
+      ? ev.why
+      : decided.reason === "hard_rule_breach"
+        ? `${ev.field}: expected ${ev.comparator} ${ev.expected}; found ${ev.found} at block ${ev.block}`
+        : `${ev.field ?? "UNKNOWN"}: ${decided.reason} — not guessed`,
+    delay: ev.delay ?? null,
+    action: ACTION.NONE,
+    actionCount: 0,
+    txExecuted: false,
+    evidence: {
+      source: evidenceOk ? r.source : null,
+      observedAt: evidenceOk ? r.observedAt : null,
+      block: evidenceOk ? r.block : null,
+      evidenceMode: "current_reader",
+      readStatus: typeof row?.status === "string" ? row.status : "UNKNOWN",
+      readReason: typeof row?.reason === "string" ? row.reason : null,
+    },
+    executionContext: {
+      runtimeChain,
+      jobChain: CURRENT_READ_JOB_CHAIN.chain,
+      executable: false,
+      role: runtimeChain === CURRENT_READ_JOB_CHAIN.chain ? "same_chain_live_execution_disabled" : "evidence_only_other_chain",
+    },
+    selection: {
+      source: typeof selectionSource === "string" && selectionSource ? selectionSource.slice(0, 64) : "UNKNOWN_SELECTION_SOURCE",
+      ruleField: typeof agreedRule?.field === "string" ? agreedRule.field.slice(0, 64) : null,
+      semanticScope: "this_selection_event_only",
+      ownerFinancialChoice: false,
+      createsPermission: false,
+    },
+    recordedAt: typeof nowIso === "string" && nowIso ? nowIso : "UNKNOWN_TIME",
+  };
+  const verdict = validateDecisionReceipt(receipt, { accountId: scope.accountId, chainId: scope.chainId });
+  out.receipt = verdict.error ? null : verdict.receipt;
+  out.receiptError = verdict.error || null;
+  return out;
+}
+
+/**
+ * Every candidate the reader reported gets a decision (the reader's universe is preserved; a display cap is a
+ * view concern elsewhere). `agreedRules` maps candidateId → the rule agreed for this event (absent = unknown).
+ */
+export function decideCurrentCandidates({ currentRead, agreedRules = {}, scope = {}, eventId, selectionSource, nowMs, nowIso } = {}) {
+  const rows = Array.isArray(currentRead?.candidates) ? currentRead.candidates : [];
+  const rules = agreedRules && typeof agreedRules === "object" ? agreedRules : {};
+  return rows.map((row) => decideCurrentCandidate({
+    row,
+    agreedRule: typeof row?.id === "string" && Object.prototype.hasOwnProperty.call(rules, row.id) ? rules[row.id] : null,
+    scope, eventId, selectionSource, nowMs, nowIso,
+  }));
+}
+
+// ── [D1] Second lane descriptors — description only: never READY, never permission, never live ──────────────────
+// One frozen record per Second candidate that the build record already evidences on a mainnet fork (chain 143):
+// Neverland USDC, Curvance USDC and the Protect allowance cleanup. A descriptor says what is already evidenced and
+// what is still missing before a lane could exist for it. It is data, not a lane:
+//   · it carries no destination address, no writer ABI and no measured rate — those are UNKNOWN here;
+//   · its evidence class is fork simulation only, and a fork PASS is not product readiness, permission or a rate;
+//   · it is never a rule, a reading or a permission: acceptAgreedRule refuses it, decideCurrentCandidate cannot
+//     read it, buildLanePermissionPreview refuses it, and nothing in this section reaches the executor;
+//   · no product code imports it (MAINNET_LANE_CONFIG stays reader:null / liveExecution:false).
+// Rule fields are derived from CURRENT_FIELDS (the reader's comparable values), not restated.
+export const SECOND_LANE_DESCRIPTOR_SCHEMA = "araso_second_lane_descriptor_v1";
+export const SECOND_LANE_STAGE = Object.freeze({ DESCRIBED: "described_not_runnable" });
+// What is still open before any of these could run. Listed, not tracked: closing one is a separate Owner step.
+export const SECOND_LANE_OPEN_GATES = Object.freeze([
+  "owner_live_go",
+  "product_reader_config",
+  "destination_bound_in_lane",
+  "writer_abi_in_app",
+  "exact_permission",
+  "lane_money_lock",
+  "freshness_definition",
+]);
+// The boolean locks every descriptor carries. Each must be exactly `false`.
+const DESCRIPTOR_LOCKS = Object.freeze(["ready", "executable", "executionPermission", "createsPermission", "liveExecution", "rateVerified"]);
+const DESCRIPTOR_KEYS = Object.freeze([
+  "schema", "candidateId", "family", "protocol", "asset", "chainId", "shape", "readerStatus", "comparableFields", "steps",
+  "exit", "forkEvidence", "unknown", "stage", "openGates", ...DESCRIPTOR_LOCKS,
+]);
+const FORK_EVIDENCE_KEYS = Object.freeze(["label", "chainId", "block", "blockTimestamp", "timeWarp", "sentRaw", "deltaRaw", "gasUsedUserSteps", "change", "currentPin"]);
+const DESCRIPTOR_FORK_LABELS = Object.freeze([EVIDENCE_LABEL.FORK_SIM]);
+
+function descriptor(fields) {
+  const fork = Object.freeze({ ...fields.forkEvidence });
+  return Object.freeze({
+    schema: SECOND_LANE_DESCRIPTOR_SCHEMA,
+    ...fields,
+    chainId: CURRENT_READ_JOB_CHAIN.chainId,
+    comparableFields: Object.freeze(Object.keys(CURRENT_FIELDS[fields.candidateId] || {})),
+    steps: Object.freeze([...fields.steps]),
+    forkEvidence: fork,
+    unknown: Object.freeze([...fields.unknown]),
+    stage: SECOND_LANE_STAGE.DESCRIBED,
+    openGates: SECOND_LANE_OPEN_GATES,
+    ready: false,
+    executable: false,
+    executionPermission: false,
+    createsPermission: false,
+    liveExecution: false,
+    rateVerified: false,
+  });
+}
+
+// Fork re-run at the current pin: chain 143, block 108999816 (2026-09-29T09:24:32Z), no time warp, $5 USDC round trip.
+const CURRENT_FORK_PIN = Object.freeze({ label: EVIDENCE_LABEL.FORK_SIM, chainId: 143, block: 108999816, blockTimestamp: "2026-09-29T09:24:32Z", timeWarp: false, sentRaw: "5000000", currentPin: true });
+
+export const SECOND_LANE_DESCRIPTORS = Object.freeze({
+  "neverland-usdc": descriptor({
+    candidateId: "neverland-usdc",
+    family: JOB_FAMILY.GROW_STABLE,
+    protocol: "Neverland",
+    asset: "USDC",
+    shape: "aave_v3_fork_pool",
+    readerStatus: "neverland_derived_assumed",
+    steps: ["approve_exact", "supply", "withdraw"],
+    exit: "immediate",
+    forkEvidence: { ...CURRENT_FORK_PIN, deltaRaw: "-1", gasUsedUserSteps: 579678 },
+    unknown: ["destination_in_lane", "writer_abi", "rate", "gas_fee_usd", "receipt_token_shape_assumed"],
+  }),
+  "curvance-usdc": descriptor({
+    candidateId: "curvance-usdc",
+    family: JOB_FAMILY.GROW_STABLE,
+    protocol: "Curvance",
+    asset: "USDC",
+    shape: "erc4626_vault",
+    readerStatus: "curvance_erc4626",
+    steps: ["approve_exact", "deposit", "redeem"],
+    exit: "immediate",
+    forkEvidence: { ...CURRENT_FORK_PIN, deltaRaw: "-2", gasUsedUserSteps: 293063 },
+    unknown: ["destination_in_lane", "writer_abi", "rate", "gas_fee_usd", "cooldown"],
+  }),
+  "protect-revoke-allowance": descriptor({
+    candidateId: "protect-revoke-allowance",
+    family: JOB_FAMILY.PROTECT,
+    protocol: "ERC-20",
+    asset: "UNKNOWN",
+    shape: "erc20_allowance_reset",
+    readerStatus: "protect_caller_supplied",
+    steps: ["approve_zero"],
+    exit: "not_applicable",
+    // Older pin (block 106616273); not re-run at the current pin. No target means unavailable, never invented work.
+    forkEvidence: { label: EVIDENCE_LABEL.FORK_SIM, chainId: 143, block: 106616273, change: "allowance 5 -> 0", currentPin: false },
+    unknown: ["target_token", "target_spender", "current_allowance", "gas_at_current_pin", "gas_fee_usd", "writer_abi"],
+  }),
+});
+
+/** Is this a well-formed descriptor that implies nothing it must not? Returns { ok: true } or { error }. */
+export function validateSecondLaneDescriptor(d) {
+  if (!d || typeof d !== "object" || Array.isArray(d)) return { error: "descriptor_missing" };
+  if (d.schema !== SECOND_LANE_DESCRIPTOR_SCHEMA) return { error: "descriptor_schema" };
+  for (const k of Object.keys(d)) if (!DESCRIPTOR_KEYS.includes(k)) return { error: `descriptor_unknown_key:${k}` };
+  for (const k of DESCRIPTOR_LOCKS) if (d[k] !== false) return { error: `descriptor_lock_not_false:${k}` };
+  if (d.stage !== SECOND_LANE_STAGE.DESCRIBED) return { error: "descriptor_stage" };
+  if (!Object.prototype.hasOwnProperty.call(CURRENT_FIELDS, d.candidateId)) return { error: "descriptor_candidate_not_read" };
+  if (!READ_OK_STATUS.includes(d.readerStatus)) return { error: "descriptor_reader_status" };
+  if (d.chainId !== CURRENT_READ_JOB_CHAIN.chainId) return { error: "descriptor_chain" };
+  const fields = Object.keys(CURRENT_FIELDS[d.candidateId]);
+  if (!Array.isArray(d.comparableFields) || d.comparableFields.length !== fields.length || d.comparableFields.some((f) => !fields.includes(f))) return { error: "descriptor_fields" };
+  const fe = d.forkEvidence;
+  if (!fe || typeof fe !== "object" || !DESCRIPTOR_FORK_LABELS.includes(fe.label) || fe.chainId !== CURRENT_READ_JOB_CHAIN.chainId || !Number.isInteger(fe.block)) return { error: "descriptor_evidence_class" };
+  for (const k of Object.keys(fe)) if (!FORK_EVIDENCE_KEYS.includes(k)) return { error: `descriptor_evidence_key:${k}` };
+  if (!Array.isArray(d.unknown) || !d.unknown.includes("writer_abi")) return { error: "descriptor_unknown_list" };
+  if (!Array.isArray(d.openGates) || SECOND_LANE_OPEN_GATES.some((g) => !d.openGates.includes(g))) return { error: "descriptor_gates" };
+  // No address of any kind lives in a descriptor (destinations are not bound to a lane yet).
+  if (/0x[0-9a-fA-F]{40}/.test(JSON.stringify(d))) return { error: "descriptor_has_address" };
+  return { ok: true };
+}
+
+/** The descriptor for one candidate, or null (unknown candidate, or a descriptor that fails validation). */
+export function secondLaneDescriptor(candidateId) {
+  const d = Object.prototype.hasOwnProperty.call(SECOND_LANE_DESCRIPTORS, candidateId) ? SECOND_LANE_DESCRIPTORS[candidateId] : null;
+  return d && validateSecondLaneDescriptor(d).ok ? d : null;
+}
+
+/**
+ * A descriptor beside a decision (from decideCurrentCandidate). Read-only view: whatever the decision says, the
+ * combination is not runnable, grants nothing and is not live — a match still leaves every open gate open.
+ */
+export function describeSecondLaneCandidate(candidateId, decision = null) {
+  const d = secondLaneDescriptor(candidateId);
+  const sameCandidate = !!decision && typeof decision === "object" && decision.candidateId === candidateId;
+  return Object.freeze({
+    candidateId: typeof candidateId === "string" ? candidateId : "UNKNOWN_CANDIDATE",
+    described: !!d,
+    stage: d ? d.stage : "UNKNOWN",
+    decision: sameCandidate && typeof decision.decision === "string" ? decision.decision : "unknown",
+    runnable: false,
+    executionPermission: false,
+    liveExecution: false,
+    openGates: SECOND_LANE_OPEN_GATES,
+  });
+}
+
+// ── [U1] Explore candidate rows — what the user may pick from this event, never what may run ──────────────────────
+// Joins the decisions above (one per reader row, the whole universe) with the family table the readiness module
+// already publishes (one baseline per family; the rest are alternatives in the same slot) and the D1 view above.
+// A row's status is "nah" only when the decision core said nah for this event; everything else (unknown, ask,
+// match) is "unknown" here, because nothing in this card is runnable: a match still only asks for the exact
+// permission, which no row carries. There is no display cap in this section; the visible limit is a view concern.
+export const EXPLORE_CANDIDATE_STATUS = Object.freeze({ NAH: "nah", UNKNOWN: "unknown" });
+
+/** @returns {{rows: object[], universe: number, decidedIds: string[]}} rows are frozen and never runnable. */
+export function exploreCandidateRows({ decisions = [], families = [] } = {}) {
+  const list = Array.isArray(decisions) ? decisions : [];
+  const byId = new Map();
+  for (const d of list) if (d && typeof d.candidateId === "string" && !byId.has(d.candidateId)) byId.set(d.candidateId, d);
+  const rows = [];
+  for (const f of Array.isArray(families) ? families : []) {
+    if (!f || typeof f.family !== "string" || typeof f.baseline !== "string" || !f.baseline) continue;
+    const d = byId.get(f.baseline) || null;
+    const view = describeSecondLaneCandidate(f.baseline, d);
+    const nah = !!d && d.decision === "nah" && d.action === ACTION.NONE && d.executionPermission === false;
+    rows.push(Object.freeze({
+      candidateId: f.baseline,
+      family: f.family,
+      alternatives: Object.freeze((Array.isArray(f.alternatives) ? f.alternatives : []).filter((x) => typeof x === "string")),
+      status: nah ? EXPLORE_CANDIDATE_STATUS.NAH : EXPLORE_CANDIDATE_STATUS.UNKNOWN,
+      reason: d && typeof d.reason === "string" ? d.reason : "not_decided",
+      described: view.described,
+      runnable: false,
+      executionPermission: false,
+      liveExecution: false,
+    }));
+  }
+  return Object.freeze({ rows: Object.freeze(rows), universe: list.length, decidedIds: Object.freeze([...byId.keys()]) });
 }

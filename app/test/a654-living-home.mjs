@@ -126,12 +126,16 @@ function planAt(vw, vh, seat, chog, brand, histRight, mobileVisibleCap = 2) {
 // (placeHomeAmbientResidents()) and get M0 only. mid/web bands are untouched (unaffected by
 // this card, still 641+/1200+ as before; `mobileVisibleCap` is only read inside
 // planHomeSlots()'s own `band === "mobile"` branch).
-await check("N4 [A-681 re-pin] measured slot formulas: 390/430 = M0+M1+M2 (main + 2 small companions, mobileVisibleCap=2/Home default), 700/900 = SEAT+WN1..3 (4, unchanged), 1200 = 6 (unchanged), 1440 = W1 W2 WA1 WA2 (4, unchanged)", () => {
+await check("N4 [A-681 re-pin] measured slot formulas: 390/430 = M0+M1+M2 (main + 2 small companions, mobileVisibleCap=2/Home default), 700/900 = SEAT+WN1..3 (4, unchanged), 1024×768/1180×820 = SEAT+WN1+WA1 (3, WA1 fallback), 1200 = 6 (unchanged), 1440 = W1 W2 WA1 WA2 (4, unchanged)", () => {
   const cases = [
     [390, 844, R(290.3, 622.49, 368.3, 715.09), R(222.4, 642.19, 286.3, 708.59), R(20, 14, 65.5, 25), 370, ["M0", "M1", "M2"]],
     [430, 900, R(323.5, 669.18, 401.5, 761.78), R(255.5, 688.88, 319.5, 755.28), R(24, 14, 69.5, 25), 406, ["M0", "M1", "M2"]],
     [700, 900, R(538.5, 508.9, 622.0, 608.3), R(465.6, 530.1, 534.2, 601.3), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WN2", "WN3"]],
     [900, 900, R(692.3, 525.8, 799.8, 653.5), R(598.7, 553.0, 686.8, 644.5), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WN2", "WN3"]],
+    // [A-728 4:3 mid-band coverage] iPad 4:3 heights (measured live, a172-local): WN2/WN3 cannot fit
+    // (viewport-margin), so the WA1 fallback (seat floor line, left of foot) gives a 3rd slot.
+    [1024, 768, R(787.7, 512.9, 910.0, 658.3), R(688.7, 543.8, 764.5, 640.6), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WA1"]],
+    [1180, 820, R(907.7, 536.9, 1048.6, 704.4), R(793.6, 572.5, 881.0, 684.0), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WA1"]],
     [1200, 900, R(923.0, 551.0, 1066.4, 721.3), R(798.3, 587.3, 915.8, 709.3), R(140, 32, 190.2, 44), 0, ["W1", "W2", "W3", "W4", "WA1", "WA2"]],
     [1440, 900, R(1107.7, 571.2, 1279.6, 775.6), R(957.9, 614.7, 1098.9, 761.2), R(140, 32, 190.2, 44), 0, ["W1", "W2", "WA1", "WA2"]],
   ];

@@ -126,8 +126,9 @@ check("sendPiggyOnce 소스 -> indexedPiggyId(account.address) 호출이 있다"
 const accountAssignPos = onceSrc.indexOf("const account = activeAccount;");
 check("캡처가 account 확정 직후 자리에 있다(그 전이 아니다)", accountAssignPos >= 0 && capturePos > accountAssignPos, true);
 
-const firstSendTxPos = onceSrc.indexOf("walletClient.sendTransaction");
-check("캡처가 첫 sendTransaction(비동기 tx 체인 시작)보다 앞에 있다", firstSendTxPos >= 0 && capturePos < firstSendTxPos, true);
+// [A-707 M2-beta] declared marker update: the first async tx-chain step is now signSendStep(...) (sign-before-send); walletClient.sendTransaction no longer exists.
+const firstSendTxPos = onceSrc.indexOf("signSendStep(walletClient, account, plan.depositTx)");
+check("캡처가 첫 sign/send(비동기 tx 체인 시작)보다 앞에 있다", firstSendTxPos >= 0 && capturePos < firstSendTxPos, true);
 
 const markSettlingPos = onceSrc.indexOf("markSettling();");
 check("캡처가 markSettling() 호출보다 앞에 있다", markSettlingPos >= 0 && capturePos < markSettlingPos, true);

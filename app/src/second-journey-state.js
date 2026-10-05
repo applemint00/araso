@@ -74,6 +74,8 @@ export function createSecondJourneyState(scope = {}) {
     chainId: clean.chainId,
     interests: [],
     preference: emptyPreference(),
+    // [A-710 S1] per-event preference change (eventId → delta), so a merge can re-apply another tab's learning.
+    preferenceEvents: [],
     processedEventIds: [],
     pendingJobs: [],
     receipts: [],
@@ -97,6 +99,48 @@ function normalizePreference(input = {}) {
     }));
   }
   return next;
+}
+
+// [A-710 S1] { eventId, delta } rows: delta holds only finite numbers for known preference keys
+// (and reasonDislike entries). Anything else is dropped, never guessed.
+function normalizePreferenceEvents(input) {
+  if (!Array.isArray(input)) return [];
+  const out = [];
+  for (const item of input) {
+    if (!item || typeof item.eventId !== "string" || !item.eventId || item.eventId.length > 200) continue;
+    const src = item.delta && typeof item.delta === "object" && !Array.isArray(item.delta) ? item.delta : {};
+    const delta = {};
+    for (const key of PREFERENCE_KEYS) if (Number.isFinite(src[key]) && src[key] !== 0) delta[key] = src[key];
+    if (src.reasonDislike && typeof src.reasonDislike === "object" && !Array.isArray(src.reasonDislike)) {
+      const rd = Object.fromEntries(Object.entries(src.reasonDislike).filter(([, v]) => Number.isFinite(v) && v !== 0));
+      if (Object.keys(rd).length) delta.reasonDislike = rd;
+    }
+    out.push({ eventId: item.eventId, delta });
+  }
+  return out.slice(-80);
+}
+
+function preferenceDelta(before, after) {
+  const delta = {};
+  for (const key of PREFERENCE_KEYS) {
+    const d = Number(after?.[key] ?? 0) - Number(before?.[key] ?? 0);
+    if (Number.isFinite(d) && d !== 0) delta[key] = d;
+  }
+  const keys = new Set([...Object.keys(before?.reasonDislike || {}), ...Object.keys(after?.reasonDislike || {})]);
+  const rd = {};
+  for (const key of keys) {
+    const d = Number(after?.reasonDislike?.[key] ?? 0) - Number(before?.reasonDislike?.[key] ?? 0);
+    if (Number.isFinite(d) && d !== 0) rd[key] = d;
+  }
+  if (Object.keys(rd).length) delta.reasonDislike = rd;
+  return delta;
+}
+
+function applyPreferenceDelta(preference, delta) {
+  const next = { ...preference, reasonDislike: { ...(preference.reasonDislike || {}) } };
+  for (const key of PREFERENCE_KEYS) if (Number.isFinite(delta?.[key])) next[key] = Number(next[key] || 0) + delta[key];
+  for (const [key, d] of Object.entries(delta?.reasonDislike || {})) next.reasonDislike[key] = Number(next.reasonDislike[key] || 0) + d;
+  return normalizePreference(next);   // same bounds as every other preference write
 }
 
 export function normalizeSecondJourneyState(input, scope = {}, options = {}) {
@@ -129,6 +173,7 @@ export function normalizeSecondJourneyState(input, scope = {}, options = {}) {
     chainId: base.chainId,
     interests: Array.isArray(input.interests) ? input.interests.filter((item) => item && item.errandId).map((item) => ({ ...item })) : [],
     preference: normalizePreference(input.preference),
+    preferenceEvents: normalizePreferenceEvents(input.preferenceEvents),
     processedEventIds: Array.isArray(input.processedEventIds) ? [...new Set(input.processedEventIds.filter(Boolean))].slice(-80) : [],
     pendingJobs: Array.isArray(input.pendingJobs) ? input.pendingJobs.map((item) => ({ ...item })) : [],
     // [A-579 repair RV-1] decision rows are re-validated on load; an invalid one is dropped (never reopened).
@@ -158,6 +203,100 @@ export function loadSecondJourneyState(storage, scope = {}) {
   }
 }
 
+// ── [A-710 S1 · closes A-693 M-3] merge-on-save ─────────────────────────────────────────────
+// Before A-710 a save replaced the whole stored state with the caller's in-memory copy, so a
+// stale tab (or the bridge's duplicate-retry branch) erased receipt / decision rows another
+// tab had written since it loaded. Now every save re-reads what is stored, merges, writes once,
+// and reads back: `saved:true` only when the stored bytes decode to a state that holds every
+// row this save intended to keep. Merge rules:
+//   · receipts           union by eventId. Stored rows keep their order; rows only this caller
+//                        has go in front (they are its new rows). A row the store already
+//                        dropped by its own 20-row cap (its eventId is in the stored
+//                        processedEventIds but the row is gone) is not resurrected.
+//   · processedEventIds  union, stored order first, last 80 kept (unchanged cap).
+//   · evidence pointers  union, last 40 kept (unchanged cap). pendingJobs: union.
+//   · interests          union by errandId, the later `updatedAt` wins. No product path removes
+//                        an interest today; removal semantics across tabs are UNKNOWN (a
+//                        removal would need a tombstone) and are not invented here.
+//   · interests (cont.)  timestamps are compared as times; a placeholder ("UNKNOWN_TIME") never
+//                        beats a real time.
+//   · preference         if the caller has seen every stored event, its value is the newest and wins.
+//                        Otherwise (a stale tab) the stored value is kept and the caller's own new
+//                        events are re-applied on top of it from their recorded per-event deltas
+//                        (`preferenceEvents`), so neither tab's learning is lost.
+//   · knowledgeState     same rule; when the caller is stale, stored scalars are kept and
+//                        observedDemonstrations are unioned.
+// A stored state that is unreadable for any reason other than corrupt JSON (future version,
+// foreign identity) is never overwritten: `stored_state_unreadable`.
+const RECEIPT_CAP = 20;
+const PROCESSED_CAP = 80;
+const POINTER_CAP = 40;
+
+const rowKey = (row) => (row && typeof row.eventId === "string" && row.eventId ? `e:${row.eventId}` : `j:${JSON.stringify(row)}`);
+
+function unionBy(stored, incoming, keyOf) {
+  const seen = new Set(stored.map(keyOf));
+  return [...stored, ...incoming.filter((item) => !seen.has(keyOf(item)))];
+}
+
+export function mergeSecondJourneyStates(stored, incoming) {
+  const storedProcessed = new Set(stored.processedEventIds);
+  const storedReceiptKeys = new Set(stored.receipts.map(rowKey));
+  const incomingOnly = incoming.receipts.filter((row) => {
+    if (storedReceiptKeys.has(rowKey(row))) return false;
+    // dropped by the store's own cap → stays dropped
+    return !(row && typeof row.eventId === "string" && storedProcessed.has(row.eventId));
+  });
+  const incomingProcessed = new Set(incoming.processedEventIds);
+  const callerSawAll = stored.processedEventIds.every((id) => incomingProcessed.has(id));
+  const callerNewEvents = incoming.processedEventIds.filter((id) => !storedProcessed.has(id));
+  const deltas = new Map((incoming.preferenceEvents || []).map((row) => [row.eventId, row.delta]));
+  let preference = stored.preference;
+  if (callerSawAll) preference = incoming.preference;
+  else for (const id of callerNewEvents) if (deltas.has(id)) preference = applyPreferenceDelta(preference, deltas.get(id));
+  const storedKs = stored.knowledgeState || {};
+  const incomingKs = incoming.knowledgeState || {};
+  const knowledgeState = callerSawAll ? incomingKs : {
+    ...incomingKs,
+    ...storedKs,
+    observedDemonstrations: unionBy(storedKs.observedDemonstrations || [], incomingKs.observedDemonstrations || [], (item) => JSON.stringify(item)),
+  };
+  const timeOf = (item) => { const t = Date.parse(item?.updatedAt); return Number.isFinite(t) ? t : -Infinity; };
+  const interests = new Map(stored.interests.map((item) => [item.errandId, { ...item }]));
+  for (const item of incoming.interests) {
+    const prev = interests.get(item.errandId);
+    if (!prev || timeOf(item) > timeOf(prev)) interests.set(item.errandId, { ...item });
+  }
+  return {
+    ...stored,
+    interests: [...interests.values()],
+    preference,
+    preferenceEvents: unionBy(stored.preferenceEvents || [], incoming.preferenceEvents || [], (row) => row.eventId).slice(-PROCESSED_CAP),
+    knowledgeState,
+    processedEventIds: [...new Set([...stored.processedEventIds, ...incoming.processedEventIds])].slice(-PROCESSED_CAP),
+    pendingJobs: unionBy(stored.pendingJobs, incoming.pendingJobs, (item) => JSON.stringify(item)),
+    receipts: [...incomingOnly, ...stored.receipts].slice(0, RECEIPT_CAP),
+    evidenceState: {
+      ...stored.evidenceState,
+      pointers: unionBy(stored.evidenceState.pointers || [], incoming.evidenceState.pointers || [], (item) => JSON.stringify(item)).slice(-POINTER_CAP),
+    },
+  };
+}
+
+function storedHoldsAll(storage, scope, intended) {
+  try {
+    const back = loadSecondJourneyState(storage, scope);
+    if (back.error || back.repaired) return { ok: false, state: null };
+    const keys = new Set(back.state.receipts.map(rowKey));
+    const errands = new Set(back.state.interests.map((item) => item.errandId));
+    const ok = intended.receipts.every((row) => keys.has(rowKey(row)))
+      && intended.interests.every((item) => errands.has(item.errandId));
+    return { ok, state: ok ? back.state : null };
+  } catch {
+    return { ok: false, state: null };
+  }
+}
+
 export function saveSecondJourneyState(storage, scope, state) {
   const key = secondJourneyStorageKey(scope);
   const validScope = validatePersistenceScope(scope);
@@ -165,12 +304,22 @@ export function saveSecondJourneyState(storage, scope, state) {
   if (!storage || typeof storage.setItem !== "function") return { key, saved: false, error: "storage_unavailable" };
   const normalized = normalizeSecondJourneyState(state, scope, { requirePersistedIdentity: true });
   if (normalized.error) return { key, saved: false, error: normalized.error };
+  // [A-710 S1] read what is stored now (same synchronous task as the write below — no await).
+  let merged = normalized.state;
+  if (typeof storage.getItem === "function") {
+    const current = loadSecondJourneyState(storage, scope);
+    if (current.error && current.error !== "corrupt_json") return { key, saved: false, error: "stored_state_unreadable" };
+    if (!current.error) merged = mergeSecondJourneyStates(current.state, normalized.state);
+  }
   try {
-    storage.setItem(key, JSON.stringify(normalized.state));
-    return { key, saved: true };
+    storage.setItem(key, JSON.stringify(merged));
   } catch {
     return { key, saved: false, error: "storage_write_failed" };
   }
+  // [A-710 S1] durability before success: a fresh read must show every row this save kept.
+  const verified = storedHoldsAll(storage, scope, merged);
+  if (!verified.ok) return { key, saved: false, error: "save_not_verified" };
+  return { key, saved: true, state: verified.state };
 }
 
 function hasProcessed(state, eventId) {
@@ -208,11 +357,14 @@ export function applyExploreSelection(state, selection, preferenceUpdate, option
   const now = options.now || "UNKNOWN_TIME";
   const next = normalizeSecondJourneyState(state, { accountId: state.accountId, chainId: state.chainId }).state;
   const addsInterest = kind === "one" || kind === "multi" || kind === "all";
+  const preference = preferenceUpdate?.preference || next.preference;
   return {
     state: {
       ...next,
       interests: addsInterest ? upsertInterests(next.interests, selectedErrands, eventId, now) : next.interests,
-      preference: preferenceUpdate?.preference || next.preference,
+      preference,
+      // [A-710 S1] what this event changed, so a later merge can re-apply it on top of another tab's value.
+      preferenceEvents: eventId ? [...next.preferenceEvents, { eventId, delta: preferenceDelta(next.preference, normalizePreference(preference)) }].slice(-80) : next.preferenceEvents,
       processedEventIds: markProcessed(next, eventId),
     },
     duplicate: false,
@@ -398,6 +550,36 @@ export function readSecondJourneyDecisionReceipts(state, { destinationId = null 
     .map((row) => validateDecisionReceipt(row, state))
     .filter((verdict) => !verdict.error)
     .map((verdict) => verdict.receipt);
+}
+
+// ── [A-710 E1] durable action-0 decision Receipt + store-level reopen ───────────────────────
+// Same schema, same storage key, same `receipts` array as A-576/A-579 (no sidecar). The record
+// path starts from the STORED state (never a stale in-memory copy), saves through the merging
+// save above, then re-opens from storage: `saved:true` only when the reopened rows contain it.
+// Reopen is headless/store-level only; a visible decision-Receipt surface is a DESIGN gate.
+export function reopenSecondJourneyDecisionReceipts(storage, scope, { destinationId = null } = {}) {
+  const loaded = loadSecondJourneyState(storage, scope);
+  if (loaded.error || loaded.repaired) return { receipts: [], error: loaded.error || "stored_state_unreadable" };
+  return { receipts: readSecondJourneyDecisionReceipts(loaded.state, { destinationId }), error: null };
+}
+
+export function recordSecondJourneyDecisionReceiptDurably(storage, scope, receipt) {
+  const loaded = loadSecondJourneyState(storage, scope);
+  if (loaded.error || loaded.repaired) return { saved: false, recorded: false, duplicate: false, state: null, error: loaded.error || "stored_state_unreadable" };
+  const rec = recordSecondJourneyDecisionReceipt(loaded.state, receipt);
+  if (rec.error) return { saved: false, recorded: false, duplicate: false, state: loaded.state, error: rec.error };
+  const eventId = typeof receipt?.eventId === "string" ? receipt.eventId : "";
+  const present = () => reopenSecondJourneyDecisionReceipts(storage, scope).receipts.some((row) => row.eventId === eventId);
+  if (rec.duplicate) {
+    // already processed in the store: verify it is really there; never rewrite over it.
+    return present()
+      ? { saved: true, recorded: false, duplicate: true, state: loaded.state, error: null }
+      : { saved: false, recorded: false, duplicate: true, state: loaded.state, error: "save_not_verified" };
+  }
+  const out = saveSecondJourneyState(storage, scope, rec.state);
+  if (!out.saved) return { saved: false, recorded: true, duplicate: false, state: rec.state, error: out.error || "save_not_verified" };
+  if (!present()) return { saved: false, recorded: true, duplicate: false, state: out.state, error: "save_not_verified" };
+  return { saved: true, recorded: true, duplicate: false, state: out.state, error: null };
 }
 
 // ── [A-475] Send 전 draft — "다시 쓰게 만들지 않는다" ────────────────────────────────

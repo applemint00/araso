@@ -34,7 +34,7 @@ check("Invite resize listener is the debounced wrapper", /window\.addEventListen
 check("no raw resize->fitInvite listener remains", !/addEventListener\("resize",\s*fitInvite\)/.test(MAIN));
 
 
-// ---- 2px/30px Invite fix is MOBILE-ONLY (900 wide Invite and 1440 stay frozen)
+// ---- 2px/30px Invite fix is media-scoped below the 1280 artboard (A-724 widened it from <=640 to <=1279; 1440 stays frozen)
 const colsRules = [...CSS.matchAll(/([^{}]*)\{([^{}]*grid-template-columns\s*:\s*minmax\(0,\s*1fr\)[^{}]*)\}/g)].filter((m) => /\.stage--invite\s*$/.test(m[1].trim()));
 check("exactly one .stage--invite minmax(0,1fr) rule", colsRules.length === 1, String(colsRules.length));
 const idx = colsRules[0] ? colsRules[0].index : -1;
@@ -42,10 +42,13 @@ const before = CSS.slice(0, idx);
 const mediaOpen = before.lastIndexOf("@media");
 const mediaHead = mediaOpen >= 0 ? before.slice(mediaOpen, before.indexOf("{", mediaOpen)) : "";
 const between = mediaOpen >= 0 ? before.slice(before.indexOf("{", mediaOpen) + 1) : "";
-check("that rule sits inside @media (max-width: 640px)", /@media\s*\(max-width:\s*640px\)\s*$/.test(mediaHead.trim()), mediaHead);
+// [A-724] named reason: the pin was widened from <=640 to <=1279 to fix the A-722 B1 wide-Invite (900..1279)
+// off-centre/right-clip — same grid-track cause. Not weakened: it still must be a media-scoped pin that never
+// reaches the >=1280 canonical artboard (1440 frozen), and the base rule below must still carry no columns.
+check("that rule sits inside @media (max-width: 1279px) (A-724: covers mobile + wide-Invite tablet band, not >=1280)", /@media\s*\(max-width:\s*1279px\)\s*$/.test(mediaHead.trim()), mediaHead);
 check("media block is still open at the rule (no closing brace between)", !/}/.test(between.replace(/\/\*[\s\S]*?\*\//g, "")), "closed early");
 const baseRule = CSS.match(/\n\.stage--invite\s*\{[^}]*\}/);
-check("base .stage--invite rule has no grid-template-columns (900/1440 untouched)", !!baseRule && !/grid-template-columns/.test(baseRule[0]));
+check("base .stage--invite rule has no grid-template-columns (>=1280 untouched)", !!baseRule && !/grid-template-columns/.test(baseRule[0]));
 
 // ---- behavior (real functions in a vm with fake timers)
 const timers = [];

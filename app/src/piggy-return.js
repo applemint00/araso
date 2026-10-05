@@ -218,22 +218,19 @@ const NATIVE_STEP_DY = -8 * GROUP_SCALE;
 // 옆에 집그림사이즈로") -------------------------------------------------
 // 자산: 비공개 디자인 원본의 crayon_bell.svg(이 저장소 밖)
 // sha256 c3b220d862b7195ac9c1c5db9a54217af8572d3686e98f55a1b2f9118fb20b3b, 8785B
-// (대부분 C2PA metadata) — Owner 확인 "그게벨자산이야". 아래 마크업은 그 파일의
+// (대부분 C2PA metadata) — Owner 확인 "그게벨자산이야". app/public/card/crayon-bell.svg 는 그 파일의
 // <metadata> 블록만 뺀 그림 내용 그대로다(재드로우 0, 좌표·색·필터 손대지 않음).
+// [A-768 M-T-3] 예전엔 같은 마크업을 data: URI 로 실었는데, 배포 CSP `img-src 'self'` 가 data: 를 막아
+// onerror → asset-missing → 귀환 연출 대신 filebox 로 떨어졌다. 이제 **같은 바이트**(969B, sha256
+// a232a0797c8d4cc90310d9f7c4ee748935c0ef5d38a6ce8a8e2de0cab1ef8f2a — 옛 BELL_SVG_MARKUP 문자열과 동일)를
+// 같은 origin 정적 파일로 읽는다. CSP 는 그대로(strict, data: 허용 0).
 // [주의] main.js 에 "별도 벨/링 그래픽은 canon 에 없다"는 예전 주석이 남아 있을 수
 // 있다 — 이 벨(2026-09-18)은 그 뒤에 온 새 Owner 지시다.
 const BELL_KEY = "alarm-bell";
-const BELL_SVG_MARKUP = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-<defs><filter id="crb" x="-25%" y="-25%" width="150%" height="150%">
- <feTurbulence type="fractalNoise" baseFrequency="0.055" numOctaves="3" seed="13" result="n"/>
- <feDisplacementMap in="SourceGraphic" in2="n" scale="3.2" xChannelSelector="R" yChannelSelector="G"/></filter></defs>
-<g filter="url(#crb)" fill="none" stroke="#E0B100" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"><path d="M50 16 C66 16 76 30 76 46 C76 62 80 70 86 78 L14 78 C20 70 24 62 24 46 C24 30 34 16 50 16 Z"/><path d="M50 10 L50 17"/><path d="M42 86 C44 93 56 93 58 86"/></g>
-<g filter="url(#crb)" fill="none" stroke="#E0B100" stroke-width="5.2" opacity=".45" stroke-linecap="round" stroke-linejoin="round" transform="translate(.7,.6)"><path d="M50 16 C66 16 76 30 76 46 C76 62 80 70 86 78 L14 78 C20 70 24 62 24 46 C24 30 34 16 50 16 Z"/><path d="M50 10 L50 17"/><path d="M42 86 C44 93 56 93 58 86"/></g>
-</svg>`;
-// data: URI + Image — Path2D 가 아니다: 캔버스 2D 는 feTurbulence/feDisplacementMap
+// Image — Path2D 가 아니다: 캔버스 2D 는 feTurbulence/feDisplacementMap
 // 을 못 돌린다(SVG 래스터라이저가 Image onload 시 대신 돌려준다). Path2D 로 세 path 를
 // 다시 그리면 크레용 displacement 질감이 사라진다 — 그래서 이 경로를 택했다.
-const BELL_SRC = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(BELL_SVG_MARKUP)}`;
+const BELL_SRC = "/card/crayon-bell.svg";
 
 // 위치 — [OWNER_INPUT_REQUIRED] "집그림사이즈"의 절대 px 기준이 앱에 없다: Home
 // paper stamp 는 `.homePaper__stamp{width:52px}` 이지만 종이 자체가 0.275~0.64 로
@@ -288,7 +285,7 @@ export async function loadReturnAssets() {
       im.onerror = () => { missing.push(name); resolve(); };
       im.src = `${DIR}/${name}.png`;
     })),
-    // 알람 종 — PNG 파일이 아니라 인라인 data: URI(위 BELL_SRC). 같은 실패 신호
+    // 알람 종 — PNG 가 아니라 같은 origin SVG 파일(위 BELL_SRC). 같은 실패 신호
     // 통로(missing[])를 쓴다 — 조용히 사라지지 않는다.
     new Promise((resolve) => {
       const im = new Image();

@@ -8,9 +8,10 @@ import { fileURLToPath } from "node:url";
 import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult } from "viem";
 
 import { resolveChainProfile } from "../src/chain-profile.js";
-import { CURRENT_READER_STATUS as S, readSecondCurrent, vendoredSelectorsMatchLane } from "../src/second-current-reader.js";
-import { ERC20_VIEW_ABI, ERC4626_VIEW_ABI, POOL_VIEW_ABI } from "../src/abi/second-reader-abi.js";
-import { LANE_RECEIPT_TOKEN } from "../src/mainnet-job-lane.js";
+import { ABIL_RECORDED, CURRENT_READER_STATUS as S, readSecondCurrent, vendoredSelectorsMatchLane } from "../src/second-current-reader.js";
+import { ABIL_POOL_VIEW_ABI, ABIL_ROUTER_VIEW_ABI, ERC20_DECIMALS_VIEW_ABI, ERC20_VIEW_ABI, ERC4626_VIEW_ABI, POOL_VIEW_ABI } from "../src/abi/second-reader-abi.js";
+import { LANE_RECEIPT_TOKEN, buildLanePermissionPreview, decideCurrentCandidates } from "../src/mainnet-job-lane.js";
+import { validateDecisionReceipt } from "../src/second-journey-state.js";
 import { RETURN_READ_METHODS } from "../src/second-job-readiness.js";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -55,6 +56,27 @@ function world({ neverAave = true, curvanceAsset = USDC, kintsuFee = 10 } = {}) 
     if (data === "0xfde73f7d" && eq(to, KINTSU)) return word(kintsuFee);
     if (eq(to, AAVE_POOL)) return reserve(LANE_RECEIPT_TOKEN.address);
     if (eq(to, NEVER_POOL)) return neverAave ? reserve(NEVER_RECEIPT) : err();
+    // [A-716] aBIL pool / router / token answer with the recorded A-652 values.
+    const R = ABIL_RECORDED;
+    const v = (abi) => { try { return decodeFunctionData({ abi, data }); } catch { return null; } };
+    const addrOut = (a) => ok(encodeAbiParameters([{ type: "address" }], [a]));
+    if (eq(to, R.pool)) {
+      const f = v(ABIL_POOL_VIEW_ABI)?.functionName;
+      if (f === "token0") return addrOut(R.token);
+      if (f === "token1") return addrOut(R.usdc);
+      if (f === "fee") return word(R.fee);
+      if (f === "factory") return addrOut(R.factory);
+      if (f === "liquidity") return word("69905557358485131");
+      return err();
+    }
+    if (eq(to, R.router)) return v(ABIL_ROUTER_VIEW_ABI) ? addrOut(R.factory) : err();
+    if (eq(to, R.token)) {
+      if (v(ERC20_DECIMALS_VIEW_ABI)) return word(R.tokenDecimals);
+      const f = v(ERC20_VIEW_ABI)?.functionName;
+      if (f === "balanceOf") return word(777);
+      if (f === "allowance") return word(0);
+      return err();
+    }
     const fn = (() => { try { return [ERC4626_VIEW_ABI, ERC20_VIEW_ABI].map((abi) => { try { return decodeFunctionData({ abi, data }); } catch { return null; } }).find(Boolean); } catch { return null; } })();
     if (!fn) return err();
     if (eq(to, CURVANCE)) {
@@ -99,8 +121,12 @@ const byId = (r, id) => r.candidates.find((c) => c.id === id);
   const kin = byId(r, "kintsu-smon");
   assert.equal(kin.status, S.KINTSU_OBSERVATION);
   assert.equal(kin.read.exitFeeBips, 10);
-  assert.equal(byId(r, "abil-spot").status, S.ABIL_QUOTE_INCOMPLETE);
-  assert.equal(byId(r, "abil-spot").read, null);
+  // [A-716] re-baseline (named): aBIL is now read from the recorded A-652 evidence; the quote is still UNKNOWN.
+  const abil = byId(r, "abil-spot");
+  assert.equal(abil.status, S.ABIL_QUOTE_INCOMPLETE);
+  assert.equal(abil.read.holdings.abilRaw, "777");
+  assert.equal(abil.read.quote.value, null);
+  assert.equal(abil.read.quote.status, "UNKNOWN");
   for (const id of ["kuru", "merkl", "move"]) assert.equal(byId(r, id).status, S.UNAVAILABLE);
 
   // No go / permission vocabulary anywhere in the output.
@@ -120,7 +146,10 @@ const byId = (r, id) => r.candidates.find((c) => c.id === id);
   assert.equal(byId(none, "aave-usdc").status, S.READ_FAILED);
   assert.equal(byId(none, "aave-usdc").reason, "no_rpc");
   assert.equal(byId(none, "kintsu-smon").read, null);
-  assert.equal(byId(none, "abil-spot").status, S.ABIL_QUOTE_INCOMPLETE);
+  // [A-716] re-baseline (named): with nothing read, aBIL is UNKNOWN (missing), not a static "quote incomplete" row.
+  assert.equal(byId(none, "abil-spot").status, S.UNKNOWN);
+  assert.equal(byId(none, "abil-spot").unknownClass, "missing");
+  assert.equal(byId(none, "abil-spot").read, null);
   const noFetch = await readSecondCurrent({ profile: PROFILE, piggyAddress: PIGGY, rpcUrl: URL_ });
   assert.equal(byId(noFetch, "curvance-usdc").reason, "no_transport");
   const http = await readSecondCurrent({ profile: PROFILE, piggyAddress: PIGGY, rpcUrl: "http://x.invalid", fetchImpl: async () => { throw new Error("x"); }, now: () => NOW });
@@ -158,7 +187,7 @@ const byId = (r, id) => r.candidates.find((c) => c.id === id);
 // 5. Vendored ABI: selectors match the lane, view functions only.
 {
   assert.equal(vendoredSelectorsMatchLane(), true);
-  for (const abi of [ERC20_VIEW_ABI, POOL_VIEW_ABI, ERC4626_VIEW_ABI]) for (const f of abi) assert.equal(f.stateMutability, "view", `${f.name} is view`);
+  for (const abi of [ERC20_VIEW_ABI, POOL_VIEW_ABI, ERC4626_VIEW_ABI, ABIL_POOL_VIEW_ABI, ABIL_ROUTER_VIEW_ABI, ERC20_DECIMALS_VIEW_ABI]) for (const f of abi) assert.equal(f.stateMutability, "view", `${f.name} is view`);
 }
 
 // 6. Static: no send / sign / broadcast symbol reachable from the reader or its vendored ABI.
@@ -172,6 +201,47 @@ const byId = (r, id) => r.candidates.find((c) => c.id === id);
   const src = readFileSync(files[0], "utf8");
   assert.ok(!/from "\.\/main\.js"|document\.|window\.|localStorage/.test(src), "no UI / storage coupling");
   assert.ok(!/https?:\/\/[a-z0-9]/i.test(src.replace(/\^https:\\\/\\\/[^\n]*/g, "").replace(/\/\/ .*/g, "")), "no URL constant");
+}
+
+// 7. [A-710 E1] The reader's output feeds a candidate decision WITHOUT creating READY / permission by itself.
+{
+  const w = world();
+  const r = await readSecondCurrent(w.input);
+  const SCOPE = { accountId: PIGGY, chainId: "monad-mainnet" };
+  const EVENT = "a710-reader-event-1";
+  // (a) No agreed rule: every reported candidate (all 9, not a top-3 cut) is decided `unknown`, action 0.
+  const bare = decideCurrentCandidates({ currentRead: r, scope: SCOPE, eventId: EVENT, selectionSource: "a710_test", nowIso: NOW });
+  assert.equal(bare.length, r.candidates.length);
+  assert.ok(bare.length > 3, "the decision universe is the reader's universe, not a display cap");
+  for (const d of bare) {
+    assert.equal(d.decision, "unknown", `${d.candidateId} decides nothing from a reading alone`);
+    assert.equal(d.action, "none");
+    assert.equal(d.executionPermission, false);
+    assert.ok(d.receipt, `${d.candidateId} still leaves an action-0 Receipt`);
+    assert.equal(d.receipt.decision, "unknown");
+    assert.equal(validateDecisionReceipt(d.receipt, SCOPE).error, null);
+  }
+  const text = JSON.stringify(bare);
+  assert.ok(!/READY|"ready"|"readiness"|"preflight"|"permissionGranted"|"envelope"/.test(text), "no READY / permission field is produced");
+  // (b) With a user rule agreed for this event: reading → match is `ask` (exact permission still required), never execute.
+  const rule = { kind: "agreed_rule", agreedBy: "user", eventId: EVENT, candidateId: "aave-usdc", field: "piggyUsdcRaw", comparator: "gte", expected: "1000000" };
+  const decided = decideCurrentCandidates({ currentRead: r, agreedRules: { "aave-usdc": rule }, scope: SCOPE, eventId: EVENT, selectionSource: "a710_test", nowIso: NOW });
+  const aave = decided.find((d) => d.candidateId === "aave-usdc");
+  assert.equal(aave.decision, "match");
+  assert.equal(aave.action, "ask");
+  assert.equal(aave.executionPermission, false);
+  assert.equal(aave.receipt, null);
+  // The decision alone cannot be turned into a permission preview (it carries no Piggy binding / READY).
+  const preview = buildLanePermissionPreview({ profile: PROFILE, piggy: { id: "piggy-1", address: PIGGY }, amountRaw: "1000000", decision: aave });
+  assert.equal(preview.preview, null);
+  // (c) The same reading against a rule it breaks: nah, action 0, expected · found · block N.
+  const breach = decideCurrentCandidates({ currentRead: r, agreedRules: { "aave-usdc": { ...rule, expected: "9000000" } }, scope: SCOPE, eventId: EVENT, nowIso: NOW })
+    .find((d) => d.candidateId === "aave-usdc");
+  assert.equal(breach.decision, "nah");
+  assert.equal(breach.action, "none");
+  assert.equal(breach.receipt.expected, "9000000");
+  assert.equal(breach.receipt.found, "5000000");
+  assert.equal(breach.receipt.evidence.block, BLOCK);
 }
 
 console.log("second-current-reader: PASS");

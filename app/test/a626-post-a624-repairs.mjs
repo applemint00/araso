@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { admitSequencedPiggy, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
+import { admitSequencedPiggy, markBornPiggyIssuance, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
 import { TAP_CUE_TIMING, tapCueFrame } from "../src/chog-home.js";
 import { nameCardMarkup } from "../src/name-card.js";
@@ -61,9 +61,11 @@ function fnBody(src, name) {
 }
 
 // A — cue hold
-check("A: hold = 1200ms, ready = entrance 1870 + 1200 = 3070ms", [TAP_CUE_TIMING.holdMs, TAP_CUE_TIMING.readyMs], [1200, 3070]);
+// [A-725] hold 1200 → 1500 (Owner real-device finding: cue still felt immediately replaced by First Job;
+// 1500 = upper edge of the A-626 Owner envelope 1.0–1.5s). Same contract, new value.
+check("A: hold = 1500ms, ready = entrance 1870 + 1500 = 3370ms", [TAP_CUE_TIMING.holdMs, TAP_CUE_TIMING.readyMs], [1500, 3370]);
 check("A: wave keys/entrance unchanged from A-624", [TAP_CUE_TIMING.entranceMs, TAP_CUE_TIMING.waveKeys], [1870, [[0, 0], [350, -7], [550, -4], [770, -8], [960, -4], [1320, 0]]]);
-check("A: label stays full opacity through the hold (1870…3070)", [tapCueFrame(1870).labelOpacity, tapCueFrame(2500).labelOpacity, tapCueFrame(3069).labelOpacity], [1, 1, 1]);
+check("A: label stays full opacity through the hold (1870…3370)", [tapCueFrame(1870).labelOpacity, tapCueFrame(2620).labelOpacity, tapCueFrame(3369).labelOpacity], [1, 1, 1]);
 check("A: tapCueHoldRemainingMs getter = 0 for reduced/hidden/none, readyMs − t otherwise",
   /get tapCueHoldRemainingMs\(\) \{\s*if \(!tapCue \|\| tapCue\.hidden \|\| reduced\) return 0;\s*return Math\.max\(0, TAP_CUE_TIMING\.readyMs - tapCue\.t\);/.test(chog), true);
 check("A: cue clock only advances with painted-frame dt (hidden tab dt 0)", /const dt = last && !document\.hidden \? Math\.min\(now - last, 50\) : 0;/.test(chog) && /tapCue\.t \+= dt;/.test(chog), true);
@@ -121,6 +123,10 @@ async function buildFixture() {
   const cred = { credentialId: Buffer.from("root-cred").toString("base64url") };
   const r1 = registerControlledPiggy(idx, CHAIN, { id: honeybunId, name: "Honeybun", address: SELF_ADDR, signerAddress: SELF_ADDR, locator: cred, at: AT });
   if (!r1.ok) throw new Error(`registerControlledPiggy: ${r1.reason}`);
+  // [A-705 follow-up] fixture re-seed: A-695 provenance. The real birth path (main.js indexControlledPiggy) stamps provenance;
+  // node-seeding the first Piggy must do the same or checkOriginDeviceIndex refuses +Piggy before PRF.
+  const rb = markBornPiggyIssuance(idx, CHAIN, { address: SELF_ADDR });
+  if (!rb.ok) throw new Error(`markBornPiggyIssuance: ${rb.reason}`);
   const r2 = await admitSequencedPiggy({ storage: idx, chainId: CHAIN, sequence: 1, rootCredential: cred, requestPrf: async (c) => ({ credentialId: c.credentialId, prfOutput: new Uint8Array(32) }), deriveAddress: () => MOCHI_ADDR, now: () => AT });
   if (!r2.ok) throw new Error(`admitSequencedPiggy: ${r2.reason}`);
   renameIndexedPiggy(idx, CHAIN, { id: mochiId, name: "Mochi" });

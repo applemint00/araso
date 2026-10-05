@@ -47,11 +47,11 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"
   check("unreadable amount -> 'Unknown' (no invented value)", fm(undefined) === "Unknown" && fm("x") === "Unknown");
 
   // receiptRows / receiptCheck through the real source (cut together with formatMoney + shortHash)
-  const rowsCtx = { formatEther, Number, String, BigInt };
+  const rowsCtx = { formatEther, Number, String, BigInt, SEND_AMOUNT: 1000000000000000n, FIRST_SEND_USD: "$5" };
   vm.createContext(rowsCtx);
   vm.runInContext(
-    `${cutFn("shortHash")}\n${cutFn("formatMoney")}\n${cutFn("receiptRows")}\n${cutFn("receiptCheck")}\n` +
-      `globalThis.__rows = receiptRows; globalThis.__check = receiptCheck;`,
+    `${cutFn("shortHash")}\n${cutFn("formatMoney")}\n${cutFn("sentRowValue")}\n${cutFn("receiptRows")}\n${cutFn("receiptCheck")}\n${cutFn("escapeHtml")}\n${cutFn("receiptRowMarkup")}\n` +
+      `globalThis.__rows = receiptRows; globalThis.__check = receiptCheck; globalThis.__rowMarkup = receiptRowMarkup;`,
     rowsCtx,
   );
   const legacy = {
@@ -60,8 +60,14 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"
   };
   const rows = rowsCtx.__rows(legacy);
   const joined = rows.map((r) => `${r.label}:${r.value}`).join("|");
-  check("legacy Receipt rows never contain '$'", !joined.includes("$"), joined);
-  check("Sent row is exact token truth", rows.find((r) => r.label === "Sent")?.value === "0.001 MON");
+  // [A-756] Owner decision A: fixed First test amount is USD-first "$5" with the real 0.001 MON as faint secondary; other rows stay MON-only.
+  const nonSent = rows.filter((r) => r.label !== "Sent").map((r) => `${r.label}:${r.value}`).join("|");
+  check("legacy Receipt rows other than Sent never contain '$'", !nonSent.includes("$"), nonSent);
+  // [A-768 M-T-2 · declared expectation update] rows carry text; the rendered (escaped) Sent markup is what the screen shows.
+  const sentVal = rowsCtx.__rowMarkup(rows.find((r) => r.label === "Sent") || {}).replace(/^<p class="receipt-row"><span class="label">Sent<\/span><span class="value">/, "");
+  check("Sent row is USD-first $5 with faint exact 0.001 MON", sentVal.startsWith("$5 ") && sentVal.includes('class="receipt-sub">0.001 MON</span>'), sentVal);
+  const otherSent = rowsCtx.__rows({ ...legacy, sent: 2000000000000000n }).find((r) => r.label === "Sent")?.value;
+  check("non-First amount never claims $5 (token truth)", otherSent === "0.002 MON", otherSent);
   check("receiptCheck never contains '$'", !rowsCtx.__check(legacy).includes("$"), rowsCtx.__check(legacy));
   check("receiptCheck still reconciles (same as Left)", rowsCtx.__check(legacy).includes("same as Left"));
   const sealedOff = rowsCtx.__check({ ...legacy, after: legacy.after + 1000000000000n });

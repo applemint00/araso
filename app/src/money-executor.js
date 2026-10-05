@@ -35,6 +35,50 @@ export const DEFAULT_HASH_SAVE_ATTEMPTS = 3;
 const TX_HASH = /^0x[0-9a-fA-F]{64}$/;
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
+// [A-768 M-C-1] Pre-sign assertion. viem's prepareTransactionRequest may take chainId/type/gas/fees from the RPC
+// (eth_fillTransaction), so the request is checked AFTER prepare and BEFORE signTransaction, in the strict path here and
+// in First's two legacy sites (main.js signSendStep). Fail-closed: anything unexpected refuses the signature.
+//   chainId   exactly Monad testnet (10143, a number) — the only chain these paths sign for today
+//   type      "eip1559" (Monad testnet blocks carry baseFeePerGas; evidence: receipts baseFeePerGas 100 gwei)
+//   absent    authorizationList (EIP-7702), blob fields, legacy gasPrice, fee-payer/fee-token/nonce-key extras, non-empty accessList
+//   bounded   gas, maxFeePerGas, maxPriorityFeePerGas, gas*maxFeePerGas — explicit caps below (INFERRED, ~10x observed):
+//             gas <= 2,000,000 (observed shMON-class calls ~100k gas) · maxFeePerGas <= 1000 gwei (observed testnet base fee
+//             100 gwei / gasPrice 102 gwei) · whole-tx fee <= 0.1 MON (= the relayer grant, relayer/src/policy.mjs GRANT_WEI)
+export const SIGN_GUARD = Object.freeze({
+  chainId: 10143,
+  type: "eip1559",
+  maxGas: 2_000_000n,
+  maxFeePerGas: 1_000_000_000_000n,
+  maxTxFeeWei: 100_000_000_000_000_000n,
+});
+const SIGN_FORBIDDEN_FIELDS = Object.freeze([
+  "authorizationList", "blobs", "blobVersionedHashes", "sidecars", "maxFeePerBlobGas", "kzg",
+  "gasPrice", "feePayerSignature", "feeToken", "keyAuthorization", "nonceKey",
+]);
+
+/** Returns null when the prepared request may be signed, otherwise a short refusal reason. Pure; never throws. */
+export function preparedSignProblem(prepared) {
+  try {
+    if (!prepared || typeof prepared !== "object") return "prepared_missing";
+    if (prepared.chainId !== SIGN_GUARD.chainId) return "chain_id_mismatch";
+    if (prepared.type !== SIGN_GUARD.type) return "tx_type_unexpected";
+    for (const field of SIGN_FORBIDDEN_FIELDS) {
+      if (prepared[field] !== undefined && prepared[field] !== null) return field === "authorizationList" ? "authorization_list_present" : "unexpected_field";
+    }
+    if (prepared.accessList !== undefined && prepared.accessList !== null && !(Array.isArray(prepared.accessList) && prepared.accessList.length === 0)) return "access_list_present";
+    if (!Number.isSafeInteger(prepared.nonce) || prepared.nonce < 0) return "nonce_invalid";
+    const { gas, maxFeePerGas, maxPriorityFeePerGas, value } = prepared;
+    if (typeof gas !== "bigint" || gas <= 0n || gas > SIGN_GUARD.maxGas) return "gas_out_of_bounds";
+    if (typeof maxFeePerGas !== "bigint" || maxFeePerGas <= 0n || maxFeePerGas > SIGN_GUARD.maxFeePerGas) return "fee_out_of_bounds";
+    if (typeof maxPriorityFeePerGas !== "bigint" || maxPriorityFeePerGas < 0n || maxPriorityFeePerGas > maxFeePerGas) return "fee_out_of_bounds";
+    if (gas * maxFeePerGas > SIGN_GUARD.maxTxFeeWei) return "fee_out_of_bounds";
+    if (value !== undefined && (typeof value !== "bigint" || value < 0n)) return "value_invalid";
+    return null;
+  } catch {
+    return "prepared_unreadable";
+  }
+}
+
 function passed(r) {
   return r === true || (!!r && typeof r === "object" && r.ok === true);
 }
@@ -134,6 +178,13 @@ export async function executeMoneyStep({ tx, transport, authorize, reserve, pers
     try {
       const prepared = await walletClient.prepareTransactionRequest({ account, ...tx });
       const { account: _drop, ...toSign } = prepared || {};
+      // [A-774] toSign is already a copy (the original prepared object is untouched). A fill-supporting node (geth/anvil) echoes
+      // gasPrice on an eip1559 tx and viem copies it; drop it from the copy ONLY when type is eip1559 and both max-fee fields are
+      // present. The same copy goes to the guard and to the signer; legacy/untyped or fee-incomplete + gasPrice is still refused.
+      if (toSign.type === "eip1559" && toSign.maxFeePerGas !== undefined && toSign.maxFeePerGas !== null && toSign.maxPriorityFeePerGas !== undefined && toSign.maxPriorityFeePerGas !== null) delete toSign.gasPrice;
+      // [A-768 M-C-1] refuse before the signer is touched — nothing signed, nothing persisted, nothing sent.
+      const signProblem = preparedSignProblem(toSign);
+      if (signProblem) return blocked("sign", signProblem);
       raw = await account.signTransaction(toSign);
       if (typeof raw !== "string" || !/^0x[0-9a-fA-F]+$/.test(raw)) return blocked("sign", "sign_failed");
       hash = keccak256(raw);

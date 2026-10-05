@@ -44,6 +44,7 @@ import { admitModelAPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, registerContro
 import { createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry } from "../src/piggy-registry.js";
 import { prfSaltFromHex, modelASalt } from "../src/piggy-session.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
+import { ISSUANCE_AUTHORITY_INTERFACE_VERSION, ISSUANCE_REFUSAL, PLUS_PURPOSE, REGISTERED_TOPIC0 } from "../src/issuance-authority.js";
 import {
   CLAIM_RESULT,
   CLAIM_STATUS,
@@ -105,7 +106,11 @@ const OPEN_SRC = RAW_OPEN_SRC.replace(
   GIFT_RECORD_SOURCE_BLOCK,
   "const GIFT_RECORD_SOURCE = globalThis.__GIFT_RECORD_SOURCE__ ?? null;",
 ).replace(GIFT_SUBMITTER_BLOCK, "const GIFT_CLAIM_SUBMITTER = globalThis.__GIFT_CLAIM_SUBMITTER__ ?? null;");
-const ADD_SRC = cut("// [A-522 B2a] MY PIGGIES 색인 = **제품 읽기 원천**", "function homePadMarkup(scene) {");
+const RAW_ADD_SRC = cut("// [A-522 B2a] MY PIGGIES 색인 = **제품 읽기 원천**", "function homePadMarkup(scene) {");
+// [A-711] same technique as the record source / submitter seams: the product literal (`= null`, no authority, no
+// registry address, no provider) must be in the source verbatim; only THIS file's copy is swapped for an injectable fake.
+assert.equal((RAW_ADD_SRC.match(/^const ISSUANCE_AUTHORITY = null;$/gm) || []).length, 1, "product default: issuance authority is null");
+const ADD_SRC = RAW_ADD_SRC.replace("const ISSUANCE_AUTHORITY = null;", "const ISSUANCE_AUTHORITY = globalThis.__ISSUANCE_AUTHORITY__ ?? null;");
 const BOOT_SRC = cut(
   "// [A-559 PHASE S1] Gift 링크 fragment 를 부팅 시 **한 번만** 읽어 둔다.",
   "\n\nrender();",
@@ -201,15 +206,15 @@ const requestPrfWith = (client) => async (credential, { prfSalt } = {}) =>
   getPasskeyPrfOutput({ rpId: RP, ...(credential ? { credential } : {}), ...(prfSalt instanceof Uint8Array ? { prfSalt } : {}), webAuthnClient: client });
 const addressOf = (prf) => getEvmAddress(createSecp256k1SigningSession({ privateKey: prf }).publicKey);
 
-async function seedFirstPiggy(storage, client, { name = "Honeybun" } = {}) {
+async function seedFirstPiggy(storage, client, { name = "Honeybun", chain = CHAIN } = {}) {
   const prf = (await requestPrfWith(client)(null, {})).prfOutput;
   const address = addressOf(prf);
-  const out = registerControlledPiggy(storage, CHAIN, {
+  const out = registerControlledPiggy(storage, chain, {
     id: `legacy-${address.toLowerCase()}`, name, address, signerAddress: address,
     locator: { credentialId: client.credentialIdString }, at: "2026-09-24T09:00:00.000Z",
   });
   assert.equal(out.ok, true);
-  assert.equal(markBornPiggyIssuance(storage, CHAIN, { address }).ok, true);   // [A-695] 생성 경로 시드
+  assert.equal(markBornPiggyIssuance(storage, chain, { address }).ok, true);   // [A-695] 생성 경로 시드
   storage.setItem("araso.passkey", JSON.stringify({ credentialId: client.credentialIdString }));
   return address;
 }
@@ -248,7 +253,7 @@ function fifoLocks() {
 }
 
 // ── "open the app" — a brand-new vm context + brand-new `state` each time (close/reopen). ──
-function openApp(storage, { href = `${ORIGIN}/`, credential, address = null, secondJourneyCompletedOnce = false, requestPrf, giftRecordSource, giftSubmitter = null, webAuthnHook = null } = {}) {
+function openApp(storage, { href = `${ORIGIN}/`, credential, address = null, secondJourneyCompletedOnce = false, requestPrf, giftRecordSource, giftSubmitter = null, webAuthnHook = null, issuanceAuthority = null, chainId = CHAIN } = {}) {
   const storedCredential = (() => { try { return JSON.parse(storage.getItem("araso.passkey") || "null"); } catch { return null; } })();
   const state = {
     address, credential: credential !== undefined ? credential : storedCredential,
@@ -274,7 +279,7 @@ function openApp(storage, { href = `${ORIGIN}/`, credential, address = null, sec
     __ARASO_LOCAL_TEST_WEBAUTHN_CLIENT__: webAuthnHook,
     claimStatement, recoverMessageAddress, giftValueLabel,
     safeLocalStorage: () => storage,
-    secondJourneyScope: () => ({ accountId: state.address, chainId: CHAIN }),
+    secondJourneyScope: () => ({ accountId: state.address, chainId }),
     localStorage: storage,
     setScene: (...a) => calls.setScene.push(a),
     render: () => { calls.render += 1; },
@@ -311,12 +316,15 @@ function openApp(storage, { href = `${ORIGIN}/`, credential, address = null, sec
       },
     },
     __GIFT_RECORD_SOURCE__: giftRecordSource,
+    __ISSUANCE_AUTHORITY__: issuanceAuthority,
     __GIFT_CLAIM_SUBMITTER__: giftSubmitter,
   };
   vm.createContext(ctx);
   vm.runInContext(
     `${SESSION_SRC}\n${ERR_SRC}\n${OPEN_SRC}\n${ADD_SRC}\n${BOOT_SRC}\n` +
-      `this.__api = { checkPiggy, startPiggyOpen, openPiggy, beginAddPiggy, beginGiftPiggy, admitAddedPiggy, settleBoundGiftClaim };\n` +
+      // [A-734] + the Gift Open UI entry (startGiftOpen / openGiftForExistingPiggy / giftPaperKind / offerGiftPaperAtBoot) so §12
+      // drives the REAL entry into the REAL beginGiftPiggy (named reason: the entry must be proven on this harness's record-source seam).
+      `this.__api = { checkPiggy, startPiggyOpen, openPiggy, beginAddPiggy, beginGiftPiggy, admitAddedPiggy, settleBoundGiftClaim, startGiftOpen, openGiftForExistingPiggy, giftPaperKind, offerGiftPaperAtBoot };\n` +
       `this.__getPendingGiftClaim = () => pendingGiftClaim;\n` +
       `this.__getLastGiftClaimSettlement = () => lastGiftClaimSettlement;\n` +
       `this.__getActiveAccount = () => activeAccount;`,
@@ -924,6 +932,202 @@ await check("11b. token/asset tampering (correct amount, wrong token address) is
     claimedAt,
   });
   assert.equal(settled.result, CLAIM_RESULT.NOT_PROVEN_BY_SIGNATURE, JSON.stringify(settled));
+});
+
+// ═══ 7i. [A-711] issuance authority through the REAL main.js wiring (injected fake registry; product default stays null) ════
+// Injection is by this file's copy of `const ISSUANCE_AUTHORITY = null;` only (see RAW_ADD_SRC). No network, no address from
+// anywhere but this test. The fake mirrors IssuanceRegistry: write-once map + one Registered log per successful register.
+const ISS_REGISTRY = `0x${"c0".repeat(20)}`;
+function fakeIssuanceAuthority({ preflight = "ok", takenAddresses = [], onRegister = null } = {}) {
+  const reg = new Map(takenAddresses.map((a) => [a.toLowerCase(), PLUS_PURPOSE]));
+  let n = 0;
+  const calls = { preflight: 0, isIssued: 0, register: [] };
+  return {
+    reg, calls,
+    interfaceVersion: ISSUANCE_AUTHORITY_INTERFACE_VERSION,
+    chainScope: CHAIN,
+    registryAddress: ISS_REGISTRY,
+    async preflight() { calls.preflight += 1; if (preflight === "throw") throw new Error("down"); return { ok: true, registryAddress: ISS_REGISTRY }; },
+    async isIssued(address) { calls.isIssued += 1; return reg.has(address.toLowerCase()); },
+    async register({ address, purpose, sequence, chainScope }) {
+      calls.register.push({ address, purpose, sequence, chainScope });
+      if (onRegister) await onRegister({ address, purpose });
+      const tx = `0x${(++n).toString(16).padStart(64, "0")}`;
+      if (reg.has(address.toLowerCase())) return { outcome: "submitted", txHash: tx, receipt: { transactionHash: tx, status: 0, finalized: true, logs: [] } };
+      reg.set(address.toLowerCase(), purpose);
+      return { outcome: "submitted", txHash: tx, receipt: { transactionHash: tx, status: 1, finalized: true, logs: [{ address: ISS_REGISTRY, topics: [REGISTERED_TOPIC0, `0x${"0".repeat(24)}${address.toLowerCase().slice(2)}`, purpose] }] } };
+    },
+  };
+}
+const ISS_GIFT_ID = `0x${"9a".repeat(32)}`;
+async function issuanceGiftSetup(tag, authorityOptions) {
+  const storage = createMemoryStorage();
+  const client = fakeClient(crypto.randomBytes(32));
+  const first = await seedFirstPiggy(storage, client);
+  const giftId = tag === "bytes32" ? ISS_GIFT_ID : `0x${crypto.randomBytes(32).toString("hex")}`;
+  const { record, url, token } = await makeLink({ giftId });
+  const recordSource = memoryRecordSource({ [giftId]: record });
+  const authority = fakeIssuanceAuthority(authorityOptions);
+  const app = openApp(storage, { href: url, address: first, giftRecordSource: recordSource, issuanceAuthority: authority });
+  return { storage, client, first, giftId, record, token, recordSource, authority, app };
+}
+
+await check("7f. [A-711] product default null authority on testnet: beginGiftPiggy / beginAddPiggy are the unchanged A-695 flow (the new seam is inert)", async () => {
+  const storage = createMemoryStorage();
+  const client = fakeClient(crypto.randomBytes(32));
+  const first = await seedFirstPiggy(storage, client);
+  const app = openApp(storage, { href: `${ORIGIN}/`, address: first, secondJourneyCompletedOnce: true });
+  app.setRequestPrf(requestPrfWith(client));
+  const out = await app.beginAddPiggy();
+  assert.equal(out.started, true, JSON.stringify(out));
+  assert.equal(loadMyPiggiesIndex(storage, CHAIN).index.piggies.length, 2);
+});
+
+await check("7g. [A-711] Gift Piggy with an authority: registers the giftId as purpose BEFORE the row exists, commits only after, then the claim settles", async () => {
+  const seenAtRegister = [];
+  const ctxHolder = {};
+  const setup = await issuanceGiftSetup("bytes32", { onRegister: async () => { seenAtRegister.push(loadMyPiggiesIndex(ctxHolder.storage, CHAIN).index.piggies.length); } });
+  ctxHolder.storage = setup.storage;
+  setup.app.setRequestPrf(requestPrfWith(setup.client));
+  const out = await setup.app.beginGiftPiggy();
+  assert.equal(out.started, true, JSON.stringify(out));
+  assert.equal(out.giftAttempted, true);
+  assert.deepEqual(seenAtRegister, [1], "at registration time the local index still has only the first Piggy");
+  assert.equal(setup.authority.calls.register.length, 1);
+  assert.equal(setup.authority.calls.register[0].purpose, ISS_GIFT_ID, "Gift purpose = giftId");
+  assert.equal(setup.authority.calls.register[0].sequence, 1);
+  assert.equal(loadMyPiggiesIndex(setup.storage, CHAIN).index.piggies.length, 2);
+  assert.equal(setup.app.getLastGiftClaimSettlement().result, CLAIM_RESULT.OK);
+  assert.equal(setup.app.getPendingGiftClaim(), null);
+});
+
+await check("7h. [A-711] Gift refused by the authority (unreachable / already registered): started:false, pending Gift preserved, no row, no settlement; unreachable = 0 requestPrf", async () => {
+  // unreachable preflight -> refused before the passkey prompt
+  const a = await issuanceGiftSetup("rand", { preflight: "throw" });
+  let prfCalls = 0;
+  a.app.setRequestPrf(async (c, o) => { prfCalls += 1; return requestPrfWith(a.client)(c, o); });
+  const outA = await a.app.beginGiftPiggy();
+  assert.deepEqual({ started: outA.started, reason: outA.reason }, { started: false, reason: ISSUANCE_REFUSAL.UNREACHABLE });
+  assert.equal(prfCalls, 0);
+  assert.equal(a.app.getPendingGiftClaim()?.token, a.token);
+  assert.equal(a.app.getLastGiftClaimSettlement(), null);
+  assert.equal(loadMyPiggiesIndex(a.storage, CHAIN).index.piggies.length, 1);
+  // n=1's address already registered (e.g. a crash survivor) -> never adopted; pending kept; n burned; the retry takes n=2
+  const b = await issuanceGiftSetup("rand", {});
+  b.app.setRequestPrf(requestPrfWith(b.client));
+  const addr1 = addressOf((await requestPrfWith(b.client)(null, { prfSalt: await modelASalt(1) })).prfOutput);
+  b.authority.reg.set(addr1.toLowerCase(), PLUS_PURPOSE);
+  const outB = await b.app.beginGiftPiggy();
+  assert.deepEqual({ started: outB.started, reason: outB.reason }, { started: false, reason: ISSUANCE_REFUSAL.SEQUENCE_REGISTERED });
+  assert.equal(b.app.getPendingGiftClaim()?.token, b.token, "pending Gift intent preserved");
+  assert.equal(b.authority.calls.register.length, 0);
+  assert.equal(loadMyPiggiesIndex(b.storage, CHAIN).index.piggies.length, 1);
+  assert.equal(loadMyPiggiesIndex(b.storage, CHAIN).index.issuedThrough, 1);
+  const retry = await b.app.beginGiftPiggy();
+  assert.equal(retry.started, true, JSON.stringify(retry));
+  assert.equal(b.authority.calls.register[0].sequence, 2);
+  assert.notEqual(b.authority.calls.register[0].address.toLowerCase(), addr1.toLowerCase());
+});
+
+await check("7i. [A-711] plain +Piggy with an authority registers keccak256('plus') and never touches the pending Gift", async () => {
+  const setup = await issuanceGiftSetup("rand", {});
+  setup.app.state.secondJourneyCompletedOnce = true;
+  setup.app.setRequestPrf(requestPrfWith(setup.client));
+  const out = await setup.app.beginAddPiggy();
+  assert.equal(out.started, true, JSON.stringify(out));
+  assert.equal(setup.authority.calls.register.length, 1);
+  assert.equal(setup.authority.calls.register[0].purpose, PLUS_PURPOSE);
+  assert.equal(setup.app.getPendingGiftClaim()?.token, setup.token, "a plain +Piggy never takes the Gift");
+});
+
+await check("7j. [A-711] profile gate through the REAL main.js wiring: mainnet scope + the shipped null authority -> Gift Piggy and +Piggy refused BEFORE the passkey prompt, zero storage writes, pending Gift preserved; the same device data on testnet scope issues (A-695 path)", async () => {
+  const LIVE = "monad-mainnet";
+  const storage = createMemoryStorage();
+  const client = fakeClient(crypto.randomBytes(32));
+  const first = await seedFirstPiggy(storage, client, { chain: LIVE });
+  const giftId = `0x${crypto.randomBytes(32).toString("hex")}`;
+  const { record, url, token } = await makeLink({ giftId });
+  const recordSource = memoryRecordSource({ [giftId]: record });
+  const app = openApp(storage, { href: url, address: first, giftRecordSource: recordSource, chainId: LIVE });   // issuanceAuthority: product default null
+  let prfCalls = 0;
+  app.setRequestPrf(async (c, o) => { prfCalls += 1; return requestPrfWith(client)(c, o); });
+  const before = JSON.stringify(storage.dump());
+  const gift = await app.beginGiftPiggy();
+  assert.deepEqual({ started: gift.started, reason: gift.reason }, { started: false, reason: ISSUANCE_REFUSAL.UNCONFIGURED });
+  assert.equal(prfCalls, 0, "no passkey prompt");
+  assert.equal(JSON.stringify(storage.dump()), before, "zero storage writes");
+  assert.equal(app.getPendingGiftClaim()?.token, token, "pending Gift intent preserved");
+  assert.equal(app.getLastGiftClaimSettlement(), null);
+  assert.deepEqual(plain(app.state.addPiggy), { status: "failed", reason: ISSUANCE_REFUSAL.UNCONFIGURED });
+  app.state.secondJourneyCompletedOnce = true;
+  const plus = await app.beginAddPiggy();
+  assert.deepEqual({ started: plus.started, reason: plus.reason }, { started: false, reason: ISSUANCE_REFUSAL.UNCONFIGURED });
+  assert.equal(prfCalls, 0);
+  assert.equal(JSON.stringify(storage.dump()), before);
+  assert.equal(loadMyPiggiesIndex(storage, LIVE).index.issuedThrough, 0);
+  // contrast: the identical seed on the testnet scope with the same null authority issues n=1 (no authority dependency)
+  const tStorage = createMemoryStorage();
+  const tFirst = await seedFirstPiggy(tStorage, client);
+  const tApp = openApp(tStorage, { href: `${ORIGIN}/`, address: tFirst, secondJourneyCompletedOnce: true });
+  tApp.setRequestPrf(requestPrfWith(client));
+  const tOut = await tApp.beginAddPiggy();
+  assert.equal(tOut.started, true, JSON.stringify(tOut));
+  assert.equal(loadMyPiggiesIndex(tStorage, CHAIN).index.issuedThrough, 1);
+});
+
+// ═══ 12. [A-734] the Gift Open UI entry → the REAL beginGiftPiggy ════════════════════════════
+// Named reason for touching this file: A-734 gives beginGiftPiggy its first UI entry (the "a Piggy came for you." Open
+// tap → startGiftOpen → openGiftForExistingPiggy). Only this harness has the record-source seam needed to prove that the
+// entry reaches a NEW Gift Piggy + claim preparation (a734-gift-open-entry.mjs proves routing/markup/A-726 over stubs).
+await check("12a. [A-734] existing-Piggy device: boot offers the 'came' paper; the Open entry (startGiftOpen) runs the REAL beginGiftPiggy → exactly one assertion, 0 creations, a NEW Gift Piggy bound + claim settled to it (never the existing Piggy) → that Piggy's Name it", async () => {
+  const storage = createMemoryStorage();
+  const client = fakeClient(crypto.randomBytes(32));
+  const first = await seedFirstPiggy(storage, client);
+  const giftId = "gift-12a-entry";
+  const { record, url, token } = await makeLink({ giftId });
+  const recordSource = memoryRecordSource({ [giftId]: record });
+  const app = openApp(storage, { href: url, address: first, giftRecordSource: recordSource });
+  app.state.scene = "sendstay";
+  assert.equal(app.offerGiftPaperAtBoot(), true);
+  assert.equal(app.state.scene, "received");
+  assert.equal(app.giftPaperKind(), "came");
+  let prfCalls = 0;
+  app.setRequestPrf(async (c, o) => { prfCalls += 1; return requestPrfWith(client)(c, o); });
+  const out = await app.startGiftOpen();
+  assert.equal(out.started, true, JSON.stringify(out));
+  assert.equal(out.giftAttempted, true);
+  assert.equal(prfCalls, 1);
+  assert.equal(client.calls.create, 0);
+  const settlement = app.getLastGiftClaimSettlement();
+  assert.equal(settlement.result, CLAIM_RESULT.OK, JSON.stringify(settlement));
+  assert.notEqual(settlement.claimParties.recipientAddress.toLowerCase(), first.toLowerCase(), "never the existing Piggy");
+  assert.equal(out.piggyId, `piggy-${settlement.claimParties.recipientAddress.toLowerCase()}`);
+  assert.deepEqual(plain(settlement.valueSubmission), { status: "claim_transport_unavailable" }, "live submit still null → value never faked");
+  assert.deepEqual(app.calls.setScene.at(-1), ["name", "", ""]);
+  assert.equal(app.giftPaperKind(), null);
+  assert.equal(app.getPendingGiftClaim(), null);
+  assert.equal(loadMyPiggiesIndex(storage, CHAIN).index.piggies.length, 2);
+  assert.equal(JSON.stringify(storage.dump()).includes(token), false);
+});
+await check("12b. [A-734] product default (no record source): the same Open entry stops at record_source_unavailable BEFORE auth → Home ('Piggy is home.'), 0 assertions, 0 new Piggies, intent kept in memory only", async () => {
+  const storage = createMemoryStorage();
+  const client = fakeClient(crypto.randomBytes(32));
+  const first = await seedFirstPiggy(storage, client);
+  const { url, token } = await makeLink({ giftId: "gift-12b-default" });
+  const app = openApp(storage, { href: url, address: first });
+  app.state.scene = "sendstay";
+  app.offerGiftPaperAtBoot();
+  let prfCalls = 0;
+  app.setRequestPrf(async (c, o) => { prfCalls += 1; return requestPrfWith(client)(c, o); });
+  const before = JSON.stringify(storage.dump());
+  const out = await app.startGiftOpen();
+  assert.equal(out.started, false);
+  assert.equal(app.getLastGiftClaimSettlement().status, GIFT_ENTRY_STATUS.RECORD_SOURCE_UNAVAILABLE);
+  assert.equal(prfCalls, 0);
+  assert.deepEqual(app.calls.setScene.at(-1), ["sendstay", "Piggy is home.", ""]);
+  assert.equal(app.giftPaperKind(), null);
+  assert.equal(app.getPendingGiftClaim()?.token, token);
+  assert.equal(JSON.stringify(storage.dump()), before, "zero storage writes");
 });
 
 // ═══ no raw secret anywhere (card TESTS item 9) ════════════════════════════════════════════

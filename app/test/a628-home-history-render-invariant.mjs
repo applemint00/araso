@@ -26,7 +26,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { admitSequencedPiggy, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
+import { admitSequencedPiggy, markBornPiggyIssuance, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -100,6 +100,10 @@ async function buildFixture() {
   const cred = { credentialId: Buffer.from("root-cred").toString("base64url") };
   const r1 = registerControlledPiggy(idx, CHAIN, { id: honeybunId, name: "Honeybun", address: SELF_ADDR, signerAddress: SELF_ADDR, locator: cred, at: AT });
   if (!r1.ok) throw new Error(`registerControlledPiggy: ${r1.reason}`);
+  // [A-705 follow-up] fixture re-seed: A-695 provenance. The real birth path (main.js indexControlledPiggy) stamps provenance;
+  // node-seeding the first Piggy must do the same or checkOriginDeviceIndex refuses +Piggy before PRF.
+  const rb = markBornPiggyIssuance(idx, CHAIN, { address: SELF_ADDR });
+  if (!rb.ok) throw new Error(`markBornPiggyIssuance: ${rb.reason}`);
   const r2 = await admitSequencedPiggy({ storage: idx, chainId: CHAIN, sequence: 1, rootCredential: cred, requestPrf: async (c) => ({ credentialId: c.credentialId, prfOutput: new Uint8Array(32) }), deriveAddress: () => MOCHI_ADDR, now: () => AT });
   if (!r2.ok) throw new Error(`admitSequencedPiggy: ${r2.reason}`);
   renameIndexedPiggy(idx, CHAIN, { id: mochiId, name: "Mochi" });

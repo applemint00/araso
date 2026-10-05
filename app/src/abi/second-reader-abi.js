@@ -23,3 +23,22 @@ export const ERC4626_VIEW_ABI = Object.freeze([
   { type: "function", name: "convertToAssets", stateMutability: "view", inputs: [{ name: "shares", type: "uint256" }], outputs: [{ type: "uint256" }] },
   { type: "function", name: "totalAssets", stateMutability: "view", inputs: [], outputs: [{ type: "uint256" }] },
 ]);
+
+// aBIL spot read surface. View fragments only, copied from the A-652 fork-lab harness that produced the recorded
+// resolution (the fork-lab harness: v3 pool views, `factory()`,
+// `decimals()`). No quoter and no price view is recorded anywhere, so none is vendored: the quote stays UNKNOWN.
+export const ABIL_POOL_VIEW_ABI = Object.freeze([
+  { type: "function", name: "token0", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "token1", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+  { type: "function", name: "fee", stateMutability: "view", inputs: [], outputs: [{ type: "uint24" }] },
+  { type: "function", name: "liquidity", stateMutability: "view", inputs: [], outputs: [{ type: "uint128" }] },
+  { type: "function", name: "factory", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+]);
+
+export const ABIL_ROUTER_VIEW_ABI = Object.freeze([
+  { type: "function", name: "factory", stateMutability: "view", inputs: [], outputs: [{ type: "address" }] },
+]);
+
+export const ERC20_DECIMALS_VIEW_ABI = Object.freeze([
+  { type: "function", name: "decimals", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
+]);

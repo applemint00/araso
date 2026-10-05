@@ -14,7 +14,7 @@
 import { decodeFunctionResult, encodeFunctionData, toFunctionSelector } from "viem";
 import { LANE_RECEIPT_TOKEN, LANE_SELECTORS, readLanePreAction } from "./mainnet-job-lane.js";
 import { RETURN_READ_METHODS, buildExecutionPlan, readReturnObservation } from "./second-job-readiness.js";
-import { ERC20_VIEW_ABI, ERC4626_VIEW_ABI, POOL_VIEW_ABI } from "./abi/second-reader-abi.js";
+import { ABIL_POOL_VIEW_ABI, ABIL_ROUTER_VIEW_ABI, ERC20_DECIMALS_VIEW_ABI, ERC20_VIEW_ABI, ERC4626_VIEW_ABI, POOL_VIEW_ABI } from "./abi/second-reader-abi.js";
 
 export const CURRENT_READER_STATUS = Object.freeze({
   AAVE_BUILDABLE: "aave_buildable",
@@ -28,7 +28,32 @@ export const CURRENT_READER_STATUS = Object.freeze({
   READ_FAILED: "read_failed",
   ASSUMPTION_BROKEN: "assumption_broken",
   TARGET_MISSING: "target_missing",
+  // A row whose value could not be established: missing / stale / conflicting / unsupported (see `unknownClass`).
+  UNKNOWN: "unknown",
 });
+
+// aBIL spot: every value below is quoted from already-recorded evidence. Nothing here is a new fact.
+//   router / pool / token, token0 aBIL / token1 USDC, fee 3000, decimals 18
+//                                   → A-652 MAINNET_FORK_MATRIX.md:96 (and raw/abil-spot.json `resolution`)
+//   router factory() = pool factory() = 0xC1e98D0A…Aa21 → A-652 MAINNET_FORK_MATRIX.md:26
+//   chain 143, block 108,999,816, USDC 0x7547…b603 → A-652 MAINNET_FORK_MATRIX.md:1/:31
+//   router is the readiness destination           → second-job-readiness.js abil-spot `destination`
+// Not recorded anywhere: a quoter, a price view, dividend, eligibility. Those stay UNKNOWN.
+export const ABIL_RECORDED = Object.freeze({
+  chainId: 143,
+  evidenceBlock: 108999816,
+  router: "0xFE951b693A2FE54BE5148614B109E316B567632F",
+  pool: "0xb8700E0D0Df2B0b09A1374FbCdCC85E2E14F7898",
+  token: "0x4FC5B9f8933597D3ecf84d0611687E1Dc8DD576f",
+  tokenSymbol: "aBIL",
+  tokenDecimals: 18,
+  usdc: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603",
+  fee: 3000,
+  factory: "0xC1e98D0A2a58fB8aBd10ccc30a58efff4080Aa21",
+  source: "A-652 mainnet fork lab (MAINNET_FORK_MATRIX §7, raw/abil-spot.json)",
+});
+export const ABIL_UNKNOWN_CLASS = Object.freeze(["missing", "stale", "conflicting", "unsupported"]);
+const ABIL_ALWAYS_UNKNOWN = Object.freeze(["quote", "dividend", "eligibility"]);
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
 const lower = (v) => String(v || "").toLowerCase();
@@ -85,6 +110,11 @@ function makeReader({ rpcUrl, fetchImpl, now }) {
     return at;
   };
   return { rpc, call, pin, stamp };
+}
+
+/** The read-only JSON-RPC reader used by this module (whitelist-bounded). Exposed so the whitelist can be tested. */
+export function makeReadOnlyReader(input = {}) {
+  return makeReader(input);
 }
 
 // Plan lookup is used ONLY to take the pinned destination address from the readiness table.
@@ -178,6 +208,57 @@ async function readProtect(reader, piggyAddress, target) {
   }
 }
 
+// aBIL: what can be shown from the recorded evidence, at one pinned block. A value that cannot be shown is UNKNOWN —
+// the row is then `unknown` with read:null, never a partial guess. The quote is UNKNOWN even on a full read.
+const abilUnknown = (unknownClass, reason) => row("abil-spot", CURRENT_READER_STATUS.UNKNOWN, `${unknownClass}:${reason}`, null, { unknownClass, unknown: [...ABIL_ALWAYS_UNKNOWN] });
+const abilClassOf = (e) => (e instanceof ReadError && e.status === "rpc_unreachable" ? "missing" : "unsupported");
+
+async function readAbil(reader, piggyAddress, usdc) {
+  const R = ABIL_RECORDED;
+  const dest = destinationOf("abil-spot", piggyAddress);
+  if (!dest.ok) return abilUnknown("missing", dest.reason);
+  if (lower(dest.destination) !== lower(R.router)) return abilUnknown("conflicting", "router_differs_from_recorded");
+  if (lower(usdc) !== lower(R.usdc)) return abilUnknown("conflicting", "usdc_differs_from_recorded");
+  try {
+    const { chainId, block, blockTag } = await reader.pin();
+    if (chainId !== R.chainId) return abilUnknown("conflicting", "chain_differs_from_recorded");
+    // Evidence-side staleness only (no clock constant): a head below the recorded evidence block cannot show it.
+    if (block < R.evidenceBlock) return abilUnknown("stale", "rpc_head_behind_recorded_evidence");
+    for (const [name, at] of [["router", R.router], ["pool", R.pool], ["token", R.token]]) {
+      const code = await reader.rpc("eth_getCode", [at, blockTag]);
+      if (code.length <= 2) return abilUnknown("missing", `no_code_at_${name}`);
+    }
+    const found = {
+      token0: await reader.call(R.pool, ABIL_POOL_VIEW_ABI, "token0", [], blockTag),
+      token1: await reader.call(R.pool, ABIL_POOL_VIEW_ABI, "token1", [], blockTag),
+      fee: Number(await reader.call(R.pool, ABIL_POOL_VIEW_ABI, "fee", [], blockTag)),
+      poolFactory: await reader.call(R.pool, ABIL_POOL_VIEW_ABI, "factory", [], blockTag),
+      routerFactory: await reader.call(R.router, ABIL_ROUTER_VIEW_ABI, "factory", [], blockTag),
+      tokenDecimals: Number(await reader.call(R.token, ERC20_DECIMALS_VIEW_ABI, "decimals", [], blockTag)),
+    };
+    const expected = { token0: R.token, token1: R.usdc, fee: R.fee, poolFactory: R.factory, routerFactory: R.factory, tokenDecimals: R.tokenDecimals };
+    for (const [k, want] of Object.entries(expected)) {
+      const same = typeof want === "string" ? lower(found[k]) === lower(want) : found[k] === want;
+      if (!same) return abilUnknown("conflicting", `${k}_differs_from_recorded`);
+    }
+    const liquidity = await reader.call(R.pool, ABIL_POOL_VIEW_ABI, "liquidity", [], blockTag);
+    const usdcRaw = await reader.call(R.usdc, ERC20_VIEW_ABI, "balanceOf", [piggyAddress], blockTag);
+    const abilRaw = await reader.call(R.token, ERC20_VIEW_ABI, "balanceOf", [piggyAddress], blockTag);
+    const usdcToRouter = await reader.call(R.usdc, ERC20_VIEW_ABI, "allowance", [piggyAddress, R.router], blockTag);
+    const abilToRouter = await reader.call(R.token, ERC20_VIEW_ABI, "allowance", [piggyAddress, R.router], blockTag);
+    return row("abil-spot", CURRENT_READER_STATUS.ABIL_QUOTE_INCOMPLETE, "pool_identity_matches_recorded_quote_unknown", {
+      source: `read-only rpc ${RETURN_READ_METHODS.join("/")} @${block}`, observedAt: reader.stamp(), chainId, block, codePresent: true,
+      router: R.router, pool: R.pool, token: { address: R.token, symbol: R.tokenSymbol, decimals: found.tokenDecimals },
+      identityMatchesRecorded: true, poolLiquidityRaw: liquidity.toString(),
+      holdings: { usdcRaw: usdcRaw.toString(), abilRaw: abilRaw.toString(), usdcAllowanceToRouterRaw: usdcToRouter.toString(), abilAllowanceToRouterRaw: abilToRouter.toString() },
+      quote: { value: null, status: "UNKNOWN", reason: "no_recorded_quoter_or_price_view" },
+      recorded: { source: R.source, block: R.evidenceBlock },
+    }, { unknown: [...ABIL_ALWAYS_UNKNOWN] });
+  } catch (e) {
+    return abilUnknown(abilClassOf(e), errReason(e));
+  }
+}
+
 async function readKintsu({ rpcUrl, fetchImpl, now }) {
   const out = await readReturnObservation("kintsu-smon", { rpcUrl, fetchImpl, now });
   if (out.status !== "ok" || !out.observation) return failRow("kintsu-smon", out.status);
@@ -195,12 +276,15 @@ export async function readSecondCurrent({ profile, piggyAddress, rpcUrl, fetchIm
   const candidates = [];
   const usdc = profile?.usdc?.address;
   const unreadable = (id, reason) => failRow(id, reason);
+  let abil;
   if (!ADDR.test(address)) {
     for (const id of ["aave-usdc", "neverland-usdc", "curvance-usdc", "protect-revoke-allowance", "kintsu-smon"]) candidates.push(unreadable(id, "missing_piggy_address"));
+    abil = abilUnknown("missing", "missing_piggy_address");
   } else {
     const reader = makeReader({ rpcUrl, fetchImpl, now });
     if (reader.fail) {
       for (const id of ["aave-usdc", "neverland-usdc", "curvance-usdc", "protect-revoke-allowance", "kintsu-smon"]) candidates.push(unreadable(id, reader.fail));
+      abil = abilUnknown("missing", reader.fail);
     } else {
       const usdcOk = ADDR.test(usdc || "");
       candidates.push(await readAave({ profile, piggyAddress: address, rpcUrl, fetchImpl, now }));
@@ -208,9 +292,10 @@ export async function readSecondCurrent({ profile, piggyAddress, rpcUrl, fetchIm
       candidates.push(usdcOk ? await readCurvance(reader, address, usdc) : unreadable("curvance-usdc", "profile_usdc_missing"));
       candidates.push(await readProtect(reader, address, protectTarget));
       candidates.push(await readKintsu({ rpcUrl, fetchImpl, now }));
+      abil = usdcOk ? await readAbil(reader, address, usdc) : abilUnknown("missing", "profile_usdc_missing");
     }
   }
-  candidates.push(row("abil-spot", CURRENT_READER_STATUS.ABIL_QUOTE_INCOMPLETE, "no_quoter_or_token_address_in_exported_surface"));
+  candidates.push(abil);
   for (const u of UNAVAILABLE) candidates.push(row(u.id, CURRENT_READER_STATUS.UNAVAILABLE, u.reason));
   return { kind: "second_current_read", piggyAddress: address || null, candidates };
 }

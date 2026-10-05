@@ -371,10 +371,13 @@ function testnetPiggy(overrides = {}) {
   const survivedRereads = app.readReceipts();
   check("9. one malformed add_money row is skipped, legacy history is not wiped", survivedRereads.length === 3);
 
-  // [A-553 리뷰 결함 1 수리] legacy 줄은 원래 안전장치 그대로 — 깨진 legacy 줄 하나면 전체 [] (반쯤 읽힌 목록 금지).
+  // [A-553 리뷰 결함 1 수리] 예전 계약: 깨진 legacy 줄 하나면 전체 [].
+  // [A-768 M-F-3 · declared expectation update] 99e 감사 M-F-3 — 그 [] 가 건강한 이력 전체를 숨기는 "자가 오염" 이었다.
+  // 이제 깨진 줄(legacy 포함)은 그 줄만 건너뛰고, 저장소의 원문은 그대로 둔다(지우지 않음).
   raw.push({ before: "undefined", after: "1", gas: "1", sent: "1" }); // kind 없음 = legacy, BigInt 불가 -> 깨진 줄
   app.localStorage.setItem("araso.receipts", JSON.stringify(raw));
-  check("9. one malformed LEGACY row still wipes to [] (legacy all-or-nothing unchanged)", app.readReceipts().length === 0);
+  check("9. one malformed LEGACY row is skipped alone — healthy history (3) still reads (A-768 M-F-3)", app.readReceipts().length === 3);
+  check("9. the malformed LEGACY row is not erased from storage by the read", JSON.parse(app.localStorage.getItem("araso.receipts")).some((r) => r && r.before === "undefined"));
 }
 
 // ── 10. HISTORY list/detail does not crash on an add_money receipt, no NaN/undefined text ──────

@@ -12,6 +12,7 @@ import { MODEL_A_NAMESPACE, bytesToHex, modelASalt, modelASaltHex, modelASaltSou
 import { admitModelAPiggy, admitSequencedPiggy, loadMyPiggiesIndex, myPiggiesIndexKey, myPiggiesLockName, registerControlledPiggy, renameIndexedPiggy, markBornPiggyIssuance } from "../src/piggy-index.js";
 import { createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry } from "../src/piggy-registry.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
+import { ISSUANCE_AUTHORITY_INTERFACE_VERSION, ISSUANCE_REFUSAL, PLUS_PURPOSE, REGISTERED_TOPIC0 } from "../src/issuance-authority.js";
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 const CHAIN = "monad-testnet";
@@ -726,6 +727,77 @@ await check("H11. main.js wiring (source): the born marker is reachable only fro
   assert.equal((MAIN.match(/commitIdentity\(\{[^}]*received: true/g) || []).length, 1, "only openPiggy passes received:true");
   assert.equal((MAIN.match(/BIRTH_PLAYED_KEY, "1"/g) || []).length, 1, "araso.birthPlayed has one writer (finishHatch)");
   assert.equal((MAIN.match(/setScene\("hatch"/g) || []).length, 1, "hatch scene (→ finishHatch) entered from one place");
+});
+
+// ── [A-711] issuance authority, driven with the REAL Mera derivation (fake registry only; no network) ─────────────────
+const ISS_LIVE = "monad-mainnet";
+async function seedFirstPiggyOn(storage, chain) {
+  const prf = (await getPasskeyPrfOutput({ rpId: RP, webAuthnClient: fakeClient() })).prfOutput;
+  const address = addressOf(prf);
+  assert.equal(registerControlledPiggy(storage, chain, { id: `legacy-${address.toLowerCase()}`, name: "Honeybun", address, signerAddress: address, locator: { credentialId: ROOT_ID }, at: AT }).ok, true);
+  assert.equal(markBornPiggyIssuance(storage, chain, { address }).ok, true);
+  return address;
+}
+function issFake(chainScope, { taken = [] } = {}) {
+  const registry = `0x${"c0".repeat(20)}`;
+  const reg = new Map(taken.map((a) => [a.toLowerCase(), PLUS_PURPOSE]));
+  const calls = { preflight: 0, isIssued: 0, register: 0 };
+  return {
+    calls, reg, interfaceVersion: ISSUANCE_AUTHORITY_INTERFACE_VERSION, chainScope, registryAddress: registry,
+    async preflight() { calls.preflight += 1; return { ok: true, registryAddress: registry }; },
+    async isIssued(a) { calls.isIssued += 1; return reg.has(a.toLowerCase()); },
+    async register({ address, purpose }) {
+      calls.register += 1;
+      const tx = `0x${String(calls.register).padStart(64, "0")}`;
+      reg.set(address.toLowerCase(), purpose);
+      return { outcome: "submitted", txHash: tx, receipt: { transactionHash: tx, status: 1, finalized: true, logs: [{ address: registry, topics: [REGISTERED_TOPIC0, `0x${"0".repeat(24)}${address.toLowerCase().slice(2)}`, purpose] }] } };
+    },
+  };
+}
+
+await check("I1. [A-711] live scope + null authority: no assertion is ever requested from the (real-Mera) client, no row, no watermark move", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggyOn(s, ISS_LIVE);
+  let asked = 0;
+  const client = fakeClient();
+  const inner = client.getCredential.bind(client);
+  client.getCredential = async (req) => { asked += 1; return inner(req); };
+  const before = s.getItem(myPiggiesIndexKey(ISS_LIVE));
+  const out = await admitModelAPiggy({ storage: s, chainId: ISS_LIVE, locks: fifoLocks(), rootCredential: { credentialId: ROOT_ID }, requestPrf: requestPrfWith(client), deriveAddress: (prf) => addressOf(prf), issuanceAuthority: null });
+  assert.deepEqual({ ok: out.ok, reason: out.reason }, { ok: false, reason: ISSUANCE_REFUSAL.UNCONFIGURED });
+  assert.equal(asked, 0);
+  assert.equal(s.getItem(myPiggiesIndexKey(ISS_LIVE)), before);
+});
+
+await check("I2. [A-711] with an authority the registered address IS the derived modelASalt(n) address; commit follows our own registration; n+1 follows n", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggyOn(s, ISS_LIVE);
+  const fake = issFake(ISS_LIVE);
+  const run = () => admitModelAPiggy({ storage: s, chainId: ISS_LIVE, locks: fifoLocks(), rootCredential: { credentialId: ROOT_ID }, requestPrf: requestPrfWith(fakeClient()), deriveAddress: (prf) => addressOf(prf), issuanceAuthority: fake, issuancePurpose: null });
+  const a = await run();
+  const b = await run();
+  assert.deepEqual([a.ok, b.ok, a.piggy.sequence, b.piggy.sequence], [true, true, 1, 2]);
+  const expected1 = addressOf((await getPasskeyPrfOutput({ rpId: RP, prfSalt: await modelASalt(1), webAuthnClient: fakeClient() })).prfOutput);
+  assert.equal(a.piggy.address, expected1);
+  assert.equal(fake.reg.has(a.piggy.address.toLowerCase()), true);
+  assert.equal(fake.calls.register, 2);
+});
+
+await check("I3. [A-711] rollback with real derivation: after restoring the pre-issuance index the registry refuses the re-derived address (no re-issue), the next n is fresh", async () => {
+  const s = createMemoryStorage();
+  await seedFirstPiggyOn(s, ISS_LIVE);
+  const fake = issFake(ISS_LIVE);
+  const run = () => admitModelAPiggy({ storage: s, chainId: ISS_LIVE, locks: fifoLocks(), rootCredential: { credentialId: ROOT_ID }, requestPrf: requestPrfWith(fakeClient()), deriveAddress: (prf) => addressOf(prf), issuanceAuthority: fake });
+  const snap = s.getItem(myPiggiesIndexKey(ISS_LIVE));
+  const a = await run();
+  assert.equal(a.ok, true);
+  s.setItem(myPiggiesIndexKey(ISS_LIVE), snap);                   // coherent whole-index rollback (A-695 F2)
+  const again = await run();
+  assert.deepEqual({ ok: again.ok, reason: again.reason }, { ok: false, reason: ISSUANCE_REFUSAL.SEQUENCE_REGISTERED });
+  const next = await run();
+  assert.equal(next.ok, true);
+  assert.equal(next.piggy.sequence, 2);
+  assert.notEqual(next.piggy.address, a.piggy.address);
 });
 
 console.log(`\n${pass}/${pass} PASS`);

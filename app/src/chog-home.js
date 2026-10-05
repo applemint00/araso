@@ -178,7 +178,10 @@ const TAP_CUE_GAP_SCREEN_PX = 4;
 // [A-626 A] Owner: 라벨이 완전히 보인 뒤 약 1.0–1.5초(목표 1.2초) 그대로 읽히게 둔 다음에야 첫 Journey
 // 카드가 자리를 가져간다. 신호 시계(tapCue.t)는 화면에 그려진 프레임 dt 로만 흐르므로(숨은 탭 dt 0)
 // 숨은 동안에는 이 대기도 멈춘다 — 카드가 보이지 않은 라벨을 건너뛰지 못한다.
-const TAP_CUE_HOLD_MS = 1200;
+// [A-725] Owner 실기기: 1.2초 유지는 여전히 첫 Send 카드에 바로 밀리는 느낌 → 같은 기록 범위
+// (1.0–1.5초)의 위쪽 끝 1.5초로만 늘린다. 지연·흔들기·페이드·문구·위치 불변. main.js 는
+// tapCueHoldRemainingMs(readyMs 파생)로 기다리므로 손댈 곳 없음.
+const TAP_CUE_HOLD_MS = 1500;
 export const TAP_CUE_TIMING = {
   delayMs: TAP_CUE_DELAY_MS,
   waveMs: TAP_CUE_WAVE_MS,

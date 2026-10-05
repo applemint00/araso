@@ -6,10 +6,10 @@ import {
   isMeraError,
 } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
-import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, parseEther, recoverMessageAddress } from "viem";
+import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, keccak256, parseEther, recoverMessageAddress } from "viem";
 import { chogHomeMarkup, mountChogHome, CHOG_HOME_GEOMETRY, pairConvergenceEase } from "./chog-home.js";
 import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-invite.js";
-import { createDepartPlayback, createDepartRenderer, loadDepartAssets } from "./piggy-depart.js";
+import { WORK_CUE, createDepartPlayback, createDepartRenderer, loadDepartAssets } from "./piggy-depart.js";
 import {
   assignHomeAmbient,
   buildPiggyMotionStateMap,
@@ -20,6 +20,7 @@ import {
   orderHomeResidents,
   PIGGY_MOTION_STATE,
   piggyMotionStateFromMap,
+  piggyWakePhase,
   planHomeSlots,
   rect as slotRect,
   rectsTouch,
@@ -92,10 +93,16 @@ import {
   RECEIPT_KIND,
 } from "./receipt-codec.js";
 import { sendCardButtonMarkup, sendCardMarkup } from "./send-card.js";
+import { preparedSignProblem } from "./money-executor.js";
 import { receiptPaperMarkup, receiptPaperFields } from "./receipt-paper.js";
 import { buildVisibleLaneChoices, runSecondJourney } from "./job-feed.js";
 // [A-579] decision-time read-only observation seam (inactive while RETURN_EVIDENCE_READ_CONFIG is null).
-import { readReturnObservation } from "./second-job-readiness.js";
+import { readReturnObservation, listVisibleJobFamilies } from "./second-job-readiness.js";
+// Second lane candidates for product Explore: the read-only current reader (no reader config is passed, so it
+// reads nothing and every row says why) → the decision core (every row decided, action 0) → family rows.
+// Nothing here reaches a permission, an executor or a lane intent.
+import { readSecondCurrent } from "./second-current-reader.js";
+import { decideCurrentCandidate, decideCurrentCandidates, exploreCandidateRows } from "./mainnet-job-lane.js";
 import { commitSecondJourneyReceipt, isDevMockReceipt } from "./second-journey-receipt-bridge.js";
 // [A-663] Second-owned testnet execution plumbing proof — LOCAL_ONLY harness call site only
 // (see runLocalSecondPlumbingProofIfHarnessed below). Never imported by Explore/candidates/
@@ -116,6 +123,8 @@ import {
   clearSecondJourneyDraft,
   // [A-579] action-0 decision Receipt → same Second Journey storage key / receipts array.
   recordSecondJourneyDecisionReceipt,
+  // durable action-0 decision Receipt (store-level merge + reopen verify) for the Second lane candidates.
+  recordSecondJourneyDecisionReceiptDurably,
 } from "./second-journey-state.js";
 import {
   paperStatusCopy,
@@ -126,6 +135,7 @@ import {
   validateSecondAmount,
   SECOND_ACTION_TITLES_EN,
   secondActionTitle,
+  exploreCandidateDestinations,
 } from "./second-journey-view.js";
 import "./style.css";
 // [A-540] confirmed HOME peek/+Piggy + multi-Piggy fold/expand packages — dropped in verbatim
@@ -161,6 +171,14 @@ const LEGACY_TESTNET_PATH = legacyTestnetPathOpen(CHAIN_PROFILE);
 // 기본값 = 같은 origin 의 서버리스(`/api/grant`). 로컬 relayer 로 붙일 때만 VITE_RELAYER_URL 로 덮는다.
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "/api";
 const SEND_AMOUNT = parseEther("0.001");
+// [A-756] TESTNET 표시 규칙(Owner decision A): 사용자에게 보이는 금액은 USD-first "$5", 실제 실행은 고정 MON 이며
+// MON 은 pre-send/Receipt 에서만 2차(faint) 기술 상세다. 환산·오라클·반올림 0 — 고정 문구일 뿐 동적 USD 한도 주장이 아니다.
+// 확인 카드의 첫 약관 줄 = 금액 "$5" 그 자체(옛 "한도" 문구는 없는 동적 USD 한도 집행을 주장했다 — 제거).
+const FIRST_SEND_USD = "$5";
+const FIRST_SEND_USD_LABEL = FIRST_SEND_USD;
+function firstSendAmountSecondary() {
+  return `${formatMoney(SEND_AMOUNT)} test`;
+}
 const SHMON_ADDRESS = "0x282BdDFF5e58793AcAb65438b257Dbd15A8745C9";
 const SHMON_ABI = [
   {
@@ -197,7 +215,10 @@ const TRIP_CLOSED_KEY = "araso.tripClosed";
 // [A-441] First Send 가 broadcast 한 뒤 결과가 확정되지 않은 동안의 최소 기록(민감정보 0 —
 // stage·address·tx hash 만). 있으면 재탭·새로고침에서 새 서명/재제출 0(fail-closed).
 const SEND_PENDING_KEY = "araso.sendPending";
-const SEND_PENDING_STAGES = ["deposit-sending", "deposit-broadcast", "redeem-sending", "redeem-broadcast"];
+// [A-707 M2-beta] "reserved" = 이 탭이 Send 를 시작했고 아직 아무것도 서명하지 않았다(돈 0). 서명한 뒤의 기록은 기존 단계 이름
+// (deposit-broadcast / redeem-broadcast)을 그대로 쓰고 `phase`("signed" → "sent")·`nonce` 를 덧붙인다 — 분류기(classifySendPending)와
+// 그 위의 고정 지문을 건드리지 않고 같은 hash 판정을 쓰기 위해서다. deposit-sending / redeem-sending 은 옛 기록을 읽기 위해서만 남는다.
+const SEND_PENDING_STAGES = ["reserved", "deposit-sending", "deposit-broadcast", "redeem-sending", "redeem-broadcast"];
 // [A-377 §3] 보관은 전체 — 저장 cap 을 없앴다(옛 RECEIPT_KEEP=2).
 // [A-460] 화면 쪽 "최근 3장만"(RECORDS_FOLDER_PREVIEW)은 **서류철 그림의 미리보기 장수**였고,
 // HISTORY 가 텍스트 전용이 되면서 그 그림과 함께 사라졌다. 보관·열람은 전과 같이 전체다
@@ -503,14 +524,10 @@ function readReceipts() {
     if (!Array.isArray(stored)) return [];
     const rows = [];
     for (const row of stored) {
-      if (row && row.kind === RECEIPT_KIND.ADD_MONEY) {
-        try {
-          rows.push(decodeReceiptRow(row));
-        } catch {
-          // 깨진 add_money 줄 하나만 건너뛴다 — legacy 이력은 지킨다.
-        }
-      } else {
+      try {
         rows.push(decodeReceiptRow(row));
+      } catch {
+        // [A-768 M-F-3] 깨진 줄 하나(add_money 든 legacy 든)만 건너뛴다 — 나머지 건강한 이력은 지킨다(저장소는 건드리지 않는다).
       }
     }
     return rows;
@@ -575,10 +592,9 @@ function rememberReceipt(receipt) {
     try {
       decoded = decodeReceiptRow(row);
     } catch {
-      // Same tolerance as readReceipts: a broken add_money row alone is skipped (and kept verbatim below);
-      // a broken legacy row means the store is not fully readable -> refuse to rewrite it.
-      if (row && row.kind === RECEIPT_KIND.ADD_MONEY) continue;
-      throw unsound();
+      // [A-768 M-F-3] Same tolerance as readReceipts: a broken row (add_money or legacy) alone is skipped here and kept
+      // VERBATIM in the rewrite below (`...stored`) — one bad row neither erases healthy history nor blocks every later save.
+      continue;
     }
     if (key && receiptIdentityKey(decoded) === key) present = true;
   }
@@ -1600,6 +1616,10 @@ const GIFT_CLAIM_SUBMITTER = GIFT_CLAIM_SUBMIT_CONFIG && GIFT_RECORD_CONFIG
 // [A-579] 새 Gift Piggy 를 만드는 흐름(openPiggy·beginGiftPiggy)이 시작에서 꺼내(takePendingGiftClaim) 그 새
 // Piggy 에 묶은 뒤에만 settleBoundGiftClaim() 이 한다 — 이 선언 자체는 아무 것도 하지 않는다.
 let pendingGiftClaim = null;
+// [A-734] Gift Open 종이(Invite 문법 재사용)를 지금 보여 줄지 — 메모리만(저장 0). 켜는 곳은 둘뿐이다: 부팅
+// (offerGiftPaperAtBoot) · 새 기기 find-first 되찾기 직후(startGiftOpen). 토큰·giftId 는 여기 담지 않는다 —
+// 종이가 실제로 보이는 것은 pendingGiftClaim 이 아직 메모리에 있을 때뿐이다(giftPaperKind).
+let giftPaperOffered = false;
 // 테스트 관찰용(렌더되지 않는다) — settleBoundGiftClaim() 이 마지막으로 낸 결과.
 let lastGiftClaimSettlement = null;
 
@@ -2141,12 +2161,14 @@ function makeRedeemTx(shares, receiver, owner) {
   };
 }
 
-async function readShmonBalance(address) {
+// [A-768 M-L-1] blockNumber(선택) = 그 블록에 고정한 읽기. 없으면 지금까지와 같은 latest 읽기.
+async function readShmonBalance(address, blockNumber) {
   return publicClient.readContract({
     address: SHMON_ADDRESS,
     abi: SHMON_ABI,
     functionName: "balanceOf",
     args: [address],
+    ...(typeof blockNumber === "bigint" ? { blockNumber } : {}),
   });
 }
 
@@ -2372,6 +2394,356 @@ function commitSendSuccess(redeemTxHash) {
   state.txHash = redeemTxHash;
 }
 
+// [A-707 M2-beta] ─── First Send 교차 탭 예약 · sign-before-send ───────────────────────────────────────
+// 순서: reserve(동기, 패스키 전, **이 탭 전용 키**) → [패스키] → confirm(배타 잠금을 쥐고 공유 슬롯으로 승격 · 잠금 유지)
+//       → [grant·simulate] → sign → persist(hash·nonce) → broadcast → … → sendPiggy finally 에서 잠금 해제.
+//  · 예약은 **동기**로 쓴다 — 탭 → sendPiggy → recoverPiggy → credentials.get 사슬을 await 로 끊지 않는다(A-687/A-698).
+//  · [A-707 r2] 공유 기록(araso.sendPending)은 **배타 잠금 안에서만** 쓴다/지운다. 잠금 밖의 빠른 예약은 araso.sendPending.reserve.<tabId>
+//    에만 쓴다 — 다른 탭이 "없음"을 읽은 뒤 늦게 쓰는 교차 탭 경쟁(공유 기록 덮어쓰기)을 막는다. 잠금은 두 broadcast 가 끝날 때까지 쥔다.
+//  · 예약 주인이 죽었는지는 탭 수명 잠금(araso.sendTab.<tabId>)이 증명한다 — 타이머·나이로 풀지 않는다.
+//  · Web Locks 가 없거나(query 포함) 애매하면 서명 전에 멈춘다(fail-closed). 새 문구 0 · 자동 재시도 0 · 재전송 0.
+const SEND_LOCK_NAME = "araso.sendPending.v1";
+const SEND_TAB_LOCK_PREFIX = "araso.sendTab.";
+const SEND_RESERVE_KEY_PREFIX = "araso.sendPending.reserve.";
+let sendTabIdValue = "";
+let sendTabLockHeld = false;
+let sendTabLockReady = null;
+let sendReservation = null;
+
+function randomHexId(byteLength) {
+  const bytes = new Uint8Array(byteLength);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function sendTabId() {
+  if (!sendTabIdValue) sendTabIdValue = randomHexId(16);
+  return sendTabIdValue;
+}
+
+function sendLocksCapable() {
+  try {
+    const locks = typeof navigator !== "undefined" ? navigator.locks : null;
+    return !!locks && typeof locks.request === "function" && typeof locks.query === "function";
+  } catch {
+    return false;
+  }
+}
+
+// 부팅 때 한 번(await 0): 이 탭이 사는 동안 쥐는 수명 잠금. 탭이 죽으면 브라우저가 놓는다 → 다른 탭이 "주인 죽음"을 증명할 수 있다.
+function holdSendTabLock() {
+  if (sendTabLockHeld || sendTabLockReady || !sendLocksCapable()) return;
+  // 락 콜백은 브라우저가 비동기로 부른다 — 부팅 청소(sweepStaleSendReservation)는 이 약속을 기다린 뒤에만 query 를 믿는다.
+  sendTabLockReady = new Promise((resolve) => {
+    try {
+      navigator.locks
+        .request(SEND_TAB_LOCK_PREFIX + sendTabId(), { mode: "exclusive" }, () => {
+          sendTabLockHeld = true;
+          resolve(true);
+          return new Promise(() => {});
+        })
+        .catch(() => {
+          sendTabLockHeld = false;
+          resolve(false);
+        });
+    } catch {
+      sendTabLockHeld = false;
+      resolve(false);
+    }
+  });
+}
+
+// [A-756 H-1] First 는 한 번뿐이다("One-time"/"Can go out once"). 다른 탭이 이미 끝낸 First(공유 저장소 araso.tripClosed="1",
+// 또는 옛 확정 txHash 다리 — computeTripClosed 와 같은 어휘)를 이 탭이 다시 실행하지 않게, **공유 저장소를 매번 다시 읽는다**
+// (부팅 때 읽은 state.tripClosed 는 오래된 탭에서 낡았다). 이 탭 메모리 플래그가 서 있어도 닫힘. 읽기 실패 = 닫힘(fail-closed).
+// 부르는 곳: reserveSend(패스키 전 빠른 거절) + promoteSendReservation(**배타 잠금 안**, grant·서명·sendRaw 전 — 정본 검사).
+function firstTripClosedShared() {
+  try {
+    if (typeof state === "object" && state && state.tripClosed === true) return true;
+    const closedKey = typeof TRIP_CLOSED_KEY === "string" ? TRIP_CLOSED_KEY : "araso.tripClosed";
+    if (localStorage.getItem(closedKey) === "1") return true;
+    const legacyTx = localStorage.getItem("araso.txHash");
+    return typeof legacyTx === "string" && legacyTx !== "";
+  } catch {
+    return true;
+  }
+}
+
+// 동기 예약(패스키 전). 이미 어떤 기록이 있거나(읽기 실패 포함) 잠금 능력이 불확실하면 쓰지 않는다. 한 번만 쓰고 읽어 확인한다
+// (재시도 0). [A-707 r2] 쓰는 곳은 **이 탭 전용 키**뿐이다 — 공유 기록(araso.sendPending)은 잠금 밖에서 절대 쓰지 않는다.
+function reserveSend() {
+  if (!sendLocksCapable() || !sendTabLockHeld) return { ok: false, reason: "lock_unsupported" };
+  if (readSendPending()) return { ok: false, reason: "busy" };
+  // [A-756 H-1] 이미 끝난 First(다른 탭 포함) — 예약 자체를 쓰지 않는다(기존 실패 문구 경로, 새 문구 0).
+  if (firstTripClosedShared()) return { ok: false, reason: "trip_closed" };
+  const tabId = sendTabId();
+  const reservation = { id: `${tabId}.${randomHexId(8)}`, tabId, key: SEND_RESERVE_KEY_PREFIX + tabId, json: "", lockHeld: false, releaseLock: null };
+  // 이 탭의 앞선 예약이 아직 승격 전이면(같은 탭 두 번째 시작) 덮어쓰지 않는다 — 읽기 실패도 busy.
+  try {
+    if (localStorage.getItem(reservation.key) !== null) return { ok: false, reason: "busy" };
+  } catch {
+    return { ok: false, reason: "busy" };
+  }
+  reservation.json = JSON.stringify({ stage: "reserved", reservationId: reservation.id, tabId, at: Date.now() });
+  try {
+    localStorage.setItem(reservation.key, reservation.json);
+    if (localStorage.getItem(reservation.key) !== reservation.json) {
+      clearOwnSendTabReservation(reservation);
+      return { ok: false, reason: "not_verified" };
+    }
+  } catch {
+    clearOwnSendTabReservation(reservation);
+    return { ok: false, reason: "write_failed" };
+  }
+  sendReservation = reservation;
+  return { ok: true, reservation };
+}
+
+// 이 탭 전용 예약 키만 지운다(내 키 · 내 예약 바이트일 때만). 공유 기록은 건드리지 않는다.
+function clearOwnSendTabReservation(reservation) {
+  if (!reservation || !reservation.key) return false;
+  try {
+    if (localStorage.getItem(reservation.key) !== reservation.json) return false;
+    localStorage.removeItem(reservation.key);
+    return localStorage.getItem(reservation.key) === null;
+  } catch {
+    return false;
+  }
+}
+
+// 이 예약이 지금 공유 슬롯의 배타 잠금을 쥐고 있는가 — 잠금 콜백 안에서만 true 가 되고, 해제·빼앗김(AbortError)·거절 때 false 로 돌아간다.
+function sendLockHeldBy(reservation) {
+  return !!reservation && reservation.lockHeld === true && typeof reservation.releaseLock === "function";
+}
+
+// 돈 단계(서명 기록 쓰기 · 각 broadcast) 직전 재확인. 잠금을 잃었으면 던진다 → 그 단계 전에 멈춘다(fail-closed).
+function assertSendLockHeld(reservation) {
+  if (!sendLockHeldBy(reservation)) throw new Error("send_lock_not_held");
+}
+
+// sendPiggy finally 에서 부른다 — 이 예약이 쥔 배타 잠금을 놓는다(두 broadcast 와 그 기록이 끝난 뒤).
+function releaseSendLock(reservation) {
+  if (reservation && typeof reservation.releaseLock === "function") reservation.releaseLock();
+}
+
+// 잠금 안에서만 부른다: 이 탭 전용 예약을 공유 슬롯으로 올린다 — 공유 슬롯이 **비어 있을 때만**(다른 탭 기록 · 읽기 실패 · 알아볼 수 없는
+// 값이 있으면 거절). 쓴 뒤 다시 읽어 확인하고, 확인이 안 되면 내 바이트일 때만 되돌린다.
+function promoteSendReservation(reservation) {
+  if (localStorage.getItem(reservation.key) !== reservation.json) return false;
+  if (localStorage.getItem(SEND_PENDING_KEY) !== null) return false;
+  // [A-756 H-1] 잠금 안 재확인: 이 탭이 예약하고 패스키를 기다리는 동안 다른 탭이 First 를 끝냈을 수 있다 — 공유 슬롯은 비어 있어도
+  // 바퀴는 닫혔다. 승격하지 않는다 → confirm false → grant·서명·sendRaw 0(기존 실패 문구).
+  if (firstTripClosedShared()) return false;
+  try {
+    localStorage.setItem(SEND_PENDING_KEY, reservation.json);
+    if (localStorage.getItem(SEND_PENDING_KEY) === reservation.json) {
+      clearOwnSendTabReservation(reservation); // 승격 끝 — 이제 공유 기록이 정본이다(실패해도 finally 가 다시 지운다)
+      return true;
+    }
+  } catch {
+    /* 아래: 내 바이트가 남았으면 되돌린다 */
+  }
+  try {
+    if (localStorage.getItem(SEND_PENDING_KEY) === reservation.json) localStorage.removeItem(SEND_PENDING_KEY);
+  } catch {
+    /* 증명 불가 → 그대로(잠금 유지) */
+  }
+  return false;
+}
+
+// 패스키 뒤 · grant 전: 배타 잠금(ifAvailable)을 쥐고, 이 탭 예약을 공유 슬롯으로 올린 뒤 **잠금을 쥔 채로** true 를 돌려준다.
+// 잠금은 sendPiggy finally 의 releaseSendLock 이 놓는다. 다른 탭이 쥐고 있거나(못 쥠) · 슬롯이 차 있거나 · 잠금 API 가 던지면 false.
+function confirmSendReservation(reservation) {
+  if (!reservation || !sendLocksCapable()) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let answered = false;
+    const answer = (value) => {
+      if (answered) return;
+      answered = true;
+      resolve(value);
+    };
+    const lost = () => {
+      reservation.lockHeld = false;
+      reservation.releaseLock = null;
+      answer(false);
+    };
+    try {
+      navigator.locks
+        .request(SEND_LOCK_NAME, { mode: "exclusive", ifAvailable: true }, (lock) => {
+          if (!lock) {
+            answer(false);
+            return undefined;
+          }
+          let promoted = false;
+          try {
+            promoted = promoteSendReservation(reservation);
+          } catch {
+            promoted = false;
+          }
+          if (!promoted) {
+            answer(false);
+            return undefined;
+          }
+          return new Promise((release) => {
+            reservation.releaseLock = () => {
+              reservation.lockHeld = false;
+              reservation.releaseLock = null;
+              release();
+            };
+            reservation.lockHeld = true;
+            answer(true);
+          });
+        })
+        .then(lost, lost);
+    } catch {
+      lost();
+    }
+  });
+}
+
+// compare-and-clear: 이 예약의 기록만, 그리고 **보내지 않았음이 프로세스 안에서 증명된 모양일 때만** 지운다.
+//  · stage "reserved"(아무것도 서명 안 함), 또는
+//  · unsentHash 를 준 경우: 방금 쓴 서명 기록(deposit-broadcast · phase "signed" · 같은 hash)인데 broadcast 호출 자체가 없었다.
+// 보냈을 수 있는 기록(broadcast 호출 뒤, redeem 단계, 다른 예약)은 절대 지우지 않는다 — 잠금이 남는다(fail-closed).
+// [A-707 r2] 이 탭 전용 예약 키는 언제든 지운다. 공유 기록은 **이 예약이 배타 잠금을 쥐고 있을 때만** 지운다.
+function clearOwnSendPending(reservation, { unsentHash = null } = {}) {
+  if (!reservation) return false;
+  clearOwnSendTabReservation(reservation);
+  if (!sendLockHeldBy(reservation)) return false;
+  try {
+    const current = readSendPending();
+    if (!current || current.reservationId !== reservation.id) return false;
+    const unsentSigned =
+      !!unsentHash &&
+      current.stage === "deposit-broadcast" &&
+      current.phase === "signed" &&
+      !current.redeemTxHash &&
+      String(current.depositTxHash).toLowerCase() === String(unsentHash).toLowerCase();
+    if (current.stage !== "reserved" && !unsentSigned) return false;
+    localStorage.removeItem(SEND_PENDING_KEY);
+    return readSendPending() === null;
+  } catch {
+    return false;
+  }
+}
+
+// 이 예약의 기록 위에서만 쓴다(서명 hash·nonce 기록). 잠금을 잃었거나 기록이 사라졌거나 다른 예약이면 던진다 → broadcast 전에 멈춘다.
+function writeOwnedSendPending(reservation, entry) {
+  assertSendLockHeld(reservation);
+  const current = readSendPending();
+  if (!reservation || !current || current.reservationId !== reservation.id) throw new Error("send_pending_not_owned");
+  writeSendPending({ ...entry, reservationId: reservation.id });
+}
+
+// 보낸 뒤의 phase 갱신은 정보용이다 — 서명 기록이 이미 hash·nonce 를 갖고 있으므로 실패해도 흐름을 멈추지 않는다.
+function markSendPhaseSent(reservation, entry) {
+  try {
+    writeOwnedSendPending(reservation, { ...entry, phase: "sent" });
+  } catch {
+    /* the signed record already carries the identity; classification is by hash */
+  }
+}
+
+// sign-before-send: 준비(nonce·fee·gas) → 서명 → hash 계산. 보내지 않는다. viem sendTransaction 의 local-account 경로와 같은 순서
+// (prepareTransactionRequest → account.signTransaction → sendRawTransaction)이고, 마지막 단계만 호출자가 hash 를 저장한 뒤에 한다.
+async function signSendStep(walletClient, account, tx) {
+  const prepared = await walletClient.prepareTransactionRequest({ account, chain: MONAD_TESTNET, ...tx });
+  const nonce = Number(prepared?.nonce);
+  if (!Number.isInteger(nonce) || nonce < 0) throw new Error("send_nonce_missing");
+  // [A-768 M-C-1] RPC 가 채운 chainId·type·gas·fee 를 서명 **직전**에 확인한다(money-executor.js preparedSignProblem 과 같은 판정).
+  // 어긋나면 서명 0 · 기록 0 · 전송 0 으로 던진다 — 호출부의 기존 broadcast 전 실패 경로(보내지 않음 증명)로 간다.
+  // [A-774] eth_fillTransaction 을 지원하는 노드(geth/anvil)는 eip1559 tx 에도 gasPrice 를 돌려주고 viem 이 그대로 옮긴다. 서명용 **사본**을
+  // 만들어, type 이 eip1559 이고 maxFeePerGas·maxPriorityFeePerGas 가 둘 다 있을 때만 사본에서 gasPrice 를 지운다. 같은 사본이 가드와
+  // 서명에 간다(원본 prepared 는 건드리지 않는다). legacy/type 없음/fee 필드 누락 + gasPrice 는 그대로 가드가 거부한다.
+  const toSign = { ...prepared };
+  if (toSign.type === "eip1559" && toSign.maxFeePerGas !== undefined && toSign.maxFeePerGas !== null && toSign.maxPriorityFeePerGas !== undefined && toSign.maxPriorityFeePerGas !== null) delete toSign.gasPrice;
+  const signProblem = preparedSignProblem(toSign);
+  if (signProblem) throw new Error(`send_prepared_refused:${signProblem}`);
+  const raw = await account.signTransaction(toSign, { serializer: MONAD_TESTNET.serializers?.transaction });
+  if (typeof raw !== "string" || !/^0x[0-9a-fA-F]+$/.test(raw)) throw new Error("send_sign_failed");
+  return { raw, hash: keccak256(raw), nonce };
+}
+
+// [A-768 M-L-1] deposit 확정 **뒤** redeem 을 정하는 읽기(shMON 잔고·nonce·gas)는 deposit receipt 의 블록에 고정한다 — 한 블록
+// 뒤처진 노드의 latest 가 "받은 shMON 0" 을 말해 영구 실패로 떨어지지 않게. 고정 읽기를 못 하는 노드면 latest 로 한 번 더 본다.
+// 뒤처짐(잔고 0·nonce 미달·읽기/추정 실패)은 짧게 상한 재시도하고, 끝까지 못 따라오면 "lagging" — 호출부는 실패가 아니라
+// 기존 「still out.」(deposit 확정·redeem 전, 재열기와 같은 상태)로 남긴다. 서명 거부·nonce 초과(다른 전송)는 재시도하지 않고 던진다.
+const POST_DEPOSIT_READ_TRIES = 5;
+const POST_DEPOSIT_READ_MS = 500;
+async function prepareRedeemAfterDeposit({ walletClient, account, depositReceipt, beforeShares, depositNonce }) {
+  const address = account.address;
+  const pinned = typeof depositReceipt?.blockNumber === "bigint" && depositReceipt.blockNumber > 0n ? depositReceipt.blockNumber : null;
+  const expectedNonce = depositNonce + 1;
+  // 고정 블록 읽기 → 실패하면 latest 로 한 번(고정 읽기 미지원 노드). 둘 다 실패하면 던진다(이번 시도만 실패).
+  const atDepositBlock = async (read) => {
+    if (pinned === null) return read(undefined);
+    try {
+      return await read(pinned);
+    } catch {
+      return read(undefined);
+    }
+  };
+  for (let attempt = 0; attempt < POST_DEPOSIT_READ_TRIES; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, POST_DEPOSIT_READ_MS));
+    let shmonReceived;
+    let nonceAtDeposit;
+    let gas;
+    try {
+      const shares = await atDepositBlock((blockNumber) => readShmonBalance(address, blockNumber));
+      shmonReceived = shares - beforeShares;
+      if (typeof shmonReceived !== "bigint" || shmonReceived <= 0n) continue; // 읽은 노드가 deposit 을 아직 못 봤다
+      nonceAtDeposit = await atDepositBlock((blockNumber) => publicClient.getTransactionCount(blockNumber === undefined ? { address } : { address, blockNumber }));
+    } catch {
+      continue;
+    }
+    if (!Number.isSafeInteger(nonceAtDeposit) || nonceAtDeposit < expectedNonce) continue; // 뒤처진 nonce
+    if (nonceAtDeposit !== expectedNonce) throw new Error("send_redeem_nonce_unexpected");
+    const redeemTx = makeRedeemTx(shmonReceived, address, address);
+    try {
+      gas = await atDepositBlock((blockNumber) => publicClient.estimateGas({ account: address, ...redeemTx, ...(blockNumber === undefined ? {} : { blockNumber }) }));
+    } catch {
+      continue;
+    }
+    // gas 를 고정 블록 추정값으로 넘긴다 — prepare 가 뒤처진 latest 로 다시 추정해 revert 하지 않게.
+    const redeemSigned = await signSendStep(walletClient, account, { ...redeemTx, gas });
+    // pending nonce 가 아직 deposit 자리(뒤처짐)면 이 서명은 버린다 — 저장·전송 0, 이미 쓰인 nonce 라 체인에서도 무효다.
+    if (redeemSigned.nonce < expectedNonce) continue;
+    return { kind: "ready", redeemSigned, shmonReceived };
+  }
+  return { kind: "lagging" };
+}
+
+// 부팅 때 한 번: 주인이 죽은 `reserved` 기록(서명 0 · 돈 0)을 푼다. 증명은 잠금 사실뿐이다 — 내 수명 잠금이 보여야 query 를 믿고,
+// 주인 탭의 수명 잠금이 없을 때만 지운다. 불확실하면 그대로 둔다(잠금 유지). 반환: none | own | unsupported | unknown | alive | cleared.
+async function sweepStaleSendReservation() {
+  if (sendTabLockReady) await sendTabLockReady;
+  if (!sendLocksCapable() || !sendTabLockHeld) return "unsupported";
+  const record = readSendPending();
+  if (!record || record.stage !== "reserved") return "none";
+  if (typeof record.reservationId !== "string" || typeof record.tabId !== "string" || !record.tabId) return "unknown";
+  if (record.tabId === sendTabId()) return "own";
+  let held;
+  try {
+    const snapshot = await navigator.locks.query();
+    held = snapshot && Array.isArray(snapshot.held) ? snapshot.held : null;
+  } catch {
+    return "unknown";
+  }
+  if (!held || !held.some((l) => l && l.name === SEND_TAB_LOCK_PREFIX + sendTabId())) return "unknown";
+  if (held.some((l) => l && l.name === SEND_TAB_LOCK_PREFIX + record.tabId)) return "alive";
+  try {
+    return await navigator.locks.request(SEND_LOCK_NAME, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+      if (!lock) return "unknown";
+      const again = readSendPending();
+      if (!again || again.stage !== "reserved" || again.reservationId !== record.reservationId) return "unknown";
+      localStorage.removeItem(SEND_PENDING_KEY);
+      return readSendPending() === null ? "cleared" : "unknown";
+    });
+  } catch {
+    return "unknown";
+  }
+}
+
 // [A-444] 실제 Send 버튼 상태는 이 한 곳에서 정한다 — origin 막힘·진행 중·미확정 기록 중 하나라도
 // 있으면 잠그고, 모두 없으면 푼다(broadcast 전 안전 실패 뒤 다시 쓸 수 있게). 새 렌더·문구 0.
 function syncSendButton() {
@@ -2416,6 +2788,15 @@ async function sendPiggy() {
     // (armSignerExpiry)로만 끝나고, sendPiggyOnce 안의 touchAppSession() 은 app-idle 만
     // 새로 잰다 — 서명자 만료를 늘리지 않는다.
     if (!settling) {
+      // [A-707] 안전망: 어느 출구로 나왔든 이 탭의 `reserved`(서명 0) 기록이 남지 않게 한다 — 서명 기록은 건드리지 않는다.
+      // (잠금을 놓기 **전에** — 공유 기록은 잠금 안에서만 지운다.)
+      clearOwnSendPending(sendReservation);
+    }
+    // [A-707 r2] 두 broadcast 와 그 기록이 끝났거나(또는 그 전에 멈췄거나) — 여기서만 배타 잠금을 놓는다. 이 탭 전용 예약 키도 정리한다.
+    clearOwnSendTabReservation(sendReservation);
+    releaseSendLock(sendReservation);
+    sendReservation = null;
+    if (!settling) {
       sendInFlight = false;
       syncSendButton(); // 안전 실패(broadcast 전)면 풀리고, pending 이 남았으면 잠긴 채
     }
@@ -2431,12 +2812,23 @@ async function sendPiggyOnce(markSettling) {
     return;
   }
 
+  // [A-707 M2-beta] 예약 — 어떤 인증 시도(beginAuthAttempt)·패스키보다 먼저, **동기**로(비동기 대기 0: 탭 → WebAuthn get 사슬 보존).
+  // 다른 탭이 이미 예약했거나 잠금 능력이 없거나 애매하면 서명 전에 멈춘다(기존 문구만 · 새 문구 0 · 재시도 0).
+  const reserved = reserveSend();
+  if (!reserved.ok) {
+    if (reserved.reason === "busy") setScene("sendstay", "Piggy is home.", "Confirmation is still catching up.");
+    else setScene("sendstay", "Piggy can't go out yet.", "");
+    return;
+  }
+  const reservation = reserved.reservation;
+
   // 생성 폴백 없음 — 저장된 credential 이 없으면 기존 패스키로 복구를 시도한다.
   if (!activeAccount || !activeSession) {
     // [A-698 M3] Send 복구는 Check/Open 과 같은 시도 칸(authAttempt)·플랫폼 요청 표(platformAuthInflight)를 나눠 쓴다 —
     // 이미 살아 있는 시도나 아직 안 끝난 플랫폼 요청이 있으면 두 번째 WebAuthn get 을 겹쳐 내지 않고 기존 실패 문구로
     // fail-closed(자동 재시도 0 · 새 문구 0). get 을 못 쓰는 기기도 시도 토큰 전에 같은 실패로(A-687).
     if (authAttempt || platformAuthInflight || (typeof webAuthnUnsupported === "function" && webAuthnUnsupported("get"))) {
+      clearOwnSendPending(reservation);
       state.authPhase = "idle";
       state.authCancelled = false;
       setScene("birth", "Chog could not wake Piggy.", "");
@@ -2449,7 +2841,11 @@ async function sendPiggyOnce(markSettling) {
       await boundAuthAttempt(attempt, trackPlatformAuth(recoverPiggy({ isCurrent: () => attempt.live })));
     } catch (error) {
       // 이미 무효가 된(idle 잠금·대체) 시도의 실패는 화면·서명자·돈 흐름을 건드리지 않는다.
-      if (!finishAuthAttempt(attempt)) return;
+      if (!finishAuthAttempt(attempt)) {
+        clearOwnSendPending(reservation);
+        return;
+      }
+      clearOwnSendPending(reservation);
       noteRecoverFailure();
       state.authPhase = "idle";
       state.authCancelled = isCancelledAuthError(error);
@@ -2458,13 +2854,26 @@ async function sendPiggyOnce(markSettling) {
       return;
     }
     // 늦은 성공도 마찬가지 — 시도가 이미 무효면 grant·simulate·서명으로 넘어가지 않는다.
-    if (!finishAuthAttempt(attempt)) return;
+    if (!finishAuthAttempt(attempt)) {
+      clearOwnSendPending(reservation);
+      return;
+    }
     noteRecoverSuccess();
+  }
+
+  // [A-707 M2-beta] 중재(패스키 뒤 · grant 전): 배타 잠금을 쥐고 이 탭 예약을 공유 슬롯으로 올린다 — 잠금은 broadcast 가 끝날 때까지 쥔다
+  // (sendPiggy finally 가 놓는다). 못 쥐거나 슬롯이 차 있거나 애매하면 멈춘다. 다른 기록이 보이면 기존 「확인 중」 문구, 아니면 기존 실패 문구.
+  if (!(await confirmSendReservation(reservation))) {
+    clearOwnSendPending(reservation);
+    if (readSendPending()) setScene("sendstay", "Piggy is home.", "Confirmation is still catching up.");
+    else setScene("sendstay", "Piggy can't go out yet.", "");
+    return;
   }
 
   // [A-698 M3] 최소 잠금 가드: 앱이 잠겨 있으면 돈 실행(grant·simulate·서명·broadcast)으로 넘어가지 않는다.
   // 기존 실패 경로·기존 문구 그대로. 남은 서명자가 있으면 함께 정리한다.
   if (state.appLock) {
+    clearOwnSendPending(reservation);
     endActiveSession();
     state.authPhase = "idle";
     state.authCancelled = false;
@@ -2480,6 +2889,7 @@ async function sendPiggyOnce(markSettling) {
   } catch (error) {
     // fail-closed — relayer 가 안 떠 있거나 그 밖의 이유로 거절하면 여기서 멈춘다. 추측 진행 금지.
     // 통과하는 거절은 위의 "already funded" 하나뿐이다.
+    clearOwnSendPending(reservation);
     recordSafeError("grant", error);
     setScene("sendstay", "relayer unreachable", "");
     return;
@@ -2492,6 +2902,7 @@ async function sendPiggyOnce(markSettling) {
   if (grant.granted) {
     const visible = await waitForGrantBalance(state.address);
     if (!visible) {
+      clearOwnSendPending(reservation);
       recordSafeError("grant-visibility", { name: "GrantBalanceNotVisible" });
       setScene("sendstay", "Piggy can't go out yet.", "");
       return;
@@ -2511,6 +2922,7 @@ async function sendPiggyOnce(markSettling) {
     plan = await simulateSend(account);
   } catch (error) {
     // fail-closed — broadcast 전에 멈춘다. 추측 진행 금지.
+    clearOwnSendPending(reservation);
     recordSafeError("simulate", error);
     setScene("sendstay", "Piggy can't go out yet.", "");
     return;
@@ -2521,9 +2933,15 @@ async function sendPiggyOnce(markSettling) {
   // 출발 연출이 돈다 — 모션이 먼저 돌아 "이미 떠났다"를 만들지 않는다.
   // 순서(rpId → recover → grant → simulate → away → 서명/broadcast)는 바뀌지 않았다.
   state.departureArrival = true;
-  setScene("away", "Piggy went out.", "Can go out once, up to $5.");
+  setScene("away", "Piggy went out.", "Can go out once.");
 
+  // [A-707 M2-beta] 서명했지만 아직 broadcast 호출이 없는 deposit hash — 프로세스 안에서 "보내지 않음"이 증명된 동안만 값이 있다.
+  let unsentDepositHash = null;
   try {
+    // [A-707] 돈 실행 경계 재확인: simulate 까지 오는 동안 앱이 잠겼으면 서명하지 않는다(A-698 최소 가드의 잔여 구간 — 새 문구 0).
+    if (state.appLock) throw new Error("app_locked_before_sign");
+    // [A-707 r2] 잠금을 잃었으면(빼앗김·해제) 서명하지 않는다.
+    assertSendLockHeld(reservation);
     // [A-556] 송금이라는 "평범한 인앱 활동" 은 app-idle 만 새로 잰다 — 서명자 5분 절대
     // 만료(armSignerExpiry)는 여기서 늘어나지 않는다(카드 §2 절대 캡).
     touchAppSession();
@@ -2536,31 +2954,38 @@ async function sendPiggyOnce(markSettling) {
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
     const signature = await activeSession.signDigest(digest);
     const mark = `${toHex(signature.compact)}:${signature.recovery}`;
-    // [A-441] 여기부터 돈이 움직일 수 있다 — 보내기 직전에 미확정 기록을 남긴다(broadcast 여부를
-    // 모르는 예외도 재제출 0 쪽으로 접힌다).
-    writeSendPending({ stage: "deposit-sending", address: account.address });
-    const depositTxHash = await walletClient.sendTransaction({
-      account,
-      chain: MONAD_TESTNET,
-      ...plan.depositTx,
-    });
-    writeSendPending({ stage: "deposit-broadcast", address: account.address, depositTxHash });
+    // [A-707 M2-beta] sign-before-send: 서명 → hash·nonce 를 저장·재읽기 확인 → 그 다음에야 broadcast. 서명(저장 전) 또는 저장이 실패하면
+    // broadcast 호출 0 이고, 보내지 않았음이 증명되므로 예약과 보내지 않은 서명 기록만 풀린다(catch). 이미 보낸 뒤의 실패는 기록이 남는다.
+    const depositSigned = await signSendStep(walletClient, account, plan.depositTx);
+    unsentDepositHash = depositSigned.hash;
+    writeOwnedSendPending(reservation, { stage: "deposit-broadcast", phase: "signed", address: account.address, depositTxHash: depositSigned.hash, nonce: depositSigned.nonce });
+    assertSendLockHeld(reservation); // broadcast 직전 재확인 — 잃었으면 보내지 않은 서명 기록만 풀린다(catch, 잠금이 있을 때만)
+    unsentDepositHash = null; // 이 줄 아래부터는 broadcast 가 일어났을 수 있다 — 기록을 지우지 않는다.
+    const depositSentHash = await publicClient.sendRawTransaction({ serializedTransaction: depositSigned.raw });
+    if (String(depositSentHash).toLowerCase() !== depositSigned.hash.toLowerCase()) throw new Error("send_hash_mismatch");
+    const depositTxHash = depositSigned.hash;
+    markSendPhaseSent(reservation, { stage: "deposit-broadcast", address: account.address, depositTxHash, nonce: depositSigned.nonce });
     const depositReceipt = await waitForSuccess(depositTxHash);
     if (!depositReceipt) throw new Error("deposit unconfirmed or reverted");
-    const afterDepositShares = await readShmonBalance(account.address);
-    const shmonReceived = afterDepositShares - plan.beforeShares;
-    const redeemTx = makeRedeemTx(shmonReceived, account.address, account.address);
-    await publicClient.estimateGas({
-      account: account.address,
-      ...redeemTx,
-    });
-    writeSendPending({ stage: "redeem-sending", address: account.address, depositTxHash });
-    const redeemTxHash = await walletClient.sendTransaction({
-      account,
-      chain: MONAD_TESTNET,
-      ...redeemTx,
-    });
-    writeSendPending({ stage: "redeem-broadcast", address: account.address, depositTxHash, redeemTxHash });
+    // [A-768 M-L-1] redeem 을 정하는 읽기는 deposit receipt 블록에 고정 + 상한 재시도(prepareRedeemAfterDeposit).
+    const redeemReady = await prepareRedeemAfterDeposit({ walletClient, account, depositReceipt, beforeShares: plan.beforeShares, depositNonce: depositSigned.nonce });
+    if (redeemReady.kind !== "ready") {
+      // deposit 은 확정됐고 읽는 노드만 아직 못 따라왔다 — 실패가 아니다. deposit 기록은 그대로(잠금 유지), 화면은 재열기와 같은
+      // 기존 Away 「still out.」(awayRestore pending). 새 문구 0 · 재제출 0 · 자동 redeem 0.
+      recordSafeError("send", { name: "PostDepositReadLag" });
+      state.awayRestore = "pending";
+      setScene("away", "Piggy went out.", "Can go out once.");
+      return;
+    }
+    const { redeemSigned, shmonReceived } = redeemReady;
+    // redeem 은 deposit 바로 다음 nonce 여야 한다 — 어긋나면(다른 곳에서 같은 주소로 보냄 등) 서명 기록 없이 멈춘다(deposit 기록이 남아 잠금 유지).
+    if (redeemSigned.nonce !== depositSigned.nonce + 1) throw new Error("send_redeem_nonce_unexpected");
+    writeOwnedSendPending(reservation, { stage: "redeem-broadcast", phase: "signed", address: account.address, depositTxHash, redeemTxHash: redeemSigned.hash, nonce: redeemSigned.nonce });
+    assertSendLockHeld(reservation); // redeem broadcast 직전 재확인
+    const redeemSentHash = await publicClient.sendRawTransaction({ serializedTransaction: redeemSigned.raw });
+    if (String(redeemSentHash).toLowerCase() !== redeemSigned.hash.toLowerCase()) throw new Error("send_hash_mismatch");
+    const redeemTxHash = redeemSigned.hash;
+    markSendPhaseSent(reservation, { stage: "redeem-broadcast", address: account.address, depositTxHash, redeemTxHash, nonce: redeemSigned.nonce });
     localStorage.setItem("araso.mark", mark);
     state.mark = mark;
     // [A-441] araso.txHash·state.txHash 는 여기서 쓰지 않는다 — redeem receipt 성공 확인 뒤에만(commitSendSuccess).
@@ -2588,6 +3013,8 @@ async function sendPiggyOnce(markSettling) {
         syncSendButton(); // 성공 뒤 pending 없음 → 풀림 · 미확정 pending → 잠긴 채
       });
   } catch (error) {
+    // [A-707] 보내지 않았음이 증명된 기록(예약 · 보내지 않은 서명 기록)만 푼다 — 문구는 풀린 뒤 상태(nothing moved.)를 읽는다. 보냈을 수 있으면 남는다.
+    clearOwnSendPending(reservation, { unsentHash: unsentDepositHash });
     recordSafeError("send", error);
     setScene("sendstay", "Piggy could not get ready.", "");
   }
@@ -2656,6 +3083,11 @@ function createEmptySecondJourney() {
     decisionEventId: null,
     decisionEventSeq: 0,
     returnRead: null,
+    // Second lane candidates (memory only, never in the draft): the event the rows were decided for, the reader
+    // report and every row's decision (the whole universe — the visible cut happens in the view).
+    laneEventId: null,
+    laneRead: null,
+    laneDecisions: [],
   };
 }
 
@@ -2860,6 +3292,8 @@ function persistSecondJourneyDomainState() {
   }
   const result = saveSecondJourneyState(localStorage, scope, sj.domainState);
   sj.persisted = !!result.saved;
+  // [A-710 S1 · A-693 M-3] the save merged with what other tabs stored and read it back; keep that verified state.
+  if (result.saved && result.state) sj.domainState = result.state;
 }
 
 // [A-360 §7] DEV 전용 미리보기 픽스처 — 실제 currentPiggyStatus/evidence 를 덮어써
@@ -2965,15 +3399,20 @@ function buildSecondJourneyViewModel() {
   // 화면/문구 변경 금지). Owner 가 "새로고침 뒤에도 누적 표시"를 원하면 그때 바꾼다 — OUTBOX A-462 참고.
   const journeyNumber = 1 + (state.tripClosed ? 1 : 0) + (state.secondCompletedThisSession ? 1 : 0);
   const flow = sj.flow;
-  const chosen = (flow?.destinations || []).find((d) => d.id === sj.chosenDestinationId) || null;
+  // Product Explore shows the Second lane candidates; the DEV preview fixture keeps the old fixture rows.
+  const laneMode = secondLaneMode(sj);
+  const destinations = laneMode ? secondLaneDestinations(sj) : flow?.destinations || [];
+  const chosen = destinations.find((d) => d.id === sj.chosenDestinationId) || null;
   const amountCheck = validateSecondAmount(sj.amount);
   const devPreview = import.meta.env.DEV && sj.devPreview === true;
-  const preflight = flow?.preflight || null;
+  // A lane candidate is never READY and never carries permission: its only status is UNKNOWN or NAH.
+  const preflight = laneMode ? (chosen ? { status: chosen.derivedStatus, executionPermission: false } : null) : flow?.preflight || null;
   // [A-421 v25] 기존 fail-closed 게이트는 그대로 두고, 빈 입력/조건 미충족일 때 Send 를
   // 더 막는 조건만 덧붙인다(Owner: 빈 입력/조건 미충족 Send disabled). 수령형은 맡길
   // 금액 칸이 없으므로 금액 조건을 걸지 않는다(APP_HANDOFF.md:24).
   const needsAmount = readinessCardKind(chosen) !== "collect";
   const canSend =
+    !laneMode &&
     devPreview &&
     preflight?.status === "JOB_READY" &&
     preflight?.executionPermission === true &&
@@ -2995,19 +3434,21 @@ function buildSecondJourneyViewModel() {
     // note 단계는 sj.note(sceneTimeout 큐) — 같은 model.note 자리를 각 단계 markup 이
     // 서로 다른 뜻으로 읽는다(둘이 동시에 쓰이지 않는다).
     note: sj.step === "interests" ? sj.interestsNote || null : sj.note || null,
-    destinations: flow?.destinations || [],
+    destinations,
     pickedCandidateId: sj.pickedCandidateId,
     errandLabelById,
     chosen,
-    decision: chosen?.decision || null,
-    jitQuestion: flow?.jitQuestions?.[0] || null,
+    decision: laneMode ? null : chosen?.decision || null,
+    // No JIT question on a lane candidate (JIT 0~1): nothing a user answers here could make it runnable.
+    jitQuestion: laneMode ? null : flow?.jitQuestions?.[0] || null,
     jitAnswer: sj.jitAnswer,
     preflight,
     permission: sj.permission,
     amount: sj.amount,
     amountError: amountCheck.error,
     canSend,
-    sendReason: secondJourneySendReason(preflight, devPreview),
+    // Lane candidate: the existing Paper status grammar (checking… / nah.) — never "Send this one?".
+    sendReason: laneMode ? paperStatusCopy(preflight?.status) : secondJourneySendReason(preflight, devPreview),
     devPreview,
     ...secondJourneyV25Lines(chosen, preflight),
   };
@@ -3060,6 +3501,10 @@ function openSecondJourneyExplore() {
   sj.noteQueue = [];
   sj.decisionEventId = null;   // [A-579] 이전 판정 이벤트/읽기를 이어받지 않는다
   sj.returnRead = null;
+  // Lane candidates are re-read and re-decided for this visit; past decisions are memory (Receipts), not state.
+  sj.laneEventId = null;
+  sj.laneRead = null;
+  sj.laneDecisions = [];
   // [A-411-p] 옛 A-405-a 회귀동작("관심 있으면 곧장 candidates")을 Owner 확정으로 대체한다:
   // Second 를 이 세션에서 아직 한 번도 끝내지 않았으면 관심이 저장돼 있어도 항상 시작
   // Paper(interests)로 돌아간다("Second 이탈은 항상 시작점", A-411-n §1/A-411-p 대조).
@@ -3072,9 +3517,129 @@ function openSecondJourneyExplore() {
   // [A-475] 여기까지가 "처음부터" 이고, 아래가 "쓰다 만 자리로". Send 전에 나갔던 흔적이 있으면
   // 그 카드로 돌려준다 — 다시 입력하게 만들지 않는다. 단 **권한과 READY 는 복원하지 않는다**:
   // 아래 recomputeSecondJourneyFlow() 가 지금 조건으로 새로 계산한다(저장된 draft 가 문을 열지 않는다).
+  const laneMode = secondLaneMode(sj);
+  // Lane ids are checked below against the lane rows, not against the fixture rows of an older flow.
+  if (laneMode) sj.flow = null;
   applySecondDraftIfAny(sj, domainState);
   recomputeSecondJourneyFlow();
+  if (laneMode) keepSecondLaneDraftIfValid(sj);
   setScene("explore", "", "");
+  if (laneMode) refreshSecondLaneCandidates().catch(() => {});
+}
+
+// ── Second lane candidates (product Explore) ────────────────────────────────────────────────────────
+// Product Explore (every path except the DEV preview fixture) shows the Second lane candidates instead of the
+// old fixture rows. Source chain, all existing: readSecondCurrent (read-only; the product passes no reader
+// config, so nothing is read and each row reports why) → decideCurrentCandidates (every row decided; no agreed
+// rule exists for this event, so every row is unknown/action 0) → exploreCandidateRows (one row per family
+// baseline, never runnable) → exploreCandidateDestinations (only families of the errands the user picked, at
+// most MAX_EXPLORE_VISIBLE shown). A pick records only a decision Receipt; Send stays disabled.
+const SECOND_LANE_SELECTION_SOURCE = Object.freeze({
+  explore: "app_ui_explore_candidates",
+  tryIt: "app_ui_candidate_ok",
+});
+
+function secondLaneMode(sj = state.secondJourney) {
+  return !(import.meta.env.DEV && sj?.devPreview === true);
+}
+
+function secondLaneRows(sj) {
+  return exploreCandidateRows({ decisions: sj?.laneDecisions || [], families: listVisibleJobFamilies() }).rows;
+}
+
+function secondLaneDestinations(sj) {
+  return exploreCandidateDestinations(secondLaneRows(sj), { selectedErrandIds: sj?.selectedIds || [], max: MAX_EXPLORE_VISIBLE });
+}
+
+// A restored draft may only point at a lane candidate that is visible for the restored selection.
+function keepSecondLaneDraftIfValid(sj) {
+  const visible = new Set(secondLaneDestinations(sj).filter((d) => d.derivedStatus !== "NAH").map((d) => d.id));
+  if (sj.pickedCandidateId && !visible.has(sj.pickedCandidateId)) sj.pickedCandidateId = null;
+  if (sj.chosenDestinationId && !visible.has(sj.chosenDestinationId)) sj.chosenDestinationId = null;
+  if (sj.step === "readiness" && !sj.chosenDestinationId) sj.step = sj.selectedIds.length ? "candidates" : "interests";
+  if (sj.step === "jit") sj.step = "candidates";
+  sj.jitAnswer = null;
+  sj.amount = "";
+}
+
+async function refreshSecondLaneCandidates() {
+  const sj = state.secondJourney;
+  if (!secondLaneMode(sj)) return;
+  sj.decisionEventSeq += 1;
+  const eventId = `explore-lane:${new Date().toISOString()}:${sj.decisionEventSeq}`;
+  sj.laneEventId = eventId;
+  const shown = () => secondLaneDestinations(sj).map((d) => `${d.id}:${d.derivedStatus}`).join("|");
+  const before = shown();
+  let currentRead;
+  try {
+    // No rpcUrl / transport / clock: the product reader stays unconfigured (gate G3), so this reads nothing.
+    currentRead = await readSecondCurrent({ profile: CHAIN_PROFILE, piggyAddress: state.address || "" });
+  } catch {
+    currentRead = { kind: "second_current_read", piggyAddress: null, candidates: [] };
+  }
+  if (state.secondJourney !== sj || sj.laneEventId !== eventId) return;
+  sj.laneRead = currentRead;
+  sj.laneDecisions = decideCurrentCandidates({
+    currentRead,
+    scope: secondJourneyScope(),
+    eventId,
+    selectionSource: SECOND_LANE_SELECTION_SOURCE.explore,
+    nowMs: Date.now(),
+    nowIso: new Date().toISOString(),
+  });
+  if (shown() !== before && state.scene === "explore" && (sj.step === "candidates" || sj.step === "readiness")) render();
+}
+
+// One user action (try = ok on a candidate) → one action-0 decision Receipt per
+// candidate it concerns, in the existing decision Receipt grammar, saved through the merging store and re-opened
+// before it counts. The Receipt says what the evidence decided (unknown here); the user's action is its
+// selection.source. Preference, permission, READY and the draft are not touched. DEV preview fixtures are not kept.
+function recordSecondLaneDecision(candidateIds, action) {
+  const sj = state.secondJourney;
+  if (!secondLaneMode(sj) || !Object.prototype.hasOwnProperty.call(SECOND_LANE_SELECTION_SOURCE, action)) return { saved: 0 };
+  const scope = secondJourneyScope();
+  if (validatePersistenceScope(scope).error) return { saved: 0 };
+  if (!sj.laneEventId) {
+    sj.decisionEventSeq += 1;
+    sj.laneEventId = `explore-lane:${new Date().toISOString()}:${sj.decisionEventSeq}`;
+  }
+  const eventId = `${sj.laneEventId}:${action}`;
+  const rows = Array.isArray(sj.laneRead?.candidates) ? sj.laneRead.candidates : [];
+  let saved = 0;
+  for (const id of candidateIds) {
+    // A candidate the reader has not reported yet is decided as not read (unknown), never guessed.
+    const row = rows.find((r) => r && r.id === id) || { id, status: "unknown", reason: "not_read", read: null };
+    const decision = decideCurrentCandidate({
+      row,
+      scope,
+      eventId,
+      selectionSource: SECOND_LANE_SELECTION_SOURCE[action],
+      nowMs: Date.now(),
+      nowIso: new Date().toISOString(),
+    });
+    if (!decision.receipt) continue;
+    const out = recordSecondJourneyDecisionReceiptDurably(safeLocalStorage(), scope, decision.receipt);
+    if (out.saved) {
+      saved += 1;
+      if (out.state) sj.domainState = out.state;
+    }
+  }
+  return { saved };
+}
+
+// ok on a lane candidate: record the decision, then show the existing action card with its Paper status and a
+// disabled Send. No JIT, no amount, no permission, no READY.
+function handleSecondLaneTry(candidateId) {
+  const sj = state.secondJourney;
+  const dest = secondLaneDestinations(sj).find((d) => d.id === candidateId) || null;
+  if (!dest || dest.derivedStatus === "NAH") return;
+  sj.chosenDestinationId = candidateId;
+  sj.jitAnswer = null;
+  sj.amount = "";
+  sj.step = "readiness";
+  recordSecondLaneDecision([candidateId], "tryIt");
+  persistSecondDraft();
+  render();
 }
 
 // 저장해 둔 draft 를 지금 화면에 되살린다. 되살릴 수 없으면 **조용히 버리고 처음부터** —
@@ -3180,6 +3745,7 @@ function handleExploreSave(ids) {
   sj.amount = "";
   recomputeSecondJourneyFlow();
   render();
+  if (secondLaneMode(sj)) refreshSecondLaneCandidates().catch(() => {});
 }
 
 // [A-663 OWNER UX CORRECTION — LEARNING SEMANTICS] none 은 항상 weak hint 만 남긴다
@@ -3279,7 +3845,9 @@ function advanceExploreNote() {
 // [A-421 Owner "시간이랑 고른거 다기록해야해"] 후보 누름·ok 를 시각과 함께 남긴다.
 const SECOND_PICK_LOG_KEY = "araso.secondJourneyPicks";
 function recordSecondPick(event, destinationId) {
-  const destination = (state.secondJourney.flow?.destinations || []).find((d) => d.id === destinationId) || null;
+  const sj = state.secondJourney;
+  const pool = secondLaneMode(sj) ? secondLaneDestinations(sj) : sj.flow?.destinations || [];
+  const destination = pool.find((d) => d.id === destinationId) || null;
   const entry = { event, destinationId, action: secondActionTitle(destination) || null, at: new Date().toISOString() };
   try {
     const log = JSON.parse(localStorage.getItem(SECOND_PICK_LOG_KEY) || "[]");
@@ -3300,6 +3868,10 @@ function handleCandidateOk() {
   const sj = state.secondJourney;
   if (!sj.pickedCandidateId) return;
   recordSecondPick("ok", sj.pickedCandidateId);
+  if (secondLaneMode(sj)) {
+    handleSecondLaneTry(sj.pickedCandidateId);
+    return;
+  }
   handleCandidateCheck(sj.pickedCandidateId);
 }
 
@@ -3363,6 +3935,12 @@ function localTestJobBindings() {
 // decision path call site above, untouched; reconcileLocalSecondPlumbingProofIfHarnessed
 // below has its own third call site for the reload/reopen path, same reason First has two —
 // commitSendSuccess is called both from the direct success path and from reconcileSendPending).
+// [A-710 L1] Web Locks wrapper handed to the Second adapter. Same capability test as the First send lock
+// (request + query). The body runs only while this tab holds the exclusive lock; otherwise it resolves undefined.
+function secondMoneyLock() {
+  if (!sendLocksCapable()) return null;
+  return (name, body) => navigator.locks.request(name, { mode: "exclusive", ifAvailable: true }, (lock) => (lock ? body() : undefined));
+}
 async function runLocalSecondPlumbingProofIfHarnessed(request = {}) {
   if (!LOCAL_DEV_ENTRY) return { ran: false, reason: "not_local_dev_entry" };
   const deps = request && typeof request === "object" ? request.deps : null;
@@ -3390,6 +3968,11 @@ async function runLocalSecondPlumbingProofIfHarnessed(request = {}) {
     signDigest: deps.signDigest,
     requestGrant: deps.requestGrant,
     waitForGrantBalance: deps.waitForGrantBalance,
+    // [A-710 L1 · A-693 M-2] app-lock state is passed, never defaulted: a locked app refuses before any money step.
+    isAppLocked: () => !!state.appLock,
+    // [A-710 L1 · A-693 M-1] cross-tab money lock (Web Locks, exclusive, ifAvailable). No capability → null → the
+    // adapter refuses with lock_unsupported before grant / sign / broadcast.
+    withMoneyLock: secondMoneyLock(),
   });
   if (outcome.outcome === "done" && outcome.receipt) {
     const sj = state.secondJourney;
@@ -3596,6 +4179,7 @@ function wireExploreCard() {
     btn.addEventListener("click", () => handleCandidatePick(btn.dataset.destinationId));
   });
   document.querySelector("#secondOkButton")?.addEventListener("click", handleCandidateOk);
+  // A-727: Home on the candidates card records nothing (merely-shown rows are not decisions; Home is not nah).
   document.querySelectorAll(".secondJourney__jitBtn").forEach((btn) => {
     btn.addEventListener("click", () => handleJitAnswer(btn.dataset.jitAnswer));
   });
@@ -4179,21 +4763,41 @@ function formatMoney(wei) {
 // [A-553 Lane B] add_money 영수증은 BigInt sent/gas/after 필드가 아예 없다 — 옛 필드로
 // formatEther()를 부르면 던진다(감사 버그 3). **기존에 있던 라벨만** 보수적으로
 // 쓴다(Tx/Block) — 새 문구·새 라벨 0.
+// [A-756] First(testnet) 고정 금액일 때만 USD-first "$5" + faint MON. 다른 금액은 USD 근거가 없으므로 MON 그대로.
+// [A-768 M-T-2] 행은 **텍스트**만 담는다: { label, value, sub? } — markup 은 receiptRowMarkup() 한 곳에서 전부 escape 해 만든다.
+// sub = Sent 행의 흐린 보조 금액(.receipt-sub). 보이는 글자·markup 은 예전과 같다.
+function sentRowValue(sent) {
+  if (sent === SEND_AMOUNT) return { value: FIRST_SEND_USD, sub: formatMoney(sent) };
+  return { value: formatMoney(sent) };
+}
 function receiptRows(receipt) {
   if (!receipt) return [];
+  // [A-768 M-T-2] 표시 전에 모양을 확인한다 — tx hash 는 0x+64 hex, block 은 0 이상 정수만. 아니면 원문을 보이지 않는다.
+  const txValue = (hash) => (!hash ? "" : typeof hash === "string" && /^0x[0-9a-fA-F]{64}$/.test(hash) ? shortHash(hash) : "Unknown");
+  const blockValue = (n) => {
+    if (!n) return "Unknown";
+    if (typeof n === "bigint") return n > 0n ? String(n) : "Unknown";
+    if (typeof n === "number") return Number.isSafeInteger(n) && n > 0 ? String(n) : "Unknown";
+    return typeof n === "string" && /^\d+$/.test(n) ? n : "Unknown";
+  };
   if (receipt.kind === "add_money") {
     return [
-      { label: "Tx", value: shortHash(receipt.txHash) },
-      { label: "Block", value: receipt.blockNumber ? String(receipt.blockNumber) : "Unknown" },
+      { label: "Tx", value: txValue(receipt.txHash) },
+      { label: "Block", value: blockValue(receipt.blockNumber) },
     ];
   }
   return [
-    { label: "Sent", value: formatMoney(receipt.sent) },
+    { label: "Sent", ...sentRowValue(receipt.sent) },
     { label: "Cost", value: formatMoney(receipt.gas) },
     { label: "Left", value: formatMoney(receipt.after) },
-    { label: "Tx", value: shortHash(receipt.redeemTxHash || receipt.txHash) },
-    { label: "Block", value: receipt.redeemBlockNumber ? String(receipt.redeemBlockNumber) : "Unknown" },
+    { label: "Tx", value: txValue(receipt.redeemTxHash || receipt.txHash) },
+    { label: "Block", value: blockValue(receipt.redeemBlockNumber) },
   ];
+}
+// [A-768 M-T-2] 영수증 한 줄 markup — label·value·sub 를 전부 escape 한다(filebox · HISTORY 상세 공용).
+function receiptRowMarkup(row) {
+  const sub = row && row.sub ? ` <span class="receipt-sub">${escapeHtml(row.sub)}</span>` : "";
+  return `<p class="receipt-row"><span class="label">${escapeHtml(row?.label)}</span><span class="value">${escapeHtml(row?.value)}${sub}</span></p>`;
 }
 
 // 숫자 대조 한 줄 — 화면이 그린 숫자가 실제로 남은 것과 맞는지 사용자가 직접 본다.
@@ -4360,8 +4964,23 @@ function openInvite() {
   inviteTimers.push(setTimeout(() => startPiggyOpen(), 5900));
 }
 
+// [A-734] Gift Open 종이의 Open 탭(#giftOpenButton) — openInvite 와 같은 봉투 연출·같은 5.9s 뒤 단 한 번의 시작.
+// 다른 점은 끝에서 부르는 것뿐이다: startGiftOpen(아래 — 새 기기는 기존 find-first 그대로, Piggy 가 있는 기기는
+// 새 Gift Piggy). openInvite 자체는 손대지 않는다(A-667/A-687/A-726 이 그 본문을 고정한다).
+function openGiftInvite() {
+  const board = document.querySelector(".invite");
+  if (!board || (board.dataset.phase || "closed") !== "closed") return;
+  clearInviteTimers();
+  setInvitePhase("checking");
+  INVITE_TIMELINE.forEach(([at, phase]) => {
+    inviteTimers.push(setTimeout(() => setInvitePhase(phase), at));
+  });
+  inviteTimers.push(setTimeout(() => startGiftOpen(), 5900));
+}
+
 // 봉투 hero — 두 아트보드가 같은 480×365 안쪽 좌표를 쓴다. 모바일은 그 덩어리를 0.55833 로 줄인다.
-function inviteHero(dir) {
+// [A-734] `lines` = Gift Open 종이일 때만 캐논 문구(GIFT_PAPER_LINES) 두 줄. 없으면 기존 Invite 문구 그대로(byte 동일).
+function inviteHero(dir, lines = null) {
   return `
     <div class="invite__heroScale">
       <div class="invite__egg">${INVITE_EGG_SVG}</div>
@@ -4376,24 +4995,26 @@ function inviteHero(dir) {
         <img class="invite__stamp" src="${dir}/stamp@2x.png" alt="" />
         <img class="invite__underline" src="${dir}/underline@2x.png" alt="" />
         <div class="invite__hand">
-          <span class="invite__line1">something small</span>
-          <span class="invite__line2">just for you</span>
+          <span class="invite__line1">${lines ? lines[0] : "something small"}</span>
+          <span class="invite__line2">${lines ? lines[1] : "just for you"}</span>
         </div>
       </div>
     </div>
   `;
 }
 
-function inviteFace() {
+// [A-734] gift=true → 같은 버튼 껍질·아이콘, id 만 #giftOpenButton(→ openGiftInvite), 첫 문구는 캐논의 "Open".
+// 이후 단계 문구(checking... / Face ID)는 기존 setInvitePhase 그대로다.
+function inviteFace(gift = false) {
   return `
-    <button class="invite__face" id="inviteFaceButton">
+    <button class="invite__face" id="${gift ? "giftOpenButton" : "inviteFaceButton"}">
       <svg class="invite__faceIcon" viewBox="0 0 22 22" fill="none" stroke="#E0B100" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
         <path d="M2 7 V5 Q2 2 5 2 H7 M15 2 H17 Q20 2 20 5 V7 M20 15 V17 Q20 20 17 20 H15 M7 20 H5 Q2 20 2 17 V15"></path>
         <circle cx="7.5" cy="9" r="0.9" fill="#E0B100" stroke="none"></circle>
         <circle cx="14.5" cy="9" r="0.9" fill="#E0B100" stroke="none"></circle>
         <path d="M8 14.5 Q11 16.5 14 14.5"></path>
       </svg>
-      <span class="invite__faceLabel">Face ID</span>
+      <span class="invite__faceLabel">${gift ? "Open" : "Face ID"}</span>
     </button>
   `;
 }
@@ -4403,15 +5024,15 @@ function inviteHoles(count) {
 }
 
 // 모바일 아트보드 — Main.dc.html 420×840
-function inviteMobile() {
+function inviteMobile(gift = null) {
   return `
     <div class="invite invite--mobile" data-kind="mobile" data-phase="closed">
       <div class="invite__paper">
         <img class="invite__tape" src="/invite/tape@2x.png" alt="" aria-hidden="true" />
         ${inviteHoles(13)}
-        <div class="invite__hero" aria-hidden="true">${inviteHero("/invite")}</div>
+        <div class="invite__hero" aria-hidden="true">${inviteHero("/invite", gift && GIFT_PAPER_LINES[gift])}</div>
         <img class="invite__burst" src="/invite/burst@2x.png" alt="" aria-hidden="true" />
-        ${inviteFace()}
+        ${inviteFace(!!gift)}
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/trail@2x.png" alt="" />
           ${chogInviteMarkup()}
@@ -4425,14 +5046,14 @@ function inviteMobile() {
 }
 
 // 웹 아트보드 — InviteWide.dc.html 1280×800
-function inviteWide() {
+function inviteWide(gift = null) {
   return `
     <div class="invite invite--wide" data-kind="wide" data-phase="closed">
       <div class="invite__paper">
         ${inviteHoles(12)}
-        <div class="invite__hero" aria-hidden="true">${inviteHero("/invite/wide")}</div>
+        <div class="invite__hero" aria-hidden="true">${inviteHero("/invite/wide", gift && GIFT_PAPER_LINES[gift])}</div>
         <img class="invite__burst" src="/invite/wide/burst@2x.png" alt="" aria-hidden="true" />
-        ${inviteFace()}
+        ${inviteFace(!!gift)}
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/wide/trail@2x.png" alt="" />
         </div>
@@ -4445,10 +5066,12 @@ function inviteWide() {
 
 function renderReceived() {
   inviteKind = wantedInviteKind();
+  // [A-734] Gift Open 종이 = 같은 Invite 판, 손글씨 두 줄과 버튼 첫 문구만 캐논 문구. null 이면 기존 Invite 그대로.
+  const gift = giftPaperKind();
   return `
-    <section class="stage stage--invite" data-scene="received">
+    <section class="stage stage--invite" data-scene="received"${gift ? ` data-gift-paper="${gift}"` : ""}>
       ${arasoBrandMarkup()}
-      ${inviteKind === "wide" ? inviteWide() : inviteMobile()}
+      ${inviteKind === "wide" ? inviteWide(gift) : inviteMobile(gift)}
     </section>
   `;
 }
@@ -7084,7 +7707,8 @@ function ambWatching(assets, mountEl) {
 }
 
 // Flop → right roll → drowsy → sleep — the connected sequence on one continuous body rig; sleep
-// holds (no wake transition is confirmed) until the next Home-life cycle.
+// holds (no wake trigger is recorded — Owner-open). [A-744] the reverse-Flop wake exists but is DORMANT:
+// piggy-motion-state.js PIGGY_WAKE/piggyWakePhase only wake when given an explicit start, which no product caller gives.
 function ambFlopSleep(assets, mountEl, seed) {
   const art = ambArt("homeAmbient__flop", false);
   mountEl.append(art);
@@ -7106,10 +7730,23 @@ function ambFlopSleep(assets, mountEl, seed) {
   const tx = AMB_SEATED.x + a * (box.x + box.width / 2) - m * (ox + 1000 * k);
   const ty = AMB_SEATED.y + a * (box.y + box.height) - m * (oy + 1300 * k);
   art.style.transform = `translate(${tx}px, ${ty}px) scale(${m})`;
+  // [A-744] After the Flop-seated idle returns (wake end) the Piggy is the approved Idle: the same seated
+  // drawing (frame 0 of this rig) with the approved 3.2s idle blink. Blink is parked open (t=0) in every
+  // other phase so the forward frames are byte-identical to before.
+  const idleFrame = art.querySelector(".flop-experiment-frame");
+  const idleBlink = ambBlink([...idleFrame.querySelectorAll('[id="eye_L"], [id="eye_R"]')]);
   return {
     draw(e, reduced) {
-      // Preview reduced motion holds the cue at half its length (38.55s → persistent sleep pose).
-      const t = reduced ? 77.1 * 0.5 : e <= 77.1 ? e : 13.1 + ((e - 13.1) % 64);
+      // [A-744] Wake = the forward sequence evaluated at the mirrored time (piggy-motion-state.js
+      // piggyWakePhase/PIGGY_WAKE — same frames, same functions, no new art/beat). The asleep phase is the
+      // old forward draw unchanged; reduced motion holds the cue at half its length (38.55s → persistent
+      // sleep pose, the stable still) and never wakes.
+      // Product passes NO wake start (trigger is Owner-open) → never wakes. The dev-server-only seam below exists
+      // so tests can drive the reverse; gated by LOCAL_DEV_ENTRY (a172-local dev server only).
+      const w = piggyWakePhase(e, reduced, LOCAL_DEV_ENTRY ? globalThis.__a744WakeStartS : null);
+      const t = w.forwardT;
+      ambDrawBlink(idleBlink, w.phase === "awake" ? w.awakeS : 0, reduced);
+      if (w.phase === "awake") return ambFlopDraw(F, 0, "flop-experiment", reduced);
       if (t < 1.3 && !reduced) return ambFlopDraw(F, t, "flop-experiment", reduced);
       if (t < 3 && !reduced) return ambConnectedRest(F, 0, null, t - 1.3, reduced);
       if (t < 4.5 && !reduced) return ambConnectedRest(F, ambSmooth((t - 3) / 1.5), null, null, reduced);
@@ -7516,6 +8153,11 @@ function ambSleepHandoff(F, elapsed, reduced) {
   frame.querySelectorAll(".sleep-closed-eye").forEach((eye) => {
     eye.style.opacity = eyelid < 0.08 ? "1" : "0";
   });
+  // [A-744] The deep-sleep branch above fades the mouth out and nothing in this (drowsy) branch put it back,
+  // so a frame drawn after a deeper one (= every reverse/wake frame) kept the faded mouth. The forward
+  // sequence always arrives here from the roll branch, which sets it to "1" — same value, so forward frames
+  // are unchanged; this only makes the draw a function of time alone, which reversal needs.
+  frame.querySelector(".sleep-mouth").style.opacity = "1";
   return undefined;
 }
 
@@ -7716,10 +8358,13 @@ async function beginAddPiggy() {
   return admitAddedPiggy(out.piggy);
 }
 
+// [A-711] 발급 권한 seam. null = 권한 없음(제품 기본값, GIFT_RECORD_CONFIG 와 같은 자리 규율): 검증된 registry 주소·codehash·finality 와
+// 검증된 어댑터가 생기기 전까지 null 이고, 이 줄 자체를 고치는 것이 유일한 켜는 법이다(debug hook 0, 주소·provider 를 여기서 만들지 않는다).
+const ISSUANCE_AUTHORITY = null;
 // [A-531 → A-579 Lane G] 모델 A 새 Piggy 입장 — beginAddPiggy 와 beginGiftPiggy 가 함께 쓰는 **하나의** 경로.
 // `onAdmitted(piggy)` 는 입장이 성공했을 때, 탄생용 세션(= 방금 그 새 Piggy 의 서명자)이 끝나기 **전에** 한 번
 // 불린다(Gift 전용 — 평범한 +Piggy 는 넘기지 않는다).
-async function runModelAAdmission(rootCredential, { onAdmitted = null } = {}) {
+async function runModelAAdmission(rootCredential, { onAdmitted = null, purpose = null } = {}) {
   let out;
   try {
     out = await admitModelAPiggy({
@@ -7727,6 +8372,10 @@ async function runModelAAdmission(rootCredential, { onAdmitted = null } = {}) {
       chainId: secondJourneyScope().chainId,
       locks: webLocks(),
       rootCredential,
+      // [A-711] 발급 권한(per-chain write-once registry) — 제품 기본값 null. 라이브(mainnet) 범위에서는 null 이면 passkey 프롬프트 **전에**
+      // 거부된다(piggy-index.js admitModelAPiggy). testnet 은 이 값과 무관하게 A-695 경로 그대로. 값을 채우는 것은 별도 릴리스 결정이다.
+      issuanceAuthority: ISSUANCE_AUTHORITY,
+      issuancePurpose: purpose,
       // 고정된 기존 패스키로 **assertion 한 번**. 생성 경로(createPasskeyWithPrfOutput) 를 부르지 않는다.
       requestPrf: (credential, prfSalt) => requestPrf(credential, { prfSalt }),
       // 서명자만 세운다 — 첫 Piggy 의 저장 scope(state.address)는 바꾸지 않는다.
@@ -7780,7 +8429,8 @@ function admitAddedPiggy(piggy) {
 // 있으면 **시작에서** intent 를 꺼내고(다른 경로가 못 가져간다) 시작 전 주소 목록을 적어 둔 뒤, 모델 A 로 새 Piggy
 // 하나를 입장시키고, 그 입장 직후(탄생 세션이 살아 있는 동안) 그 새 주소에만 묶어 claim 을 시도한다. 입장이
 // 안 되면 intent 를 되돌린다. Second Journey 완료를 요구하지 않는다(A-567: Gift 수령은 Journey 와 독립 — OWNER Q2).
-// **UI 진입점 0** — 어떤 버튼도 이것을 부르지 않는다(DESIGN gate: Open 탭 배치). 새 문구·씬 0(admitAddedPiggy 그대로).
+// [A-734] UI 진입점 = Gift Open 종이 "a Piggy came for you." 의 Open 탭 하나뿐(#giftOpenButton → openGiftInvite →
+// startGiftOpen → openGiftForExistingPiggy). 이 함수 본문은 그대로다(새 문구·씬 0 — admitAddedPiggy 그대로).
 async function beginGiftPiggy() {
   if (!pendingGiftClaim) return { started: false, reason: "no_gift_intent" };
   if (state.addPiggy?.status === "authenticating") return { started: false, reason: "already_running" };
@@ -7810,6 +8460,8 @@ async function beginGiftPiggy() {
   state.addPiggy = { status: "authenticating" };
   try {
     out = await runModelAAdmission(root.credential, {
+      // [A-711] Gift Piggy 의 발급 purpose = giftId(bytes32). 평범한 +Piggy 는 기본 purpose("plus").
+      purpose: { kind: "gift", giftId: intent?.giftId },
       onAdmitted: async (piggy) => {
         const bound = bindGiftToNewPiggy({ intent, piggy, preExistingAddresses: preExisting, signerAddress: state.activeSignerAddress, requireSequence: true });
         if (!bound.ok) {
@@ -7832,6 +8484,88 @@ async function beginGiftPiggy() {
     return { started: false, reason: out.reason };
   }
   return { ...admitAddedPiggy(out.piggy), giftAttempted: attempted };
+}
+
+// ── [A-734] Gift Open 입구 — 이미 있는 Gift 원시동작(openPiggy · beginGiftPiggy)에 캐논 종이를 잇는다 ──────────────
+// 캐논(A-567 · A-597 REUSE_MATRIX §A): 기존 Invite/Open/Face ID/Egg/Hatch/Home 문법 재사용. 새 그림·새 문구 0 —
+// 손글씨 두 줄에 캐논 문구만 얹는다. 라이브 Gift 는 여전히 꺼져 있다(GIFT_RECORD_CONFIG · GIFT_CLAIM_SUBMIT_CONFIG = null):
+// 받는 흐름은 기존 그대로 정확한 이유(record_source_unavailable 등)로 멈추고, 돈이 온 것처럼 보이는 화면은 없다.
+const GIFT_PAPER_LINES = {
+  for: ["a Piggy", "for you"],
+  came: ["a Piggy came", "for you."],
+};
+
+// "for" = 이 기기에 Piggy 표식이 없다(startPiggyOpen 과 같은 판정) · "came" = 이미 Piggy 가 있다. null = 기존 Invite.
+function giftPaperKind() {
+  if (!giftPaperOffered || !pendingGiftClaim) return null;
+  return readCredential() || hasReceivedPiggy() || state.address ? "came" : "for";
+}
+
+// 부팅(첫 render 앞, A-733 tester 판정 **뒤**)에 한 번. 새 기기의 첫 화면(received)이면 그 자리가 곧 "a Piggy for you".
+// Piggy 가 있는 기기는 Home(sendstay) 목적지일 때만 "a Piggy came for you." 로 연다 — 앱 잠금(A-633)은 위에서 이미
+// 걸렸고 그대로다(잠금 해제 → 이 종이). Name/Away 등 다른 목적지는 바꾸지 않는다(intent 는 메모리에 그대로).
+function offerGiftPaperAtBoot() {
+  if (!pendingGiftClaim) return false;
+  if (state.scene === "received") {
+    giftPaperOffered = true;
+    return true;
+  }
+  if (state.scene === "sendstay" && readCredential()) {
+    giftPaperOffered = true;
+    state.scene = "received";
+    return true;
+  }
+  return false;
+}
+
+// Open 탭(봉투 연출 뒤) 한 번 = 이 함수 한 번.
+//  · Piggy 가 있는 기기 → 새 Gift Piggy(openGiftForExistingPiggy → beginGiftPiggy). 기존 Piggy 를 고르는 길 0.
+//  · 표식 없는 새 기기 → **기존 startPiggyOpen 그대로**(A-533/A-726 find-first). 기존 패스키가 있으면 그 Piggy 를
+//    되찾을 뿐 Hatch·생성 0 이고 Gift 는 메모리에 남는다 → Home 이면 "a Piggy came for you." 로 다시 묻는다(새 Gift
+//    Piggy 는 그 다음 명시적 Open 에서만). 못 찾으면 기존 Make new → 같은 종이 → 다음 Open 이 openPiggy(새 Piggy +
+//    시작 시점 Gift 묶음, A-579) → Egg/Hatch.
+async function startGiftOpen() {
+  if (!pendingGiftClaim) {
+    giftPaperOffered = false;
+    return startPiggyOpen();
+  }
+  if (readCredential() || hasReceivedPiggy() || state.address) return openGiftForExistingPiggy();
+  const out = await startPiggyOpen();
+  if (out && out.ok === true && pendingGiftClaim && state.scene === "sendstay" && readCredential()) {
+    giftPaperOffered = true;
+    setScene("received", "", "");
+  }
+  return out;
+}
+
+let giftOpenRunning = false;
+async function openGiftForExistingPiggy() {
+  if (giftOpenRunning) return { started: false, reason: "already_running" };
+  giftOpenRunning = true;
+  const before = state.addPiggy;
+  let out;
+  try {
+    out = await beginGiftPiggy();
+  } catch {
+    out = { started: false, reason: "gift_open_failed" };
+  } finally {
+    giftOpenRunning = false;
+  }
+  if (out && out.started) {
+    // 새 Gift Piggy 가 입장했다 — admitAddedPiggy 가 이미 그 Piggy 의 Name it 으로 보냈다(→ Home).
+    giftPaperOffered = false;
+    return out;
+  }
+  // 인증까지 갔다가 실패(취소 등)했고 intent 가 되돌려졌으면 같은 종이로 — 다시 여는 것은 사용자의 다음 Open 탭.
+  if (pendingGiftClaim && state.addPiggy !== before && state.addPiggy?.status === "failed") {
+    setScene("received", "", "");
+    return out;
+  }
+  // 인증 전에 멈춘 경우(제품 기본값 record_source_unavailable · 만료 · 이미 받음 · root 없음 …) → 기존 Home 그대로.
+  // 성공처럼 보이는 문구 0 · 새 Piggy 0 · 기존 Piggy 에 Gift 0.
+  giftPaperOffered = false;
+  setScene("sendstay", "Piggy is home.", "");
+  return out;
 }
 
 function homePadMarkup(scene) {
@@ -8227,7 +8961,7 @@ function homeCharacter(name) {
       <div class="homeChar" id="homeChar" data-arrival="0" data-drowsy="0" aria-hidden="true">
         <img class="homeChar__walk" id="homeWalk" src="${MOTION_DIR}/walk/f00.svg" alt="" />
         <img class="homeChar__seat" id="homeSeat" src="${MOTION_DIR}/seat.svg" alt="" />
-        <span class="homeChar__name" id="homeName">${name}</span>
+        <span class="homeChar__name" id="homeName">${escapeHtml(name)}</span>
       </div>
       ${chogHomeMarkupForExplore()}
     </div>
@@ -9224,6 +9958,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
 // perk/기다림)을 켠다. piggy-depart.js 는 **새로 건드리지 않는다** — 이미 있는
 // createDepartRenderer(mode:"work")를 그대로 부른다.
 //
+// [A-735 갱신] 아래 "남은 문제"는 해소됐다 — work 분기는 확정 cue(piggy-depart.js WORK_CUE)로 교체됨. 이하는 이력.
 // [보고할 남은 문제] piggy-depart.js drawAt()의 mode==="work" 분기는 확정 원본
 // (비공개 모션 디자인 원본 departure.js:79 `source=.15+.65*ease(elapsed/.55)`)과 달리 scene 진행값 `t`를 그
 // 홀드식으로 다시 누르지 않고 `elapsed`를 그대로 t로 흘려보낸다(app/src/
@@ -9406,16 +10141,20 @@ function mountSendCardWorkPose({
     // 눈 깜박임(work-half/shut)이 한 번도 안 나오던 원인이었다(A-414-b/c 정정).
     // 이제 **실제 경과 그대로** 넘긴다: 씬 시계는 렌더러가 0.8 에서 홀드해 출발하지
     // 않고, 깜박임은 실제 시계로 3.6초 주기(1.65s·1.98s)로 계속 돈다.
+    // [A-735] 확정 cue(piggy-depart.js WORK_CUE): 올려다봄 → 놀란 눈 한 박자 → 점프 한 번 → 1.8s 준비 홀드.
+    // 3.6s 깜박임 루프는 없다 — 홀드에 닿으면 마지막 한 장을 그리고 프레임 루프를 멈춘다(재그림은 resize 만).
+    // 이 cue 는 출발/Send 를 시작하지 않는다(렌더러 씬 시계는 0.8 에서 멈춤).
     const draw = () => {
       if (!alive()) return false;
-      renderer.drawAt((performance.now() - workStartedAt) / 1000);
-      return true; // 깜박임이 계속 돌아야 하므로 카드가 살아 있는 동안 계속 그린다.
+      const el = (performance.now() - workStartedAt) / 1000;
+      renderer.drawAt(el);
+      return el < WORK_CUE.total;
     };
 
     if (reduced) {
       // 원본도 reduced 에서는 깜박임을 끄고 한 장만 둔다 — 새 식에서 0.6 은 이미
       // source 0.8(정착)이고 눈은 open 단계다(깜박임 창 1.65/1.98 밖).
-      renderer.drawAt(0.6);
+      renderer.drawAt(WORK_CUE.total); // [A-735] reduced = 움직임 없이 준비 홀드 한 장(놀란 눈·점프 없음)
       return;
     }
     draw();
@@ -9469,11 +10208,13 @@ function renderSendStay() {
             // [A-407-e] 막힌 상태의 카드 문구도 같은 기준 — 내부 origin 노출 0, 실행 가능
             // 한 것처럼 보이지 않게. blocked 자체(버튼 비활성)는 그대로 둔다.
             message: blocked ? "Not from here." : state.message || "Piggy is home.",
-            detail: blocked ? "Piggy can only go out from the real app." : state.detail,
+            detail: blocked
+              ? "Piggy can only go out from the real app."
+              : [state.detail, firstSendAmountSecondary()].filter(Boolean).join(" · "),
             // [A-454 Owner "자기 주소는 홈 기록 보기에서"] Send 카드(시각·접근성 DOM)에는 주소 0.
             // 주소는 내부 state 에만 — auth/tx 동작 무변경.
             address: "",
-            terms: ["$5 limit", "Ask me every time", "One-time"],
+            terms: [FIRST_SEND_USD_LABEL, "Ask me every time", "One-time"],
             blocked,
             busy: sendBusy(),
           })}
@@ -9828,12 +10569,7 @@ function renderFileBox() {
     return `<section class="stage" data-scene="filebox"></section>`;
   }
   const rows = receiptRows(receipt);
-  const rowsMarkup = rows
-    .map(
-      (row) =>
-        `<p class="receipt-row"><span class="label">${row.label}</span><span class="value">${row.value}</span></p>`,
-    )
-    .join("");
+  const rowsMarkup = rows.map(receiptRowMarkup).join("");
   // [A-346] 귀환 두 번째 탭에서 정착한 것과 **같은 종이**(receipt-paper.js)를 여기서도 쓴다 —
   // 파일 정리 뒤에도 같은 영수증이 이어져 보이게. 아래 Sent/Cost/Left/Tx/Block 상세 증거줄은
   // 지우지 않고 그대로 둔다(§2 「읽기상세에 보존」) — 이 종이는 그 요약일 뿐이다.
@@ -10052,12 +10788,7 @@ function recordsCardDetailMarkup(index) {
         `<p class="receipt-row"><span class="label">${escapeHtml(label)}</span><span class="value">${escapeHtml(value)}</span></p>`,
     )
     .join("");
-  const rowsMarkup = receiptRows(receipt)
-    .map(
-      (row) =>
-        `<p class="receipt-row"><span class="label">${row.label}</span><span class="value">${row.value}</span></p>`,
-    )
-    .join("");
+  const rowsMarkup = receiptRows(receipt).map(receiptRowMarkup).join("");
   return `
     ${recordsMastheadMarkup()}
     <div class="recordsCard__panel recordsCard__panel--detail">
@@ -10555,11 +11286,99 @@ if (typeof location !== "undefined") {
   }
 }
 
+// [A-733] TESTER INVITE INTRO — `/?i=<code>` 첫 기기 한정 오버레이. 코드는 표시/라벨 신호일 뿐이다:
+// 접근 게이트 0 · 신원/키/PRF/주소/시퀀스/레지스트리/Receipt/SEQ-5/Gift 입력 0 · 저장 0(저장하는 건 araso.introSeen="1" 하나,
+// 코드 값은 어디에도 쓰지 않는다 — 화면 문구도 고정 "3 of 20"). 얼굴 = reentry 승인 자료
+// piggy_face_dark/piggy_face_peek.svg 의 path 12개(= piggy_assembled_stand.svg 의 path 10개 동일 + 눈 2개 class="eye"),
+// viewBox 170 10 660 600 크롭. 새 그림 0.
+const TESTER_INTRO_SEEN_KEY = "araso.introSeen";
+const TESTER_INTRO_BLINK_MS = 3200;
+const TESTER_INTRO_CLOSE_AT_MS = 2850;
+const TESTER_INTRO_LEAVE_MS = 150;
+const TESTER_INTRO_CODE_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const TESTER_PIGGY_FACE_PATHS = "<path d=\"M358.92 123.008L352.494 128.259L343.811 135.356L330.914 148.262L320.681 162.14L317.957 167.596L315.091 173.337L309.194 175.865L305.979 177.242L289.637 192.213L288.396 194.283L287.445 195.869L286.183 197.22L263.123 221.925L252.72 236.341L240.691 253.008L226.156 238.474L220.747 233.066L219.478 230.526L216.077 223.726L215.267 222.104L214.806 220.35L210.556 204.191L210.184 202.778L210.052 201.324L209.416 194.33L207.689 189.737L206.804 187.381L206.617 184.873L205.021 163.299L201.935 150.175L201.47 148.199V135.545L197.406 107.905L197.22 106.639V57.8618L197.502 56.3091L199.202 46.9585L199.424 45.7378L199.817 44.5601L203.216 34.3501L204.85 29.4448L208.888 26.2144L213.138 22.814L216.466 20.1519L220.646 19.3179L224.906 18.4673L228.178 17.8149L231.46 18.4116L240.811 20.1118L242.946 20.4995L244.921 21.3979L254.272 25.6479L255.258 26.0962L256.182 26.6636L293.602 49.6235L294.298 50.0503L294.95 50.5396L325.561 73.4995L326.864 74.4771L327.963 75.6772L345.227 94.52L351.118 98.4429L358.92 103.637V123.008Z\" fill=\"black\" stroke=\"white\" stroke-width=\"35\"/><path d=\"M257.24 101.1L255.54 103.65L254.69 111.31L258.94 119.81L269.99 132.57L272.54 140.22L276.79 14" + "3.62L281.05 141.92L285.3 137.67L286.15 135.12V130.01L284.45 126.61L266.59 107.91L262.34 101.95L257.24 101.1Z\" fill=\"white\"/><path d=\"M805.33 105.752L805.154 106.984L798.354 154.594L798.227 155.486L798.009 156.36L795.458 166.57L794.992 168.436L794.133 170.156L792.071 174.277L789.884 191.717L789.713 193.083L789.33 194.404L779.98 226.714L779.536 228.248L778.822 229.675L776.272 234.776L773.664 239.994L768.446 242.602L766.746 243.452L752.855 250.397L744.309 237.431L719.986 200.535L690.747 162.353L659.531 134.337L648.414 126.404L641.08 121.169V103.519L645.837 98.4653L659.447 84.0054L660.421 82.9712L661.548 82.1069L701.508 51.4966L702.924 50.4126L704.53 49.6353L729.45 37.5806L740.919 29.1685L742.116 28.2905L743.443 27.6265L751.943 23.3765L753.057 22.8208L754.236 22.4272L764.436 19.0278L767.13 18.1294H784.954L789.869 22.3423L795.819 27.4429L799.668 30.7417L801.157 35.5874L804.558 46.647L805.33 49.1606V105.752Z\" fill=\"black\" stroke=\"white\" stroke-width=\"35\"/><path d=\"M738.51 102.799L735.11 103.649L728.31 107.909L708.75 127.459L701.95 138.519V141.919L703.65 144.469L709.6 145.319L719.81 139.369L727.46 125.759L738.51 113.009L740.21 109.609V104.509L738.51 102.799Z\" fill=\"white\"/><path d=\"M411.677 703.361L427.233 705.913L430.007 706.369L432.498 707.669L443.906 713.625L446.378 714.917L448.327 716.913L456.636 725.421L458.435 727.263L459.626 729.545L462.738 735.501L463.884 737.697L464.376 740.124L466.45 750.344L467.13 753.692L466.5 757.049L464.426 768.111L464.083 769.938L463.365 771.652L452.288 798.072L445.354 820.838L441.281 835.352L436.714 852.282V895.766L445.921 972.192L446.328 975.574L445.439 978.86L443.365 986.518L442.337 990.312L439.786 993.301L432.527 1001.81L430.186 1004.55L426.951 1006.15L411.396 1013.82L409.06 1014.97L406.49 1015.39L370.169 1021.35L369.648 1021.43L369.122 1021.49L344.234 1024.04L343.343 1024.13H308.424L307.602 1024.05L280.626 1021.5L279.119 1021.36L277.658 1020.96L268.325 1018.4L265.91 1017.74L263.777 1016.43L251.321 1008.77L246.632 1005.89L244.438 1000.85L239.252 988.923L237.11 983.998L238.1 978.718L240.174 967.657L240.854 964.033L242.937 960.992L252.271 947.368L254.223 944.517L257.113 942.623L267.495 935.816L268.897 934.896L270.448 934.26L278.744 930.856L279.737 930.449L280.772 930.167L308.784 922.508L310.582 922.017L312.443 921.915L312.723 921.899L314.566 896.191V863.751L314.885 862.102L319.571 837.926L319.685 837.333L319.841 836.748L325.538 815.375L325.633 815.023L325.741 814.674L331.39 796.556L331.707 795.54L332.145 794.569L337.972 781.649L342.222 766.86L342.453 766.051L342.762 765.27L354.182 736.33L355.047 734.137L356.46 732.252L364.757 721.191L366.87 718.374L369.908 716.593L384.427 708.083L387.234 706.439L390.444 705.913L406.012 703.36L408.844 702.896L411.677 703.361Z\" fill=\"black\" stroke=\"white\" stroke-width=\"35\"/><path d=\"M578.957 701.347L562.92 703.9L560.212 704.331L557.765 705.57L546.004 711.527L543.538 712.775L541.578 714.723L533.013 723.232L531.169 725.063L529.938 727.35L526.73 733.306L525.528 735.539L525.009 738.02L522.871 748.241L522.149 751.688L522.818 755.146L524.956 766.208L525.318 768.079L526.074 769.829L537.486 796.229L544.644 819.024L548.841 833.539L553.517 850.35V893.734L544.028 970.128L543.596 973.612L544.54 976.992L546.678 984.65L547.753 988.5L550.393 991.501L557.876 1000.01L560.239 1002.7L563.468 1004.24L579.505 1011.91L581.796 1013L584.305 1013.4L621.749 1019.36L622.255 1019.44L622.766 1019.49L648.424 1022.04L649.288 1022.13H685.183L685.98 1022.06L713.79 1019.5L715.256 1019.37L716.678 1018.99L726.3 1016.44L728.67 1015.81L730.775 1014.55L743.617 1006.9L748.362 1004.07L750.623 999.026L755.969 987.103L758.232 982.054L757.182 976.623L755.044 965.561L754.329 961.863L752.156 958.787L742.534 945.163L740.543 942.343L737.631 940.491L726.927 933.684L725.537 932.799L724.007 932.191L715.454 928.787L714.48 928.4L713.469 928.131L684.59 920.473L682.84 920.009L681.031 919.914L680.26 919.873L678.36 894.172V861.7L678.021 860.002L673.191 835.828L673.069 835.217L672.904 834.619L667.031 813.246L666.932 812.885L666.817 812.529L660.994 794.41L660.66 793.373L660.201 792.385L654.206 779.492L649.83 764.722L649.585 763.897L649.261 763.099L637.488 734.159L636.586 731.942L635.122 730.048L626.569 718.987L624.424 716.211L621.374 714.477L606.406 705.968L603.644 704.398L600.506 703.899L584.457 701.346L581.707 700.91L578.957 701.347Z\" fill=\"black\" stroke=\"white\" stroke-width=\"35\"/><path d=\"M167.862 470.54L199.362 489.04L202.237 490.728L204.29 493.356L216.79 509.356L223.372 517.78L218.881 527.482L206.381 554.482L175.652 622.034L165.944 663.924L158.584 708.652V720.164L160.019 723.972L160.964 726.48L161.114 729.156L161.978 744.442L162.146 747.418L161.318 750.283L159.603 756.224L158.92 758.589L157.61 760.675L153.347 767.464L151.11 771.027L147.499 773.183L143.236 775.729L139.703 777.839L139.555 777.85L139.428 779.629L136.544 783.648L132.281 789.589L129.746 793.122L125.853 795.056L117.316 799.3L113.636 801.129H96.4678L93.7842 800.239L86.1104 797.693L83.0654 796.683L80.5771 794.659L71.1885 787.02L69.0332 785.268L67.5273 782.934L59.8535 771.042L58.2881 768.617L57.585 765.817L55.0273 755.632L54.5 753.534V695.292L54.8428 693.586L61.4375 660.758L62.2129 649.167L62.3184 647.597L62.7012 646.072L64.4062 639.283L64.8174 637.645L65.5342 636.117L70.5225 625.477L72.6855 613.313L72.9727 611.701L73.5537 610.169L88.0488 571.968L88.6074 570.496L89.4199 569.147L96.7031 557.053L114.29 521.222L114.693 520.401L115.181 519.625L136.507 485.667L137.097 484.728L137.802 483.87L145.476 474.524L154.966 462.965L167.862 470.54Z\" fill=\"black\" stroke=\"white\" stroke-width=\"35\"/><path d=\"M832.138 470.54L800.638 489.04L797.763 490.728L795.71 493.356L783.21 509.356L776.628 517.78L781.119 527.482L793.619 554.482L824.348 622.034L834.056 663.924L841.416 708.652V720.164L839.981 723.972L839.036 726.48L838.886 729.156L838.022 744.442L837.854 747.418L838.682 750.283L840.397 756.224L841.08 758.589L842.39 760.675L846.653 767.464L848.89 771.027L852.501 773.183L856.764 775.729L860.297 777.839L860.445 777.85L860.572 779.629L863.456 783.648L867.719 789.589L870.254 793.122L874.147 795.056L882.684 799.3L886.364 801.129H903.532L906.216 800.239L913.89 797.693L916.935 796.683L919.423 794.659L928.812 787.02L930.967 785.268L932.473 782.934L940.146 771.042L941.712 768.617L942.415 765.817L944.973 755.632L945.5 753.534V695.292L945.157 693.586L938.562 660.758L937.787 649.167L937.682 647.597L937.299 646.072L935.594 639.283L935.183 637.645L934.466 636.117L929.478 625.477L927.314 613.313L927.027 611.701L926.446 610.169L911.951 571.968L911.393 570.496L910.58 569.147L903.297 557.053L885.71 521.222L885.307 520.401L884.819 519.625L863.493 485.667L862.903 484.728L862.198 483.87L854.524 474.524L845.034 462.965L832.138 470.54Z\" fill=\"black\" stroke=\"white\" stroke-width=\"35\"/><path d=\"M843.59 493.574L848.216 512.82L848.7 514.835V529.37L849.502 531.775L850.4 534.469V602.178L850.264 603.26L848.565 616.86L848.382 618.324L847.957 619.736L846.14 625.765V635.759L845.882 637.247L842.481 656.806L842.306 657.814L842.014 658.794L832.665 690.254L832.035 692.375L830.896 694.273L824.32 705.231L820.694 716.845L820.211 718.393L819.452 719.826L811.792 734.276L811.349 735.11L810.82 735.891L792.97 762.251L792.481 762.974L791.923 763.644L783.413 773.854L782.661 774.755L781.795 775.549L763.769 792.072L761.803 795.994L760.539 798.515L758.547 800.511L753.446 805.622L752.103 806.967L750.502 807.994L717.343 829.244L716.648 829.688L715.917 830.065L687.856 844.525L686.176 845.391L684.349 845.878L673.117 848.873L660.077 855.005L658.776 855.618L657.392 856.008L618.282 867.069L617.245 867.362L616.179 867.526L571.96 874.326L570.637 874.529H549.16L517.104 878.637L515.997 878.779H488.883L487.56 878.576L466.267 875.301L408.427 871.95L407.152 871.875L405.901 871.618L352.332 860.558L350.5 860.179L348.789 859.422L296.919 836.473L295.836 835.994L294.827 835.373L261.667 814.962L260.526 814.26L259.506 813.393L225.496 784.483L224.093 783.291L222.969 781.832L191.509 741.012L190.89 740.209L190.369 739.341L182.709 726.591L181.923 725.284L181.376 723.859L172.876 701.749L172.541 700.878L172.301 699.977L165.751 675.401L160.15 661.002L159.542 659.439L159.242 657.788L155.842 639.078L155.642 637.981L155.584 636.869L154.834 622.592L152.771 615.06L152.15 612.792V603.924L151.344 601.503L150.45 598.814V537.188L150.557 536.223L155.668 490.313L155.756 489.523L155.915 488.744L163.418 452.043L164.91 439.355V418.299L165.621 415.881L169.409 402.999L170.947 387.619L171.057 386.511L171.307 385.427L173.857 374.368L174.127 373.201L174.552 372.081L190.382 330.437L194.395 315.178L194.835 313.507L195.593 311.955L212.377 277.557L224.926 247.43L225.625 245.75L226.656 244.25L235.405 231.513L245.128 212.898L245.653 211.893L246.302 210.964L287.963 151.444L289.851 148.747L292.591 146.919L307.129 137.223L326.82 120.823L327.855 119.96L329.011 119.266L348.422 107.61L352.866 103.174L354.315 101.728L356.058 100.655L367.108 93.855L368.115 93.2358L369.197 92.7563L421.066 69.7964L422.013 69.3774L423.004 69.0728L434.053 65.6733L435.367 65.269L436.726 65.0747L453.159 62.729L467.944 58.0532L469.988 57.4067L472.129 57.2729L485.728 56.4233L486.838 56.354L487.946 56.4253L514.306 58.1255L515.73 58.2173L517.121 58.5386L538.546 63.4907L560.813 66.7876L561.952 66.9565L563.057 67.2729L574.958 70.6724L576.823 71.2056L578.526 72.1343L596.611 81.9937L634.229 98.7183L636.864 99.8901L638.984 101.845L647.28 109.496L653.914 111.708L657.429 112.879L660.168 115.375L698.428 150.245L699.066 150.827L699.643 151.468L714.954 168.468L715.649 169.24L716.248 170.088L746.857 213.458L747.435 214.276L747.916 215.155L782.775 278.925L783.656 280.536L784.182 282.293L789.074 298.606L809.215 349.792L809.514 350.553L809.742 351.339L820.357 388.064L823.892 395.133L824.838 397.023L825.305 399.083L829.555 417.792L829.828 418.991L829.929 420.215L830.636 428.708L836.968 450.874L837.437 452.52L837.58 454.227L838.337 463.323L843.202 486.034L843.59 487.846V493.574Z\" fill=\"black\" stroke=\"white\" stroke-width=\"35\"/><path class=\"eye\" d=\"M412.84 414.02L401.79 419.97L394.99 427.62L391.59 439.53V451.43L394.99 459.08L402.64 466.74L413.69 472.69H423.05L428.15 470.99L434.95 466.74L439.2 461.64L444.3 450.58V436.98L438.35 423.37L431.55 416.57L426.45 414.02H412.84Z\" fill=\"white\"/><path class=\"eye\" d=\"M554.84 413.169L544.64 417.419L535.29 425.919L530.19 436.979V448.029L533.59 458.229L542.94 467.589L552.29 472.689H562.5L574.4 467.589L578.65 464.189L583.76 457.379L585.46 453.129V436.129L584.61 431.869L578.65 422.519L565.9 414.019L554.84 413.169Z\" fill=\"white\"/><path d=\"M556.55 519.459L554.84 516.059L550.59 512.649L546.34 511.799L542.94 513.499L538.69 519.459V523.709L535.29 531.359L531.04 536.459L523.38 540.709H513.18L506.38 537.309L499.57 529.659L495.32 518.609L492.77 516.059L487.67 514.349L482.57 516.059L479.17 519.459L476.62 527.109L470.66 536.459L465.56 540.709L458.76 543.269L452.81 542.409L449.41 540.709L444.3 535.609L439.2 527.109L436.65 517.759L430.7 513.499H428.15L422.2 517.759L421.35 519.459V527.109L423.9 534.759L430.7 546.669L438.35 554.319L443.45 557.719L450.26 560.269L460.46 561.119L470.66 558.569L480.87 551.769L488.52 543.269L495.32 550.919L504.68 556.869L514.03 559.419H524.23L537.84 554.319L548.04 544.969L553.99 533.909L556.55 526.259V519.459Z\" fill=\"white\"/>";
+let testerIntroPending = false;
+let testerIntroTimers = [];
+
+function readTesterInviteParam() {
+  try {
+    if (typeof location === "undefined") return { present: false, valid: false };
+    const sp = new URLSearchParams(location.search);
+    if (!sp.has("i")) return { present: false, valid: false };
+    return { present: true, valid: TESTER_INTRO_CODE_RE.test(sp.get("i") || "") };
+  } catch {
+    return { present: false, valid: false };
+  }
+}
+
+// `i` 만 지우고 나머지 query(debug 등)와 fragment(#g=…)는 그대로 둔다.
+function stripTesterInviteFromUrl() {
+  try {
+    if (typeof history === "undefined" || typeof location === "undefined") return;
+    const sp = new URLSearchParams(location.search);
+    sp.delete("i");
+    const qs = sp.toString();
+    history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
+  } catch {
+    // no-op
+  }
+}
+
+function testerIntroSeen() {
+  try { return safeLocalStorage()?.getItem(TESTER_INTRO_SEEN_KEY) === "1"; } catch { return false; }
+}
+
+function markTesterIntroSeen() {
+  try { safeLocalStorage()?.setItem(TESTER_INTRO_SEEN_KEY, "1"); } catch {  }
+}
+
+function removeTesterIntro() {
+  testerIntroTimers.forEach((t) => clearTimeout(t));
+  testerIntroTimers = [];
+  document.querySelector(".testerIntro")?.remove();
+}
+
+function startTesterIntro() {
+  if (!testerIntroPending) return;
+  testerIntroPending = false;
+  if (state.scene !== "received" || state.appLock) return;
+  markTesterIntroSeen();
+  if (prefersReducedMotion()) return;
+  const el = document.createElement("div");
+  el.className = "testerIntro";
+  el.setAttribute("role", "status");
+  el.innerHTML =
+    `<div class="testerIntro__inner">` +
+    `<svg class="testerIntro__face" viewBox="170 10 660 600" fill="none" aria-hidden="true">${TESTER_PIGGY_FACE_PATHS}</svg>` +
+    `<p class="testerIntro__line">this one's for you</p>` +
+    `<p class="testerIntro__num">3 of 20</p>` +
+    `</div>`;
+  el.style.setProperty("--testerIntroBlink", `${TESTER_INTRO_BLINK_MS}ms`);
+  document.body.appendChild(el);
+  testerIntroTimers.push(
+    setTimeout(() => el.classList.add("is-closed"), TESTER_INTRO_CLOSE_AT_MS),
+    setTimeout(() => el.classList.add("is-leaving"), TESTER_INTRO_BLINK_MS),
+    setTimeout(removeTesterIntro, TESTER_INTRO_BLINK_MS + TESTER_INTRO_LEAVE_MS),
+  );
+}
+
+{
+  const testerInvite = readTesterInviteParam();
+  if (testerInvite.present) {
+    testerIntroPending = testerInvite.valid && state.scene === "received" && !state.appLock && !testerIntroSeen();
+    stripTesterInviteFromUrl();
+  }
+}
+
 // [A-654] A page that opens away from Home (a trip, Name, auth) is outside the Home-life cycle, so
 // the first Home it reaches starts a new one (visual only).
 homeLifeLeft = !HOME_LIFE_SCENES.includes(state.scene);
 
+// [A-734] Gift Open 종이 — A-733 tester 판정 **뒤**라 Piggy 가 있는 기기에는 tester intro 가 그대로 0 이다.
+if (offerGiftPaperAtBoot()) homeLifeLeft = !HOME_LIFE_SCENES.includes(state.scene);
+
 render();
+startTesterIntro();
 
 // [A-697] Invite fit rides the same debounce as Home (A-666 §2): a real width/orientation change
 // recomputes synchronously (so the wide<->mobile `render()` switch in fitInvite is immediate), an
@@ -10575,6 +11394,22 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 // 것뿐이고, passive:true 는 activity 훅이 스크롤/탭을 막을 이유가 없어서다(preventDefault 0).
 window.addEventListener("pointerdown", handleTrustedAppActivity, { capture: true, passive: true });
 window.addEventListener("keydown", handleTrustedAppActivity, { capture: true, passive: true });
+
+// [A-707 M2-beta] First Send 예약의 탭 수명 잠금과, 주인이 죽은 `reserved` 기록(서명 0 · 돈 0)의 한 번 청소. 부팅 블록(위 A-633 / R4)이 같은 기록을
+// 읽기 전용으로 조회하는 것과 별개로, 첫 render() 뒤에 돈다. 잠금 사실로 증명될 때만 지우고(불확실하면 그대로 = 잠금 유지), 지운 뒤 화면은 기존 「nothing moved.」 등급이다.
+if (LEGACY_TESTNET_PATH) {
+  holdSendTabLock();
+  sweepStaleSendReservation()
+    .then((swept) => {
+      if (swept !== "cleared") return;
+      if (state.scene === "away" && state.awayRestore) {
+        state.awayRestore = null;
+        setScene("sendstay", "Piggy can't go out yet.", "");
+      }
+      syncSendButton();
+    })
+    .catch(() => {});
+}
 
 // [A-666] Owner-identified top-left HISTORY dot (`.recordsCard__dot`, masthead) is now the
 // obvious Home-return control — same closeRecordsCard() path #recordsCardClose already
@@ -10595,6 +11430,14 @@ function handleRecordsDotActivate(event) {
 }
 document.addEventListener("click", handleRecordsDotActivate);
 document.addEventListener("keydown", handleRecordsDotActivate);
+
+// [A-734] Gift Open 종이의 Open 버튼 — 위 HISTORY 점과 같은 모양의 module-scope 위임 리스너 하나(render() 무변경).
+// <button> 이라 키보드 Enter/Space 도 click 으로 들어온다.
+function handleGiftOpenActivate(event) {
+  if (!event.target?.closest?.("#giftOpenButton")) return;
+  openGiftInvite();
+}
+document.addEventListener("click", handleGiftOpenActivate);
 
 // @DEV_ONLY — 로컬 검토용 씬 점프. localhost 는 rpId 가 허용 목록 밖이라 실제 패스키를
 // 탈 수 없고(isAllowedPiggyRpId), 그래서 해치·Name it·첫 Home 을 실제 앱에서 눈으로

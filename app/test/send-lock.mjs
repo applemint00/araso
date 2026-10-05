@@ -2,6 +2,8 @@
 //   node app/test/send-lock.mjs
 // return-outcome.mjs 와 같은 방식: main.js 에서 실제 함수 소스만 잘라 스텁 위에서 돌린다(로직 재작성 0).
 import { readFileSync } from "node:fs";
+import { keccak256 } from "viem";
+import { preparedSignProblem } from "../src/money-executor.js";
 
 const SRC = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 function cut(startMarker, endMarker) {
@@ -21,6 +23,22 @@ function check(label, got, want) {
   else { console.log(`FAIL  ${label} — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); fail += 1; }
 }
 const tick = () => new Promise((r) => setTimeout(r, 0));
+// [A-707 M2-beta] harness wiring: sign-before-send replaces walletClient.sendTransaction. The fake account signs a deterministic raw tx per nonce
+// ("0xa0" deposit, "0xa1" redeem) and the fake node returns keccak256(raw), so the recorded hashes below are the REAL keccak of those raws.
+const HASH_DEPOSIT = keccak256("0xa0");
+const HASH_REDEEM = keccak256("0xa1");
+function fakeLocks() {
+  const held = new Map();
+  return {
+    held,
+    async request(name, opts, cb) {
+      if (held.has(name)) return opts.ifAvailable ? cb(null) : new Promise(() => {});
+      held.set(name, true);
+      try { return await cb({ name, mode: "exclusive" }); } finally { held.delete(name); }
+    },
+    async query() { return { held: [...held.keys()].map((name) => ({ name })), pending: [] }; },
+  };
+}
 
 function mockStorage(init = {}) {
   const m = new Map(Object.entries(init));
@@ -34,14 +52,16 @@ function mockStorage(init = {}) {
 
 // 전체 sendPiggy + sendPiggyOnce 를 스텁 위에서 만든다. settleOutcome 으로 결말을 고른다.
 function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows = false, simThrows = false, allowed = true }) {
-  const calls = { grant: 0, sign: 0, sendTx: 0, scenes: [], finished: [], endSession: 0 };
+  const calls = { grant: 0, sign: 0, sendTx: 0, prepared: 0, scenes: [], finished: [], endSession: 0 };
   const btn = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   const env = {
     localStorage: storage,
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     state: { address: "0xabc", txHash: "", mark: "", grantTxHash: "" },
     isAllowedPiggyRpId: () => allowed,
-    activeAccount: { address: "0xabc" },
+    activeAccount: { address: "0xabc", signTransaction: async (prepared) => `0xa${prepared.nonce}` },
+    navigator: { locks: fakeLocks() },
+    keccak256,
     activeSession: { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } },
     // [A-444] 진짜 setScene 은 재렌더한다 — 진행 중이면 markup(busy)이 버튼을 disabled 로 다시 그린다.
     setScene: (...a) => { calls.scenes.push(a); btn.disabled = true; btn.attrs["aria-disabled"] = "true"; },
@@ -49,15 +69,18 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
     requestGrant: async () => { calls.grant += 1; if (gate) await gate; return { txHash: "0xgrant" }; },
     simulateSend: async () => { if (simThrows) throw new Error("sim reverted"); return { depositTx: {}, before: 1n, beforeShares: 0n }; },
     touchAppSession() {}, // [A-556] rename: touchSession -> touchAppSession (app-idle only, harness wiring)
-    createWalletClient: () => ({ sendTransaction: async () => { calls.sendTx += 1; if (depositThrows && calls.sendTx === 1) throw new Error("rpc"); return calls.sendTx === 1 ? "0xdeposit" : "0xredeem"; } }),
+    // [A-768 M-C-1/M-L-1 harness wiring] the fake prepare returns a well-formed Monad-testnet eip1559 request (the pre-sign guard now checks it),
+    // the REAL preparedSignProblem is injected, and the fake node answers the deposit-block nonce read (deposit nonce + 1).
+    createWalletClient: () => ({ prepareTransactionRequest: async () => ({ type: "eip1559", chainId: 10143, gas: 21000n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, nonce: calls.prepared++ }) }),
+    preparedSignProblem,
     MONAD_TESTNET: {}, MONAD_TESTNET_RPC: "", http: () => ({}),
-    crypto: { subtle: { digest: async () => new ArrayBuffer(32) } },
+    crypto: { subtle: { digest: async () => new ArrayBuffer(32) }, getRandomValues: (a) => globalThis.crypto.getRandomValues(a) },
     TextEncoder,
     toHex: () => "00",
     waitForSuccess: async () => ({ status: "success", gasUsed: 1n, effectiveGasPrice: 1n, blockNumber: 1n }),
     readShmonBalance: async () => 5n,
     makeRedeemTx: () => ({}),
-    publicClient: { estimateGas: async () => 1n },
+    publicClient: { estimateGas: async () => 1n, getTransactionCount: async () => calls.prepared, sendRawTransaction: async ({ serializedTransaction }) => { calls.sendTx += 1; if (depositThrows && calls.sendTx === 1) throw new Error("rpc"); return keccak256(serializedTransaction); } },
     settleSend: async () => ({ outcome: settleOutcome, reason: settleOutcome === "done" ? "ok" : "redeem-unconfirmed-or-reverted", receipt: null }),
     finishTrip: (t) => calls.finished.push(t.outcome),
     formatError: (e) => String(e),
@@ -69,8 +92,10 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
     endActiveSession: () => { calls.endSession += 1; },
   };
   const names = Object.keys(env);
-  const factory = new Function(...names, `${constsSrc}\n${lockSrc}\n${onceSrc}\nreturn { sendPiggy, computeTripClosed, readSendPending, sendBusy, isInFlight: () => sendInFlight };`);
-  return { ...factory(...names.map((n) => env[n])), calls, btn, env };
+  const factory = new Function(...names, `${constsSrc}\n${lockSrc}\n${onceSrc}\nreturn { sendPiggy, computeTripClosed, readSendPending, sendBusy, holdSendTabLock, isInFlight: () => sendInFlight };`);
+  const made = factory(...names.map((n) => env[n]));
+  made.holdSendTabLock(); // boot step: the tab lifetime lock (fake locks grant it synchronously)
+  return { ...made, calls, btn, env };
 }
 
 // ── 1. 동시 두 호출 → grant/서명/sendTransaction 1회 ─────────────────────────────
@@ -95,7 +120,7 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
   const storage = mockStorage();
   const t = makeSend({ storage, settleOutcome: "done" });
   await t.sendPiggy(); await tick(); await tick();
-  check("success: araso.txHash = redeem hash", storage.getItem("araso.txHash"), "0xredeem");
+  check("success: araso.txHash = redeem hash", storage.getItem("araso.txHash"), HASH_REDEEM);
   // [A-699 M2-alpha] declared expectation update: commitSendSuccess no longer clears the pending record; the clear is in the
   // REAL finishTrip, behind the verified receipt save (stubbed in this harness; end-to-end in money-safety-first.mjs).
   check("  pending NOT cleared by commitSendSuccess (clear moved behind the verified receipt save)", storage.has("araso.sendPending"), true);
@@ -110,7 +135,8 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
   await t.sendPiggy(); await tick(); await tick();
   check("unconfirmed: araso.txHash not written", storage.getItem("araso.txHash"), null);
   check("  pending kept (stage redeem-broadcast)", JSON.parse(storage.getItem("araso.sendPending")).stage, "redeem-broadcast");
-  check("  pending keeps both hashes", JSON.parse(storage.getItem("araso.sendPending")).redeemTxHash, "0xredeem");
+  check("  pending keeps both hashes", JSON.parse(storage.getItem("araso.sendPending")).redeemTxHash, HASH_REDEEM);
+  check("  pending carries the deposit hash and both nonces (0 then 1)", `${JSON.parse(storage.getItem("araso.sendPending")).depositTxHash === HASH_DEPOSIT}/${JSON.parse(storage.getItem("araso.sendPending")).nonce}`, "true/1");
   const before = `${t.calls.grant}/${t.calls.sign}/${t.calls.sendTx}`;
   await t.sendPiggy(); await tick();
   check("  re-tap with pending: no grant/sign/send", `${t.calls.grant}/${t.calls.sign}/${t.calls.sendTx}`, before);
@@ -123,7 +149,9 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
   const storage = mockStorage();
   const t = makeSend({ storage, depositThrows: true });
   await t.sendPiggy(); await tick();
-  check("deposit send threw: pending kept (deposit-sending)", JSON.parse(storage.getItem("araso.sendPending") || "{}").stage, "deposit-sending");
+  // [A-707 M2-beta] declared expectation update: the deposit hash is persisted BEFORE the broadcast call, so a throwing broadcast leaves a SIGNED record
+  // (stage deposit-broadcast, phase signed, hash + nonce) instead of the hash-less deposit-sending. It stays (broadcast may have happened) and locks Send.
+  check("deposit send threw: pending kept (signed deposit record with the hash, phase signed)", `${JSON.parse(storage.getItem("araso.sendPending") || "{}").stage}/${JSON.parse(storage.getItem("araso.sendPending") || "{}").phase}/${JSON.parse(storage.getItem("araso.sendPending") || "{}").depositTxHash === HASH_DEPOSIT}`, "deposit-broadcast/signed/true");
   check("  lock released (no settle)", t.isInFlight(), false);
   check("  txHash not written", storage.getItem("araso.txHash"), null);
 }
@@ -183,7 +211,7 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
 // ── 6. 새로고침 복구: 확정 전 txHash 가 닫힌 바퀴가 되지 않는다 ────────────────────
 {
   const t = makeSend({ storage: mockStorage() });
-  check("reload: pending + txHash(legacy) → not closed", t.computeTripClosed({ tripClosedFlag: null, txHash: "0xredeem", pending: { stage: "redeem-broadcast" } }), false);
+  check("reload: pending + txHash(legacy) → not closed", t.computeTripClosed({ tripClosedFlag: null, txHash: HASH_REDEEM, pending: { stage: "redeem-broadcast" } }), false);
   check("reload: legacy txHash-only (no pending) → closed (bridge kept)", t.computeTripClosed({ tripClosedFlag: null, txHash: "0xold", pending: null }), true);
   check("reload: tripClosed flag → closed", t.computeTripClosed({ tripClosedFlag: "1", txHash: "", pending: null }), true);
   check("reload: nothing → not closed", t.computeTripClosed({ tripClosedFlag: null, txHash: "", pending: null }), false);

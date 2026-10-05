@@ -16,6 +16,8 @@
 
 import { isMeraError } from "@category-labs/mera";
 import { bindSigner, bytesToHex, modelASalt, modelASaltHex, normalizeLocator } from "./piggy-session.js";
+import { issuanceAuthorityRequiredForScope } from "./chain-profile.js";
+import { ISSUANCE_REFUSAL, preflightIssuanceAuthority, queryIssued, registerWithAuthority, resolveIssuancePurpose, validateIssuanceAuthority } from "./issuance-authority.js";
 
 const INDEX_VERSION = 1;
 const INDEX_PREFIX = "araso.myPiggiesIndex.v1";
@@ -186,7 +188,10 @@ function writeControlledPiggy(storage, chainId, { id = null, name = null, addres
   if (locError) return refuse(locError);
   if (typeof at !== "string" || at.trim() === "") return refuse("missing_time");
 
-  const { index } = loadMyPiggiesIndex(storage, chainId);
+  // [A-768 M-F-1] 읽기 실패·깨짐·버전/체인 불일치 위에 깨끗한 1줄 색인을 새로 쓰지 않는다(다른 Piggy 줄·워터마크 소실 0).
+  // 빈 색인에서 시작해도 되는 것은 키가 아예 없을 때(absent)뿐이다.
+  const { index, error: loadError } = loadMyPiggiesIndex(storage, chainId);
+  if (loadError && loadError !== "absent") return refuse("index_unreadable");
   const wantId = typeof id === "string" && id.trim() !== "" ? id.trim() : `piggy-${lower(address)}`;
   if (!ID.test(wantId)) return refuse("invalid_id");
   const cleanName = typeof name === "string" && name.trim() !== "" ? name.trim().slice(0, 40) : null;
@@ -266,7 +271,9 @@ export function renameIndexedPiggy(storage, chainId, { id, name } = {}) {
   if (!storage) return refuse("no_storage");
   const cleanName = typeof name === "string" && name.trim() !== "" ? name.trim().slice(0, 40) : null;
   if (!cleanName) return refuse("invalid_name");
-  const { index } = loadMyPiggiesIndex(storage, chainId);
+  // [A-768 M-F-1] 읽을 수 없는 색인은 고쳐 쓰지 않는다(absent 면 어차피 not_indexed).
+  const { index, error: loadError } = loadMyPiggiesIndex(storage, chainId);
+  if (loadError && loadError !== "absent") return refuse("index_unreadable");
   const at = index.piggies.findIndex((p) => p.id === id);
   if (at < 0) return refuse("not_indexed");
   const piggies = index.piggies.map((p, i) => (i === at ? { ...p, name: cleanName } : { ...p }));
@@ -310,7 +317,7 @@ export function checkOriginDeviceIndex(storage, chainId, rootCredential) {
   return { ok: true, reason: null, index: loaded.index };
 }
 
-export async function admitModelAPiggy({ storage, chainId, locks, rootCredential, requestPrf, deriveAddress, now = () => new Date().toISOString() } = {}) {
+export async function admitModelAPiggy({ storage, chainId, locks, rootCredential, requestPrf, deriveAddress, now = () => new Date().toISOString(), issuanceAuthority = null, issuancePurpose = null, authorityTimeouts = {} } = {}) {
   const lockName = myPiggiesLockName(chainId);
   if (!lockName) return refuse("invalid_chain");
   if (!storage) return refuse("no_storage");
@@ -320,6 +327,9 @@ export async function admitModelAPiggy({ storage, chainId, locks, rootCredential
   if (!rootId) return refuse("missing_root_credential");
   if (typeof requestPrf !== "function" || typeof deriveAddress !== "function") return refuse("missing_auth_provider");
   const pinned = { credentialId: rootId, ...(Array.isArray(rootCredential.transports) && rootCredential.transports.length ? { transports: rootCredential.transports } : {}) };
+  // [A-711] 발급 권한 프로필 게이트 — 라이브 범위(mainnet)이면 권한이 **필수**, 아니면(testnet 기본) 권한 의존 0.
+  // 권한이 주입돼 있으면(테스트 또는 이후의 별도 릴리스) 범위와 무관하게 쓴다. 주입이 없고 필수면 requestPrf 전에 거부한다.
+  const authorityRequired = issuanceAuthorityRequiredForScope(chainId);
 
   return locks.request(lockName, { mode: "exclusive" }, async () => {
     // [A-695 SEQ-5=A] 번호를 정하기 **전에**, requestPrf 를 부르기 전에 — 이 기기의 첫 Piggy 행이 **발급 출처(provenance)** 를 가졌는지 본다.
@@ -327,7 +337,12 @@ export async function admitModelAPiggy({ storage, chainId, locks, rootCredential
     if (!gate.ok) return refuse(gate.reason);
     const before = gate.index;
     const n = (before.issuedThrough || 0) + 1;
-    return admitSequencedPiggy({ storage, chainId, sequence: n, rootCredential: pinned, requestPrf, deriveAddress, now, requireNext: true });
+    if (issuanceAuthority === null || issuanceAuthority === undefined) {
+      if (authorityRequired) return refuse(ISSUANCE_REFUSAL.UNCONFIGURED);   // 라이브: null 권한 = 거부(PRF 0 · 쓰기 0)
+      // testnet 기본: A-695 경로 그대로(admitSequencedPiggy 는 바이트 그대로이고 권한 코드를 지나지 않는다).
+      return admitSequencedPiggy({ storage, chainId, sequence: n, rootCredential: pinned, requestPrf, deriveAddress, now, requireNext: true });
+    }
+    return admitIssuedPiggy({ storage, chainId, sequence: n, rootCredential: pinned, requestPrf, deriveAddress, now, authority: issuanceAuthority, purpose: issuancePurpose, timeouts: authorityTimeouts });
   });
 }
 
@@ -392,6 +407,108 @@ export async function admitSequencedPiggy({
     address,
     signerAddress: address,
     locator: { ...pinned, prfSalt: saltHex },
+    at: now(),
+    sequence,
+  });
+}
+
+// ---- [A-711] 발급 권한 경로 — 새 번호를 **내는** 길(+Piggy · Gift Piggy) 전용 ------------------------------------
+//
+// admitSequencedPiggy 는 복원(index-backup)·되찾기와 공유하는 **권한 없는** 경로이고 이 변경에서 한 바이트도 바뀌지 않았다
+// (A-669 의 pre-pin 이 그 본문을 고정한다). 새 번호를 내는 쪽은 여기 admitIssuedPiggy 만 지난다:
+//
+//   ① 권한 모양·체인 확인  ② R0 preflight(핀 고정 registry·도달 가능)   — 둘 다 **requestPrf 전**, 쓰기 0
+//   ③ 같은 salt 로 인증 → credential 확인 → 라이브 파생 → PRF 즉시 0 (admitSequencedPiggy 와 같은 순서)
+//   ④ requireNext 재확인(stale_sequence)
+//   ⑤ R1 isIssued(addr_n): true 면 **채택하지 않는다** — n 을 태우고(burn) 거부
+//   ⑥ R2 register(addr_n, purpose): **우리 tx 의 확정 영수증 · status 1 · 핀 registry 의 정확히 1개 일치 로그**일 때만 통과.
+//      아니면 n 을 태우고 거부(주소 · 로그 검색 · 조회값은 성공 신호가 아니다)
+//   ⑦ 그 뒤에야 줄 + 워터마크를 쓴다(writeControlledPiggy — 로컬은 캐시일 뿐)
+//
+// 등록은 됐는데 ⑦ 전에 죽으면: 다음 시도가 같은 n 을 파생해 ⑤에서 "이미 등록됨"을 보고 건너뛴다 — n 재사용 0.
+// 태운 n 은 줄 없이 워터마크(issuedThrough)만 올린다. 롤백돼도 권한이 같은 답을 하므로 다시 태워질 뿐 재발급은 없다.
+
+/** 줄 없이 워터마크만 sequence 까지 올린다(번호를 쓰지 않고 소모). 이미 그 이상이거나 연속이 아니면 아무것도 안 쓴다. */
+function burnSequence(storage, chainId, sequence) {
+  try {
+    const { index, error } = loadMyPiggiesIndex(storage, chainId);
+    if (error) return false;
+    if ((index.issuedThrough || 0) !== sequence - 1) return false;
+    return writeIndex(storage, chainId, { ...index, issuedThrough: sequence });
+  } catch {
+    return false;
+  }
+}
+
+export async function admitIssuedPiggy({
+  storage,
+  chainId,
+  sequence,
+  rootCredential,
+  requestPrf,
+  deriveAddress,
+  now = () => new Date().toISOString(),
+  authority = null,
+  purpose = null,
+  timeouts = {},
+  authErrorReason = classifyAuthError,
+} = {}) {
+  if (!myPiggiesIndexKey(chainId)) return refuse("invalid_chain");
+  if (!storage) return refuse("no_storage");
+  if (!Number.isSafeInteger(sequence) || sequence < 1) return refuse("invalid_sequence");
+  const rootId = typeof rootCredential?.credentialId === "string" ? rootCredential.credentialId : "";
+  if (!rootId) return refuse("missing_root_credential");
+  if (typeof requestPrf !== "function" || typeof deriveAddress !== "function") return refuse("missing_auth_provider");
+  const pinned = { credentialId: rootId, ...(Array.isArray(rootCredential.transports) && rootCredential.transports.length ? { transports: rootCredential.transports } : {}) };
+
+  // ①② — PRF 전. 권한이 없으면 **조용히 권한 없는 길로 내려가지 않는다**.
+  if (authority === null || authority === undefined) return refuse(ISSUANCE_REFUSAL.UNCONFIGURED);
+  const shape = validateIssuanceAuthority(authority, chainId);
+  if (!shape.ok) return refuse(shape.reason);
+  const resolved = resolveIssuancePurpose(purpose);
+  if (resolved.error) return refuse(resolved.error);
+  const ready = await preflightIssuanceAuthority(authority, { timeoutMs: timeouts.preflight });
+  if (!ready.ok) return refuse(ready.reason);
+
+  // ③ 인증·credential 확인·라이브 파생·PRF 0 은 admitSequencedPiggy 를 **그대로** 지난다(salt 는 그 안의 한 곳에서만 만들어진다).
+  // 파생 직후 쓰기 **전에** 멈추도록 deriveAddress 만 감싼다: 주소를 붙잡고 던지면 admitSequencedPiggy 는 줄을 쓰지 않고
+  // derive_failed 를 돌려준다 — 그 사이 PRF 출력은 이미 0 이다. 그 뒤(④~⑦)가 이 함수의 몫이다.
+  let derived = null;
+  const probe = await admitSequencedPiggy({
+    storage, chainId, sequence, rootCredential: pinned, requestPrf, now, authErrorReason,
+    requireNext: false,
+    deriveAddress: (prfOutput) => { derived = deriveAddress(prfOutput); throw new Error("derived_hold_for_authority"); },
+  });
+  if (derived === null) return probe.ok ? refuse("derive_failed") : probe;            // 취소/실패/credential 불일치/파생 실패 그대로
+  if (!ADDR.test(derived)) return refuse("invalid_address");
+  const address = derived;
+
+  // ④ 최신 색인에서 n 이 아직 다음 번호인가.
+  const after = loadMyPiggiesIndex(storage, chainId).index;
+  if ((after.issuedThrough || 0) + 1 !== sequence) return refuse("stale_sequence");
+
+  // ⑤ R1 — 이미 등록된 주소는 이번 시도의 성공이 될 수 없다.
+  const seen = await queryIssued(authority, address, { timeoutMs: timeouts.preflight });
+  if (!seen.ok) return refuse(seen.reason);                // 모름 = 거부 · n 은 그대로(아무것도 알려지지 않았다)
+  if (seen.issued) {
+    burnSequence(storage, chainId, sequence);
+    return refuse(ISSUANCE_REFUSAL.SEQUENCE_REGISTERED);
+  }
+
+  // ⑥ R2 — 우리 tx 의 확정된 결과만. 로컬 쓰기는 이 뒤에만.
+  const registered = await registerWithAuthority(authority, { address, purpose: resolved.purpose, sequence, chainScope: chainId }, { timeoutMs: timeouts.register });
+  if (!registered.ok) {
+    if (registered.burn) burnSequence(storage, chainId, sequence);
+    return refuse(registered.reason);
+  }
+
+  // ⑦ 커밋 — writeControlledPiggy 가 순번 ↔ salt · 연속성(stale_sequence) · 통제 증명을 한 번 더 확인한다.
+  return writeControlledPiggy(storage, chainId, {
+    id: `piggy-${lower(address)}`,
+    name: null,
+    address,
+    signerAddress: address,
+    locator: { ...pinned, prfSalt: modelASaltHex(sequence) },
     at: now(),
     sequence,
   });

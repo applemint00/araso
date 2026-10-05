@@ -52,6 +52,34 @@ const GROUP_DY = HOME_SEAT.top - 515 * GROUP_SCALE;
 
 // --- 원본 시간 함수 (departure.js 그대로) --------------------------------
 export const DEPART_TOTAL_S = 11.25;
+// ── [A-735] Work? 확정 cue (Owner 확정 2026-09-26, home_motion_confirmed_20260926) ──────────────────
+// 원본: 비공개 preview.js:14,1087-1125 `drawConfirmedWorkCue`. 수치 그대로(새 모션·새 그림 0):
+//   0–0.35s 올려다봄(work 렌더러 source 상승) → 0.35–0.75s 놀란 눈 한 박자(원본 SURPRISED_EYES 경로 2개 +
+//   검정 덮개) → 0.9–1.45s 점프 한 번(-18px) → 1.8s 에 준비 홀드로 정지(loop:false).
+// 이 cue 는 출발/Send 를 시작하지 않는다 — 씬 시계(source)는 그대로 0.8 에서 멈춘다(위 A-419 식).
+export const WORK_CUE = Object.freeze({ total: 1.8, lookUp: 0.35, surprisedEnd: 0.75, jumpStart: 0.9, jumpEnd: 1.45, jump: -18 });
+const WORK_SURPRISED = {
+  viewbox: { width: 1086, height: 1149 },
+  seat: { width: 150, height: 150 * 1102 / 1056 },
+  cover: [1008, 548, 43, 24],
+  eyes: [
+    { d: "M629.282 534.398L639.973 541.407L650.015 556.554L655.829 576.985L656.408 597.918L653.453 617.588L644.347 636.274L635.018 646.891L624.538 647.934L612.057 639.488L607.517 633.481L601.915 621.103L599.948 613.225L599.057 581.021L599.706 572.864L605.334 554.543L617.974 537.138L629.282 534.398Z", sourceCenter: [627.7, 591.2], targetCenter: [1017.1, 558.5] },
+    { d: "M776.846 524.282L788.5 534.425L795.88 548.222L799.994 570.437L800.617 592.98L797.528 607.819L790.078 623.111L779.048 635.512L769.441 636.468L764.118 633.769L756.916 626.412L752.286 617.185L746.472 596.754L745.76 570.991L751.154 544.601L757.777 531.024L762.877 525.673L776.846 524.282Z", sourceCenter: [773.2, 580.4], targetCenter: [1037.6, 561.7] },
+  ],
+};
+/** 순수 타임라인(캔버스 없이 검증 가능). elapsed(초, 실제 경과) → 그 순간의 cue 상태. */
+export function workCueState(elapsed) {
+  const t = Math.max(0, Math.min(WORK_CUE.total, Number.isFinite(elapsed) ? elapsed : 0));
+  const jp = t >= WORK_CUE.jumpStart && t <= WORK_CUE.jumpEnd ? (t - WORK_CUE.jumpStart) / (WORK_CUE.jumpEnd - WORK_CUE.jumpStart) : 0;
+  return {
+    t,
+    clock: t < WORK_CUE.lookUp ? t : 1, // work 렌더러에 넘기는 시계: 올려다보기 후 홀드
+    surprised: t >= WORK_CUE.lookUp && t < WORK_CUE.surprisedEnd,
+    jumpY: jp ? WORK_CUE.jump * Math.sin(Math.PI * jp) : 0,
+    hold: t >= WORK_CUE.total,
+  };
+}
+
 const C = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 const ease = (t) => { t = C(t); return t * t * (3 - 2 * t); };
 const mix = (a, b, t) => a + (b - a) * t;
@@ -184,7 +212,10 @@ export function createDepartRenderer(canvas, opts) {
    * 원본 `renderBase()` 를 Canvas 로 옮긴 것. 수식은 그대로다.
    * @param {number} elapsed 초 단위 실제 경과(애니메이션 시계)
    */
-  function drawAt(elapsed) {
+  function drawAt(rawElapsed) {
+    // [A-735] work? = 확정 cue 타임라인. 렌더러 안의 모든 `elapsed` 는 cue 시계(올려다봄 후 홀드)가 된다.
+    const cue = mode === "work" ? workCueState(rawElapsed) : null;
+    const elapsed = cue ? cue.clock : rawElapsed;
     const e = Math.max(0, Math.min(DEPART_TOTAL_S, elapsed));
     // [A-419] work? 홀드식이 이 파일에 없어서 호출부(main.js mountSendCardWorkPose)가
     // elapsed 자체를 0.8 로 얼려 출발을 막고 있었다 — 그 대가로 아래 깜박임 계산
@@ -201,6 +232,7 @@ export function createDepartRenderer(canvas, opts) {
 
     ctx = mainCtx;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (cue) { ctx.save(); ctx.translate(0, cue.jumpY * sx()); } // [A-735] 점프 = 캔버스 통째 -18px 한 번(원본과 같음)
 
     const rise = ease((t - 1) / 0.55);
     const travel = ease((t - 1.6) / 2.2);
@@ -275,13 +307,7 @@ export function createDepartRenderer(canvas, opts) {
     // work? 는 준비 반응이다 — 눈 단계만 바뀌고 출발하지 않는다.
     let lookName = "seat-lookup";
     if (mode === "work") {
-      const b = elapsed % 3.6;
-      let stage = "open";
-      for (const start of [1.65, 1.98]) {
-        const d = b - start;
-        if (d >= 0 && d < 0.18) stage = d < 0.035 || d > 0.145 ? "half" : "shut";
-      }
-      lookName = `work-${stage}`;
+      lookName = "work-open"; // [A-735] 3.6s 깜박임 루프 제거 — 확정 cue 는 놀란 눈 한 박자 뒤 홀드(원본 preview 도 work-open 고정)
     } else if (mode === "send" && elapsed < 0.5) {
       lookName = "work-open";
     }
@@ -342,6 +368,27 @@ export function createDepartRenderer(canvas, opts) {
       ctx.scale(s, s);
       ctx.translate(-PORTAL.cx, -PORTAL.cy);
       ctx.drawImage(img("portal-ring"), PORTAL_RECT.x, PORTAL_RECT.y, PORTAL_RECT.w, PORTAL_RECT.h);
+      ctx.restore();
+    }
+
+    if (cue) {
+      if (cue.surprised) {
+        const sv = WORK_SURPRISED;
+        ctx.save();
+        ctx.scale(sx(), sx());
+        ctx.fillStyle = "#000";
+        ctx.fillRect(...sv.cover);
+        ctx.fillStyle = "#fff";
+        for (const eye of sv.eyes) {
+          ctx.save();
+          ctx.translate(eye.targetCenter[0], eye.targetCenter[1]);
+          ctx.scale(sv.seat.width / sv.viewbox.width, sv.seat.height / sv.viewbox.height);
+          ctx.translate(-eye.sourceCenter[0], -eye.sourceCenter[1]);
+          ctx.fill(new Path2D(eye.d));
+          ctx.restore();
+        }
+        ctx.restore();
+      }
       ctx.restore();
     }
 

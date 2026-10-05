@@ -335,7 +335,9 @@ async function live() {
   check("cue: when the Send card owns the slot the cue is gone (no overlap)", [s.labels, s.send], [0, true]);
   const tSend = Date.now() - t0;
   // [A-626 A] superseded window: entrance 1870 + 1.2s hold ≈ 3070ms (allow 1.0–1.5s hold + harness slack).
-  check("cue: Send card appeared only after entrance + ≥1.0s full-opacity hold (≈3.07s, ≤ 3.6s)", tSend >= 2870 && tSend <= 3600, true);
+  // [A-725] hold 1200 → 1500 (Owner real-device pacing finding): ready ≈ 3370ms. Window shifted by the
+  // same +300ms on both ends (lower = entrance + ≥1.3s hold, upper = ready + the same 530ms slack).
+  check("cue: Send card appeared only after entrance + ≥1.3s full-opacity hold (≈3.37s, ≤ 3.9s)", tSend >= 3170 && tSend <= 3900, true);
   await ev(`document.querySelector("#stayButton").click(), true`);
   await wait(900);
   await ev(PAGE);

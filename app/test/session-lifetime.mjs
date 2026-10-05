@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 import vm from "node:vm";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
+import { keccak256 } from "viem";
 import { getEvmAddress, createSecp256k1SigningSession } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
 import { selectionContext, switchSelection } from "../src/piggy-session.js";
@@ -91,6 +92,19 @@ function makeFakeClock() {
 // sendPiggyOnce's fire-and-forget settleSend(...).then().catch().finally() chain resolve).
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
+function fakeLocks() {
+  const held = new Map();
+  return {
+    held,
+    async request(name, opts, cb) {
+      if (held.has(name)) return opts.ifAvailable ? cb(null) : new Promise(() => {});
+      held.set(name, true);
+      try { return await cb({ name, mode: "exclusive" }); } finally { held.delete(name); }
+    },
+    async query() { return { held: [...held.keys()].map((name) => ({ name })), pending: [] }; },
+  };
+}
+
 function mockStorage() {
   const m = new Map();
   return {
@@ -108,7 +122,7 @@ function mockStorage() {
 function buildApp({ grantThrows = false } = {}) {
   const clock = makeFakeClock();
   const authCalls = { count: 0 };
-  const calls = { scenes: [], finished: [], grant: 0, sign: 0, sendTx: 0 };
+  const calls = { scenes: [], finished: [], grant: 0, sign: 0, sendTx: 0, prepared: 0 };
   const btn = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   const storage = mockStorage();
   const state = {
@@ -134,16 +148,19 @@ function buildApp({ grantThrows = false } = {}) {
     },
     waitForGrantBalance: async () => true,
     simulateSend: async () => ({ depositTx: {}, before: 1n, beforeShares: 0n }),
+    // [A-707 M2-beta] harness wiring: sign-before-send. The REAL Mera account signs a real eip1559 request; the fake node returns keccak256(raw).
     createWalletClient: () => ({
-      sendTransaction: async () => { calls.sendTx += 1; return calls.sendTx % 2 === 1 ? "0xdeposit" : "0xredeem"; },
+      prepareTransactionRequest: async ({ to }) => ({ type: "eip1559", chainId: 10143, nonce: calls.prepared++, gas: 21000n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, to: to || "0x00000000000000000000000000000000000000a1", value: 0n, data: "0x" }),
     }),
+    keccak256,
+    navigator: { locks: fakeLocks() },
     MONAD_TESTNET: {}, MONAD_TESTNET_RPC: "", http: () => ({}),
     TextEncoder,
     toHex: () => "00", // [narrowed SESSION_SRC excludes main.js's own toHex() — harness wiring only]
     waitForSuccess: async () => ({ status: "success", gasUsed: 1n, effectiveGasPrice: 1n, blockNumber: 1n }),
     readShmonBalance: async () => 5n,
     makeRedeemTx: () => ({}),
-    publicClient: { estimateGas: async () => 1n },
+    publicClient: { estimateGas: async () => 1n, sendRawTransaction: async ({ serializedTransaction }) => { calls.sendTx += 1; return keccak256(serializedTransaction); } },
     settleSend: async () => ({ outcome: "done", reason: "ok", receipt: null }),
     finishTrip: (t) => calls.finished.push(t.outcome),
     formatError: (e) => String(e),
@@ -168,6 +185,7 @@ function buildApp({ grantThrows = false } = {}) {
       `function boundAuthAttempt(a, work) { return work; }\nfunction finishAuthAttempt(a) { if (authAttempt !== a) return false; authAttempt = null; return true; }\n` +
       `${constsSrc}\n${lockSrc}\n${onceSrc}\n` +
       `const consumedPermissionNonces = new Set();\n${CORE_SRC}\n` +
+      `holdSendTabLock();\n` +
       `this.__api = { sendPiggy, readSendPending, sendBusy, authorizeMoneyAction, applyPiggySelection, consumeMoneyPermission };\n` +
       `this.__get = () => ({ hasSigner: !!activeAccount, address: activeAccount ? activeAccount.address : null });`,
     ctx,

@@ -20,7 +20,7 @@ import {
   makeSecondRedeemTx,
   readSecondSendPending,
   reconcileSecondPendingOnBoot,
-  runSecondPlumbingProof,
+  runSecondPlumbingProof as runSecondPlumbingProofRaw,
   SECOND_PLUMBING_DESTINATION_ID,
   SECOND_PLUMBING_EVIDENCE_CLASS,
   SECOND_PLUMBING_EXECUTION_MODE,
@@ -35,6 +35,19 @@ import {
 } from "../src/second-execution-adapter.js";
 import { classifySecondReceipt, PERSISTABLE_EVIDENCE_CLASSES } from "../src/second-journey-receipt-bridge.js";
 import { resolveChainProfile, legacyTestnetPathOpen } from "../src/chain-profile.js";
+
+// [A-710 L1 re-baseline · named reason: A-693 M-1/M-2 closed] runSecondPlumbingProof now REQUIRES an injected
+// cross-tab money lock (`withMoneyLock`) and app-lock state (`isAppLocked`) and refuses without them (pinned in
+// app/test/a710-e-second-local.mjs). Every existing case here keeps its arguments and assertions; these two
+// dependencies are supplied as defaults (an in-process exclusive lock, app not locked) and any case may override
+// them (e.g. `isAppLocked: () => true` below).
+const HELD_TEST_LOCKS = new Set();
+async function testMoneyLock(name, body) {
+  if (HELD_TEST_LOCKS.has(name)) return undefined;
+  HELD_TEST_LOCKS.add(name);
+  try { return await body(); } finally { HELD_TEST_LOCKS.delete(name); }
+}
+const runSecondPlumbingProof = (args = {}) => runSecondPlumbingProofRaw({ isAppLocked: () => false, withMoneyLock: testMoneyLock, ...args });
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");

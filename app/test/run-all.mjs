@@ -13,12 +13,16 @@
 //
 // Env:
 //   ARASO_TEST_BROWSER=1   also run the browser/dev-server suites (needs Chrome + local port binding).
-//   ARASO_TEST_TIMEOUT_MS  per-suite timeout (default 180000).
+//   ARASO_TEST_TIMEOUT_MS  per-suite timeout. Default 180000 (node mode), 600000 when ARASO_TEST_BROWSER=1.
+//
+// Each suite runs in its own process group. On timeout the whole group is killed (SIGTERM, then SIGKILL),
+// and the group is swept again after the suite exits, so a vite/Chrome grandchild a suite leaked can
+// never survive into the next suite (port collisions).
 // Args: any argument is a substring filter on the file name (e.g. `npm test -- receipt`).
 //
 // Exit code: 1 if any FAIL, else 0.
 
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,7 +30,9 @@ import { fileURLToPath } from "node:url";
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SELF = path.basename(fileURLToPath(import.meta.url));
 const WANT_BROWSER = process.env.ARASO_TEST_BROWSER === "1";
-const TIMEOUT_MS = Number(process.env.ARASO_TEST_TIMEOUT_MS) > 0 ? Number(process.env.ARASO_TEST_TIMEOUT_MS) : 180000;
+// setTimeout treats delays above 2^31-1 ms as 1 ms, so clamp the override.
+const TIMEOUT_MS = Number(process.env.ARASO_TEST_TIMEOUT_MS) > 0 ? Math.min(Number(process.env.ARASO_TEST_TIMEOUT_MS), 2 ** 31 - 1) : WANT_BROWSER ? 600000 : 180000;
+const KILL_GRACE_MS = 2000;
 const filters = process.argv.slice(2).filter(Boolean);
 
 // A suite needs a browser/dev server when it launches headless Chrome over CDP or starts vite on a port.
@@ -38,6 +44,41 @@ const files = readdirSync(TEST_DIR)
   .filter((f) => f.endsWith(".mjs") && f !== SELF)
   .filter((f) => filters.length === 0 || filters.some((x) => f.includes(x)))
   .sort();
+
+// Run one suite in its own process group. Resolves { status, signal, error, out, timedOut }.
+function runSuite(file, env) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [path.join(TEST_DIR, file)], {
+      cwd: path.resolve(TEST_DIR, "..", ".."),
+      env,
+      detached: true, // new process group; pgid === child.pid
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const chunks = [];
+    let size = 0;
+    const onData = (d) => { size += d.length; chunks.push(d); while (size > 64 * 1024 * 1024 && chunks.length > 1) size -= chunks.shift().length; };
+    child.stdout.on("data", onData);
+    child.stderr.on("data", onData);
+    const killGroup = (sig) => { try { process.kill(-child.pid, sig); } catch {} };
+    let timedOut = false, spawnError = null, settled = false, graceTimer = null;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killGroup("SIGTERM");
+      graceTimer = setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS);
+      graceTimer.unref();
+    }, TIMEOUT_MS);
+    const finish = (status, signal) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(graceTimer); // never signal a pgid that may be reused after exit
+      killGroup("SIGKILL"); // sweep leaked grandchildren (vite, Chrome) after exit
+      resolve({ status, signal, error: spawnError, timedOut, out: Buffer.concat(chunks).toString("utf8") });
+    };
+    child.on("error", (e) => { spawnError = e; finish(null, null); });
+    child.on("close", (status, signal) => finish(status, signal));
+  });
+}
 
 const rows = [];
 for (const file of files) {
@@ -58,17 +99,11 @@ for (const file of files) {
   }
 
   const started = Date.now();
-  const r = spawnSync(process.execPath, [path.join(TEST_DIR, file)], {
-    cwd: path.resolve(TEST_DIR, "..", ".."),
-    env,
-    encoding: "utf8",
-    timeout: TIMEOUT_MS,
-    maxBuffer: 64 * 1024 * 1024,
-  });
+  const r = await runSuite(file, env);
   const ms = Date.now() - started;
-  const out = `${r.stdout || ""}${r.stderr || ""}`;
-  if (r.error || r.status !== 0) {
-    const why = r.error ? (r.error.code === "ETIMEDOUT" ? `timeout after ${TIMEOUT_MS}ms` : String(r.error.message)) : `exit ${r.status}${r.signal ? ` (${r.signal})` : ""}`;
+  const out = r.out;
+  if (r.timedOut || r.error || r.status !== 0) {
+    const why = r.timedOut ? `timeout after ${TIMEOUT_MS}ms` : r.error ? String(r.error.message) : `exit ${r.status}${r.signal ? ` (${r.signal})` : ""}`;
     rows.push({ file, status: "FAIL", note: why, ms });
     console.log(`FAIL  ${file}  — ${why}`);
     const tail = out.trim().split("\n").slice(-12).join("\n");
@@ -85,7 +120,7 @@ console.log("");
 console.log(`SUMMARY  files=${rows.length}  PASS=${count("PASS")} (node-only partial=${partial})  SKIP=${count("SKIP")}  FAIL=${count("FAIL")}`);
 if (count("SKIP") > 0) {
   console.log("SKIPPED (not run):");
-  for (const r of rows.filter((x) => x.status === "SKIP")) console.log(`  - ${r.file}`);
+  for (const r of rows.filter((x) => x.status === "SKIP")) console.log(`  - ${r.file}: ${r.note}`);
 }
 if (count("FAIL") > 0) {
   console.log("FAILED:");

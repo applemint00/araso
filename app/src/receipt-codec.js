@@ -19,23 +19,51 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim() !== "";
 }
 
+// [A-768 M-T-2 / M-F-3] 모양 검사 — 아니면 throw(호출부가 그 한 줄만 건너뛴다).
+// 숫자 칸은 0 이상 정수 모양만. hash 칸은 **문자열**만(객체·숫자 등은 화면 코드가 .slice 에서 깨지는 줄이다);
+// 0x+64 hex 모양 확인은 표시 직전(main.js receiptRows)에서 한다 — 모양이 아니면 원문 대신 "Unknown".
+const UINT_RE = /^\d+$/;
+
+/** 비어 있음(""/undefined/null) → "", 문자열 → 그대로, 그 밖(객체·숫자·배열…) → throw. */
+function optionalHashString(value, field) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "string") return value;
+  throw new Error(`receipt: invalid ${field}`);
+}
+
+/** 0 이상 정수로 읽히는 값(bigint · 안전 정수 number · 숫자만 있는 문자열) → BigInt. 그 밖(undefined 포함)은 throw. */
+function requiredUint(value, field) {
+  if (typeof value === "bigint" && value >= 0n) return value;
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+  if (typeof value === "string" && UINT_RE.test(value)) return BigInt(value);
+  throw new Error(`receipt: invalid ${field}`);
+}
+
+/** 선택 필드: 없음(undefined/null/""/0/0n) → 0n, 있으면 requiredUint 와 같은 검사. */
+function optionalUint(value, field) {
+  if (value === undefined || value === null || value === "" || value === 0 || value === 0n) return 0n;
+  return requiredUint(value, field);
+}
+
 // ── legacy(shMON) — 지금까지 main.js readReceipts()/serializeReceiptRow() 에 있던 로직 그대로 ──
+// [A-768 M-T-2] 숫자 칸은 0 이상 정수 모양만(BigInt("0x..")/" 12 " 같은 느슨한 변환 0), hash 칸은 문자열만.
+// 어긋나면 throw — readReceipts/rememberReceipt 가 그 한 줄만 건너뛰고 나머지 이력은 지킨다.
 function decodeLegacyRow(row) {
   return {
-    before: BigInt(row.before),
-    after: BigInt(row.after),
-    gas: BigInt(row.gas),
-    sent: BigInt(row.sent),
-    txHash: row.txHash || "",
-    depositTxHash: row.depositTxHash || "",
-    redeemTxHash: row.redeemTxHash || "",
-    grantTxHash: row.grantTxHash || "",
-    depositBlockNumber: row.depositBlockNumber ? BigInt(row.depositBlockNumber) : 0n,
-    redeemBlockNumber: row.redeemBlockNumber ? BigInt(row.redeemBlockNumber) : 0n,
-    depositGasUsed: row.depositGasUsed ? BigInt(row.depositGasUsed) : 0n,
-    redeemGasUsed: row.redeemGasUsed ? BigInt(row.redeemGasUsed) : 0n,
-    shmonReceived: row.shmonReceived ? BigInt(row.shmonReceived) : 0n,
-    shmonAfterRedeem: row.shmonAfterRedeem ? BigInt(row.shmonAfterRedeem) : 0n,
+    before: requiredUint(row.before, "before"),
+    after: requiredUint(row.after, "after"),
+    gas: requiredUint(row.gas, "gas"),
+    sent: requiredUint(row.sent, "sent"),
+    txHash: optionalHashString(row.txHash, "txHash"),
+    depositTxHash: optionalHashString(row.depositTxHash, "depositTxHash"),
+    redeemTxHash: optionalHashString(row.redeemTxHash, "redeemTxHash"),
+    grantTxHash: optionalHashString(row.grantTxHash, "grantTxHash"),
+    depositBlockNumber: optionalUint(row.depositBlockNumber, "depositBlockNumber"),
+    redeemBlockNumber: optionalUint(row.redeemBlockNumber, "redeemBlockNumber"),
+    depositGasUsed: optionalUint(row.depositGasUsed, "depositGasUsed"),
+    redeemGasUsed: optionalUint(row.redeemGasUsed, "redeemGasUsed"),
+    shmonReceived: optionalUint(row.shmonReceived, "shmonReceived"),
+    shmonAfterRedeem: optionalUint(row.shmonAfterRedeem, "shmonAfterRedeem"),
     // 옛 영수증에는 status 가 없다. 없으면 빈 값으로 두고 성공이라 넘겨짚지 않는다.
     status: row.status || "",
     at: row.at || 0,
@@ -47,22 +75,25 @@ function decodeLegacyRow(row) {
   };
 }
 
+// [A-768 M-F-3] 저장 **전에** 검사한다: 필수 숫자(before/after/gas/sent)가 없거나 정수 모양이 아니면 throw — 예전처럼
+// 문자열 "undefined" 를 써서 저장소 전체를 오염시키지 않는다(throw 는 rememberReceipt → receipt_store_unsound, 기록 유지).
+// 쓰는 값은 예전과 같은 String(...) 모양이다.
 function encodeLegacyRow(row) {
   return {
-    before: String(row.before),
-    after: String(row.after),
-    gas: String(row.gas),
-    sent: String(row.sent),
-    txHash: row.txHash,
-    depositTxHash: row.depositTxHash || "",
-    redeemTxHash: row.redeemTxHash || "",
-    grantTxHash: row.grantTxHash || "",
-    depositBlockNumber: String(row.depositBlockNumber || 0n),
-    redeemBlockNumber: String(row.redeemBlockNumber || 0n),
-    depositGasUsed: String(row.depositGasUsed || 0n),
-    redeemGasUsed: String(row.redeemGasUsed || 0n),
-    shmonReceived: String(row.shmonReceived || 0n),
-    shmonAfterRedeem: String(row.shmonAfterRedeem || 0n),
+    before: String(requiredUint(row.before, "before")),
+    after: String(requiredUint(row.after, "after")),
+    gas: String(requiredUint(row.gas, "gas")),
+    sent: String(requiredUint(row.sent, "sent")),
+    txHash: optionalHashString(row.txHash, "txHash") || row.txHash,
+    depositTxHash: optionalHashString(row.depositTxHash, "depositTxHash"),
+    redeemTxHash: optionalHashString(row.redeemTxHash, "redeemTxHash"),
+    grantTxHash: optionalHashString(row.grantTxHash, "grantTxHash"),
+    depositBlockNumber: String(optionalUint(row.depositBlockNumber, "depositBlockNumber")),
+    redeemBlockNumber: String(optionalUint(row.redeemBlockNumber, "redeemBlockNumber")),
+    depositGasUsed: String(optionalUint(row.depositGasUsed, "depositGasUsed")),
+    redeemGasUsed: String(optionalUint(row.redeemGasUsed, "redeemGasUsed")),
+    shmonReceived: String(optionalUint(row.shmonReceived, "shmonReceived")),
+    shmonAfterRedeem: String(optionalUint(row.shmonAfterRedeem, "shmonAfterRedeem")),
     status: row.status || "",
     at: row.at,
     ...(typeof row.piggyId === "string" && row.piggyId.trim() !== ""

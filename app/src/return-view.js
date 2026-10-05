@@ -7,6 +7,15 @@
 
 import { createReturnPlayback, RETURN_GEOMETRY } from "./piggy-return.js";
 
+// [A-768 M-T-1] 사용자가 정한 Piggy 이름은 markup 에 넣기 전에 escape 한다(main.js escapeHtml 과 같은 규칙) — 보이는 글자는 같다.
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 const BOARD_W = 1256;
 const BOARD_H = 772;
 const HOME_CENTER = 1041;   // Home 판의 Piggy 중심
@@ -25,7 +34,7 @@ export function returnSceneMarkup(input) {
            까지 AX 트리에서 빠진다. 장식 파츠는 chog-home.js 쪽에서 개별로 숨긴다. -->
       <div class="homeBoard" id="homeBoard">
         <div class="returnChogHop" id="returnChogHop">${input.homeChogMarkup || ""}</div>
-        <span class="homeChar__name returnName" id="returnName" hidden>${name}</span>
+        <span class="homeChar__name returnName" id="returnName" hidden>${escapeHtml(name)}</span>
       </div>
       <button class="returnTap" id="returnTap" type="button" hidden aria-label="Receipt">
         <span class="returnTap__rows" id="returnRows">${receiptRowsMarkup}</span>

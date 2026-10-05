@@ -11,6 +11,8 @@
 // 가짜 시계로 몬다). 여기는 좁게 "sendPiggy 래퍼가 더는 세션을 죽이지 않는다"만 잰다.
 //   node app/test/s4-send-session-end.mjs
 import { readFileSync } from "node:fs";
+import { keccak256 } from "viem";
+import { preparedSignProblem } from "../src/money-executor.js";
 
 const SRC = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 function cut(startMarker, endMarker) {
@@ -52,13 +54,27 @@ function mockStorage(init = {}) {
   };
 }
 
+
+// [A-707 M2-beta] harness wiring: sign-before-send replaces walletClient.sendTransaction (fake account signs "0xa<nonce>"; the fake node returns keccak256(raw)).
+function fakeLocks() {
+  const held = new Map();
+  return {
+    held,
+    async request(name, opts, cb) {
+      if (held.has(name)) return opts.ifAvailable ? cb(null) : new Promise(() => {});
+      held.set(name, true);
+      try { return await cb({ name, mode: "exclusive" }); } finally { held.delete(name); }
+    },
+    async query() { return { held: [...held.keys()].map((name) => ({ name })), pending: [] }; },
+  };
+}
 // send-lock.mjs 의 makeSend 와 같은 스텁 — endActiveSession/touchAppSession 을 스파이로 넣는다.
 function makeSend({
   storage, settleOutcome = "done", depositThrows = false, simThrows = false,
   grantThrows = false, grantGranted = false, grantVisible = true, allowed = true,
   pendingAtStart = false, inFlightAtStart = false,
 }) {
-  const calls = { grant: 0, sign: 0, sendTx: 0, scenes: [], finished: [], endSession: 0, touchApp: 0 };
+  const calls = { grant: 0, sign: 0, sendTx: 0, prepared: 0, scenes: [], finished: [], endSession: 0, touchApp: 0 };
   const btn = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   const state = { address: "0xabc", txHash: "", mark: "", grantTxHash: "", activeSignerAddress: "0xabc" };
   const env = {
@@ -66,7 +82,9 @@ function makeSend({
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     state,
     isAllowedPiggyRpId: () => allowed,
-    activeAccount: { address: "0xabc" },
+    activeAccount: { address: "0xabc", signTransaction: async (prepared) => `0xa${prepared.nonce}` },
+    navigator: { locks: fakeLocks() },
+    keccak256,
     activeSession: { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } },
     setScene: (...a) => { calls.scenes.push(a); btn.disabled = true; btn.attrs["aria-disabled"] = "true"; },
     recoverPiggy: async () => {}, noteRecoverSuccess() {}, noteRecoverFailure() {}, isCancelledAuthError: () => false,
@@ -78,15 +96,18 @@ function makeSend({
     waitForGrantBalance: async () => grantVisible,
     simulateSend: async () => { if (simThrows) throw new Error("sim reverted"); return { depositTx: {}, before: 1n, beforeShares: 0n }; },
     touchAppSession: () => { calls.touchApp += 1; },
-    createWalletClient: () => ({ sendTransaction: async () => { calls.sendTx += 1; if (depositThrows && calls.sendTx === 1) throw new Error("rpc"); return calls.sendTx === 1 ? "0xdeposit" : "0xredeem"; } }),
+    // [A-768 M-C-1/M-L-1 harness wiring] the fake prepare returns a well-formed Monad-testnet eip1559 request (the pre-sign guard now checks it),
+    // the REAL preparedSignProblem is injected, and the fake node answers the deposit-block nonce read (deposit nonce + 1).
+    createWalletClient: () => ({ prepareTransactionRequest: async () => ({ type: "eip1559", chainId: 10143, gas: 21000n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, nonce: calls.prepared++ }) }),
+    preparedSignProblem,
     MONAD_TESTNET: {}, MONAD_TESTNET_RPC: "", http: () => ({}),
-    crypto: { subtle: { digest: async () => new ArrayBuffer(32) } },
+    crypto: { subtle: { digest: async () => new ArrayBuffer(32) }, getRandomValues: (a) => globalThis.crypto.getRandomValues(a) },
     TextEncoder,
     toHex: () => "00",
     waitForSuccess: async () => ({ status: "success", gasUsed: 1n, effectiveGasPrice: 1n, blockNumber: 1n }),
     readShmonBalance: async () => 5n,
     makeRedeemTx: () => ({}),
-    publicClient: { estimateGas: async () => 1n },
+    publicClient: { estimateGas: async () => 1n, getTransactionCount: async () => calls.prepared, sendRawTransaction: async ({ serializedTransaction }) => { calls.sendTx += 1; if (depositThrows && calls.sendTx === 1) throw new Error("rpc"); return keccak256(serializedTransaction); } },
     settleSend: async () => ({ outcome: settleOutcome, reason: settleOutcome === "done" ? "ok" : "redeem-unconfirmed-or-reverted", receipt: null }),
     finishTrip: (t) => calls.finished.push(t.outcome),
     formatError: (e) => String(e),
@@ -97,8 +118,10 @@ function makeSend({
   };
   if (pendingAtStart) storage.setItem("araso.sendPending", JSON.stringify({ stage: "redeem-broadcast", at: Date.now() }));
   const names = Object.keys(env);
-  const factory = new Function(...names, `${constsSrc}\n${lockSrc}\n${onceSrc}\n${inFlightAtStart ? "sendInFlight = true;" : ""}\nreturn { sendPiggy, computeTripClosed, readSendPending, sendBusy, isInFlight: () => sendInFlight };`);
-  return { ...factory(...names.map((n) => env[n])), calls, btn, env, state };
+  const factory = new Function(...names, `${constsSrc}\n${lockSrc}\n${onceSrc}\n${inFlightAtStart ? "sendInFlight = true;" : ""}\nreturn { sendPiggy, computeTripClosed, readSendPending, sendBusy, holdSendTabLock, isInFlight: () => sendInFlight };`);
+  const made = factory(...names.map((n) => env[n]));
+  made.holdSendTabLock();
+  return { ...made, calls, btn, env, state };
 }
 
 // ── 1. 성공한 실제 send: settle 이 끝난 뒤에도 세션은 살아 있다(bank-style) ────────────────
@@ -127,7 +150,8 @@ function makeSend({
   const t = makeSend({ storage: mockStorage(), depositThrows: true });
   await t.sendPiggy(); await tick();
   check("3. deposit threw: endActiveSession NOT called", t.calls.endSession, 0);
-  check("3. deposit threw: pending stage stays at last written stage (deposit-sending)", JSON.parse(t.env.localStorage.getItem("araso.sendPending") || "{}").stage, "deposit-sending");
+  // [A-707 M2-beta] declared expectation update: the signed deposit record (hash + nonce, phase signed) is written BEFORE the broadcast call, so it is the last written stage.
+  check("3. deposit threw: pending stage stays at last written stage (deposit-broadcast, phase signed)", `${JSON.parse(t.env.localStorage.getItem("araso.sendPending") || "{}").stage}/${JSON.parse(t.env.localStorage.getItem("araso.sendPending") || "{}").phase}`, "deposit-broadcast/signed");
   check("3. deposit threw: SEND_PENDING_KEY not cleared (fail-closed, unchanged)", t.env.localStorage.has("araso.sendPending"), true);
   check("3. deposit threw: lock released (not settling, unchanged)", t.isInFlight(), false);
 }
@@ -201,7 +225,7 @@ function makeSend({
 {
   const t = makeSend({ storage: mockStorage(), settleOutcome: "done" });
   await t.sendPiggy(); await tick(); await tick();
-  check("9. success still writes txHash exactly once (unchanged)", t.env.localStorage.getItem("araso.txHash"), "0xredeem");
+  check("9. success still writes txHash exactly once (unchanged)", t.env.localStorage.getItem("araso.txHash"), keccak256("0xa1"));
   check("9. [A-699 declared update] commitSendSuccess no longer clears pending (finishTrip does, behind the verified receipt)", t.env.localStorage.has("araso.sendPending"), true);
   check("9. success still releases the lock (unchanged)", t.isInFlight(), false);
 }

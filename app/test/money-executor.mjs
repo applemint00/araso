@@ -62,7 +62,8 @@ function rig({ transport = "compat", fail: failPhase = null, throwPhase = null, 
   } else {
     transportObj = {
       kind: TRANSPORT_KIND.VIEM_RAW, account,
-      walletClient: { async prepareTransactionRequest(t) { return { ...t, nonce: 7, gas: 21000n }; } },
+      // [A-768 M-C-1 harness wiring] a well-formed Monad-testnet eip1559 request — the strict path now checks it before signing.
+      walletClient: { async prepareTransactionRequest(t) { return { ...t, type: "eip1559", chainId: 10143, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, nonce: 7, gas: 21000n }; } },
       publicClient: { async sendRawTransaction({ serializedTransaction }) { log.push("broadcast"); calls.sendRaw += 1; assert.equal(serializedTransaction, RAW); if (sendThrows) throw new Error("net"); return rawReturns ?? RAW_HASH; } },
     };
   }

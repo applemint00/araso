@@ -27,6 +27,8 @@
 //   · order on success: receipt build -> durable save (bridge) -> verify by re-read -> compare-and-clear pending (D1);
 //     a failed save keeps the pending record and reports `done_unsaved` / `success_unsaved` so reconcile retries
 //   · reconcile never re-broadcasts and never clears a record it did not verify (unchanged)
+// [A-710 L1] A-693 M-1/M-2 closed for this lane: a run needs an injected exclusive cross-tab lock (`withMoneyLock`,
+// per chain + account) and an app-lock reader (`isAppLocked`); without either it refuses before grant/sign/send.
 //
 // Nothing here is wired into Explore/candidates/handleSecondSend/canSend. The only call site
 // is a LOCAL_ONLY, LOCAL_DEV_ENTRY-gated harness entry point in main.js
@@ -38,10 +40,18 @@
 // (sendPiggyOnce, requestGrant, readSendPending/writeSendPending, classifySendPending,
 // reconcileSendPending, commitSendSuccess, finishTrip — all untouched, all still main.js-only).
 
-import { encodeFunctionData } from "viem";
+import { encodeAbiParameters, encodeFunctionData, keccak256, maxUint256, stringToBytes } from "viem";
 import { executeMoneyStep, TRANSPORT_KIND } from "./money-executor.js";
 import { commitSecondJourneyReceipt } from "./second-journey-receipt-bridge.js";
 import { loadSecondJourneyState, validatePersistenceScope } from "./second-journey-state.js";
+// Aave mainnet lane execution boundary (section at the end of this file). The lane stays the only place that
+// builds the lifecycle and calls the executor; this file only re-checks and seals what reaches it.
+import { authorize } from "./permission-envelope.js";
+import { EXECUTION_MODE, buildExecutionPlan } from "./second-job-readiness.js";
+import {
+  LANE_AMOUNT_CAP_RAW, LANE_FORK_EVIDENCE, LANE_JOB_ID, LANE_RECEIPT_TOKEN, LANE_SELECTORS, LANE_STAGE, MAINNET_LANE_CONFIG,
+  advanceLaneIntent, buildLaneReceipt, loadLaneIntent, reconcileLaneIntent,
+} from "./mainnet-job-lane.js";
 
 // LEGACY single global key (A-663 original). Since A-693 it is only READ for migration/blocking; new records
 // are written to secondSendPendingKey(scope, piggyId). It is deleted only after its record was migrated to the
@@ -109,6 +119,8 @@ function isTxHashLike(value) {
 }
 
 export function makeSecondDepositTx(amountWei, receiver) {
+  // A non-string receiver (e.g. a one-element array that a regex would coerce) is refused here, not passed to the encoder.
+  if (typeof receiver !== "string" || !ADDRESS_RE.test(receiver)) throw new Error("invalid receiver");
   return {
     to: SHMON_ADDRESS,
     value: amountWei,
@@ -118,6 +130,7 @@ export function makeSecondDepositTx(amountWei, receiver) {
 
 export function makeSecondRedeemTx(shares, receiver, owner) {
   if (shares <= 0n) throw new Error("no shMON received");
+  if (typeof receiver !== "string" || !ADDRESS_RE.test(receiver) || typeof owner !== "string" || !ADDRESS_RE.test(owner)) throw new Error("invalid receiver");
   return {
     to: SHMON_ADDRESS,
     data: encodeFunctionData({ abi: SHMON_ABI, functionName: "redeem", args: [shares, receiver, owner] }),
@@ -126,9 +139,17 @@ export function makeSecondRedeemTx(shares, receiver, owner) {
 
 const enc = (v) => encodeURIComponent(String(v)).replace(/\./g, "%2E");
 
+/** [A-710 L1] Exclusive cross-tab money lock name for the Second lane: per chain + account (not per Piggy). */
+export const SECOND_MONEY_LOCK_PREFIX = "araso.secondMoney.v1";
+export function secondMoneyLockName(scope = {}) {
+  const valid = validatePersistenceScope(scope || {});
+  if (valid.error) return null;
+  return `${SECOND_MONEY_LOCK_PREFIX}.${enc(valid.chainId)}.${enc(valid.accountId.toLowerCase())}`;
+}
+
 /** [A-693 D6] Per chain + account + Piggy key (mirrors mainnet-job-lane laneIntentKey). null when the scope is invalid. */
 export function secondSendPendingKey(scope = {}, piggyId = "") {
-  const valid = validatePersistenceScope(scope);
+  const valid = validatePersistenceScope(scope || {});
   const piggy = typeof piggyId === "string" ? piggyId.trim() : "";
   if (valid.error || !piggy) return null;
   return `${SECOND_SEND_PENDING_KEY_PREFIX}.${enc(valid.chainId)}.${enc(valid.accountId)}.${enc(piggy)}`;
@@ -213,6 +234,7 @@ export function clearSecondSendPendingIf(storage, key, expected) {
 // Bound to chain + asset + token(shMON) + Piggy — a reload never cross-reads another Piggy's,
 // another account's, another chain's, or another asset's pending record.
 export function secondSendPendingBelongsToScope(pending, scope = {}) {
+  if (!scope || typeof scope !== "object") return false;
   return (
     !!pending &&
     pending.stage !== "unknown" &&
@@ -263,7 +285,8 @@ function transitionPending(storage, key, from, next) {
 // Stage classifier — mirrors main.js classifySendPending()'s shape (kind:
 // unknown|pending|deposit-confirmed|failed|success) as independent, new code. `readTxReceipt`
 // is injected (address, hash) => { kind: "success"|"reverted"|"pending"|"unknown", receipt? }.
-export async function classifySecondSendPending(pending, { readTxReceipt } = {}) {
+export async function classifySecondSendPending(pending, opts = {}) {
+  const readTxReceipt = opts?.readTxReceipt;
   if (!pending || typeof readTxReceipt !== "function") return { kind: "unknown" };
   const address = pending.address;
   if (typeof address !== "string" || !ADDRESS_RE.test(address)) return { kind: "unknown" };
@@ -332,7 +355,10 @@ function finalizeSuccess({ storage, scope, key, pending, receipt }) {
 // Boot/reopen reconcile. Read-only toward the chain — never re-broadcasts, never clears a pending record that
 // is not a confirmed success whose receipt was durably saved, never touches a record outside the given scope.
 // Result kinds: none | out_of_scope | unknown | pending | failed | success | success_unsaved (saved failed, pending kept).
-export async function reconcileSecondPendingOnBoot({ storage, scope = {}, piggyId, readTxReceipt } = {}) {
+export async function reconcileSecondPendingOnBoot(opts = {}) {
+  // A null options object (or null scope) is an invalid scope, not a TypeError.
+  const { storage, scope: rawScope, piggyId, readTxReceipt } = opts || {};
+  const scope = rawScope || {};
   const key = secondSendPendingKey(scope, piggyId);
   if (!key) return { kind: "unknown", reason: "invalid_scope" };
   const bind = { ...scope, piggyId };
@@ -385,28 +411,40 @@ function mapExecutor(res, names) {
 // The orchestrator. Every side effect is injected and every broadcast goes through money-executor.js; this
 // function itself opens no network connection and holds no credential. The reserving pending write happens
 // BEFORE each broadcast, and a hash is persisted (verified) right after it.
-export async function runSecondPlumbingProof({
-  storage,
-  scope,
-  piggyId,
-  amountWei,
-  confirm,
-  account,
-  walletClient,
-  publicClient,
-  signDigest,
-  requestGrant = null,
-  waitForGrantBalance = null,
-  isAppLocked = null,
-} = {}) {
+export async function runSecondPlumbingProof(opts = {}) {
+  const {
+    storage,
+    scope: rawScope,
+    piggyId,
+    amountWei,
+    confirm,
+    account,
+    walletClient,
+    publicClient,
+    signDigest,
+    requestGrant = null,
+    waitForGrantBalance = null,
+    isAppLocked = null,
+    withMoneyLock = null,
+  } = opts || {};
   // Fail-closed permission gate — nothing below runs without an explicit, caller-confirmed
   // request. This is the plumbing lane's own analogue of "permission missing/mismatch => action0".
   if (confirm !== true) return { outcome: "blocked", reason: "permission_not_confirmed" };
+  // One snapshot of the caller's scope and signer address: a getter that answers differently on a later read
+  // can never change which key / lock / receiver / owner the run uses after validation.
+  let scope;
+  let accountAddress;
+  try {
+    scope = rawScope && typeof rawScope === "object" ? { ...rawScope } : null;
+    accountAddress = account && typeof account === "object" ? account.address : undefined;
+  } catch {
+    return { outcome: "blocked", reason: "invalid_scope" };
+  }
   if (!scope || typeof scope.accountId !== "string" || !scope.accountId || typeof scope.chainId !== "string" || !scope.chainId) {
     return { outcome: "blocked", reason: "invalid_scope" };
   }
   if (typeof piggyId !== "string" || !piggyId) return { outcome: "blocked", reason: "missing_piggy" };
-  if (!account || typeof account.address !== "string" || !ADDRESS_RE.test(account.address)) {
+  if (!account || typeof accountAddress !== "string" || !ADDRESS_RE.test(accountAddress)) {
     return { outcome: "blocked", reason: "missing_account" };
   }
   if (typeof walletClient?.sendTransaction !== "function" || typeof publicClient?.waitForTransactionReceipt !== "function" || typeof publicClient?.readContract !== "function") {
@@ -425,7 +463,34 @@ export async function runSecondPlumbingProof({
   }
   const key = secondSendPendingKey(scope, piggyId);
   if (!key) return { outcome: "blocked", reason: "invalid_scope" };
+  // [A-710 L1 · A-693 M-2] The app-lock state is required, not optional: absent means unknown, and unknown
+  // refuses before any grant / sign / broadcast (previously an absent function meant "not locked").
+  if (typeof isAppLocked !== "function") return { outcome: "blocked", reason: "app_lock_state_unknown" };
+  // [A-710 L1 · A-693 M-1] Cross-tab reservation: the whole run (pending check -> grant -> sign -> deposit ->
+  // redeem -> receipt save) runs inside ONE exclusive lock per chain + account (account level, so two Piggies of
+  // the same address cannot interleave either: A-693 L-1). The lock primitive is injected (main.js exports
+  // nothing; the caller passes a Web Locks wrapper). No primitive = refuse before signing.
+  if (typeof withMoneyLock !== "function") return { outcome: "blocked", reason: "lock_unsupported" };
+  const lockName = secondMoneyLockName(scope);
+  if (!lockName) return { outcome: "blocked", reason: "invalid_scope" };
+  let locked;
+  try {
+    // A throw from the run itself is that run's failure (pending record kept, nothing retried), not a lock problem.
+    locked = await withMoneyLock(lockName, async () => {
+      try {
+        return { ran: true, value: await runUnderLock() };
+      } catch {
+        return { ran: true, value: { outcome: "failed", reason: "run_error" } };
+      }
+    });
+  } catch {
+    return { outcome: "blocked", reason: "lock_unsupported" };
+  }
+  // The body did not run: another tab (or this one) holds the lock, or the primitive did not grant it.
+  if (!locked || locked.ran !== true) return { outcome: "blocked", reason: "lock_busy" };
+  return locked.value;
 
+  async function runUnderLock() {
   // Duplicate-send prevention: ANY readable, unreadable or corrupt record (scoped or legacy) blocks a new
   // broadcast — the caller should reconcile instead, never start a second one. (Re-checked atomically at reserve.)
   const early = blockingPendingReason(storage, scope, piggyId, key);
@@ -436,19 +501,19 @@ export async function runSecondPlumbingProof({
   if (typeof requestGrant === "function") {
     let grant;
     try {
-      grant = await requestGrant(account.address);
+      grant = await requestGrant(accountAddress);
     } catch {
       return { outcome: "failed", reason: "grant_error" };
     }
     if (grant?.granted && typeof waitForGrantBalance === "function") {
-      const visible = await waitForGrantBalance(account.address);
+      const visible = await waitForGrantBalance(accountAddress);
       if (!visible) return { outcome: "failed", reason: "grant_not_visible" };
     }
   }
 
   if (typeof signDigest === "function") {
     try {
-      const bytes = new TextEncoder().encode(`${SECOND_SIGN_MESSAGE_PREFIX}${account.address}`);
+      const bytes = new TextEncoder().encode(`${SECOND_SIGN_MESSAGE_PREFIX}${accountAddress}`);
       const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
       await signDigest(digest);
     } catch {
@@ -459,15 +524,16 @@ export async function runSecondPlumbingProof({
   // [A-693 D8] Share balance BEFORE this deposit, so the redeem amount is only what this deposit minted.
   let shareBefore;
   try {
-    shareBefore = BigInt(await publicClient.readContract({ address: SHMON_ADDRESS, abi: SHMON_ABI, functionName: "balanceOf", args: [account.address] }));
+    shareBefore = BigInt(await publicClient.readContract({ address: SHMON_ADDRESS, abi: SHMON_ABI, functionName: "balanceOf", args: [accountAddress] }));
   } catch {
     return { outcome: "blocked", reason: "balance_before_unreadable" };
   }
 
-  const base = { address: account.address, accountId: scope.accountId, chainId: scope.chainId, piggyId, asset: "shMON", reservationId: newReservationId(), shareBefore: shareBefore.toString() };
+  const base = { address: accountAddress, accountId: scope.accountId, chainId: scope.chainId, piggyId, asset: "shMON", reservationId: newReservationId(), shareBefore: shareBefore.toString() };
   const authorize = () => {
     if (confirm !== true) return { ok: false, reason: "permission_not_confirmed" };
-    if (typeof isAppLocked === "function" && isAppLocked()) return { ok: false, reason: "app_locked" };
+    // [A-710 L1] isAppLocked is guaranteed to be a function here (checked above); a throw stops the step (hook_threw).
+    if (isAppLocked() !== false) return { ok: false, reason: "app_locked" };
     return { ok: true };
   };
   const transport = { kind: TRANSPORT_KIND.VIEM_SEND, walletClient, account };
@@ -475,7 +541,7 @@ export async function runSecondPlumbingProof({
   // ── deposit ────────────────────────────────────────────────────────────────────────────────
   const depositSending = { ...base, stage: "deposit-sending" };
   const dep = await executeMoneyStep({
-    tx: makeSecondDepositTx(amount, account.address),
+    tx: makeSecondDepositTx(amount, accountAddress),
     transport,
     authorize,
     reserve: () => reservePending(storage, scope, piggyId, key, depositSending),
@@ -493,7 +559,7 @@ export async function runSecondPlumbingProof({
   // pending record still at deposit-broadcast (value stays as shMON; reconcile classifies by the stored hash).
   let shareAfter;
   try {
-    shareAfter = BigInt(await publicClient.readContract({ address: SHMON_ADDRESS, abi: SHMON_ABI, functionName: "balanceOf", args: [account.address] }));
+    shareAfter = BigInt(await publicClient.readContract({ address: SHMON_ADDRESS, abi: SHMON_ABI, functionName: "balanceOf", args: [accountAddress] }));
   } catch {
     return { outcome: "failed", reason: "balance_read_error" };
   }
@@ -503,7 +569,7 @@ export async function runSecondPlumbingProof({
   // ── redeem ─────────────────────────────────────────────────────────────────────────────────
   const redeemSending = { ...base, stage: "redeem-sending", depositTxHash, sharesToRedeem: shmonReceived.toString() };
   const red = await executeMoneyStep({
-    tx: makeSecondRedeemTx(shmonReceived, account.address, account.address),
+    tx: makeSecondRedeemTx(shmonReceived, accountAddress, accountAddress),
     transport,
     authorize,
     reserve: () => transitionPending(storage, key, depositBroadcast, redeemSending),
@@ -528,4 +594,373 @@ export async function runSecondPlumbingProof({
     return { outcome: "done_unsaved", reason: fin.reason, receipt, depositTxHash, redeemTxHash, shmonReceived };
   }
   return { outcome: "done", receipt, depositTxHash, redeemTxHash, shmonReceived };
+  }
+}
+
+// ── Aave mainnet lane · execution boundary (local only; live execution stays off) ───────────────────────────
+// mainnet-job-lane.js owns the errand record and the one send (advanceLaneIntent -> money-executor.js). What it
+// does not re-check at the moment of a step, this boundary does, fail-closed, BEFORE the lane is called:
+//   1. the exact permission envelope, revalidated against the STORED errand (not the caller's copy) on every step;
+//   2. current, block-tagged evidence for this step: destination code, reserve state, receipt token, balance,
+//      allowance; a read older than the errand's own reads, outside an explicit freshness window, or naming a
+//      different destination / Piggy / chain is refused;
+//   3. capacity: supply-cap evidence before entry and an explicit exit-liquidity precheck on every step;
+//      missing evidence is refused, never assumed;
+//   4. local amount / gas / fee caps from fields that are actually measured or quoted; gas in USD has no
+//      measured source and stays "UNKNOWN";
+//   5. the calldata the user authorized is rebuilt from the stored errand and compared to the preview; the lane
+//      then receives the rebuilt, frozen copy, so the caller's preview object can never be swapped in later;
+//   6. an unknown outcome stays unknown: no step runs over a *_sending / *_sent / unknown record, and the
+//      reconcile path hands the lane a receipt-only reader (it has no send method at all).
+// Nothing here constructs an executor, picks a network or reads one; MAINNET_LANE_CONFIG must stay
+// { reader: null, liveExecution: false } or every step is refused.
+
+const AAVE_NEXT_STEP = Object.freeze({ [LANE_STAGE.AUTHORIZED]: "approve", [LANE_STAGE.APPROVED]: "supply", [LANE_STAGE.OUT]: "withdraw" });
+const AAVE_TERMINAL = Object.freeze([LANE_STAGE.RETURNED, LANE_STAGE.REVERTED]);
+const AAVE_ENTRY_STEPS = Object.freeze(["approve", "supply"]);
+const AAVE_STEPS = Object.freeze(["approve", "supply", "withdraw"]);
+export const AAVE_GUARD_UNKNOWN = "UNKNOWN";
+
+const isRawUnits = (v) => typeof v === "string" && /^\d+$/.test(v);
+const lowerHex = (v) => (typeof v === "string" ? v.toLowerCase() : "");
+const isPositiveInt = (v) => Number.isSafeInteger(v) && v > 0;
+
+// Plain-data copy taken once: every getter is read exactly one time, so a value that changes between reads
+// (or a Proxy) cannot pass a check and then answer differently at execution. Non-plain input -> null.
+function plainOnce(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  try {
+    const copy = JSON.parse(JSON.stringify(value));
+    return copy && typeof copy === "object" && !Array.isArray(copy) ? copy : null;
+  } catch {
+    return null;
+  }
+}
+
+// The lane's pool for this Piggy, derived again from the Job plan (not from the preview or the read).
+function aaveExpectedPool(profile, piggyAddress) {
+  try {
+    const out = buildExecutionPlan(LANE_JOB_ID, { context: { address: piggyAddress, chain: profile.scope }, executionMode: EXECUTION_MODE.LIVE });
+    const pool = out?.plan?.destination;
+    return typeof pool === "string" && ADDRESS_RE.test(pool) ? pool : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The three step transactions the errand authorizes, rebuilt from its own fields: approve exactly `amountRaw`
+ * to the pool, supply `amountRaw` on behalf of the Piggy, withdraw max to the Piggy. null on any bad field.
+ */
+export function rebuildAaveLaneSteps({ token, pool, piggyAddress, amountRaw } = {}) {
+  if (![token, pool, piggyAddress].every((a) => typeof a === "string" && ADDRESS_RE.test(a))) return null;
+  if (!isRawUnits(amountRaw) || BigInt(amountRaw) <= 0n) return null;
+  const amount = BigInt(amountRaw);
+  const args = (types, values) => encodeAbiParameters(types.map((type) => ({ type })), values).slice(2);
+  return Object.freeze([
+    Object.freeze({ step: "approve", to: token, data: `${LANE_SELECTORS.approve}${args(["address", "uint256"], [pool, amount])}` }),
+    Object.freeze({ step: "supply", to: pool, data: `${LANE_SELECTORS.supply}${args(["address", "uint256", "address", "uint16"], [token, amount, piggyAddress, 0])}` }),
+    Object.freeze({ step: "withdraw", to: pool, data: `${LANE_SELECTORS.withdraw}${args(["address", "uint256", "address"], [token, maxUint256, piggyAddress])}` }),
+  ]);
+}
+
+/** Digest of exactly what is authorized: nonce + each step's target and calldata. */
+export function aavePreviewDigest(nonce, steps) {
+  const rows = (steps || []).map((s) => [s.step, lowerHex(s.to), lowerHex(s.data)]);
+  return keccak256(stringToBytes(JSON.stringify({ nonce: String(nonce), steps: rows })));
+}
+
+function aaveRequestFromIntent(intent) {
+  return { piggyId: intent.piggyId, signerAddress: intent.piggyAddress, action: intent.action, asset: intent.asset, amount: intent.amountRaw, chain: intent.chain, destination: intent.pool };
+}
+
+/**
+ * The exact envelope, re-checked at the execution boundary against the STORED errand. It must be the sealed
+ * object issued for this errand, carry the errand's nonce, have been consumed by this errand's start, still be
+ * inside its lifetime, and match chain / asset / action / amount / destination / Piggy / live signer exactly.
+ * Returns a refusal reason or null.
+ */
+export function revalidateAaveEnvelope({ envelope, intent, signerContext, consumedNonces, nowMs } = {}) {
+  if (!envelope || typeof envelope !== "object") return "no_permission";
+  if (!Object.isFrozen(envelope)) return "envelope_not_sealed";
+  const env = plainOnce(envelope);
+  if (!env) return "no_permission";
+  if (!intent || typeof intent.nonce !== "string" || !intent.nonce) return "errand_nonce_missing";
+  if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) return "permission_clock_missing";
+  if (env.nonce !== intent.nonce) return "envelope_nonce_mismatch";
+  if (!(consumedNonces instanceof Set) || !consumedNonces.has(intent.nonce)) return "envelope_not_consumed_for_errand";
+  const r = authorize(env, aaveRequestFromIntent(intent), { nowMs, consumedNonces: null, context: plainOnce(signerContext) });
+  return r.ok ? null : r.reason || "no_permission";
+}
+
+// The caller's preview must be the one this errand authorized, byte for byte. Read once (plainOnce).
+function aavePreviewProblem(preview, intent, rebuilt) {
+  const p = plainOnce(preview);
+  if (!p) return "preview_unreadable";
+  if (p.nonce !== intent.nonce) return "preview_nonce_mismatch";
+  if (p.amountRaw !== intent.amountRaw) return "preview_amount_mismatch";
+  if (lowerHex(p.target) !== lowerHex(intent.pool) || lowerHex(p.spender) !== lowerHex(intent.pool)) return "preview_destination_mismatch";
+  if (p.piggyId !== intent.piggyId || lowerHex(p.piggyAddress) !== lowerHex(intent.piggyAddress) || p.chainId !== intent.chainId) return "preview_binding_mismatch";
+  if (p.unlimitedApproval !== false || p.reusable !== false || p.liveExecution !== false) return "preview_scope_mismatch";
+  const req = p.request || {};
+  const want = aaveRequestFromIntent(intent);
+  for (const k of Object.keys(want)) {
+    const same = k === "signerAddress" || k === "destination" ? lowerHex(req[k]) === lowerHex(want[k]) : req[k] === want[k];
+    if (!same) return "preview_request_mismatch";
+  }
+  if (!Array.isArray(p.steps) || p.steps.length !== rebuilt.length) return "preview_replaced";
+  for (let i = 0; i < rebuilt.length; i += 1) {
+    const a = p.steps[i];
+    const b = rebuilt[i];
+    if (!a || a.step !== b.step || lowerHex(a.to) !== lowerHex(b.to) || lowerHex(a.data) !== lowerHex(b.data)) return "preview_replaced";
+  }
+  return null;
+}
+
+/**
+ * Pre-send evidence for ONE step. `read` has the readLanePreAction shape, plus `supplyCap` {block, capRaw,
+ * suppliedRaw} and `exitLiquidity` {block, availableRaw} taken at the same block. Freshness is judged only
+ * against what the caller states (maxReadAgeMs, expiresAtMs) and against the errand's own recorded blocks; no
+ * window is assumed here. Returns a refusal reason or null.
+ */
+export function aaveEvidenceProblem({ read, profile, intent, step, expectedPool, maxReadAgeMs, nowMs } = {}) {
+  const r = plainOnce(read);
+  if (!r) return "evidence_missing";
+  if (!intent || !AAVE_STEPS.includes(step)) return "no_step";
+  if (r.stale === true || r.conflict === true) return "stale_evidence";
+  if (r.chainId !== profile?.numericChainId) return "evidence_chain_mismatch";
+  if (!Number.isSafeInteger(r.block) || r.block < 0) return "evidence_block_missing";
+  if (typeof r.source !== "string" || !r.source.endsWith(`@${r.block}`)) return "evidence_block_untagged";
+  if (!Number.isSafeInteger(intent.before?.block)) return "before_block_missing";
+  const recorded = Object.values(intent.steps || {}).map((s) => (Number.isSafeInteger(s?.blockNumber) ? s.blockNumber : -1));
+  if (r.block < Math.max(intent.before.block, ...recorded)) return "stale_evidence";
+  const observedMs = typeof r.observedAt === "string" ? Date.parse(r.observedAt) : NaN;
+  if (!Number.isFinite(observedMs)) return "evidence_time_missing";
+  if (!isPositiveInt(maxReadAgeMs)) return "freshness_window_unknown";
+  if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) return "evidence_clock_missing";
+  if (observedMs > nowMs) return "evidence_from_future";
+  if (nowMs - observedMs > maxReadAgeMs) return "stale_evidence";
+  if (r.expiresAtMs !== undefined && r.expiresAtMs !== null && !(Number.isFinite(r.expiresAtMs) && r.expiresAtMs > nowMs)) return "stale_evidence";
+  if (r.codePresent !== true) return "destination_code_absent";
+  if (!expectedPool || lowerHex(r.pool) !== lowerHex(expectedPool) || lowerHex(r.pool) !== lowerHex(intent.pool)) return "destination_evidence_mismatch";
+  const reserve = r.reserve || {};
+  if (lowerHex(reserve.aTokenAddress) !== lowerHex(LANE_RECEIPT_TOKEN.address)) return "receipt_token_mismatch";
+  if (reserve.decimals !== profile?.usdc?.decimals) return "decimals_mismatch";
+  if (![reserve.active, reserve.frozen, reserve.paused].every((b) => typeof b === "boolean")) return "reserve_state_unreadable";
+  const piggy = r.piggy || {};
+  if (lowerHex(piggy.address) !== lowerHex(intent.piggyAddress)) return "piggy_mismatch";
+  if (!isRawUnits(piggy.usdcRaw) || !isRawUnits(piggy.aTokenRaw) || !isRawUnits(piggy.allowanceRaw)) return "balance_evidence_missing";
+  if (!isRawUnits(intent.amountRaw)) return "amount_not_exact";
+  const amount = BigInt(intent.amountRaw);
+  if (AAVE_ENTRY_STEPS.includes(step)) {
+    if (!reserve.active || reserve.frozen || reserve.paused) return "reserve_not_accepting_supply";
+    if (BigInt(piggy.usdcRaw) < amount) return "balance_below_amount";
+    if (step === "supply" && BigInt(piggy.allowanceRaw) !== amount) return "allowance_not_exact";
+  } else {
+    // Exit needs an active, unpaused reserve and a position to take back.
+    if (!reserve.active || reserve.paused) return "reserve_exit_unavailable";
+    if (BigInt(piggy.aTokenRaw) === 0n) return "no_position_to_exit";
+  }
+  return null;
+}
+
+/**
+ * Capacity, explicit and fail-closed: entry needs supply-cap evidence with room for the amount; every step
+ * needs exit-liquidity evidence covering what would be taken back (the amount at entry, the whole position at
+ * exit). Both must be read at the evidence block. Returns a refusal reason or null.
+ */
+export function aaveCapacityProblem({ read, intent, step } = {}) {
+  const r = plainOnce(read);
+  if (!r || !intent || !AAVE_STEPS.includes(step) || !isRawUnits(intent.amountRaw)) return "evidence_missing";
+  const amount = BigInt(intent.amountRaw);
+  if (AAVE_ENTRY_STEPS.includes(step)) {
+    const cap = r.supplyCap;
+    if (!cap || typeof cap !== "object" || cap.block !== r.block || !isRawUnits(cap.capRaw) || !isRawUnits(cap.suppliedRaw)) return "supply_cap_unknown";
+    if (BigInt(cap.suppliedRaw) + amount > BigInt(cap.capRaw)) return "supply_cap_exceeded";
+  }
+  const exit = r.exitLiquidity;
+  if (!exit || typeof exit !== "object" || exit.block !== r.block || !isRawUnits(exit.availableRaw)) return "exit_liquidity_unknown";
+  const need = step === "withdraw" ? (isRawUnits(r.piggy?.aTokenRaw) ? BigInt(r.piggy.aTokenRaw) : null) : amount;
+  if (need === null) return "exit_liquidity_unknown";
+  if (BigInt(exit.availableRaw) < need) return "exit_liquidity_insufficient";
+  return null;
+}
+
+/**
+ * Local amount / gas / fee caps for ONE step. Inputs are only measured or quoted integers: the lane's amount
+ * cap, the fork-measured gasUsed for the step (a gas limit below it is refused), the caller's quote
+ * {gasLimit, maxFeePerGasWei} and explicit caps {maxGasUnits:{step}, maxFeeWei, amountCapRaw?}. A missing
+ * quote or cap is refused, not defaulted. Gas in USD has no measured source here: always "UNKNOWN".
+ * @returns {{problem: string|null, quoted: object|null}}
+ */
+export function checkAaveFeeGuard({ step, amountRaw, quote, caps } = {}) {
+  if (!AAVE_STEPS.includes(step)) return { problem: "no_step", quoted: null };
+  const c = plainOnce(caps) || {};
+  if (!isRawUnits(amountRaw) || BigInt(amountRaw) <= 0n) return { problem: "amount_not_exact", quoted: null };
+  if (BigInt(amountRaw) > BigInt(LANE_AMOUNT_CAP_RAW)) return { problem: "amount_over_cap", quoted: null };
+  if (c.amountCapRaw !== undefined && (!isRawUnits(c.amountCapRaw) || BigInt(amountRaw) > BigInt(c.amountCapRaw))) return { problem: "amount_over_cap", quoted: null };
+  const q = plainOnce(quote);
+  if (!q || !isRawUnits(q.gasLimit)) return { problem: "gas_quote_unknown", quoted: null };
+  if (!isRawUnits(q.maxFeePerGasWei)) return { problem: "fee_quote_unknown", quoted: null };
+  const measured = LANE_FORK_EVIDENCE.gasUsed[step];
+  const gasLimit = BigInt(q.gasLimit);
+  if (!Number.isSafeInteger(measured) || gasLimit < BigInt(measured)) return { problem: "gas_limit_below_measured", quoted: null };
+  const gasCap = c.maxGasUnits && typeof c.maxGasUnits === "object" ? c.maxGasUnits[step] : undefined;
+  if (!isRawUnits(gasCap)) return { problem: "gas_cap_unknown", quoted: null };
+  if (gasLimit > BigInt(gasCap)) return { problem: "gas_over_cap", quoted: null };
+  if (!isRawUnits(c.maxFeeWei)) return { problem: "fee_cap_unknown", quoted: null };
+  const maxFeeWei = gasLimit * BigInt(q.maxFeePerGasWei);
+  if (maxFeeWei > BigInt(c.maxFeeWei)) return { problem: "fee_over_cap", quoted: null };
+  return {
+    problem: null,
+    quoted: Object.freeze({
+      step,
+      amountRaw,
+      gasLimit: q.gasLimit,
+      maxFeePerGasWei: q.maxFeePerGasWei,
+      maxFeeWei: maxFeeWei.toString(),
+      gasUsd: AAVE_GUARD_UNKNOWN,
+      forkMeasuredGasUsed: measured,
+    }),
+  };
+}
+
+/**
+ * ONE guarded step of the Aave errand. Every check above runs on the STORED errand before the lane is called;
+ * the lane then receives the rebuilt, frozen preview (never the caller's object). A refusal sends nothing.
+ * Unknown outcomes come back with retry:false and next:"reconcile_read_only".
+ */
+export async function advanceAaveLaneGuarded(opts = {}) {
+  const {
+    profile, piggy: rawPiggy, intent: callerIntent, preview, envelope, signerContext, consumedNonces,
+    read, quote, caps, executor, storage, nowMs, nowIso,
+  } = opts || {};
+  const refuse = (reason, extra = {}) => ({ status: "blocked", reason, sent: false, retry: false, ...extra });
+  if (MAINNET_LANE_CONFIG.liveExecution !== false || MAINNET_LANE_CONFIG.reader !== null || profile?.liveExecution !== false) {
+    return refuse("live_execution_disabled");
+  }
+  const piggySnap = plainOnce(rawPiggy);
+  if (!piggySnap || typeof piggySnap.id !== "string" || typeof piggySnap.address !== "string" || !ADDRESS_RE.test(piggySnap.address)) return refuse("missing_piggy");
+  const piggy = { id: piggySnap.id, address: piggySnap.address };
+  const stored = loadLaneIntent(storage, profile, piggy);
+  if (stored.error || !stored.intent) return refuse(stored.error ? "stored_intent_unavailable" : "no_errand", stored.error ? { detail: stored.error } : {});
+  const intent = stored.intent;
+  const given = plainOnce(callerIntent);
+  if (!given || given.nonce !== intent.nonce || given.stage !== intent.stage) return refuse("stored_intent_changed");
+  if (AAVE_TERMINAL.includes(intent.stage)) return { status: "terminal", reason: intent.stage, sent: false, retry: false };
+  const step = AAVE_NEXT_STEP[intent.stage];
+  if (!step) {
+    // *_sending, *_sent or unknown: whether something went out is not known from here. Read, never re-send.
+    return { status: "reconcile_first", reason: "unknown_outcome_must_reconcile", sent: false, retry: false, next: "reconcile_read_only" };
+  }
+  if (lowerHex(intent.token) !== lowerHex(profile?.usdc?.address)) return refuse("asset_mismatch");
+  const expectedPool = aaveExpectedPool(profile, intent.piggyAddress);
+  if (!expectedPool || lowerHex(expectedPool) !== lowerHex(intent.pool)) return refuse("destination_mismatch");
+
+  const envelopeProblem = revalidateAaveEnvelope({ envelope, intent, signerContext, consumedNonces, nowMs });
+  if (envelopeProblem) return refuse(envelopeProblem);
+
+  const rebuilt = rebuildAaveLaneSteps({ token: intent.token, pool: intent.pool, piggyAddress: intent.piggyAddress, amountRaw: intent.amountRaw });
+  if (!rebuilt) return refuse("calldata_unbuildable");
+  const previewProblem = aavePreviewProblem(preview, intent, rebuilt);
+  if (previewProblem) return refuse(previewProblem);
+
+  const c = plainOnce(caps) || {};
+  const evidence = plainOnce(read);
+  const evidenceProblem = aaveEvidenceProblem({ read: evidence, profile, intent, step, expectedPool, maxReadAgeMs: c.maxReadAgeMs, nowMs });
+  if (evidenceProblem) return refuse(evidenceProblem);
+  const capacityProblem = aaveCapacityProblem({ read: evidence, intent, step });
+  if (capacityProblem) return refuse(capacityProblem);
+  const fee = checkAaveFeeGuard({ step, amountRaw: intent.amountRaw, quote, caps: c });
+  if (fee.problem) return refuse(fee.problem);
+
+  const sealed = Object.freeze({ nonce: intent.nonce, steps: rebuilt });
+  const facts = { step, previewDigest: aavePreviewDigest(intent.nonce, rebuilt), quoted: fee.quoted, evidenceBlock: evidence.block };
+  let out;
+  try {
+    out = await advanceLaneIntent({ profile, piggy, intent, preview: sealed, executor, storage, nowIso });
+  } catch {
+    // A throw after the lane started cannot prove nothing was sent: unknown, reconcile by reading.
+    return { status: "unknown", reason: "lane_threw", retry: false, next: "reconcile_read_only", ...facts };
+  }
+  if (out.status === "blocked") return { ...out, sent: false, retry: false, ...facts };
+  if (out.status === "unknown" || out.status === "pending" || out.status === "unsaved" || out.status === "reconcile_first") {
+    return { ...out, retry: false, next: "reconcile_read_only", ...facts };
+  }
+  return { ...out, retry: false, ...facts };
+}
+
+/**
+ * Read-only reconcile of the stored errand. The lane gets a reader with `receipt` only: there is no send method
+ * to call, so a reconcile can never broadcast. "*_sending" becomes unknown; "*_sent" reads its receipt.
+ */
+export async function reconcileAaveLaneReadOnly(opts = {}) {
+  const { profile, piggy: rawPiggy, executor, storage, nowIso } = opts || {};
+  const piggySnap = plainOnce(rawPiggy);
+  if (!piggySnap || typeof piggySnap.id !== "string" || typeof piggySnap.address !== "string") return { status: "unknown", reason: "missing_piggy", sent: false, retry: false };
+  const piggy = { id: piggySnap.id, address: piggySnap.address };
+  const stored = loadLaneIntent(storage, profile, piggy);
+  if (stored.error || !stored.intent) return { status: "unknown", reason: stored.error ? "stored_intent_unavailable" : "no_errand", sent: false, retry: false };
+  const txReceiptReader = executor && typeof executor.receipt === "function" ? Object.freeze({ receipt: (hash) => executor.receipt(hash) }) : null;
+  let out;
+  try {
+    out = await reconcileLaneIntent({ profile, piggy, intent: stored.intent, executor: txReceiptReader, storage, nowIso });
+  } catch {
+    return { status: "unknown", reason: "reconcile_threw", sent: false, retry: false };
+  }
+  return { ...out, sent: false, retry: false };
+}
+
+/**
+ * The finished errand's Receipt with QUOTED and MEASURED kept apart. `quotes` is {approve, supply, withdraw},
+ * each the `quoted` object a guarded step returned. A measured field never falls back to a quote, and a quote
+ * never stands in for a measurement: what was not measured is "UNKNOWN".
+ */
+export function buildAaveGuardedReceipt({ profile, piggy, intent, after, nowIso, quotes } = {}) {
+  const built = buildLaneReceipt({ profile, piggy: piggy || {}, intent, after, nowIso });
+  if (!built.receipt) return { record: null, reason: built.reason };
+  const rc = built.receipt;
+  const q = plainOnce(quotes) || {};
+  const quotedStep = (s) => {
+    const x = q[s] && typeof q[s] === "object" ? q[s] : {};
+    return Object.freeze({
+      gasLimit: isRawUnits(x.gasLimit) ? x.gasLimit : AAVE_GUARD_UNKNOWN,
+      maxFeePerGasWei: isRawUnits(x.maxFeePerGasWei) ? x.maxFeePerGasWei : AAVE_GUARD_UNKNOWN,
+      maxFeeWei: isRawUnits(x.maxFeeWei) ? x.maxFeeWei : AAVE_GUARD_UNKNOWN,
+    });
+  };
+  const measuredGas = (s) => (Number.isSafeInteger(rc.gasUsed?.[s]) ? rc.gasUsed[s] : AAVE_GUARD_UNKNOWN);
+  return {
+    record: Object.freeze({
+      schema: "araso_mainnet_lane_receipt_split_v1",
+      eventId: rc.eventId,
+      outcome: rc.outcome,
+      evidenceClass: rc.evidenceClass,
+      executionMode: rc.executionMode,
+      quoted: Object.freeze({
+        source: "pre_send_quote",
+        amountRaw: rc.amountRaw,
+        returnRaw: AAVE_GUARD_UNKNOWN,
+        gas: Object.freeze(Object.fromEntries(AAVE_STEPS.map((s) => [s, quotedStep(s)]))),
+        gasUsd: AAVE_GUARD_UNKNOWN,
+      }),
+      measured: Object.freeze({
+        source: "step_receipts_and_after_read",
+        usdcBeforeRaw: rc.usdcBeforeRaw,
+        usdcAfterRaw: rc.usdcAfterRaw,
+        deltaRaw: rc.deltaRaw,
+        receiptTokenBeforeRaw: rc.receiptTokenBeforeRaw,
+        receiptTokenAfterRaw: rc.receiptTokenAfterRaw,
+        allowanceAfterRaw: rc.allowanceAfterRaw,
+        beforeBlock: rc.beforeBlock,
+        afterBlock: rc.afterBlock,
+        gasUsed: Object.freeze(Object.fromEntries(AAVE_STEPS.map((s) => [s, measuredGas(s)]))),
+        gasUsd: AAVE_GUARD_UNKNOWN,
+        txs: Object.freeze({ approve: rc.approveTx, supply: rc.supplyTx, withdraw: rc.withdrawTx }),
+      }),
+      unmeasured: Object.freeze([...rc.unmeasured]),
+      laneReceipt: rc,
+    }),
+    reason: null,
+  };
 }

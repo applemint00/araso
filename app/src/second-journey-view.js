@@ -13,6 +13,7 @@
 
 import { sendCardButtonMarkup } from "./send-card.js";
 import { EXPLORE_ERRANDS } from "./job-feed.js";
+import { JOB_FAMILY } from "./second-job-readiness.js";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -227,7 +228,23 @@ export const SECOND_ACTION_TITLES_EN = Object.freeze({
 // [A-421 박스] Explore-many → Send-one: 행동 카드는 선택된 destination 의 행동 **하나**만.
 // errandIds 가 하나면 그것, 여럿이면 destination.laneId 와 같은 lane 의 errand(job-feed.js
 // EXPLORE_ERRANDS 기존 값). 근거가 없으면 빈칸(SOURCE_MISSING) — 임의 선택 0.
+// [A-723] Second lane candidate titles follow the Job FAMILY (experience), not the Explore errand: grow_stable
+// and grow_delayed both sit under the one "grow" errand, so the errand title collapsed them into two identical
+// "put some money to work" rows (A-719). Family semantics = second-job-readiness.js JOB_FAMILY (:302 맡기고 바로
+// 찾기 / :303 며칠 나갔다 오기 / :305 값을 따라가는 것 갖기). English wording = Owner correction 2026-10-04 (INBOX
+// A-723 "Approved visible candidate wording", newest wins) — no other canon source carries these strings.
+// One title per family: same-family alternatives (Curvance/Neverland behind Aave) never get a row of their own.
+// No asset/protocol names here — those live only in the selected-Job explanation. protect keeps its errand title.
+export const SECOND_FAMILY_TITLES_EN = Object.freeze({
+  [JOB_FAMILY.GROW_STABLE]: "a quick trip",
+  [JOB_FAMILY.GROW_DELAYED]: "stay out a little longer",
+  [JOB_FAMILY.OWN_RWA]: "try the stock market",
+});
+
 export function secondActionTitle(destination) {
+  if (destination?.laneCandidate === true && Object.hasOwn(SECOND_FAMILY_TITLES_EN, destination.family ?? "")) {
+    return SECOND_FAMILY_TITLES_EN[destination.family];
+  }
   const ids = destination?.errandIds || [];
   let id = ids.length === 1 ? ids[0] : null;
   if (!id && destination?.laneId) {
@@ -241,10 +258,48 @@ export function secondActionTitle(destination) {
   return (id && SECOND_ACTION_TITLES_EN[id]) || "";
 }
 
+// Second lane candidates → candidate rows for the existing candidates card (product Explore).
+// `rows` come from mainnet-job-lane.js exploreCandidateRows() (A-710 decisions × the readiness family table ×
+// A-715 descriptor view). A row is shown only when its family belongs to an errand the user picked on the Explore
+// Paper (family "grow_stable" → lane "Grow", "protect" → "Protect", "own_rwa" → "Own"; the errand list's own
+// `lane` field, nothing restated). The cut to `max` is presentation only: the decided universe stays whole in
+// the caller. derivedStatus is "NAH" or "UNKNOWN" — never JOB_READY, so paperStatusCopy never says "Send this one?".
+export function exploreCandidateDestinations(rows = [], { selectedErrandIds = [], max = 3 } = {}) {
+  const selected = new Set(Array.isArray(selectedErrandIds) ? selectedErrandIds : []);
+  const out = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (!row || typeof row.candidateId !== "string" || typeof row.family !== "string") continue;
+    const lane = row.family.split("_")[0];
+    const errand = EXPLORE_ERRANDS.find((e) => String(e.lane || "").toLowerCase() === lane);
+    if (!errand || !selected.has(errand.id)) continue;
+    out.push({
+      id: row.candidateId,
+      laneCandidate: true,
+      family: row.family,
+      laneId: lane,
+      errandIds: [errand.id],
+      derivedStatus: row.status === "nah" ? "NAH" : "UNKNOWN",
+    });
+  }
+  // A-727 diversity: pass 1 takes at most one row per selected lane (existing row order), pass 2 fills the remaining
+  // slots with the other rows (existing row order). Output order = pass order. The cut to `max` stays last.
+  const seenLanes = new Set();
+  const pass1 = [];
+  const pass2 = [];
+  for (const d of out) {
+    if (seenLanes.has(d.laneId)) pass2.push(d);
+    else { seenLanes.add(d.laneId); pass1.push(d); }
+  }
+  return pass1.concat(pass2).slice(0, Math.max(0, Number.isInteger(max) ? max : 3));
+}
+
 // 조건별 화면 구분(APP_HANDOFF.md:21-24): 수령형(맡길 금액 칸 없음) · 지연귀환형 ·
 // 금액형. 판정은 이미 job-feed.js 가 만든 destination 값만 읽는다(새 판정 0).
 export function readinessCardKind(destination) {
   if (!destination) return "amount";
+  // Second lane candidate (product Explore): nothing is runnable yet, so no amount/claim field is drawn —
+  // the card keeps the chosen action, the Paper status line and a disabled Send only.
+  if (destination.laneCandidate === true) return "status";
   if (destination.laneId === "collect") return "collect";
   if (destination.capabilityContext?.returnModel?.type === "delayed") return "wait";
   return "amount";
@@ -371,7 +426,7 @@ function readinessStepMarkup(model) {
     if (readinessCardKind(chosen) === "collect") claimValue = claimValue ?? "(shows here)"; // 값 자리만 표시
   }
   const amountBlock =
-    kind === "collect"
+    kind === "collect" || kind === "status"
       ? ""
       : `
     <section class="amount">

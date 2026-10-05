@@ -41,6 +41,58 @@ export const AMBIENT_CYCLE_S = Object.freeze({
   [S.FLOP_SLEEP]: 2,
 });
 
+// ── [A-744] Wake = the approved Flop→roll→drowsy→sleep sequence played in REVERSE ──────────────────
+// Owner clarification 2026-09-30 (A-656): "Wake may reuse the approved flop sequence in reverse rather
+// than inventing a new animation, subject to source/timing verification. Reduced-motion remains a
+// stable still pose." So there is NO new art and NO new beat here: every wake frame is the SAME forward
+// draw evaluated at the mirrored time  forwardT = durationS - u  (u = seconds since the wake began).
+// The forward draw is a pure function of time (frames/SVGs in public/motion/home-ambient/), hence
+// reversing it is exactly this one subtraction.
+//   forward beats (home_motion_confirmed_20260926 README · main.js ambFlopSleep): Flop 0–1.30 (idle 0–1.00,
+//   squash 1.00–1.24, lean 1.24–1.30, landing from 1.30) · landed rest 1.30–3.00 · right roll 3.00–4.50 ·
+//   drowsy 3.2s · blanket rise 2.4s (arm lift delay .15 dur 1.5) → deep sleep reached at 4.5+3.2+2.4 s.
+//   The reverse of the deep-sleep part is NOT separately recorded in canon, so (per the A-744 card) the
+//   forward timings are reversed as-is: blanket lowers 2.4s, drowsy undoes over 3.2s, roll back 1.5s,
+//   landed rest 1.7s, Flop in reverse 1.3s (lying → seated idle) — 10.1s in all.
+// TRIGGER: DORMANT. No wake trigger (tap / timer / interrupt) is recorded in canon (A656 VERIFY: "Wake
+// trigger UNKNOWN") — Owner-open. So the reverse is implemented and tested but NOTHING in the product starts
+// it: piggyWakePhase() only wakes when a caller passes an explicit `wakeStartS`, and no product caller does.
+// With no start the sleeper behaves exactly as before A-744 (asleep; 77.1s cue then the 64s rest loop).
+// `snapFreeStartS` documents the one start time at which a future trigger could begin without a pose snap
+// (deep sleep 10.1 + one full 64s rest cycle: breath is a 4s period, hold plan a 64s cycle).
+// Runtime cues (WORK/AWAY/RETURN) still pre-empt ambient exactly as before; reduced motion never wakes.
+const WAKE_FORWARD = Object.freeze({ flopS: 1.3, landedUntilS: 3.0, rollUntilS: 4.5, drowsyS: 3.2, blanketRiseS: 2.4 });
+const WAKE_FULL_SLEEP_S = Math.round((WAKE_FORWARD.rollUntilS + WAKE_FORWARD.drowsyS + WAKE_FORWARD.blanketRiseS) * 1000) / 1000;
+const WAKE_REST_CYCLE_S = 64;
+export const PIGGY_WAKE = Object.freeze({
+  forward: WAKE_FORWARD,
+  durationS: WAKE_FULL_SLEEP_S,
+  restCycleS: WAKE_REST_CYCLE_S,
+  wakeStartS: null, // dormant: no recorded trigger
+  snapFreeStartS: WAKE_FULL_SLEEP_S + WAKE_REST_CYCLE_S,
+  // forward time to draw u seconds into the wake (u clamped to [0, durationS])
+  forwardTimeAt(u) {
+    const c = Math.min(WAKE_FULL_SLEEP_S, Math.max(0, Number.isFinite(u) ? u : 0));
+    return WAKE_FULL_SLEEP_S - c;
+  },
+});
+
+// phase of a flop-sleep resident at `elapsedS` seconds into its Home-life cycle.
+//   asleep  → the forward sequence (pre-A-744 mapping: cue 0–77.1s, then the 64s rest loop from 13.1s)
+//   waking  → the same sequence mirrored      awake → seated idle
+// Waking only exists when `wakeStartS` is a finite number (explicit trigger); default null = never wakes.
+// reduced motion = stable still: the preview's persistent sleep pose (cue held at half its 77.1s length).
+export function piggyWakePhase(elapsedS, reduced = false, wakeStartS = null) {
+  if (reduced) return Object.freeze({ phase: "asleep", forwardT: 77.1 * 0.5, awakeS: 0 });
+  const e = Number.isFinite(elapsedS) ? Math.max(0, elapsedS) : 0;
+  const W = PIGGY_WAKE;
+  const asleep = Object.freeze({ phase: "asleep", forwardT: e <= 77.1 ? e : 13.1 + ((e - 13.1) % 64), awakeS: 0 });
+  if (!Number.isFinite(wakeStartS) || e < wakeStartS) return asleep;
+  const u = e - wakeStartS;
+  if (u < W.durationS) return Object.freeze({ phase: "waking", forwardT: W.forwardTimeAt(u), awakeS: 0 });
+  return Object.freeze({ phase: "awake", forwardT: 0, awakeS: u - W.durationS });
+}
+
 function piggyIdOf(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -301,6 +353,12 @@ export function planHomeSlots({ width, seat, chog, foot, paper, brand = null, sa
         ["WN1", at(foot.x - gap - w, foot.y)],
         ["WN2", at(foot.r - w, foot.y - gap - h)],
         ["WN3", at(foot.x, foot.b + gap)],
+        // [A-728 4:3 mid-band coverage] WN2/WN3 need vh ≳ 900 (the fixed 456.9px foot is centred),
+        // so at 1024×768 / 1180×820 only SEAT+WN1 fit and a 3rd Piggy went card-only. WA1 (the
+        // already-adopted 1440 lower-left seat-floor slot, same formula) is a FALLBACK: it is tried
+        // only when a WN candidate was rejected, so tall mid viewports (700×900, 900×900) keep the
+        // exact measured plan SEAT,WN1..WN3 and their seeded slot preference (homeSlotPreference).
+        ["WA1", at(foot.x - gap - w, seat.y), { fallback: true }],
       ]
       : [
         ["W2", at(foot.r + gap, foot.y)],
@@ -314,7 +372,8 @@ export function planHomeSlots({ width, seat, chog, foot, paper, brand = null, sa
   const seatName = band === "mobile" ? "M0" : band === "mid" ? "SEAT" : "W1";
   const slots = [{ name: seatName, rect: seat, seat: true }];
   const rejected = [];
-  for (const [name, r] of candidates) {
+  for (const [name, r, opt] of candidates) {
+    if (opt?.fallback && !rejected.length) continue;
     const why = [];
     if (!rectInside(r, safe)) why.push("viewport-margin");
     if (rectsTouch(r, chog, gap)) why.push("chog");

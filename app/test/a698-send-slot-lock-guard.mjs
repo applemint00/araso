@@ -16,6 +16,28 @@ function cutFn(name, async = false) {
   if (start < 0) throw new Error(`${name} not found`);
   return MAIN.slice(start, MAIN.indexOf("\n}\n", start) + 2);
 }
+// [A-707 M2-beta] harness wiring only: Send now reserves (sync, before any auth attempt) and confirms the reservation under a short lock before
+// grant. These are the REAL main.js helpers over a fake storage and fake Web Locks; the assertions below are unchanged except where a707 adds.
+function cutRange(startMarker, endMarker) {
+  const start = MAIN.indexOf(startMarker);
+  const end = MAIN.indexOf(endMarker, start);
+  if (start < 0 || end < 0) throw new Error(`range not found: ${startMarker}`);
+  return MAIN.slice(start, end);
+}
+const RESERVE_SRC = `const SEND_PENDING_KEY = "araso.sendPending"; const SEND_PENDING_STAGES = ["reserved", "deposit-sending", "deposit-broadcast", "redeem-sending", "redeem-broadcast"];\n` +
+  cutFn("readSendPending") + "\n" + cutFn("writeSendPending") + "\n" + cutRange("const SEND_LOCK_NAME", "// 보낸 뒤의 phase 갱신은");
+function fakeLocks() {
+  const held = new Map();
+  return {
+    held,
+    async request(name, opts, cb) {
+      if (held.has(name)) return opts.ifAvailable ? cb(null) : new Promise(() => {});
+      held.set(name, true);
+      try { return await cb({ name, mode: "exclusive" }); } finally { held.delete(name); }
+    },
+    async query() { return { held: [...held.keys()].map((name) => ({ name })), pending: [] }; },
+  };
+}
 const FAIL_COPY = ["birth", "Chog could not wake Piggy.", ""];
 const flush = () => new Promise((r) => setImmediate(r));
 
@@ -24,6 +46,12 @@ function world({ session = false, locked = false, unsupported = false, recover =
   let deferred;
   const ctx = {
     calls,
+    localStorage: (() => { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; })(),
+    navigator: { locks: fakeLocks() },
+    crypto: globalThis.crypto,
+    keccak256: () => "0x" + "ab".repeat(32),
+    MONAD_TESTNET: { id: 10143 },
+    publicClient: { sendRawTransaction: async () => { calls.sendTx += 1; return "0x"; } },
     state: { address: "0xabc", appLock: locked ? { phase: "waiting", cancelled: false } : null, credential: { credentialId: "c" }, scene: "sendstay", authPhase: "x", authCancelled: true },
     activeAccount: session ? { address: "0xabc" } : null,
     activeSession: session ? { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } } : null,
@@ -54,14 +82,16 @@ function world({ session = false, locked = false, unsupported = false, recover =
   vm.createContext(ctx);
   vm.runInContext(
     `let authAttempt = null; let platformAuthInflight = null;\n` +
-      [cutFn("trackPlatformAuth"), cutFn("beginAuthAttempt"), cutFn("boundAuthAttempt"), cutFn("finishAuthAttempt"), cutFn("invalidateLiveAuthAttempt"), cutFn("lockAppAfterIdle"), cutFn("sendPiggyOnce", true)].join("\n") +
-      `\nglobalThis.__f = { sendPiggyOnce, lockAppAfterIdle, getAttempt: () => authAttempt, getInflight: () => platformAuthInflight, setAttempt: (a) => { authAttempt = a; }, setInflight: (v) => { platformAuthInflight = v; } };`,
+      RESERVE_SRC + "\n" + [cutFn("trackPlatformAuth"), cutFn("beginAuthAttempt"), cutFn("boundAuthAttempt"), cutFn("finishAuthAttempt"), cutFn("invalidateLiveAuthAttempt"), cutFn("lockAppAfterIdle"), cutFn("sendPiggyOnce", true)].join("\n") +
+      `\nholdSendTabLock();\nglobalThis.__f = {reservation: () => sendReservation, pending: () => readSendPending(),  sendPiggyOnce, lockAppAfterIdle, getAttempt: () => authAttempt, getInflight: () => platformAuthInflight, setAttempt: (a) => { authAttempt = a; }, setInflight: (v) => { platformAuthInflight = v; } };`,
     ctx,
   );
   if (preAttempt) ctx.__f.setAttempt({ kind: "check", live: true });
   if (preInflight) ctx.__f.setInflight({});
   return { ctx, calls, f: ctx.__f, settle: () => deferred };
 }
+// [A-707 r2] this tab's own pre-lock reservation record (araso.sendPending.reserve.<tabId>), or null.
+const tabRes = (w) => { const k = w.f.reservation()?.key; const raw = k ? w.ctx.localStorage.getItem(k) : null; return raw ? JSON.parse(raw) : null; };
 const scene = (calls, i = -1) => JSON.stringify(calls.scenes.at(i));
 const failed = (calls) => scene(calls) === JSON.stringify(FAIL_COPY);
 
@@ -92,7 +122,9 @@ for (const [label, opt] of [["authAttempt live (Check/Open)", { preAttempt: true
   const w = world({ recover: "pending" });
   const p1 = w.f.sendPiggyOnce();
   await w.f.sendPiggyOnce();
-  check("second send during live recovery is refused (1 recover total)", w.calls.recover === 1 && failed(w.calls));
+  // [A-707 M2-beta re-pin, named reason] the reservation record (written before the attempt) now refuses a second send in the same tab before the
+  // attempt-slot refusal is reached: same single-recover guarantee, now with the existing busy card instead of the failure card.
+  check("second send during live recovery is refused (1 recover total, existing busy card)", w.calls.recover === 1 && JSON.stringify(w.calls.scenes.at(-1)) === JSON.stringify(["sendstay", "Piggy is home.", "Confirmation is still catching up."]));
   w.settle().resolve(); await p1;
   check("first send continues to grant after its own recovery", w.calls.grant === 1 && w.f.getAttempt() === null);
 }
@@ -149,6 +181,53 @@ for (const [label, opt] of [["authAttempt live (Check/Open)", { preAttempt: true
   check("no bare unbounded recoverPiggy() in sendPiggyOnce; recoverPiggy only inside trackPlatformAuth+boundAuthAttempt", !/await recoverPiggy\(\)/.test(src) && /boundAuthAttempt\(attempt, trackPlatformAuth\(recoverPiggy\(\{ isCurrent: \(\) => attempt\.live \}\)\)\)/.test(src));
   check("every exit after beginAuthAttempt finishes the attempt (catch + success path)", (src.match(/finishAuthAttempt\(attempt\)/g) || []).length === 2);
   check("no new user copy: only existing setScene strings", !/setScene\("[a-z]+", "(?!Piggy is waking up\.|Piggy is asking to go out\.|Chog could not wake Piggy\.|Not from here\.|Piggy can't go out yet\.|Piggy went out\.|relayer unreachable|Piggy is home|Piggy stayed)/.test(src.slice(0, src.indexOf("requestGrant("))));
+}
+// 13 [A-707 M2-beta] reservation lifecycle at the A-698 exits (the new rows; every row above is unchanged)
+{
+  const w = world({ recover: "pending" });
+  const p = w.f.sendPiggyOnce();
+  // [A-707 r2 re-baseline, named reason: tab-scoped reservation] the pre-passkey reservation now lives ONLY in this tab's key
+  // (araso.sendPending.reserve.<tabId>); the shared araso.sendPending is written only under the exclusive lock (confirm), so it is still empty here.
+  check("A-707 reservation record exists while the recovery passkey is pending (written before beginAuthAttempt, 0 grant)", tabRes(w)?.stage === "reserved" && w.f.pending() === null && w.f.getAttempt()?.kind === "send" && w.calls.grant === 0);
+  w.f.lockAppAfterIdle();
+  await p;
+  check("A-707 stale attempt (idle lock invalidated it): reservation cleared, nothing signed", w.f.pending() === null && tabRes(w) === null && w.calls.sign === 0 && w.calls.sendTx === 0);
+}
+{
+  const w = world({ recover: "cancel" });
+  await w.f.sendPiggyOnce();
+  check("A-707 recover cancelled: reservation cleared", w.f.pending() === null && tabRes(w) === null);
+}
+{
+  const w = world({ recover: "pending" });
+  const p = w.f.sendPiggyOnce();
+  w.calls.timers[0]();
+  await p;
+  check("A-707 recover timeout: reservation cleared", w.f.pending() === null && tabRes(w) === null);
+}
+{
+  const w = world({ preAttempt: true });
+  await w.f.sendPiggyOnce();
+  check("A-707 attempt-slot refusal: reservation cleared and the other flow's attempt untouched", w.f.pending() === null && tabRes(w) === null && w.f.getAttempt()?.kind === "check");
+}
+{
+  const w = world({ recover: "resolve" });
+  const p = w.f.sendPiggyOnce();
+  w.ctx.state.appLock = { phase: "waiting", cancelled: false };
+  await p;
+  check("A-707 lock guard stop: reservation cleared, 0 grant / 0 sign / 0 broadcast", w.f.pending() === null && w.calls.grant === 0 && w.calls.sign === 0 && w.calls.sendTx === 0);
+}
+{
+  const w = world({ session: true });
+  await w.f.sendPiggyOnce();
+  check("A-707 grant failure (live session): reservation cleared before the failure card", w.f.pending() === null && w.calls.grant === 1);
+}
+{
+  const src = cutFn("sendPiggyOnce", true);
+  const at = (x) => src.indexOf(x);
+  check("A-707 order: reserveSend() -> platformAuthInflight refusal -> beginAuthAttempt -> ... -> confirmSendReservation -> appLock guard -> requestGrant, with no async wait before the reservation",
+    at("reserveSend()") > 0 && at("reserveSend()") < at("platformAuthInflight") && at("platformAuthInflight") < at('beginAuthAttempt("send")') &&
+    at("confirmSendReservation(") > at("finishAuthAttempt(attempt)") && at("confirmSendReservation(") < at("if (state.appLock)") && at("if (state.appLock)") < at("requestGrant(") && !/await|setTimeout/.test(src.slice(0, at("reserveSend()"))));
 }
 console.log(`\nA-698: ${pass}/${pass + fail} PASS`);
 if (fail) process.exitCode = 1;

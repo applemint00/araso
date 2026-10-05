@@ -2,6 +2,8 @@
 //   node app/test/send-error-boundary.mjs
 // send-lock.mjs 와 같은 방식: main.js 실제 소스를 잘라 스텁 위에서 실행(로직 재작성 0).
 import { readFileSync } from "node:fs";
+import { keccak256 } from "viem";
+import { preparedSignProblem } from "../src/money-executor.js";
 
 const SRC = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 function cut(startMarker, endMarker) {
@@ -24,6 +26,20 @@ function check(label, got, want) {
   else { console.log(`FAIL  ${label} — got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`); fail += 1; }
 }
 const tick = () => new Promise((r) => setTimeout(r, 0));
+// [A-707 M2-beta] harness wiring: sign-before-send replaces walletClient.sendTransaction (fake account signs "0xa<nonce>"; the fake node returns keccak256(raw)).
+function fakeLocks() {
+  const held = new Map();
+  return {
+    held,
+    async request(name, opts, cb) {
+      if (held.has(name)) return opts.ifAvailable ? cb(null) : new Promise(() => {});
+      held.set(name, true);
+      try { return await cb({ name, mode: "exclusive" }); } finally { held.delete(name); }
+    },
+    async query() { return { held: [...held.keys()].map((name) => ({ name })), pending: [] }; },
+  };
+}
+
 function mockStorage() {
   const m = new Map();
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), dump: () => [...m.entries()] };
@@ -46,7 +62,7 @@ function leakyError() {
 
 function makeSend({ grantGranted = false, balances = [], simThrows = false, sendThrows = false }) {
   const storage = mockStorage();
-  const calls = { scenes: [], sign: 0, sendTx: 0, sim: 0, balanceReads: 0 };
+  const calls = { scenes: [], sign: 0, sendTx: 0, prepared: 0, sim: 0, balanceReads: 0 };
   const btn = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   let bi = 0;
   const env = {
@@ -54,21 +70,26 @@ function makeSend({ grantGranted = false, balances = [], simThrows = false, send
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     state: { address: LEAK.addr, txHash: "", mark: "", grantTxHash: "" },
     isAllowedPiggyRpId: () => true,
-    activeAccount: { address: LEAK.addr },
+    activeAccount: { address: LEAK.addr, signTransaction: async (prepared) => `0xa${prepared.nonce}` },
+    navigator: { locks: fakeLocks() },
+    keccak256,
     activeSession: { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } },
     setScene: (...a) => { calls.scenes.push(a); btn.disabled = true; },
     recoverPiggy: async () => {}, noteRecoverSuccess() {}, noteRecoverFailure() {}, isCancelledAuthError: () => false,
     requestGrant: async () => ({ granted: grantGranted, txHash: grantGranted ? "0xgrant" : "" }),
     simulateSend: async () => { calls.sim += 1; if (simThrows) throw leakyError(); return { depositTx: {}, before: 1n, beforeShares: 0n }; },
     touchAppSession() {}, // [A-556] rename: touchSession -> touchAppSession (app-idle only, harness wiring)
-    createWalletClient: () => ({ sendTransaction: async () => { calls.sendTx += 1; if (sendThrows) throw leakyError(); return "0xhash"; } }),
+    // [A-768 M-C-1/M-L-1 harness wiring] the fake prepare returns a well-formed Monad-testnet eip1559 request (the pre-sign guard now checks it),
+    // the REAL preparedSignProblem is injected, and the fake node answers the deposit-block nonce read (deposit nonce + 1).
+    createWalletClient: () => ({ prepareTransactionRequest: async () => ({ type: "eip1559", chainId: 10143, gas: 21000n, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, nonce: calls.prepared++ }) }),
+    preparedSignProblem,
     MONAD_TESTNET: { id: 10143 }, MONAD_TESTNET_RPC: "", http: () => ({}),
-    crypto: { subtle: { digest: async () => new ArrayBuffer(32) } },
+    crypto: { subtle: { digest: async () => new ArrayBuffer(32) }, getRandomValues: (a) => globalThis.crypto.getRandomValues(a) },
     TextEncoder, toHex: () => "00",
     waitForSuccess: async () => ({ status: "success", gasUsed: 1n, effectiveGasPrice: 1n, blockNumber: 1n }),
     readShmonBalance: async () => 5n,
     makeRedeemTx: () => ({}),
-    publicClient: { estimateGas: async () => 1n, getBalance: async () => { calls.balanceReads += 1; return balances[Math.min(bi++, balances.length - 1)] ?? 0n; } },
+    publicClient: { estimateGas: async () => 1n, getTransactionCount: async () => calls.prepared, sendRawTransaction: async ({ serializedTransaction }) => { calls.sendTx += 1; if (sendThrows) throw leakyError(); return keccak256(serializedTransaction); }, getBalance: async () => { calls.balanceReads += 1; return balances[Math.min(bi++, balances.length - 1)] ?? 0n; } },
     settleSend: async () => ({ outcome: "done", reason: "ok", receipt: null }),
     finishTrip: () => {},
     formatError: (e) => String(e),
@@ -78,8 +99,10 @@ function makeSend({ grantGranted = false, balances = [], simThrows = false, send
     endActiveSession: () => { calls.endSession = (calls.endSession || 0) + 1; },
   };
   const names = Object.keys(env);
-  const factory = new Function(...names, `${safeErrSrc}\n${waitSrc}\n${pendingConsts}\n${lockSrc}\n${onceSrc}\nreturn { sendPiggy, recordSafeError, waitForGrantBalance };`);
-  return { ...factory(...names.map((n) => env[n])), calls, storage, btn };
+  const factory = new Function(...names, `${safeErrSrc}\n${waitSrc}\n${pendingConsts}\n${lockSrc}\n${onceSrc}\nreturn { sendPiggy, recordSafeError, waitForGrantBalance, holdSendTabLock };`);
+  const made = factory(...names.map((n) => env[n]));
+  made.holdSendTabLock();
+  return { ...made, calls, storage, btn };
 }
 const noLeak = (text) => Object.values(LEAK).every((v) => !String(text).includes(v));
 
