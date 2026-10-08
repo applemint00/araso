@@ -58,7 +58,12 @@ function rig({ transport = "compat", fail: failPhase = null, throwPhase = null, 
   if (transport === "compat") {
     transportObj = { kind: TRANSPORT_KIND.LANE_EXECUTOR, executor: { async send() { log.push("broadcast"); calls.send += 1; if (sendThrows) throw new Error("net"); return { hash: sendReturns }; } } };
   } else if (transport === "viem_send") {
-    transportObj = { kind: TRANSPORT_KIND.VIEM_SEND, account, walletClient: { async sendTransaction(t) { log.push("broadcast"); calls.sendTx += 1; assert.equal(t.account, account); if (sendThrows) throw new Error("net"); return sendReturns; } } };
+    // [A-791 harness wiring] VIEM_SEND now prepares first and runs the A-768 pre-sign assertion before sendTransaction, so the rig
+    // returns a well-formed Monad-testnet eip1559 request (hostile prepares are asserted separately in a791-second-prelive-closeout).
+    transportObj = { kind: TRANSPORT_KIND.VIEM_SEND, account, walletClient: {
+      async prepareTransactionRequest(t) { return { ...t, type: "eip1559", chainId: 10143, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, nonce: 7, gas: 21000n }; },
+      async sendTransaction(t) { log.push("broadcast"); calls.sendTx += 1; assert.equal(t.account, account); if (sendThrows) throw new Error("net"); return sendReturns; },
+    } };
   } else {
     transportObj = {
       kind: TRANSPORT_KIND.VIEM_RAW, account,

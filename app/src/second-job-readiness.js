@@ -628,6 +628,9 @@ export function readDestinationReturnEvidence(jobId, { observation = null, nowMs
     block: Number.isInteger(observation.block) ? observation.block : null,
     // [A-579] the values read at that block, so the Receipt shows what was found where.
     ...(Number.isInteger(observation.chainId) ? { chainId: observation.chainId } : {}),
+    // [A-859] finalized pin: only carried when the observation says it is finalized AND has a well-formed hash.
+    ...(observation.finality === "finalized" && typeof observation.blockHash === "string" && /^0x[0-9a-f]{64}$/.test(observation.blockHash)
+      ? { finality: "finalized", blockHash: observation.blockHash, tagUsed: "finalized" } : {}),
     ...(typeof observation.codePresent === "boolean" ? { codePresent: observation.codePresent } : {}),
     ...(Number.isInteger(observation.exitFeeBips) ? { exitFeeBips: observation.exitFeeBips } : {}),
     signal: signal || "ok",
@@ -662,6 +665,9 @@ export function readDestinationReturnEvidence(jobId, { observation = null, nowMs
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const RETURN_READ_METHODS = Object.freeze(["eth_chainId", "eth_blockNumber", "eth_getCode", "eth_call"]);
+// [A-859] Finalized mode: the pin block comes from the `finalized` tag (eth_getBlockByNumber), never from
+// the head. Still read-only; the default (head) whitelist above is unchanged.
+export const RETURN_READ_METHODS_FINALIZED = Object.freeze(["eth_chainId", "eth_getBlockByNumber", "eth_getCode", "eth_call"]);
 
 // Per-Job read plan: which view calls prove the Job is still the one that was proven.
 // The contract address is not repeated here; it comes from FORK_PROVEN_DESTINATIONS.
@@ -688,7 +694,12 @@ function hexToSafeInteger(value) {
  * @param {{rpcUrl?: string, fetchImpl?: Function, now?: Function}} [options]
  * @returns {Promise<{observation: object|null, status: string}>}
  */
-export async function readReturnObservation(jobId, { rpcUrl, fetchImpl, now } = {}) {
+export async function readReturnObservation(jobId, { rpcUrl, fetchImpl, now, finality } = {}) {
+  // [A-859] finality: "finalized" pins every read to the exact block the `finalized` tag names (number + hash
+  // recorded). Any other value (incl. undefined) keeps the head-pinned behaviour. A failed finalized read is
+  // never downgraded to head: it returns observation null -> the decision stays unknown.
+  const finalized = finality === "finalized";
+  const allowed = finalized ? RETURN_READ_METHODS_FINALIZED : RETURN_READ_METHODS;
   const destination = FORK_PROVEN_DESTINATIONS.find((d) => d.id === jobId);
   const plan = RETURN_READ_PLANS[jobId];
   if (!destination || !plan || !ADAPTER_ADDR.test(destination.destination || "")) return { observation: null, status: "no_read_plan" };
@@ -696,7 +707,7 @@ export async function readReturnObservation(jobId, { rpcUrl, fetchImpl, now } = 
   if (typeof fetchImpl !== "function" || typeof now !== "function") return { observation: null, status: "no_transport" };
   let id = 0;
   const rpc = async (method, params) => {
-    if (!RETURN_READ_METHODS.includes(method)) throw new ReturnReadError("method_not_read_only");
+    if (!allowed.includes(method)) throw new ReturnReadError("method_not_read_only");
     let response;
     try {
       response = await fetchImpl(rpcUrl, {
@@ -710,12 +721,26 @@ export async function readReturnObservation(jobId, { rpcUrl, fetchImpl, now } = 
     if (!response || response.ok !== true || typeof response.json !== "function") throw new ReturnReadError("rpc_unreachable");
     let body;
     try { body = await response.json(); } catch { throw new ReturnReadError("unreadable_result"); }
-    if (!body || typeof body !== "object" || body.error || typeof body.result !== "string") throw new ReturnReadError("unreadable_result");
+    if (!body || typeof body !== "object" || body.error) throw new ReturnReadError("unreadable_result");
+    if (method === "eth_getBlockByNumber") {
+      if (!body.result || typeof body.result !== "object" || Array.isArray(body.result)) throw new ReturnReadError("unreadable_result");
+      return body.result;
+    }
+    if (typeof body.result !== "string") throw new ReturnReadError("unreadable_result");
     return body.result;
   };
   try {
     const chainId = hexToSafeInteger(await rpc("eth_chainId", []));
-    const block = hexToSafeInteger(await rpc("eth_blockNumber", []));
+    let block;
+    let blockHash = null;
+    if (finalized) {
+      const head = await rpc("eth_getBlockByNumber", ["finalized", false]);
+      block = hexToSafeInteger(head.number);
+      blockHash = typeof head.hash === "string" && /^0x[0-9a-fA-F]{64}$/.test(head.hash) ? head.hash.toLowerCase() : null;
+      if (blockHash === null) throw new ReturnReadError("unreadable_result");
+    } else {
+      block = hexToSafeInteger(await rpc("eth_blockNumber", []));
+    }
     if (chainId === null || block === null) throw new ReturnReadError("unreadable_result");
     const blockTag = `0x${block.toString(16)}`;
     const code = await rpc("eth_getCode", [destination.destination, blockTag]);
@@ -731,9 +756,12 @@ export async function readReturnObservation(jobId, { rpcUrl, fetchImpl, now } = 
     return {
       status: "ok",
       observation: {
-        source: `read-only rpc ${RETURN_READ_METHODS.join("/")} @${block}`,
+        source: finalized
+          ? `read-only rpc ${RETURN_READ_METHODS_FINALIZED.join("/")} @finalized:${block}`
+          : `read-only rpc ${RETURN_READ_METHODS.join("/")} @${block}`,
         observedAt,
         block,
+        ...(finalized ? { blockHash, finality: "finalized", tagUsed: "finalized" } : {}),
         chainId,
         codePresent: code.length > 2,
         ...fields,

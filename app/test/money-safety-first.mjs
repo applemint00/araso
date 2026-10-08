@@ -544,6 +544,7 @@ function makeFlow({ storage = makeStorage(), settleOutcome = "done", depositThro
     localStorage: storage, state,
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     isAllowedPiggyRpId: () => true,
+    signerSince: Date.now(), // [A-896 harness wiring] live signer stamped now (wall clock) so sendPiggyOnce's 60 s margin check sees a fresh signer
     activeAccount: { address: "0xabc", signTransaction: async (prepared) => `0xa${prepared.nonce}` },
     navigator: navigatorStub, keccak256,
     activeSession: { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } },

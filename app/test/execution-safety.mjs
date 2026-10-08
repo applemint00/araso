@@ -216,6 +216,18 @@ check("an expired or stale quote forces a re-quote", () => {
   assert(has(stale, "quote_stale"));
 });
 
+// [A-895 N2] A quote stamped in the future is not "fresh": its age is negative, so it used to pass the stale check forever.
+check("a quote timestamped in the future is refused (quote_timestamp_in_future)", () => {
+  const future = run({ quoteTimestamp: NOW + 1 });
+  assert.equal(future.decision, DECISION.NAH);
+  assert(has(future, "quote_timestamp_in_future"));
+  assert.equal(future.findings.find((f) => f.code === "quote_timestamp_in_future").detail.requote, true);
+  assert(has(run({ quoteTimestamp: NOW + 86_400_000 * 365 }), "quote_timestamp_in_future"));
+  // boundary: stamped exactly now is fine
+  assert.equal(has(run({ quoteTimestamp: NOW }), "quote_timestamp_in_future"), false);
+  assert.equal(has(run({ quoteTimestamp: NOW - 1 }), "quote_timestamp_in_future"), false);
+});
+
 // ── §15-12 출력 악화 = 기존 권한 무효 ────────────────────────────────────────────
 check("a material fee or output deterioration invalidates the earlier execution readiness", () => {
   const before = fields();

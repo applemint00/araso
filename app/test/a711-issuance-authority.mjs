@@ -712,7 +712,9 @@ await check("S2. untouched protected functions: render(), sendPiggyOnce(), begin
   // (6430b5e0…) with exactly that string replaced hashes to the value below. A-711 still does not touch sendPiggyOnce.
   // [A-768 re-pin, named reason: 99e M-L-1] post-deposit redeem reads moved into prepareRedeemAfterDeposit + lag keeps "still out."
   // (pre-A-768 6feadb01…). A-711 still does not touch sendPiggyOnce.
-  assert.equal(sha(bodyOf(MAIN, "sendPiggyOnce")), "01ee727da9fc2def3d057d939c42b9cf69a95ace97f4c9af81500bd3fef9646b");
+  // [A-896 re-pin, named reason: 99e M-L-2 60 s signer margin] one entry check added to sendPiggyOnce; A-711 still does not touch it.
+  // pre-A-896 baseline: sendPiggyOnce 01ee727da9fc2def3d057d939c42b9cf69a95ace97f4c9af81500bd3fef9646b [A-896 R1 re-pin: + monotonic performance.now stamp/check; prior A-896 value was the old pin]
+  assert.equal(sha(bodyOf(MAIN, "sendPiggyOnce")), "0120bd9896880837c5fbb0e10a47b73efedeff3b9077f9877cbaae82b4e7955e");
   assert.equal(sha(bodyOf(MAIN, "beginAddPiggy")), "2850f629cff4bf470ff482dbb70a9280b7bd0c2bf033dd885b680a84d18e718e");
 });
 

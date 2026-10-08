@@ -82,6 +82,7 @@ function makeSend({
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     state,
     isAllowedPiggyRpId: () => allowed,
+    signerSince: Date.now(), // [A-896 harness wiring] live signer stamped now (wall clock) so sendPiggyOnce's 60 s margin check sees a fresh signer
     activeAccount: { address: "0xabc", signTransaction: async (prepared) => `0xa${prepared.nonce}` },
     navigator: { locks: fakeLocks() },
     keccak256,

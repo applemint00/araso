@@ -7,6 +7,11 @@ dist/
 .grant-ledger.json
 .grant-ledger.json.tmp
 
+# local backups / merge leftovers (e.g. main.js.pre_A292_1241)
+*.pre_*
+*.bak
+*.orig
+
 # 에이전트 운영 파일 — 저장소에 올리지 않는다 (오퍼레이터 구조 노출 방지)
 AGENTS.md
 CLAUDE.md

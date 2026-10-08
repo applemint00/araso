@@ -8,6 +8,7 @@
 // Network 0 · browser 0 · tx 0. The "rail" below is a TEST-ONLY in-memory adapter defined in this
 // file; it never exists in app/src and so cannot reach the product bundle.
 // On the pre-A-646 tree the model exports do not exist → every group fails → exit 1.
+// pre-A-911 baseline: the A-646 allocation model pinned here is unchanged. The split is drawn on the own screen as amounts only (no % column, Owner answer 5); the percent maths stays in the model.
 import { readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -502,12 +503,26 @@ check("static: model functions contain no WebAuthn / tx / signer / network / DOM
   if (bad.length) throw new Error(bad.join(" | "));
 });
 check("static: the three model files import only local pure modules (no signer/session/network module)", () => {
-  const allowed = new Set(["./add-money.js", "./funding-entry.js", "./piggy-registry.js", "./piggy-session.js"]);
+  // pre-A-877 baseline: ["./add-money.js", "./funding-entry.js", "./piggy-registry.js", "./piggy-session.js"]
+  // [A-877] + the three pure modules the Relay plan boundary needs (gate · chain/token identity · rail adapter).
+  const allowed = new Set(["./add-money.js", "./funding-entry.js", "./piggy-registry.js", "./piggy-session.js",
+    "./execution-safety.js", "./funding-context.js", "./funding-rail-relay.js"]);
   for (const f of ["add-money.js", "funding-entry.js", "funding-intent-bridge.js"]) {
     const src = readFileSync(path.join(SRC_DIR, f), "utf8");
     const imports = [...src.matchAll(/^import\s[^;]*?from\s+"([^"]+)";/gm)].map((m) => m[1]);
     for (const i of imports) if (!allowed.has(i)) throw new Error(`${f} imports ${i}`);
   }
+});
+check("static: [A-877] the three added modules stay pure (no imports, network, signer or session)", () => {
+  const bad = [];
+  for (const f of ["execution-safety.js", "funding-context.js", "funding-rail-relay.js"]) {
+    const src = readFileSync(path.join(SRC_DIR, f), "utf8");
+    if (/^\s*import[\s{*"']/m.test(src) || /\bimport\s*\(/.test(src) || /\brequire\s*\(/.test(src)) bad.push(`${f}:import`);
+    if (/[^\w.]fetch\s*\(|\b(?:window|self)\.fetch\s*\(|globalThis\.fetch|XMLHttpRequest|WebSocket|sendBeacon/.test(src)) bad.push(`${f}:network`);
+    if (/sendTransaction|sendRawTransaction|signTransaction|signMessage|signTypedData|eth_send|writeContract|walletClient|privateKey|mnemonic/.test(src)) bad.push(`${f}:signer`);
+    if (/piggy-session|localStorage|sessionStorage|indexedDB|navigator\.credentials/.test(src)) bad.push(`${f}:session`);
+  }
+  if (bad.length) throw new Error(bad.join(" | "));
 });
 check("static: the test-only rail id exists nowhere in app/src", () => {
   const hit = walk(SRC_DIR).filter((f) => /\.(js|css|html)$/.test(f)).find((f) => readFileSync(f, "utf8").includes("a646_test_only_rail"));

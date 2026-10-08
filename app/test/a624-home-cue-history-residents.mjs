@@ -1,4 +1,5 @@
 // [A-624] HOME first-arrival cue B · HISTORY edge cases · multi-Piggy residuals — focused test.
+// [A-786 RE-PIN] Home paper is drawn x1.10 (style.css --homePaperK) so its measured width is 282 (256.338*1.1=281.97), and HISTORY derives its width from the live paper rect (main.js alignRecordsCardToHomePaper) = 282. Intended size change only. 
 //   node app/test/a624-home-cue-history-residents.mjs
 //
 // Part 1 (no browser): tapCueFrame() curve/timing (pure export of chog-home.js), and the source
@@ -72,8 +73,17 @@ const chog = stripComments(CHOG);
 // mountHome's parameter is a destructuring default ({…} = {}), so fnBody() would stop at it —
 // cut by markers instead (same as home-arrival.mjs).
 const mountHome = code.slice(code.indexOf("function mountHome("), code.indexOf("function mountHome(") + 20000);
+// [A-895 P-D COVERAGE POINTER] After A-891 the first-arrival "tap me!" cue is gone, so the cue checks in this file (source gate here, and the
+// browser checks below that expect [0, "", 0, false] / [false, true] / tSend false) pin its ABSENCE under titles that still describe the cue.
+// Cue timing coverage (tSend, entrance, hold) is NOT here any more: First Send reveal timing = a891-wave4-file-quiet-tapme.mjs Part B
+// (firstArrival), post-file / revisit cue entrance = a779-small-text-unify.mjs B5 and a891 Part B. A regression that restores the cue fails here; one that
+// shifts the Send timing is caught by a891 B, not by this file.
+// pre-A-891 baseline: /if \(isFirstArrival && !state\.sendCardVisible\) homeChog\?\.startTapCue\?\.\(\);/ → true.
+// [A-891 CG-04, Owner 2026-10-08 "First Home stays quiet"] the first-arrival cue is removed; the same gate now starts only the silent hold
+// that keeps the First Send reveal timing. Measured: [old call present, new gate present] = [false, true].
 check("settle(): cue started only on isFirstArrival && !sendCardVisible (no new persistence key)",
-  /if \(isFirstArrival && !state\.sendCardVisible\) homeChog\?\.startTapCue\?\.\(\);/.test(mountHome), true);
+  [/if \(isFirstArrival && !state\.sendCardVisible\) homeChog\?\.startTapCue\?\.\(\);/.test(mountHome),
+    /if \(isFirstArrival && !state\.sendCardVisible\) a891StartFirstArrivalHold\(\);/.test(mountHome)], [false, true]);
 check("no new localStorage key for the cue", /localStorage\.setItem\([^)]*[Cc]ue/.test(MAIN) || /localStorage/.test(chog), false);
 // [A-626 A] superseded: records keep the 1200ms retry; the cue now defers by its exact remaining
 // entrance + 1.2s hold (tapCueHoldRemainingMs) instead of a 1200ms-multiple retry.
@@ -321,15 +331,20 @@ async function live() {
   await boot(390, 844);
   let t0 = await arrive();
   let s = await snap();
-  check("cue: first arrival → exactly one 'tap me!' label, entering, Home paper closed", [s.labels, s.cue, s.pad, s.send], [1, "entering", 0, false]);
+  // [A-891 CG-04, Owner 2026-10-08] First Home stays quiet: no first-arrival "tap me!". Re-pinned to the coordinator browser run 2026-10-08 (browser_merged/a624-home-cue-history-residents.log).
+  // pre-A-891 baseline: [1, "entering", 0, false]
+  check("cue: first arrival → exactly one 'tap me!' label, entering, Home paper closed", [s.labels, s.cue, s.pad, s.send], [0, "", 0, false]);
   const arms = [];
   while (Date.now() - t0 < 1500) { arms.push(await ev(`(() => { const m = /rotate\\((-?[\\d.e-]+)deg\\)/.exec(document.querySelector('[data-part="home-near-arm"]').style.transform); return m ? Number(m[1]) : 0; })()`)); await wait(60); }
-  check("cue: the near arm actually waves (min rotation ≤ -5°) and never beyond -8°", [Math.min(...arms) <= -5, Math.min(...arms) >= -8.0001], [true, true]);
+  // pre-A-891 baseline: [true, true]
+  check("cue: the near arm actually waves (min rotation ≤ -5°) and never beyond -8°", [Math.min(...arms) <= -5, Math.min(...arms) >= -8.0001], [false, true]);
   s = await snap();
-  check("cue: 1500ms after settle the First-Journey card has NOT pre-empted the cue (old 1200ms reveal)", [s.send, s.labels], [false, 1]);
+  // pre-A-891 baseline: [false, 1]
+  check("cue: 1500ms after settle the First-Journey card has NOT pre-empted the cue (old 1200ms reveal)", [s.send, s.labels], [false, 0]);
   await waitFor(`window.__a624.snap().cue === "shown"`, 3000);
   s = await snap();
-  check("cue: entrance completes → label fully visible, paper still closed (no auto-open)", [s.labelOpacity, s.pad, s.send], [1, 0, false]);
+  // pre-A-891 baseline: [1, 0, false]
+  check("cue: entrance completes → label fully visible, paper still closed (no auto-open)", [s.labelOpacity, s.pad, s.send], [null, 0, true]);
   check("cue: First-Journey card follows after the entrance (existing retry)", await waitFor(`window.__a624.snap().send`, 3500), true);
   s = await snap();
   check("cue: when the Send card owns the slot the cue is gone (no overlap)", [s.labels, s.send], [0, true]);
@@ -337,7 +352,9 @@ async function live() {
   // [A-626 A] superseded window: entrance 1870 + 1.2s hold ≈ 3070ms (allow 1.0–1.5s hold + harness slack).
   // [A-725] hold 1200 → 1500 (Owner real-device pacing finding): ready ≈ 3370ms. Window shifted by the
   // same +300ms on both ends (lower = entrance + ≥1.3s hold, upper = ready + the same 530ms slack).
-  check("cue: Send card appeared only after entrance + ≥1.3s full-opacity hold (≈3.37s, ≤ 3.9s)", tSend >= 3170 && tSend <= 3900, true);
+  // pre-A-891 baseline: true. Measured false: tSend now includes the 3 s waitFor(cue "shown") above, which never resolves without a cue.
+  // The First Send reveal timing itself (settle + 3370 / 1200 reduced) is measured in a891-wave4-file-quiet-tapme.mjs Part B.
+  check("cue: Send card appeared only after entrance + ≥1.3s full-opacity hold (≈3.37s, ≤ 3.9s)", tSend >= 3170 && tSend <= 3900, false);
   await ev(`document.querySelector("#stayButton").click(), true`);
   await wait(900);
   await ev(PAGE);
@@ -351,7 +368,8 @@ async function live() {
   await c.tapAt(cc.x, cc.y);
   await wait(250);
   s = await snap();
-  check("tap: cue hidden immediately, wave stopped, paper opening", [s.labels, s.cue, s.pad > 0], [0, "off", true]);
+  // pre-A-891 baseline: [0, "off", true]
+  check("tap: cue hidden immediately, wave stopped, paper opening", [s.labels, s.cue, s.pad > 0], [0, "", true]);
   await waitFor(`window.__a624.snap().send`, 3000);
   await ev(`document.querySelector("#stayButton")?.click(), true`);
   await wait(900);
@@ -360,7 +378,8 @@ async function live() {
   await boot(390, 844, { reduced: true });
   t0 = await arrive();
   s = await snap();
-  check("reduced: cue shown statically at once, opacity 1, paper NOT snapped open", [s.labels, s.cue, s.labelOpacity, s.pad, s.paperW < 20], [1, "shown", 1, 0, true]);
+  // pre-A-891 baseline: [1, "shown", 1, 0, true]
+  check("reduced: cue shown statically at once, opacity 1, paper NOT snapped open", [s.labels, s.cue, s.labelOpacity, s.pad, s.paperW < 20], [0, "", null, 0, true]);
   await wait(700);
   s = await snap();
   check("reduced: no wave (arm rotate 0)", /rotate\(0deg\)/.test(s.arm || ""), true);
@@ -391,11 +410,11 @@ async function live() {
   await c.tapAt(cc2.x, cc2.y);
   await wait(900);
   s = await snap();
-  check("history + Chog tap: HOME stays open (256px), HISTORY stays full size (no 4.8px strand)", [s.paperW, s.anchorH, s.open], [256, 420, true]);
+  check("history + Chog tap: HOME stays open (256px), HISTORY stays full size (no 4.8px strand)", [s.paperW, s.anchorH, s.open], [282, 420, true]);
   check("history: close reachable", await tap("#recordsCardClose"), true);
   await wait(600);
   s = await snap();
-  check("history closed: Chog hit live again, HOME unchanged", [s.hitInert, s.paperW, s.open], [false, 256, false]);
+  check("history closed: Chog hit live again, HOME unchanged", [s.hitInert, s.paperW, s.open], [false, 282, false]);
   check("history closed: focus not left on a hidden control", await ev(`!document.activeElement?.closest?.("[hidden]")`), true);
   await c.key("Escape", "Escape", 27);
   await wait(700);

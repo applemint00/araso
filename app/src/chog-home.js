@@ -173,7 +173,10 @@ const TAP_CUE_FADE_MS = 250; // PREVIEW 라벨 페이드
 // 라벨 글자 크기는 화면 px 로 고정한다(INFERRED — Owner 수치 아님). .chogHome 로컬 좌표는
 // 바닥 스케일·판 스케일을 거쳐 390 에서 ≈0.245배, 1440 에서 ≈0.54배로 줄어들어 로컬 18px
 // (PREVIEW) 은 폰에서 ≈4px 가 된다 — 읽히지 않는 신호는 신호가 아니다.
-const TAP_CUE_SCREEN_PX = 15;
+// [A-779 · A-777 §8.2 LOCKED "Chog microcopy legibility bump", §4 ">=14pt"] 15 -> 18 screen px. Text size only:
+// delay/wave/fade/hold, wording, anchor (INK centre-top, translate(-50%,-100%) grows upward) and Chog art unchanged.
+// [A-845] 18 = the A-843 Choice style at the phone reference (style.css --ts-choice); at other widths it scales with the stage.
+const TAP_CUE_SCREEN_PX = 18;
 const TAP_CUE_GAP_SCREEN_PX = 4;
 // [A-626 A] Owner: 라벨이 완전히 보인 뒤 약 1.0–1.5초(목표 1.2초) 그대로 읽히게 둔 다음에야 첫 Journey
 // 카드가 자리를 가져간다. 신호 시계(tapCue.t)는 화면에 그려진 프레임 dt 로만 흐르므로(숨은 탭 dt 0)
@@ -390,6 +393,20 @@ export function sampleDoze(ms) {
  *   onCleanup  해제 등록기
  *   listen     리스너 등록기
  */
+// [A-912 · item 1] One speech line on screen. Speech = .chogCheckLine (not [hidden]) and the "tap me!" cue. Each gets a rising order
+// number the first time it is seen visible; every visible line except the newest is marked data-chog-left (never shown again).
+let a912SayOrder = 0;
+export function settleChogOneLine(root) {
+  if (!root?.querySelectorAll) return 0;
+  const lines = [...root.querySelectorAll(".chogCheckLine:not([hidden]), .chogHome__tapCue")].filter((el) => el.dataset.chogLeft !== "1" && !el.closest(".chogCheckLine__line") && !(el.parentElement && el.parentElement.closest(".chogCheckLine")));
+  for (const el of lines) if (!el.dataset.chogSay) el.dataset.chogSay = String(++a912SayOrder);
+  if (lines.length > 1) {
+    lines.sort((a, b) => Number(a.dataset.chogSay) - Number(b.dataset.chogSay));
+    for (const el of lines.slice(0, -1)) el.dataset.chogLeft = "1";
+  }
+  return Math.min(lines.length, 1);
+}
+
 export function mountChogHome(root, opts) {
   // [A-359 §3] cardClaimed — 공통 카드 자리(.cardAnchor)를 지금 이 화면의 다른 카드
   // (Send/Receipt)가 이미 쓰고 있는가. true 면 손끝-노트패드는 그 자리로 도킹하지
@@ -712,17 +729,16 @@ export function mountChogHome(root, opts) {
     return true;
   }
 
-  // 로컬 좌표 → 화면 배율은 hit 의 실제 rect 로 잰다(바닥 스케일·판 스케일 합성값).
+  // [A-845 · A-843 item 6] 글자 크기는 화면 고정 px 가 아니라 캐릭터 무대 배율을 따른다: style.css
+  // `.chogHome__tapCue { font-size: var(--tsChog) }` (Choice 18 = 폰 390x844 화면 px, 로컬 px 한 값 → Chog 와 같이 커짐).
+  // 간격도 같은 비율(4/18 em). pre-A-845 baseline: fontSize = TAP_CUE_SCREEN_PX / k, top = INK.top - TAP_CUE_GAP_SCREEN_PX / k
+  // (k = hit rect 로 잰 로컬→화면 배율, 모든 폭에서 화면 18px 고정).
   function measureTapCue() {
     if (!tapCue || tapCue.hidden) return;
-    const r = hit.getBoundingClientRect();
-    const k = r.width / (INK.right - INK.left);
-    if (!k) return;
     tapCue.measure = false;
     const { label } = tapCue;
-    label.style.fontSize = `${TAP_CUE_SCREEN_PX / k}px`;
     label.style.left = `${(INK.left + INK.right) / 2}px`;
-    label.style.top = `${INK.top - TAP_CUE_GAP_SCREEN_PX / k}px`;
+    label.style.top = `calc(${INK.top}px - ${TAP_CUE_GAP_SCREEN_PX / TAP_CUE_SCREEN_PX}em)`;
   }
 
   function hideTapCue() {
@@ -946,6 +962,16 @@ export function mountChogHome(root, opts) {
     destroyed = true;
     clearSleepTimers();
   });
+
+  // [A-912 · item 1] Chog speaks one line at a time. Speech lines are added by several callers (Return alarm, away line, Explore say,
+  // A-891 lines, "tap me!"); this watches the Chog root and, when a newer line becomes visible, the older one leaves
+  // (data-chog-left → style.css [A-912] display:none). No new copy, timer or motion; the two-row bubbles stay one bubble.
+  if (typeof MutationObserver !== "undefined") {
+    const oneLine = new MutationObserver(() => settleChogOneLine(root));
+    oneLine.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"] });
+    onCleanup(() => oneLine.disconnect());
+    settleChogOneLine(root);
+  }
 
   if (!startRect || reduced) armIdle();
   draw();

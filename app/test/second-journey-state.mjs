@@ -24,6 +24,22 @@ const market = { id: "market", label: "시장 다녀오기", lane: "Trade" };
 const claim = { id: "claim", label: "받을 것 받아오기", lane: "Claim" };
 const pref = { preference: { reasonDislike: {}, novelty: 0.1, clarity: 0, liquidity: 0, lowCost: 0, yield: 0, confidence: 0, explorationWidth: 0 } };
 
+check("A-895 M-F-2: a stored state whose evidenceState.pointers is not an array (object / string / number) does not make save throw; the state is saved", () => {
+  for (const bad of [{ x: 1 }, "abc", 7, true]) {
+    const storage = createMemoryStorage();
+    const sc = { accountId: "a", chainId: "1" };
+    const first = saveSecondJourneyState(storage, sc, createSecondJourneyState({ accountId: "a", chainId: "1" }));
+    assert.equal(first.saved, true);
+    const key = secondJourneyStorageKey(sc);
+    const raw = JSON.parse(storage.getItem(key));
+    raw.evidenceState = { ...raw.evidenceState, pointers: bad };
+    storage.setItem(key, JSON.stringify(raw));
+    let r;
+    assert.doesNotThrow(() => { r = saveSecondJourneyState(storage, sc, createSecondJourneyState({ accountId: "a", chainId: "1" })); }, `pointers=${JSON.stringify(bad)}`);
+    assert.ok(r && typeof r.saved === "boolean");
+  }
+});
+
 check("storage key separates account and chain", () => {
   assert.notEqual(secondJourneyStorageKey({ accountId: "a", chainId: "1" }), secondJourneyStorageKey({ accountId: "a", chainId: "2" }));
   assert.notEqual(secondJourneyStorageKey({ accountId: "a", chainId: "1" }), secondJourneyStorageKey({ accountId: "b", chainId: "1" }));

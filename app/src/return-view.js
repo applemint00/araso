@@ -20,6 +20,10 @@ const BOARD_W = 1256;
 const BOARD_H = 772;
 const HOME_CENTER = 1041;   // Home 판의 Piggy 중심
 const HOME_FLOOR = 648;     // Home 판의 바닥선
+// [A-891 UI-19] the First-filing label (accessible name only now) and the drawn folder's rect in the Return group (stage) units —
+// the literal piggy-return.js draws (`folderRect = [580, 632, 130, 100]`, enterGroup() = board → group via RETURN_GEOMETRY.group).
+const OPEN_FILE_LABEL = "open the file";
+const FOLDER_STAGE_RECT = [580, 632, 130, 100];
 
 /**
  * 씬 markup. finance 문자열은 전부 인자로 받는다.
@@ -40,7 +44,7 @@ export function returnSceneMarkup(input) {
         <span class="returnTap__rows" id="returnRows">${receiptRowsMarkup}</span>
       </button>
       <span class="returnTap__hint" id="returnHint" hidden></span>
-      <button class="tiny returnOpen" id="returnOpen" type="button" hidden>open the file</button>
+      <button class="tiny returnOpen" id="returnOpen" type="button" hidden></button>
       <!-- 결과 모션 skip. 문구·클래스·자리 전부 hatch 의 승인된 skip 과 같은 것을
            재사용한다(새 카피·새 수치 0). 첫 결과에서는 숨고, 그 뒤 Return 에서만 보인다. -->
       <button class="tiny skip" id="returnSkip" type="button" hidden>skip</button>
@@ -80,7 +84,7 @@ export function mountReturnView(opts) {
     reduced = false,
     play = true,
     onOpenFilebox = () => {},
-    openFileLabel = "open the file",
+    openFileLabel = OPEN_FILE_LABEL,
     onError = () => {},
     onIdleEnter = () => {},
     // [A-466] 이 진입에서 skip 을 보여도 되는가. 판단(첫 결과인지)은 바깥이 한다 — 이 파일은
@@ -100,7 +104,20 @@ export function mountReturnView(opts) {
   const hint = $("returnHint");
   const openBtn = $("returnOpen");
   const skipBtn = $("returnSkip");
-  if (openBtn) openBtn.textContent = openFileLabel;
+  // [A-891 UI-19] First filing ("open the file", the default label): the visible helper text is removed — the drawn folder itself
+  // is the affordance. #returnOpen stays (same id, same click → onOpenFilebox); it only loses its text and sits over the folder
+  // (placeFolderHit below). Its accessible name keeps the old words. Other labels (Second "Home") are unchanged.
+  // pre-A-891 baseline: `openBtn.textContent = openFileLabel` for every label.
+  const folderOpen = openFileLabel === OPEN_FILE_LABEL;
+  if (openBtn) {
+    if (folderOpen) {
+      openBtn.textContent = "";
+      openBtn.setAttribute("aria-label", openFileLabel);
+      openBtn.classList.add("returnOpen--folder");
+    } else {
+      openBtn.textContent = openFileLabel;
+    }
+  }
   const nameTag = $("returnName");
   const chogRoot = root.querySelector("#chogHome");
   // 알람 hop 과 숨김은 **바깥 wrapper** 에만 건다.
@@ -231,6 +248,19 @@ export function mountReturnView(opts) {
     }
   }
 
+  // [A-891 UI-19] The folder hit: the drawn folder's viewport rect (same canvas-rect × k mapping as placePaper()). Only after filing.
+  function placeFolderHit() {
+    if (!openBtn || !folderOpen || openBtn.hidden) return;
+    const r = canvas.getBoundingClientRect();
+    const k = r.width / BOARD_W;
+    const g = RETURN_GEOMETRY.group;
+    const [fx, fy, fw, fh] = FOLDER_STAGE_RECT;
+    openBtn.style.left = `${r.left + (g.dx + fx * g.scale) * k}px`;
+    openBtn.style.top = `${r.top + (g.dy + fy * g.scale) * k}px`;
+    openBtn.style.width = `${fw * g.scale * k}px`;
+    openBtn.style.height = `${fh * g.scale * k}px`;
+  }
+
   // [A-322 교정 1] 같은 화면에 Chog 는 언제나 **하나**다.
   //   t < 11.4 → Home DOM Chog 만 · t ≥ 11.4 → canvas native 만.
   function placeChog(meta) {
@@ -328,11 +358,12 @@ export function mountReturnView(opts) {
         nameTag.style.top = `${HOME_FLOOR + 6}px`;
       }
       if (openBtn) openBtn.hidden = false;
+      placeFolderHit(); // [A-891 UI-19]
     },
   });
   onCleanup(() => playback.stop());
 
-  listen(window, "resize", () => { fit(); playback.redraw(); placePaper(lastFrame); });
+  listen(window, "resize", () => { fit(); playback.redraw(); placePaper(lastFrame); placeFolderHit(); });
 
   // ---- 입력 — 한 사용자 입력에 한 gate --------------------------------
   // [A-322 교정 6] click 과 keydown 을 둘 다 걸면 button 의 기본 활성화와 겹쳐

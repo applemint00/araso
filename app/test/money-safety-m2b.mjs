@@ -222,8 +222,8 @@ function makeTab(shared, opts = {}) {
     requestPrf: () => { calls.forbidden.push("requestPrf"); throw new Error("forbidden"); },
   };
   const names = Object.keys(env);
-  const body = `let activeAccount = __startSigned ? __account : null; let activeSession = __startSigned ? __session : null;\n` +
-    `async function recoverPiggy() { await __recover(); activeAccount = __account; activeSession = __session; }\n` +
+  const body = `let signerSince = __startSigned ? Date.now() : 0; /* [A-896 harness wiring] */ let activeAccount = __startSigned ? __account : null; let activeSession = __startSigned ? __session : null;\n` +
+    `async function recoverPiggy() { await __recover(); signerSince = Date.now(); activeAccount = __account; activeSession = __session; }\n` +
     `${CONSTS.join("\n")}\n${RECEIPT_FNS_SRC}\n${PENDING_SRC}\n${FINISH_SRC}\n${RECONCILE_SRC}\n${ONCE_SRC}\n` +
     `return { sendPiggy, sendPiggyOnce, readSendPending, writeSendPending, sendBusy, holdSendTabLock, sweepStaleSendReservation, reserveSend, clearOwnSendPending, classifySendPending, reconcileSendPending, sendTabId, reservation: () => sendReservation, tabLockHeld: () => sendTabLockHeld, isInFlight: () => sendInFlight };`;
   const factory = new Function(...names, body);

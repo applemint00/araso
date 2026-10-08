@@ -292,7 +292,12 @@ export function createDepartRenderer(canvas, opts) {
 
     // 앉은/올려보는 상태 — 일어서기 전.
     const sittingA = t < 0.15 ? 1 : 0;
-    const lookingA = t >= 0.15 ? 1 - rise : 0;
+    // [A-841 UI-16] 잔상 제거 — 앉은 포즈와 선 포즈가 같은 프레임에 5% 넘게 겹치지 않게 한다.
+    // rise 창(0.55s)은 그대로, 알파만 어긋나게: 앉은 쪽은 rise 0..K 에서 사라지고 선 쪽은 K..1 에서 나타난다.
+    // pre-A-841 baseline: lookingA = 1 - rise; 서 있는 몸 globalAlpha = rise
+    const XFADE_K = 0.5;
+    const lookingA = t >= 0.15 ? C(1 - rise / XFADE_K) : 0;
+    const standA = C((rise - XFADE_K) / (1 - XFADE_K));
     const drawSeat = (name, alpha, dy = 0) => {
       const im = img(name);
       if (!im || alpha <= 0) return;
@@ -319,12 +324,15 @@ export function createDepartRenderer(canvas, opts) {
     // sceneTime >= 7 이면 원본처럼 entryDepthMask 로 가린다. 그 구간에서는 별도 층에
     // 그린 뒤 `destination-in` 으로 마스크를 먹이고 본 화면에 얹는다.
     const masked = t >= 7 && img("entry-mask");
-    const target = masked ? layerCtx0() : ctx;
-    if (rise > 0) {
+    // [A-841 UI-16] 일어서는 동안(standA<1)에도 별도 층에 불투명으로 그린 뒤 한 번에 알파를 건다.
+    // 파츠마다 globalAlpha 를 덮어쓰던 것이 잔상(서 있는 몸이 앉은 포즈 위에 100% 로 얹힘)의 원인이었다.
+    const useLayer = masked || (standA > 0 && standA < 1);
+    const target = useLayer ? layerCtx0() : ctx;
+    if (standA > 0) {
       const ctxSave = ctx;
       ctx = target;
       ctx.save();
-      ctx.globalAlpha = rise;
+      ctx.globalAlpha = 1;
       withStanding(x, y + 14 * (1 - rise), () => {
         // z 순서 — 원본 문서 순서 그대로
         part("ears_R", { tx: -230 * profile, visible: !(rearView || side > 0.95) });
@@ -343,7 +351,8 @@ export function createDepartRenderer(canvas, opts) {
       });
       ctx.restore();
       ctx = ctxSave;
-      if (masked) {
+      if (useLayer) {
+       if (masked) {
         // 마스크 적용 — 흰 영역만 남는다.
         // 원본은 `#piggyClip` 에 mask 를 건다 — 그 요소는 group 안이므로
         // mask 의 userSpace 도 **group 좌표계**다. stage 에 걸면 경계가 어긋난다.
@@ -355,7 +364,11 @@ export function createDepartRenderer(canvas, opts) {
         ctx = keep;
         layerCtx.drawImage(img("entry-mask"), 0, 0, STAGE_W, STAGE_H);
         layerCtx.restore();
+       }
+        ctx.save();
+        ctx.globalAlpha = standA;
         ctx.drawImage(layer, 0, 0);
+        ctx.restore();
       }
     }
 

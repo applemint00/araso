@@ -59,6 +59,7 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     state: { address: "0xabc", txHash: "", mark: "", grantTxHash: "" },
     isAllowedPiggyRpId: () => allowed,
+    signerSince: Date.now(), // [A-896 harness wiring] live signer stamped now (wall clock) so sendPiggyOnce's 60 s margin check sees a fresh signer
     activeAccount: { address: "0xabc", signTransaction: async (prepared) => `0xa${prepared.nonce}` },
     navigator: { locks: fakeLocks() },
     keccak256,

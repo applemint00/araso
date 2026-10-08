@@ -154,8 +154,10 @@ for (const [name, src, needle] of [
       assert.equal(fn(name).includes(banned), false, `${name} must not reference ${banned}`);
     }
   }
-  // the only settle call sites in the whole file are openPiggy + beginGiftPiggy.
-  assert.equal((code.match(/await settleBoundGiftClaim\(/g) || []).length, 2);
+  // the only settle call sites in the whole file are openPiggy + beginGiftPiggy + (A-897 case 2) a897GiftOpenPromotion.
+  // [A-897 re-pin · pre-A-897 P1 baseline: 2] the third site binds only through bindGiftToPromotedFirstPiggy (the same #1), never to a new Piggy.
+  assert.equal((code.match(/await settleBoundGiftClaim\(/g) || []).length, 3);
+  assert.equal((fn("a897GiftOpenPromotion").match(/await settleBoundGiftClaim\(/g) || []).length, 1);
   assert.equal(code.includes("settlePendingGiftClaimIfAny"), false);
   // setScene() still happens somewhere after the claim attempt (scene continues normally,
   // it is just not driven by the claim's outcome) — checked from that point on, since an

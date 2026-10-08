@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { decodeFunctionData, encodeAbiParameters, encodeFunctionResult } from "viem";
 
 import { resolveChainProfile } from "../src/chain-profile.js";
-import { ABIL_RECORDED, CURRENT_READER_STATUS as S, readSecondCurrent, vendoredSelectorsMatchLane } from "../src/second-current-reader.js";
+import { ABIL_RECORDED, CURRENT_READER_STATUS as S, SECOND_READER_ROUTE_IDS, readSecondCurrent, routeSecondCurrentRead, vendoredSelectorsMatchLane } from "../src/second-current-reader.js";
 import { ABIL_POOL_VIEW_ABI, ABIL_ROUTER_VIEW_ABI, ERC20_DECIMALS_VIEW_ABI, ERC20_VIEW_ABI, ERC4626_VIEW_ABI, POOL_VIEW_ABI } from "../src/abi/second-reader-abi.js";
 import { LANE_RECEIPT_TOKEN, buildLanePermissionPreview, decideCurrentCandidates } from "../src/mainnet-job-lane.js";
 import { validateDecisionReceipt } from "../src/second-journey-state.js";
@@ -242,6 +242,43 @@ const byId = (r, id) => r.candidates.find((c) => c.id === id);
   assert.equal(breach.receipt.expected, "9000000");
   assert.equal(breach.receipt.found, "5000000");
   assert.equal(breach.receipt.evidence.block, BLOCK);
+}
+
+// 8. [A-762] Read-only routing of REAL reader rows: every per-protocol read / unknown / assumption is carried over
+//    unchanged, no row is dropped, nothing becomes a decision or permission.
+{
+  const check = (r) => {
+    const routed = routeSecondCurrentRead(r);
+    assert.deepEqual(routed.routes.map((x) => x.jobId), [...SECOND_READER_ROUTE_IDS]);
+    assert.deepEqual(routed.routes.map((x) => x.jobId), ["aave-usdc", "neverland-usdc", "curvance-usdc", "abil-spot", "kintsu-smon"]);
+    assert.equal(routed.routes.length + routed.unrouted.length, r.candidates.length, "no row dropped");
+    for (const route of routed.routes) {
+      const row = byId(r, route.jobId);
+      assert.equal(route.status, row.status);
+      assert.deepEqual(route.read, row.read ?? null, `${route.jobId}: read preserved exactly`);
+      for (const u of row.unknown || []) assert.ok(route.unknown.includes(u), `${route.jobId}: unknown ${u} kept`);
+      if (row.unknownClass) assert.equal(route.unknownClass, row.unknownClass);
+      assert.deepEqual([...route.assumptions], row.assumptions || []);
+      assert.equal(route.decision, "unknown"); assert.equal(route.action, "none");
+      assert.equal(route.executionPermission, false); assert.equal(route.liveExecution, false);
+    }
+    for (const u of routed.unrouted) assert.deepEqual(u, byId(r, u.id));
+    return routed;
+  };
+  const full = check(await readSecondCurrent(world().input));
+  const at = (routed, id) => routed.routes.find((x) => x.jobId === id);
+  assert.equal(at(full, "aave-usdc").evidence, "observed");
+  assert.equal(at(full, "neverland-usdc").evidence, "observed");
+  assert.ok(at(full, "neverland-usdc").unknown.includes("receipt_token_shape_assumed"));
+  assert.equal(at(full, "abil-spot").read.quote.value, null, "UNKNOWN quote is not coerced to a number");
+  assert.equal(at(full, "abil-spot").read.quote.status, "UNKNOWN");
+  const broken = check(await readSecondCurrent(world({ neverAave: false, curvanceAsset: ZERO }).input));
+  assert.equal(at(broken, "neverland-usdc").evidence, "unknown");
+  assert.equal(at(broken, "curvance-usdc").evidence, "unknown");
+  assert.equal(at(broken, "curvance-usdc").unknownClass, "conflicting");
+  const none = check(await readSecondCurrent({ profile: PROFILE, piggyAddress: PIGGY }));
+  for (const route of none.routes) { assert.equal(route.evidence, "unknown"); assert.equal(route.read, null); }
+  assert.equal(at(none, "abil-spot").unknownClass, "missing");
 }
 
 console.log("second-current-reader: PASS");

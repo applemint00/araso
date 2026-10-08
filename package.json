@@ -2,6 +2,7 @@
   "name": "araso",
   "version": "0.0.1",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite app --host 0.0.0.0",
@@ -10,6 +11,7 @@
     "relayer": "node --env-file=.env relayer/src/server.mjs",
     "test": "node app/test/run-all.mjs",
     "relayer:test": "node relayer/test/smoke.mjs",
+    "relayer:gift-test": "node relayer/test/gift-gas-ledger.mjs && node relayer/test/gift-gas-service.mjs && node relayer/test/gift-gas-route.mjs && node relayer/test/gift-sponsor-service.mjs",
     "test:security": "node relayer/test/grant-launch-gate.mjs && node relayer/test/deploy-headers.mjs"
   },
   "dependencies": {

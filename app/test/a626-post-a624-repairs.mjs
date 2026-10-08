@@ -1,4 +1,5 @@
 // [A-626] POST-A624 SMALL PRODUCT REPAIRS — focused regression test.
+// [A-786 RE-PIN] Home paper is drawn x1.10 (style.css --homePaperK) so its measured width is 282 (256.338*1.1=281.97), and HISTORY derives its width from the live paper rect (main.js alignRecordsCardToHomePaper) = 282. Intended size change only. 
 //   node app/test/a626-post-a624-repairs.mjs
 //
 // Part 1 (no browser): A cue hold timing (pure TAP_CUE_TIMING) + reveal wiring; B additional-Piggy
@@ -255,7 +256,7 @@ async function live() {
   await waitFor(`window.__a626.snap().open`);
   await wait(800);
   const open0 = await snap();
-  check("D web: HISTORY open → Chog hit inert, HOME mount NOT inert", [open0.hitInert, open0.mountInert, open0.paperW, open0.anchorW], [true, false, 256, 256]);
+  check("D web: HISTORY open → Chog hit inert, HOME mount NOT inert", [open0.hitInert, open0.mountInert, open0.paperW, open0.anchorW], [true, false, 376, 376]); // pre-A-833 baseline: [true, false, 282, 282] (v10 card at 1440x900 = 376)
   const cp2 = await ev("window.__a626.chog()");
   check("D web: Chog center is not a pointer target while HISTORY is open", await ev(`document.elementFromPoint(${cp2.x}, ${cp2.y})?.closest("#chogHomeHit") != null`), false);
   await c.tapAt(cp2.x, cp2.y);
@@ -267,14 +268,14 @@ async function live() {
   await c.key(" ", "Space", 32, " ");
   await wait(900);
   s = await snap();
-  check("D web: after Chog pointer/Enter/Space → HOME 256, HISTORY 256, still open (no 10px collapse)", [s.paperW, s.anchorW, s.open], [256, 256, true]);
+  check("D web: after Chog pointer/Enter/Space → HOME 256, HISTORY 256, still open (no 10px collapse)", [s.paperW, s.anchorW, s.open], [376, 376, true]); // pre-A-833 baseline: [282, 282, true]
   check("D web: identity switch via Mochi records still works (HOME live)", await tap(`.homePaper__records[data-piggy-id="${mochiId}"]`) && (await waitFor(`window.__a626.snap().identity === "Mochi"`)), true);
 
   // D — close restores Chog immediately
   check("D web: HISTORY close reachable", await tap("#recordsCardClose"), true);
   await wait(600);
   s = await snap();
-  check("D web: after close → Chog hit live again, HOME unchanged", [s.open, s.hitInert, s.paperW], [false, false, 256]);
+  check("D web: after close → Chog hit live again, HOME unchanged", [s.open, s.hitInert, s.paperW], [false, false, 376]); // pre-A-833 baseline: [false, false, 282]
 
   // positive control — the visible +Piggy with an OPEN paper (HISTORY closed) still starts the existing
   // path once. (Its failure in this authenticator-less Chrome re-renders Home; run last.)

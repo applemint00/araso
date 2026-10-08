@@ -102,14 +102,15 @@ function anchorCenter() {
   const cx = ANCHOR_BOARD_CX;
   const cy = ANCHOR_BOARD_CY;
   // GROUP 변환의 역함수로 이 board 중심을 "엔터그룹 이전" 무대 좌표로 되돌린다.
-  const zx = (cx - GROUP_DX) / GROUP_SCALE;
-  const zy = (cy - GROUP_DY) / GROUP_SCALE;
+  const zx = legacyDims.zx ?? (cx - GROUP_DX) / GROUP_SCALE; // [A-831] legacyDims.zx/zy = the Home card centre (provider) in stage units; unset -> the fixed 1440-canon anchor
+  const zy = legacyDims.zy ?? (cy - GROUP_DY) / GROUP_SCALE;
   // delivery=1 시점 종이 크기(무대 단위, 아래 rw/rh 식의 델리버리 종착 크기 — [A-659] 이제
   // RECEIPT_DELIVERED_W/H, 옛 280×320 에 같은 배율을 곱한 값) 절반만큼 확대 중심에서 물러난
   // 자리를 도착 목표로 둔다 — 그래야 확대 pivot 과 종이 중심이 같아, zoom 이 1→1.18 로
   // 커지는 동안에도 화면 위치가 안 흔들린다.
-  return { cx, cy, zx, zy, tx: zx - RECEIPT_DELIVERED_W / 2, ty: zy - RECEIPT_DELIVERED_H / 2 };
+  return { cx, cy, zx, zy, tx: zx - legacyDims.w / 2, ty: zy - legacyDims.h / 2 }; // [A-831] legacyDims = RECEIPT_DELIVERED_W/H unless the 0.91 x Home card provider answers
 }
+const legacyDims = { w: RECEIPT_DELIVERED_W, h: RECEIPT_DELIVERED_H, zx: null, zy: null };
 
 // [A-681 MOBILE RETURN/RECEIPT — OWNER FINAL MOBILE CLOSEOUT A, 2026-10-03] On a phone (<=640)
 // the Receipt's throw/hand-off target and its settled/read position are the viewer-LEFT CONTENT
@@ -150,6 +151,14 @@ const READ_ZOOM_GAIN = 0.18;                    // drawAt `zoom = 1 + READ_ZOOM_
 const READ_ZOOM_MAX = 1 + READ_ZOOM_GAIN;
 const PIGGY_GATE_STAGE_Y = 250;                 // drawAt `y = 250` (Piggy at the gate; settle===0)
 const PIGGY_GATE_SIZE = 0.24;                   // drawAt `mix(0.24, 0.20, settle)` at settle===0
+// [A-831 · Cowork Q-C (c) · canon A-835 item 5] Receipt size = 0.91 x the Home card width. main.js registers a provider that answers the delivered Receipt's
+// viewport-px width; it replaces the fixed 280x320 x RECEIPT_SIZE_SCALE legacy size (and the legacy end of the 640..700 blend) by that width at the same aspect, about the
+// same legacy centre. Unregistered / answering null -> the exact previous size. Position = main.js returnLayout() (A-837).
+let receiptLegacySizeProvider = null;
+export function setReceiptLegacySizeProvider(fn) {
+  receiptLegacySizeProvider = typeof fn === "function" ? fn : null;
+}
+
 /**
  * Pure: viewport-space rail facts + the canvas's on-screen placement -> stage-unit Receipt target.
  * @param {{vw:number,vh:number,inset:number,topBound:number,cardCy:number,cardW:number,gap:number}|null} rail
@@ -169,13 +178,15 @@ export function receiptRailTarget(rail, view) {
   const bottomBound = piggyTopVp - rail.gap;
   const availH = bottomBound - rail.topBound;
   const railW = rail.vw - 2 * rail.inset;
-  const baseW = Math.min(rail.cardW, railW / READ_ZOOM_MAX, (availH / READ_ZOOM_MAX) * aspect);
+  // [A-831 Q-C] rail.sizeW = 0.91 x Home card width: the Receipt is that wide at every width (no height-limit shrink; arrangement above Piggy is A-837). pre-A-831: min(cardW, railW / zoom, availH / zoom x aspect)
+  const baseW = rail.sizeW > 0 ? Math.min(rail.sizeW, railW / READ_ZOOM_MAX, (Math.max(0, bottomBound) / ((1 + READ_ZOOM_MAX) / 2)) * aspect) : Math.min(rail.cardW, railW / READ_ZOOM_MAX, (availH / READ_ZOOM_MAX) * aspect);
   if (!(baseW > 0)) return null;
   const baseH = baseW / aspect;
   const readH = baseH * READ_ZOOM_MAX;
   const cyLo = rail.topBound + readH / 2;
   const cyHi = bottomBound - readH / 2;
-  const cyVp = Math.max(cyLo, Math.min(cyHi, rail.cardCy));
+  // [A-831 Q-C] a 0.91 x Home card paper can be taller than the band above Piggy: then it stays bottom-anchored on the gap (cyHi), like the shorter papers, instead of top-aligned. pre-A-831: Math.max(cyLo, Math.min(cyHi, rail.cardCy))
+  const cyVp = rail.sizeW > 0 && cyLo > cyHi ? cyHi : Math.max(cyLo, Math.min(cyHi, rail.cardCy));
   const toStageX = (vx) => ((vx - view.left) / view.k - GROUP_DX) / GROUP_SCALE;
   const toStageY = (vy) => ((vy - view.top) / view.k - GROUP_DY) / GROUP_SCALE;
   const w = baseW / (view.k * GROUP_SCALE);
@@ -457,14 +468,27 @@ export function createReturnRenderer(canvas, opts) {
     // module scope) — see anchorCenter() above for why this is no longer a per-draw viewport
     // read.
     // [A-681] Mobile: viewer-left CONTENT rail target (receiptRailTarget above); null -> legacy.
+    // [A-831] legacy delivered size = 0.91 x Home card (provider) at the legacy aspect, about the legacy centre; no provider -> RECEIPT_DELIVERED_W/H (anchorCenter reads legacyDims).
+    legacyDims.w = RECEIPT_DELIVERED_W; legacyDims.h = RECEIPT_DELIVERED_H; legacyDims.zx = null; legacyDims.zy = null;
+    const legacyVp = receiptLegacySizeProvider ? receiptLegacySizeProvider() : null; // { w, cx, cy } viewport px: 0.91 x Home card width, Home card centre
+    if (legacyVp && legacyVp.w > 0) {
+      const cr0 = canvas.getBoundingClientRect();
+      const k0 = cr0.width / BOARD_W;
+      if (k0 > 0) {
+        legacyDims.w = legacyVp.w / (k0 * GROUP_SCALE); legacyDims.h = legacyVp.h > 0 ? legacyVp.h / (k0 * GROUP_SCALE) : (legacyDims.w * RECEIPT_DELIVERED_H) / RECEIPT_DELIVERED_W; // [A-837] h = the paper's own rendered aspect when main.js measured it
+        legacyDims.zx = ((legacyVp.cx - cr0.left) / k0 - GROUP_DX) / GROUP_SCALE; legacyDims.zy = ((legacyVp.cy - cr0.top) / k0 - GROUP_DY) / GROUP_SCALE;
+      }
+    }
     let railTarget = null;
+    // [A-837] the 640/641 blend hand-over is gone: the Receipt is placed by main.js returnLayout() through the size provider at every width. `receiptRail` is kept as the
+    // public option return-view.js (hash-pinned) forwards; main.js no longer passes it.
     if (receiptRail) {
       const cr = canvas.getBoundingClientRect();
       railTarget = receiptRailTarget(receiptRail, { left: cr.left, top: cr.top, k: cr.width / BOARD_W });
     }
     const anchor = railTarget || anchorCenter();
-    const delW = railTarget ? railTarget.w : RECEIPT_DELIVERED_W;
-    const delH = railTarget ? railTarget.h : RECEIPT_DELIVERED_H;
+    const delW = railTarget ? railTarget.w : legacyDims.w;
+    const delH = railTarget ? railTarget.h : legacyDims.h;
 
     let x = mix(210, 520, emerge), y = 250;
     x = mix(x, 880, settle); y = mix(y, 508, settle);

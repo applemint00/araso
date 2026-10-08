@@ -27,6 +27,8 @@ import { authRequestForPiggy, bindSigner, selectionContext, switchSelection } fr
 import { issuePermission, authorize, consume, permissionNonce, cancel as cancelPermission, PERMISSION_STATE } from "../src/permission-envelope.js";
 import { filterHistory, historyIdentityLabel, resolveHistorySelection } from "../src/history-filter.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
+// [A-791] main's authorizeMoneyAction now runs the A-763 destination provenance producer (real module, injected like the rest).
+import { deriveDestinationProvenance, DESTINATION_SOURCE } from "../src/execution-safety.js";
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 function cut(startMarker, endMarker) {
@@ -153,6 +155,7 @@ function openApp(storage, { address = null, secondJourneyCompletedOnce = true, p
     createPiggy, loadRegistry, migrateSinglePiggy, normalizePiggy, projectRegistryTotals, saveRegistry,
     filterHistory, historyIdentityLabel, resolveHistorySelection,
     issuePermission, authorize, consume, permissionNonce, cancelPermission, PERMISSION_STATE,
+    deriveDestinationProvenance, DESTINATION_SOURCE,
     authRequestForPiggy, bindSigner, selectionContext, switchSelection,
     createSecp256k1SigningSession, getEvmAddress, toViemAccount,
     safeLocalStorage: () => storage,
@@ -400,8 +403,31 @@ await check("g1. a correctly-derived signer for the selected Piggy matches exact
   const signer = app.state.moneyIntent.permission.signerAddress;
   assert.equal(signer.toLowerCase(), rowB.address.toLowerCase()); // selected Piggy == active signer
   assert.equal(app.state.activeSignerAddress.toLowerCase(), rowB.address.toLowerCase());
+  // [A-791 expectation update, named reason: the A-763 destination producer now sits at this authorize boundary. DEST is not one of
+  // this device's Piggies, so it is first-seen (gate ASK) and the product has no strong-confirmation step -> refused fail-closed.
+  // The signer/selection match this check is about is still proven: the same envelope shape with a VOUCHED destination (Honeybun,
+  // a Piggy in this device's records) authorizes ok:true below (g1b).]
   const out = app.authorizeMoneyAction({ piggyId: rowB.id, signerAddress: signer, action: "send_money", asset: "USDC", amount: "3", chain: CHAIN, destination: DEST });
+  assert.deepEqual({ ...out }, { ok: false, reason: "destination_needs_strong_confirmation" });
+});
+
+await check("g1b. [A-791] the matching signer + a destination vouched by this device's Piggy records (Honeybun) authorizes ok:true; the producer adds nothing to the permission", async () => {
+  const app = openApp(storage, { address: firstAddress, secondJourneyCompletedOnce: true, piggyName: "Honeybun" });
+  const snap = app.moneyPiggiesSnapshot();
+  const rowB = snap.piggies.find((p) => p.id === piggy2.id);
+  const honey = snap.piggies.find((p) => p.id === `legacy-${firstAddress.toLowerCase()}`);
+  app.applyPiggySelection(rowB);
+  app.setRequestPrf(requestPrfWith(fakeClient()));
+  app.state.moneyIntent = { piggyId: rowB.id, status: PERMISSION_STATE.AWAITING, action: "send_money", asset: "USDC", amount: "3", destination: honey.address };
+  await app.requestMoneyPermission();
+  assert.equal(app.state.moneyIntent.status, PERMISSION_STATE.PERMITTED);
+  const signer = app.state.moneyIntent.permission.signerAddress;
+  const out = app.authorizeMoneyAction({ piggyId: rowB.id, signerAddress: signer, action: "send_money", asset: "USDC", amount: "3", chain: CHAIN, destination: honey.address });
   assert.equal(out.ok, true);
+  assert.equal(out.nonce, app.state.moneyIntent.permission.nonce);
+  // a mismatch that authorize() already refuses stays refused — the producer never turns a refusal into a pass
+  const wrongAmount = app.authorizeMoneyAction({ piggyId: rowB.id, signerAddress: signer, action: "send_money", asset: "USDC", amount: "4", chain: CHAIN, destination: honey.address });
+  assert.deepEqual([wrongAmount.ok, wrongAmount.reason], [false, "amount_mismatch"]);
 });
 
 await check("g2. a signer that derives to a DIFFERENT address than the selected Piggy fails closed — no envelope, session torn down, no money authorized", async () => {

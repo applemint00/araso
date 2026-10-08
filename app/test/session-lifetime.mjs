@@ -22,6 +22,8 @@ import { getEvmAddress, createSecp256k1SigningSession } from "@category-labs/mer
 import { toViemAccount } from "@category-labs/mera/viem";
 import { selectionContext, switchSelection } from "../src/piggy-session.js";
 import { issuePermission, authorize, consume, permissionNonce } from "../src/permission-envelope.js";
+// [A-791] authorizeMoneyAction now runs the A-763 destination provenance producer (real module) over this device's Piggy records.
+import { deriveDestinationProvenance, DESTINATION_SOURCE } from "../src/execution-safety.js";
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 function cut(startMarker, endMarker) {
@@ -134,6 +136,11 @@ function buildApp({ grantThrows = false } = {}) {
     state, console, Set, Map, Array, Object, Date, JSON, Promise,
     createSecp256k1SigningSession, getEvmAddress, toViemAccount,
     crypto: globalThis.crypto,
+    // [A-791 harness wiring] the destination producer at the authorize boundary reads this device's Piggy records. The envelope
+    // destination in these checks (DEST) is modelled as another Piggy this device holds, so provenance is vouched and the checks
+    // keep testing what they test (session / nonce lifetime). Unvouched destinations are refused — covered by a791 M5.
+    deriveDestinationProvenance, DESTINATION_SOURCE,
+    moneyPiggiesSnapshot: () => ({ piggies: [{ id: "dest-piggy", address: DEST }] }),
     localStorage: storage,
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     setScene: (...a) => { calls.scenes.push(a); },

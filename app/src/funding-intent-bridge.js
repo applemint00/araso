@@ -12,8 +12,14 @@
 // 그 Piggy 에 돈이 생겼다는 것과, 그 돈으로 무엇을 해도 된다는 것은 **다른 일**이다(Birth ≠ Funding ≠ Job Permission).
 // 원래 행동은 여전히 자기 권한(Face ID/passkey)과 Receipt 를 따로 받는다.
 
-import { FUNDING_STATE, fundingEvidenceKey } from "./funding-entry.js";
+import { FUNDING_STATE, FUNDING_RAIL, FUNDING_PLAN_STATE, fundingEvidenceKey, planFundingRoute, gasTopupAllowed } from "./funding-entry.js";
 import { checkPlanApproval } from "./add-money.js";
+import {
+  buildRelayQuoteRequest, validateRelayQuote, verifyRelayDepositBinding, snapshotRelayJson, parseUnits,
+  MONAD_CHAIN_ID, MONAD_USDC_ADDRESS, MONAD_USDC_DECIMALS,
+} from "./funding-rail-relay.js";
+import { ROUTE_CLASS, hasOwnSafe } from "./execution-safety.js";
+import { sha256Sync } from "./piggy-session.js";
 
 const AMOUNT = /^\d+(\.\d+)?$/;
 
@@ -294,6 +300,250 @@ export function planLegReceipts(plan) {
   return (plan?.legs || [])
     .filter((l) => l.state === LEG_STATE.CONFIRMED && l.receipt)
     .map((l) => ({ key: l.idempotencyKey, piggyId: l.piggyId, evidenceKey: l.evidenceKey, receipt: { ...l.receipt } }));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [A-877] Relay 견적 어댑터(A-872) → 제공자 중립 계획 경계(funding-entry `planFundingRoute`) 연결.
+//
+// 런타임 배선만 있다 — 화면 호출자 0, 네트워크 0(fetch 를 부르지 않는다; 견적 원문은 호출자가 넘긴다),
+// 지갑·서명·전송·브로드캐스트 0. 결과는 **검증된 계획 데이터** 하나 또는 거절/막힘이다.
+//   · 요청 본문(데이터만): 도착 = Monad USDC 고정, 받는 주소 = 의도의 Piggy 주소, top-up = 꺼짐.
+//     top-up 은 `fundingPolicy.gasTopup.enabled === true`(미래 정책 입력)일 때만 켜진다 — 호출자의 다른 값은 무시.
+//   · 검증 기대값(받는 주소·출발 체인/토큰/수량·top-up)은 **묶음에서만** 온다. `validate` 로 덮어쓸 수 없다
+//     (A-872 `requestRelayQuote` 는 validate 를 마지막에 펼친다 — 이 배선은 그 함수를 쓰지 않는다).
+//   · Relay 검증 통과 → 정규화 → `planFundingRoute` 가 묶음과 다시 한 칸씩 대조하고 실행 안전 게이트를 돌린다.
+
+export const RELAY_FUNDING_RAIL_ID = FUNDING_RAIL.INTERNAL_ROUTE;
+
+const RELAY_ADDR = /^0x[0-9a-fA-F]{40}$/;
+// [A-895 P-A · N1] 견적 원문 크기 상한(문자). 이보다 크면 읽지 않는다(멈춤만 가능한 입력).
+const RELAY_MAX_QUOTE_JSON = 262144;
+const relaySame = (a, b) => typeof a === "string" && typeof b === "string" && RELAY_ADDR.test(a) && RELAY_ADDR.test(b) && a.toLowerCase() === b.toLowerCase();
+
+function relayReject(reasons, extra = {}) {
+  return Object.freeze({
+    state: FUNDING_PLAN_STATE.REJECTED, ok: false, reasons: Object.freeze([...new Set(reasons)]),
+    decision: null, safety: null, plan: null, executionAuthority: false, permissionGranted: false, ...extra,
+  });
+}
+
+/** 이 레일이 받을 수 있는 도착 묶음인가(Relay 어댑터는 Monad 메인넷 USDC 로 고정되어 있다). */
+function relayDestinationOk(binding) {
+  const d = binding?.destination;
+  return !!d && d.chainId === MONAD_CHAIN_ID && relaySame(d.token, MONAD_USDC_ADDRESS) && d.decimals === MONAD_USDC_DECIMALS;
+}
+
+function topupInput(fundingPolicy) {
+  if (!gasTopupAllowed(fundingPolicy)) return { topupGas: false };
+  // [A-877 R2 · L2] 자기 속성만(gasTopupAllowed 가 이미 own 으로 확인했다).
+  const g = Object.getOwnPropertyDescriptor(fundingPolicy, "gasTopup")?.value;
+  const amount = g ? Object.getOwnPropertyDescriptor(g, "amountUnits")?.value : undefined;
+  return { topupGas: true, topupGasAmount: amount };
+}
+
+/**
+ * Relay quote/v2 요청 본문(데이터만, 아무것도 보내지 않는다). 묶음과 의도가 맞지 않으면 열지 않는다.
+ * [A-895 P-A F4] `refundTo` 는 항상 명시한다(기본값 = 결제자 `user` 를 본문에 **적어 넣는다**) · `includeProtocolData:true`.
+ */
+export function relayQuoteRequestForFunding({ intent, binding, user, refundTo, fundingPolicy = null } = {}) {
+  if (!intent || !binding) return { ok: false, reasons: ["binding_missing"], request: null };
+  if (!relayDestinationOk(binding)) return { ok: false, reasons: ["binding_destination_not_supported_by_rail"], request: null };
+  if (!relaySame(binding.recipient, intent.target)) return { ok: false, reasons: ["binding_recipient_not_intent"], request: null };
+  const built = buildRelayQuoteRequest({
+    user,
+    recipient: binding.recipient,
+    refundTo: refundTo === undefined ? user : refundTo,
+    originChainId: binding.source?.chainId,
+    originCurrency: binding.source?.token,
+    amount: binding.inputAmountUnits,
+    ...topupInput(fundingPolicy),
+  });
+  return { ok: built.ok, reasons: built.reasons, request: built.request };
+}
+
+function relayCost(usd) {
+  // totalImpact.usd 는 손실이 음수다. 손실 크기 = 총 실효 비용. 알 수 없으면 null(게이트가 UNKNOWN 으로 멈춘다).
+  const s = typeof usd === "number" && Number.isFinite(usd) ? String(usd) : typeof usd === "string" ? usd.trim() : "";
+  if (/^-\d+(\.\d+)?$/.test(s)) return s.slice(1);
+  if (/^\d+(\.\d+)?$/.test(s)) return "0";
+  return null;
+}
+
+// ── [A-895 P-A · F2] 시뮬레이션 결과 칸 ─────────────────────────────────────────────
+// 시뮬레이션 결과는 **검증된 단계(calldata)와 같은 해시**에 묶여야만 받는다. 해시가 다르면 다른 바이트를 돌린 결과다.
+// 모양: { status:"ok"|"fail"|"incomplete", calldataHash, chainId, blockNumber, origin:{payerDebitedUnits,depositoryCreditedUnits} }
+// 이 칸은 **출발 체인 다리**만 말한다(도착 쪽 정산은 로컬에서 증명 불가 — A-886 §6). 호출자가 도착 사후조건을
+// 주장해도 이 경로는 게이트에 넘기지 않는다. 칸의 정직성(실제로 돌렸는가)은 호출자 책임이다 — 여기서는 모양과 묶음만 본다.
+
+const SIM_KEYS = ["status", "calldataHash", "chainId", "blockNumber", "origin"];
+const SIM_ORIGIN_KEYS = ["payerDebitedUnits", "depositoryCreditedUnits"];
+const HEX64 = /^[0-9a-f]{64}$/;
+const UINT_STR = /^\d{1,78}$/;
+
+/** 검증된 계획 단계들의 정본 바이트열 sha256(소문자 hex). 호출자는 시뮬레이션을 돌린 바로 그 단계로 이 해시를 만든다. */
+export function relayCalldataHash(steps) {
+  if (!Array.isArray(steps) || steps.length === 0 || steps.length > 64) return null;
+  const rows = [];
+  for (const st of steps) {
+    if (st === null || typeof st !== "object") return null;
+    const chainId = hasOwnSafe(st, "chainId") ? st.chainId : null;
+    const to = hasOwnSafe(st, "to") ? st.to : null;
+    const value = hasOwnSafe(st, "value") ? st.value : null;
+    const data = hasOwnSafe(st, "data") ? st.data : null;
+    if (!Number.isInteger(chainId) || typeof to !== "string" || typeof value !== "string" || typeof data !== "string") return null;
+    rows.push(`${chainId}|${to.toLowerCase()}|${value}|${data.toLowerCase()}`);
+  }
+  const digest = sha256Sync(new TextEncoder().encode(rows.join("\n")));
+  let hex = "";
+  for (const b of digest) hex += b.toString(16).padStart(2, "0");
+  return hex;
+}
+
+function ownOf(o, keys) {
+  const r = {};
+  for (const k of keys) r[k] = hasOwnSafe(o, k) ? o[k] : undefined;
+  return r;
+}
+
+/** @returns {{ok:boolean, reasons:string[], simulation:object|null}} simulation = 게이트로 넘길 { status, postconditions:null } */
+function checkRelaySimulation(rawSim, { calldataHash, originChainId, inputAmountUnits }) {
+  if (rawSim === undefined || rawSim === null) return { ok: true, reasons: [], simulation: null };
+  const bad = (r) => ({ ok: false, reasons: [r], simulation: null });
+  let sim;
+  try { sim = JSON.parse(JSON.stringify(rawSim)); } catch { return bad("simulation_malformed"); }
+  if (sim === null || typeof sim !== "object" || Array.isArray(sim)) return bad("simulation_malformed");
+  if (Object.keys(sim).some((k) => !SIM_KEYS.includes(k))) return bad("simulation_malformed");
+  const f = ownOf(sim, SIM_KEYS);
+  if (f.status !== "ok" && f.status !== "fail" && f.status !== "incomplete") return bad("simulation_malformed");
+  if (typeof f.calldataHash !== "string" || !HEX64.test(f.calldataHash)) return bad("simulation_malformed");
+  if (!Number.isInteger(f.chainId) || !Number.isSafeInteger(f.blockNumber) || f.blockNumber <= 0) return bad("simulation_malformed");
+  if (f.chainId !== originChainId) return bad("simulation_chain_mismatch");
+  if (calldataHash === null || f.calldataHash !== calldataHash) return bad("simulation_not_bound_to_calldata");
+  if (f.status === "fail") return bad("simulation_failed");
+  if (f.status === "ok") {
+    const o = f.origin;
+    if (o === null || typeof o !== "object" || Array.isArray(o) || Object.keys(o).some((k) => !SIM_ORIGIN_KEYS.includes(k))) return bad("simulation_malformed");
+    const po = ownOf(o, SIM_ORIGIN_KEYS);
+    if (typeof po.payerDebitedUnits !== "string" || !UINT_STR.test(po.payerDebitedUnits)
+      || typeof po.depositoryCreditedUnits !== "string" || !UINT_STR.test(po.depositoryCreditedUnits)) return bad("simulation_malformed");
+    if (po.payerDebitedUnits !== inputAmountUnits || po.depositoryCreditedUnits !== inputAmountUnits) return bad("simulation_postcondition_mismatch");
+  }
+  return { ok: true, reasons: [], simulation: { status: f.status, postconditions: null } };
+}
+
+/**
+ * Relay 견적 원문 → 검증된 충전 계획(또는 거절/막힘). 순수 함수. 네트워크·서명·전송 0.
+ *
+ * @param {object} p
+ * @param {object} p.intent       `startFunding(...).intent` (railId 는 RELAY_FUNDING_RAIL_ID 여야 한다)
+ * @param {object} p.binding      { source:{chainId,token,decimals}, destination:{chainId,token,decimals}, recipient, inputAmountUnits }
+ * @param {object} p.rawQuote     Relay quote/v2 응답 원문(호출자가 가져온 것, includeProtocolData:true)
+ * @param {string} p.payer        [A-895 P-A] 결제자 = 출발 체인에서 서명·지출하는 계정. 예치 calldata 의 depositor 가 이것이어야 한다.
+ * @param {string} [p.refundTo]  [A-898] 견적 요청에 실어 보낸 refundTo(생략 = payer, relayQuoteRequestForFunding 기본과 같다). 출발 쪽 환불 수령자가 이것과 다르면 거절(A-901 D2).
+ * @param {object} [p.simulation] [A-895 P-A] 시뮬레이션 결과 칸(relayCalldataHash 로 같은 단계에 묶인 것만)
+ * @param {number} p.receivedAtMs 견적을 받은 시각 · p.expiresAtMs 견적 만료 시각 — 없으면 게이트 UNKNOWN
+ * @param {object} p.safety       planFundingRoute 의 safety 그대로
+ * @param {object} [p.fundingPolicy]
+ * @param {object} [p.validate]   { maxImpactPercent?, maxEtaSeconds?, minOutFloor? } — 묶음 칸은 덮지 못한다
+ */
+export function planRelayFunding({
+  intent, binding, rawQuote, payer, refundTo, simulation, receivedAtMs, expiresAtMs, safety = {}, fundingPolicy = null, validate = {},
+} = {}) {
+  if (!intent || intent.railId !== RELAY_FUNDING_RAIL_ID) return relayReject(["quote_rail_not_intent"]);
+  if (!binding || !binding.source) return relayReject(["binding_missing"]);
+  if (!relayDestinationOk(binding)) return relayReject(["binding_destination_not_supported_by_rail"]);
+  // [A-895 P-A] 견적 원문은 **한 번** 굳힌다 — 이후 검증·묶음·계획은 전부 이 사본에서만 나온다(getter/Proxy 가 두 번째 읽기에서 달라질 수 없다).
+  const raw = snapshotRelayJson(rawQuote, RELAY_MAX_QUOTE_JSON); // null-prototype 사본(오염된 Object.prototype 이 칸을 채울 수 없다)
+  if (raw === undefined) return relayReject(["relay_quote_unreadable"]);
+  // [A-895 P-A] 시계는 한 번 읽는다: 게이트와 마감(deadline) 검사가 같은 nowMs 를 쓴다.
+  let nowMs;
+  let safetyForGate;
+  try {
+    const sf = safety !== null && typeof safety === "object" && !Array.isArray(safety) ? safety : {};
+    const copy = { ...sf }; // 자기 속성 한 번 읽기(getter 도 한 번)
+    const own = hasOwnSafe(copy, "nowMs") ? copy.nowMs : undefined;
+    nowMs = typeof own === "number" && Number.isFinite(own) ? own : Date.now();
+    safetyForGate = { ...copy, nowMs };
+  } catch {
+    return relayReject(["input_unreadable"]);
+  }
+  const topup = topupInput(fundingPolicy);
+  const v = validate && typeof validate === "object" ? validate : {};
+  let checked;
+  try {
+  checked = validateRelayQuote(raw, {
+    maxImpactPercent: v.maxImpactPercent,
+    maxEtaSeconds: v.maxEtaSeconds,
+    minOutFloor: v.minOutFloor,
+    // 아래 칸은 묶음에서만 — 위 선택 칸 뒤에 둬서 덮이지 않는다.
+    recipient: binding.recipient,
+    originChainId: binding.source.chainId,
+    originCurrency: binding.source.token,
+    amount: binding.inputAmountUnits,
+    topupGas: topup.topupGas,
+    topupGasAmount: topup.topupGasAmount,
+  });
+  } catch { return relayReject(["relay_quote_unreadable"]); } // 던지지 않는다
+  if (!checked.ok) return relayReject(checked.reasons.map((r) => `relay_${r}`));
+
+  // [A-895 P-A · F1/F3] 예치 calldata 를 해독해 묶는다: id=orderId · depositor=payer · amount=input · token=source ·
+  // 대상=고정된 /chains depository · approve 금액=input · 마감 유효. 하나라도 못 증명하면 계획이 없다.
+  let bound;
+  try {
+  bound = verifyRelayDepositBinding(raw, {
+    originChainId: binding.source.chainId,
+    payer,
+    refundTo: refundTo === undefined ? payer : refundTo, // [A-898] A-901 D2: 환불 수령자 대조
+    recipient: binding.recipient, // [A-898] A-901 review: monad-side refund must go to the request recipient
+    sourceToken: binding.source.token,
+    inputAmountUnits: binding.inputAmountUnits,
+    nowMs,
+  });
+  } catch { return relayReject(["relay_quote_unreadable"]); }
+  if (!bound.ok) return relayReject(bound.reasons.map((r) => `relay_${r}`));
+
+  const planSteps = checked.plan.steps.map((s) => ({ chainId: s.chainId, to: s.to, value: s.value, data: s.data, kind: s.kind }));
+  // [A-895 P-A · F2] 시뮬레이션 칸: 같은 calldata 해시에 묶인 것만. 없으면 "unavailable"(게이트가 정책대로 멈춘다).
+  const simChecked = checkRelaySimulation(simulation, {
+    calldataHash: relayCalldataHash(planSteps),
+    originChainId: binding.source.chainId,
+    inputAmountUnits: binding.inputAmountUnits,
+  });
+  if (!simChecked.ok) return relayReject(simChecked.reasons.map((r) => `relay_${r}`));
+
+  const q = checked.quote;
+  const curIn = raw?.details?.currencyIn?.currency ?? {};
+  const expectedOut = parseUnits(q.netUsdc, MONAD_USDC_DECIMALS);
+  const minOut = parseUnits(q.minOutUsdc, MONAD_USDC_DECIMALS);
+  const deducted = parseUnits(q.topupGas.usdcDeducted, MONAD_USDC_DECIMALS);
+  const percent = q.totalImpact?.percent;
+  const railQuote = {
+    railId: RELAY_FUNDING_RAIL_ID,
+    validated: true,
+    quoteId: q.requestId,
+    sourceChainId: q.origin.chainId,
+    sourceToken: q.origin.token,
+    sourceDecimals: curIn.decimals,
+    inputAmountUnits: q.origin.amountUnits,
+    destinationChainId: q.destination.chainId,
+    destinationToken: q.destination.token,
+    destinationDecimals: MONAD_USDC_DECIMALS,
+    recipient: q.destination.recipient,
+    expectedOutUnits: expectedOut === null ? null : expectedOut.toString(),
+    minOutUnits: minOut === null ? null : minOut.toString(),
+    timeEstimateSeconds: q.timeEstimateSeconds,
+    priceImpactPct: typeof percent === "number" && Number.isFinite(percent) ? (percent < 0 ? -percent : 0) : null,
+    totalEffectiveCost: relayCost(q.totalImpact?.usd),
+    topupGas: { requested: q.topupGas.requested, deductedUnits: deducted === null ? null : deducted.toString() },
+    routeClass: ROUTE_CLASS.INTENT_LIQUIDITY,
+    // 견적이 돌아왔다는 사실만 말한다("깊다" 가 아니다).
+    liquidityStatus: "quoted",
+    receivedAtMs,
+    expiresAtMs,
+    steps: planSteps,
+    ...(simChecked.simulation ? { simulation: simChecked.simulation } : {}),
+  };
+  return planFundingRoute({ intent, binding, railQuote, safety: safetyForGate, fundingPolicy });
 }
 
 /** "N 중 M 놓임, K 확인 필요" 의 **숫자만**(문구는 OWNER). */

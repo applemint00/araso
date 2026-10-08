@@ -160,8 +160,9 @@ check("[A-662] alignRecordsCardToHomePaper() calls stackMobileRecordsOverHome() 
 const workPoseSrc = cut("function mountSendCardWorkPose({", "\n  loadWorkAssetsCached()");
 check("mountSendCardWorkPose()'s fit() checks the SAME HOME_CHAR_SCALE_FLOOR condition applyHomeCharacterScaleFloor() uses",
   /s < HOME_CHAR_SCALE_FLOOR/.test(workPoseSrc), true);
-check("[A-681] fit()'s floor branch now covers BOTH clock === \"send\" and clock === \"second\" (Explore joins First Job's mobile floor/anchor — mid-band below stays send-only, web untouched)",
-  /\(clock === "send" \|\| clock === "second"\) && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR/.test(workPoseSrc), true);
+// pre-A-837 baseline: /\(clock === "send" \|\| clock === "second"\) && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR/ (Explore joined the First Job floor branch)
+check("[A-837 re-pin of A-681] fit()'s legacy floor branch is clock === \"send\" only; Second rides the keyframe board (applyDesktopBoardToCanvas) like Home and has no legacy branch",
+  /if \(clock === "send" && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR\)/.test(workPoseSrc) && !/clock === "second" &&/.test(workPoseSrc.replace(/\/\/.*$/gm, "")), true);
 check("[A-681] fit()'s mid-band branch (width>=641) is still clock === \"send\" only — Explore's web fit is untouched",
   /if \(clock === "send" && board && s >= HOME_CHAR_SCALE_FLOOR\)/.test(workPoseSrc), true);
 check("fit()'s floor branch derives k the same way applyHomeCharacterScaleFloor() does (HOME_CHAR_SCALE_FLOOR / s), then applies the A-681 mobile-only size boost on top (kBoosted) for the actual canvas size/position",
@@ -269,19 +270,20 @@ check("narrow (≤640px) .stage[data-scene=\"sendstay\"] .cardAnchor override is
 // ── 9. NAME CHOG — A-608 pass 2 web freeze: "Name Chog stage-level move" reverted at web,
 // kept at narrow. Legacy web element (`.nameScene__chogWeb`, byte-identical to pre-A-607)
 // reinstated; the new master-size element (`.nameScene__chog`) hidden at web. ──────────────
-check(".nameScene__chog base rule is display:none (hidden at web — legacy element takes over there)",
+check(".nameScene__chog base rule is display:none (A-837: shown at every width by the scene-scoped .stage--name rule)",
   /\.nameScene__chog \{\s*\n\s*display:\s*none;/.test(CSS), true);
 check("narrow .nameScene__chog override sets display:block",
   /@media \(max-width: 640px\) \{\s*\n\s*\.nameScene__chog \{\s*\n\s*display:\s*block;/.test(CSS), true);
-check(".nameScene__chogWeb legacy rule exists with the exact pre-A-607 coordinates (left196/top556/width104)",
-  /\.nameScene__chogWeb \{\s*\n\s*position:\s*absolute;\s*\n\s*left:\s*196px;\s*\n\s*top:\s*556px;\s*\n\s*width:\s*104px;/.test(CSS), true);
-check(".nameScene__chogWeb hidden at narrow (only the new master-size element shows there)",
-  /@media \(max-width: 640px\) \{\s*\n\s*\.nameScene__chogWeb \{\s*\n\s*display:\s*none;/.test(CSS), true);
-check("renderName() reinstates the legacy <img class=\"nameScene__chogWeb\"> inside #nameScene (same asset, chog_idle_fill.png)",
-  /<img class="nameScene__chogWeb" src="\$\{MOTION_DIR\}\/assets\/chog_idle_fill\.png"/.test(renderNameSrc), true);
-check("Save-time capture checks BOTH .nameScene__chogWeb and .nameScene__chog, picking whichever is actually visible (non-zero rect)",
-  /document\.querySelector\("\.nameScene__chogWeb"\)/.test(SRC) &&
-  /chogCandidates\.find\(\(el\) => el && el\.getBoundingClientRect\(\)\.width > 0\)/.test(SRC),
+// pre-A-837 baseline: `.nameScene__chogWeb` legacy rule (left196/top556/width104), its narrow display:none, the in-board <img class="nameScene__chogWeb"> in renderName() and
+// the Save-time capture over BOTH elements. A-837: one Name Chog at every width (the stage-level sibling), so all four are gone.
+check(".nameScene__chogWeb rules are gone (A-837: one Name Chog at every width)",
+  !/\.nameScene__chogWeb \{/.test(CSS), true);
+check("scene-scoped rule shows .nameScene__chog at every width",
+  /\.stage--name \.nameScene__chog \{\s*\n\s*display:\s*block;/.test(CSS), true);
+check("renderName() no longer renders the in-board nameScene__chogWeb <img>",
+  !/nameScene__chogWeb/.test(renderNameSrc), true);
+check("Save-time capture reads the single .nameScene__chog (non-zero rect guard kept)",
+  !/nameScene__chogWeb"\)/.test(SRC) && /const chogArt = document\.querySelector\("\.nameScene__chog"\);/.test(SRC) && /cbox\.width > 0 && cbox\.height > 0/.test(SRC),
   true);
 
 console.log(`\n${pass}/${pass + fail} PASS`);

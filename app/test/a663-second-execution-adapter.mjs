@@ -88,6 +88,9 @@ function stubClients({ sharesBefore = 0n, minted = 777n, depositHash = DEPOSIT_H
   const receipts = { [depositHash]: { status: failDeposit ? "reverted" : "success", blockNumber: 100n }, [redeemHash]: { status: failRedeem ? "reverted" : "success", blockNumber: 101n } };
   const storage = createMemoryStorage();
   const walletClient = {
+    // [A-791 harness wiring] the VIEM_SEND path now prepares first and runs the A-768 pre-sign assertion before sendTransaction;
+    // this stub returns a well-formed Monad-testnet eip1559 request carrying the tx fields unchanged.
+    async prepareTransactionRequest(t) { return { ...t, type: "eip1559", chainId: 10143, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, nonce: 7, gas: 21000n }; },
     async sendTransaction(tx) {
       if (requirePendingBeforeSend) {
         const pending = readSecondSendPending(storage, SCOPE, PIGGY_ID);

@@ -80,12 +80,15 @@ const rule = (candidateId, field, comparator, expected, eventId) => ({ kind: "ag
 // ═══ Part N ════════════════════════════════════════════════════════════════════════════════════════════════
 
 // ── the ACTUAL main.js lane functions, cut out and run against the real modules ──────────────────────────
-const LANE_FUNCTIONS = ["secondLaneMode", "secondLaneRows", "secondLaneDestinations", "keepSecondLaneDraftIfValid", "refreshSecondLaneCandidates", "recordSecondLaneDecision"];
+// [A-791 harness wiring] refreshSecondLaneCandidates now also routes the same read through the A-762 surface as evidence
+// (secondLaneRouteEvidence); the real function and its real imports are added to this cut.
+const LANE_FUNCTIONS = ["secondLaneMode", "secondLaneRows", "secondLaneDestinations", "keepSecondLaneDraftIfValid", "secondLaneRouteEvidence", "refreshSecondLaneCandidates", "recordSecondLaneDecision"];
 async function loadLane() {
   const url = (f) => pathToFileURL(path.join(SRC_DIR, f)).href;
   const body = LANE_FUNCTIONS.map(fnBody).join("\n\n").replaceAll("import.meta.env.DEV", "__env.DEV");
   const code = `
-import { readSecondCurrent } from ${JSON.stringify(url("second-current-reader.js"))};
+import { readSecondCurrent, routeSecondCurrentRead } from ${JSON.stringify(url("second-current-reader.js"))};
+import { routeSecondMainnetExecution, SECOND_MAINNET_DESCRIPTORS } from ${JSON.stringify(url("second-execution-adapter.js"))};
 import { decideCurrentCandidate, decideCurrentCandidates, exploreCandidateRows } from ${JSON.stringify(url("mainnet-job-lane.js"))};
 import { listVisibleJobFamilies } from ${JSON.stringify(url("second-job-readiness.js"))};
 import { exploreCandidateDestinations } from ${JSON.stringify(url("second-journey-view.js"))};
@@ -100,6 +103,7 @@ function secondJourneyScope() { return { accountId: state.address || "", chainId
 function safeLocalStorage() { return __io.store; }
 function render() { __io.renders += 1; }
 ${constDecl("SECOND_LANE_SELECTION_SOURCE")}
+${constDecl("SECOND_ROUTE_LOCKS")}
 ${body}
 export { ${LANE_FUNCTIONS.join(", ")} };
 `;
@@ -322,6 +326,17 @@ async function browserRun(browser, BASE, shots) {
   const realClick = async (sel, idx = 0) => { const r = await pointAt(sel, idx); if (!r) return "unreachable"; await p.mouse.click(r.x, r.y); return "pointer"; };
   const mustTap = async (sel, label, idx = 0) => { for (let i = 0; i < 6; i += 1) { if ((await realClick(sel, idx)) === "pointer") return; await sleep(600); } throw new Error(`${label}: ${sel} not pointer-reachable`); };
   const unlockIfLocked = async () => { for (let i = 0; i < 4; i += 1) { if (!(await p.locator("#loginChogButton").count())) return; await p.locator("#loginChogButton").click(); await sleep(2500); } };
+  // [A-891 CG-04/05] pre-A-891 baseline: after a reload with First done / Second not done, Explore opened by itself (~1.2 s, waitScene(["explore"])).
+  // Now (Owner 2026-10-08): quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore. forgetIntro() drops the once-per-user intro fact
+  // before a reload so a later reopen takes the same product path (Cowork 2026-10-08: before the intro the cue returns on every reload).
+  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const exploreViaTapMe = async (ms = 16000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
+    if (!(await p.locator(".chogHome__tapCue").count())) return `NOCUE:${await scene()}`;
+    await mustTap("#chogHomeHit", "Chog (tap me!)");
+    return waitScene(["explore"], 5000);
+  };
   const step = () => p.evaluate(() => document.querySelector("#exploreForm") ? "interests" : document.querySelector(".secondJourney__jitBtn") ? "jit" : document.querySelector("#secondSendButton") ? "readiness" : document.querySelector("#secondOkButton") ? "candidates" : document.querySelector("#secondJourneyCard") ? "note" : null);
   const decisionRows = () => p.evaluate(() => {
     const out = [];
@@ -346,9 +361,10 @@ async function browserRun(browser, BASE, shots) {
   };
   const reopenAt = async (w, h, wantStep) => {
     await p.setViewportSize({ width: w, height: h });
+    await forgetIntro(); // [A-891]
     await p.reload({ waitUntil: "networkidle" }); await sleep(600);
     await unlockIfLocked();
-    const sc = await waitScene(["explore"], 15000);
+    const sc = await exploreViaTapMe(); // [A-891] pre-A-891 baseline: await waitScene(["explore"], 15000)
     assert.equal(sc, "explore", `${w}: Explore reopens (First done, Second not done)`);
     for (let t0 = Date.now(); Date.now() - t0 < 6000;) { if ((await step()) === wantStep) break; await sleep(200); }
     assert.equal(await step(), wantStep, `${w}: reopens at ${wantStep}`);
@@ -387,6 +403,7 @@ async function browserRun(browser, BASE, shots) {
     });
     await p.reload({ waitUntil: "networkidle" }); await sleep(600);
     await unlockIfLocked();
+    await exploreViaTapMe(); // [A-891] pre-A-891 baseline: none — B1's first mustTap relied on Explore opening by itself (~1.2 s) after this reload
 
 
     await check("B1 candidates card (grow + asset-piece) shows pass order aave, abil, kintsu with 0 Receipts; Home -> 0 Receipts, quiet Home", async () => {

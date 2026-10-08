@@ -23,7 +23,7 @@
 // Exit code: 1 if any FAIL, else 0.
 
 import { spawn } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -45,10 +45,29 @@ const files = readdirSync(TEST_DIR)
   .filter((f) => filters.length === 0 || filters.some((x) => f.includes(x)))
   .sort();
 
+// [A-895 P-C / L9] The three relayer gift-gas suites (node only: no port bind, no network, no keys) run in `npm test` too.
+// They live under relayer/test, so they are listed explicitly (the other relayer suites bind a port or are launch-gate checks
+// run by `npm run test:security`). A row name is the repo-relative path so it cannot be confused with an app/test file.
+const RELAYER_TEST_DIR = path.resolve(TEST_DIR, "..", "..", "relayer", "test");
+export const RELAYER_SUITES = Object.freeze(["gift-gas-ledger.mjs", "gift-gas-service.mjs", "gift-gas-route.mjs", "gift-sponsor-service.mjs", "gift-sponsor-reconcile.mjs", "gift-sponsor-preflight.mjs", "gift-sponsor-vercel.mjs"]); // [A-906] + sponsor service; [A-913] + reconcile / preflight / vercel (pre-A-913 baseline: ends at gift-sponsor-service.mjs)
+// If relayer/test does not exist at all (this runner copied into an isolated harness tree, e.g. run-all-process-cleanup.mjs) there is
+// nothing to list. In the real repo the directory exists, so a missing listed suite is a readFileSync error = a hard failure, never a skip.
+// [L-1] The only exception is the isolated harness copy (run-all-process-cleanup.mjs), recognised by its temp-dir name; anywhere else a
+// missing relayer/test directory is a hard failure, never a silent skip.
+const ISOLATED_HARNESS_COPY = path.basename(path.resolve(TEST_DIR, "..", "..")).startsWith("araso-runall-");
+if (!existsSync(RELAYER_TEST_DIR) && !ISOLATED_HARNESS_COPY) {
+  console.log("FAIL  relayer/test directory is missing — the three relayer gift-gas suites cannot run");
+  process.exit(1);
+}
+const relayerFiles = (existsSync(RELAYER_TEST_DIR) ? RELAYER_SUITES : [])
+  .map((f) => `relayer/test/${f}`)
+  .filter((f) => filters.length === 0 || filters.some((x) => f.includes(x)));
+const abs = (f) => (f.startsWith("relayer/test/") ? path.join(RELAYER_TEST_DIR, f.slice("relayer/test/".length)) : path.join(TEST_DIR, f));
+
 // Run one suite in its own process group. Resolves { status, signal, error, out, timedOut }.
 function runSuite(file, env) {
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [path.join(TEST_DIR, file)], {
+    const child = spawn(process.execPath, [abs(file)], {
       cwd: path.resolve(TEST_DIR, "..", ".."),
       env,
       detached: true, // new process group; pgid === child.pid
@@ -81,8 +100,8 @@ function runSuite(file, env) {
 }
 
 const rows = [];
-for (const file of files) {
-  const src = readFileSync(path.join(TEST_DIR, file), "utf8");
+for (const file of [...files, ...relayerFiles]) {
+  const src = readFileSync(abs(file), "utf8");
   const switches = [...new Set([...src.matchAll(NODE_ONLY_ENV)].map((m) => m[1]))];
   const needsBrowser = BROWSER_MARKER.test(src);
   const env = { ...process.env };

@@ -12,7 +12,16 @@
 //
 // 동적 값(이름/상태/시간)은 실제 데이터다. 샘플 "Honeybun"/"6:04 PM"을 그대로 쓰지 않는다.
 
+import { soundIsOn } from "./sound.js"; // [A-902]
+
 const CARD_DIR = "/card";
+
+// [A-902] Sound on/off — one small speaker icon at the top right of the HOME status card (Owner 2026-10-08 "여기 하자 굿").
+// Crayon line like the A-898 copy icon / crayon-bell.svg (same feTurbulence + displacement filter, round caps), ink colour.
+// No visible text. Tap = a slash is drawn through the speaker (off) / removed (on); main.js [A-902] flips the attributes in place.
+export function homeSoundToggleMarkup(on = soundIsOn()) {
+  return `<button class="a902-sound${on ? "" : " a902-sound--off"}" id="homeSoundToggle" type="button" aria-label="${on ? "sound on" : "sound off"}" aria-pressed="${on ? "true" : "false"}"><svg class="a902-sound__svg" viewBox="0 0 100 100" aria-hidden="true"><defs><filter id="a902crb" x="-25%" y="-25%" width="150%" height="150%"><feTurbulence type="fractalNoise" baseFrequency="0.055" numOctaves="3" seed="13" result="n"/><feDisplacementMap in="SourceGraphic" in2="n" scale="3.2" xChannelSelector="R" yChannelSelector="G"/></filter></defs><g filter="url(#a902crb)" fill="none" stroke="#141210" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 40 L32 40 L52 22 L52 78 L32 60 L16 60 Z"/><path d="M66 38 C72 45 72 55 66 62"/><path d="M76 28 C88 40 88 60 76 72"/><path class="a902-sound__slash" d="M18 16 L84 86"/></g></svg></button>`;
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -82,6 +91,7 @@ export function homePaperMarkup({
       ? `
         <div class="homePaper__card homePaper__card--status">
           <div class="homePaper__heading" aria-label="Home">HOME</div>
+          ${homeSoundToggleMarkup()}
           <div class="homePaper__statusRow">
             <span class="homePaper__statusText">&gt; status &nbsp; ${homeCount} in &nbsp; ${awayCount} out</span>
             <span class="homePaper__time">${escapeHtml(time)}</span>
@@ -109,7 +119,7 @@ export function homePaperMarkup({
             aria-label="${escapeHtml(stampLabel)}"
             aria-pressed="${mode !== "home"}"
           >
-            <img class="homePaper__stamp" src="${CARD_DIR}/house-stamp.png" alt="" aria-hidden="true" />
+            <img class="homePaper__stamp" src="${CARD_DIR}/house-stamp-filled.png" alt="" aria-hidden="true" />
           </button>
           <img class="homePaper__logo" src="${CARD_DIR}/araso-logo.png" alt="ARASO" />
         </div>
@@ -126,13 +136,21 @@ export function homePaperMarkup({
 // home-peek.js/home-paper-multi.js(App 런타임 모듈)가 이 DOM 순서를 그대로 감싸서 만든다
 // (A-540 cleanup boundary) — 여기서는 카드마다 정확한 `data-piggy-id` 와 그 카드 자신의
 // records entry 만 찍는 순수 마크업이다.
-function residentCardMarkup({ index, name, label, recordsEntryMarkup, id = null }) {
+// ---- [A-897] 이름 없는 Piggy — 이름 자리 = 빈 밑줄 + 작은 crayon 펜(card/name-pen.svg) -----------------
+// 이름 데이터 없음 ≠ 새 Piggy. 이름 있는 카드와 같은 레이아웃, 이름 자리만 빈 칸 + 펜 하나. 펜(버튼)만 탭 가능하다. 탭 → 제자리 입력은
+// 이 파일 아래 applyUnnamedNameRows()(main.js [A-897] 이 새 카드가 DOM 에 들어올 때 부른다)가 같은 마크업 위에서 붙인다. 새 낱말 0 — 접근성 이름은
+// Name it 의 기존 제목 "name it" 을 그대로 쓴다(보이는 글자 없음).
+export function unnamedNameRowMarkup() {
+  return `<div class="homePaper__name homePaper__name--unnamed" data-name-fill="underline"><img class="homePaper__nameUnderline" src="/invite/underline@2x.png" alt="" aria-hidden="true" /><button class="homePaper__namePen" type="button" data-name-pen aria-label="name it"><img src="/card/name-pen.svg" alt="" aria-hidden="true" /></button></div>`;
+}
+
+function residentCardMarkup({ index, name, label, recordsEntryMarkup, id = null, unnamed = false }) {
   const idAttr = id ? ` data-piggy-id="${escapeHtml(id)}"` : "";
   return `
         <div class="homePaper__card homePaper__card--piggy"${idAttr}>
           <div class="homePaper__num">${index + 1}</div>
           <div class="homePaper__piggyInfo">
-            <div class="homePaper__name">${escapeHtml(name)}</div>
+            ${unnamed ? unnamedNameRowMarkup() : `<div class="homePaper__name">${escapeHtml(name)}</div>`}
             <div class="homePaper__state">${escapeHtml(label)}</div>
             ${recordsEntryMarkup}
           </div>
@@ -149,6 +167,7 @@ export function residentCardsMarkup({ name, label, recordsEntryMarkup = "", resi
     .map((r, i) => residentCardMarkup({
       index: i,
       id: r.id,
+      unnamed: r.unnamed === true,
       name: r.name || "Piggy",
       label: typeof r.label === "string" ? r.label : "",
       // 둘 이상이면 main.js homeResidents() 가 이미 행마다 자기 records entry 를 채워
@@ -157,6 +176,99 @@ export function residentCardsMarkup({ name, label, recordsEntryMarkup = "", resi
     }))
     .join("");
 }
+
+// ── [A-897] 이름 없는 Piggy — 이름 자리 밑줄 + 탭하면 제자리 입력 ─────────────────────────────────────────
+// main.js 가 [A-897] 블록에서 provider 를 한 번 등록하고, 새 `.homePaper__card--piggy` 가 DOM 에 들어오면 applyUnnamedNameRows() 를 부른다
+// (home-paper-multi.js 는 확정 디자인 패키지와 byte-identical 이라 건드리지 않는다 — 그 pin 은 home-paper-multi.mjs).
+//   isUnnamed(card) → boolean   그 카드의 Piggy 가 이름이 없나(이름 데이터 없음. 새 Piggy 아님)
+//   save(card, name) → boolean  현재 chain-scoped Piggy 의 renameIndexedPiggy. 성공하면 true
+// 이름 있는 Piggy 는 아무것도 붙이지 않는다(rename 기능 열지 않음). Hatch / Name scene 재진입 / reset 0.
+let nameFillProvider = null;
+export function setUnnamedNameFill(provider) {
+  nameFillProvider = provider && typeof provider.isUnnamed === 'function' && typeof provider.save === 'function' ? provider : null;
+}
+
+const NAME_MAX = 24; // Name it 입력(maxlength 24)과 같다
+
+function openNameFill(card, nameEl) {
+  const form = document.createElement('form');
+  form.className = 'homePaper__name homePaper__nameFill';
+  form.setAttribute('data-name-fill', 'form');
+  form.innerHTML =
+    `<input class="homePaper__nameInput" type="text" maxlength="${NAME_MAX}" autocomplete="off" aria-label="Piggy name" />` +
+    `<img class="homePaper__nameUnderline" src="/invite/underline@2x.png" alt="" aria-hidden="true" />` +
+    `<button class="homePaper__nameSave" type="submit" aria-label="save" disabled>save</button>`;
+  nameEl.replaceWith(form);
+  const input = form.querySelector('input');
+  const save = form.querySelector('.homePaper__nameSave');
+  let busy = false;
+  // [M7] 바깥을 누르면 빈 폼을 닫는다(빈 폼이 남지 않게). 저장 중·글자가 있을 때는 닫지 않는다.
+  // 빈 폼만 닫는다 — 쓰다 만 글자는 바깥 탭으로 버리지 않는다(Escape 는 명시적 취소라 그대로 닫는다).
+  const outside = (e) => { if (!busy && !input.value.trim() && !form.contains(e.target)) restore(); };
+  document.addEventListener('pointerdown', outside, true);
+  const restore = () => {
+    document.removeEventListener('pointerdown', outside, true);
+    if (!form.isConnected) return;
+    const back = document.createElement('div');
+    back.innerHTML = unnamedNameRowMarkup();
+    const btn = back.firstElementChild;
+    form.replaceWith(btn);
+    bindUnnamedButton(card, btn);
+  };
+  input.addEventListener('input', () => { if (!busy) save.disabled = !input.value.trim(); });
+  input.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.stopPropagation(); restore(); } });
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (busy) return;
+    const name = input.value.trim().slice(0, NAME_MAX);
+    if (!name) { input.focus(); return; }
+    busy = true; // Save 단일 실행
+    input.disabled = true; save.disabled = true;
+    let ok = false;
+    try { ok = nameFillProvider ? nameFillProvider.save(card, name) === true : false; } catch { ok = false; }
+    if (ok) document.removeEventListener('pointerdown', outside, true);
+    if (!ok) { busy = false; input.disabled = false; save.disabled = !input.value.trim(); input.focus(); }
+    // 성공이면 provider 가 Home 종이를 같은 자리에서 다시 그린다(Home 그대로, 씬 전환 0).
+  });
+  input.focus();
+}
+
+function bindUnnamedButton(card, btn) {
+  btn.setAttribute('data-name-bound', '1');
+  const pen = btn.querySelector('[data-name-pen]');
+  if (!pen) return;
+  pen.addEventListener('click', (e) => {
+    e.stopPropagation(); // 종이 접기/Chog 탭으로 번지지 않는다 — 펜만 탭 가능(빈 줄은 이름 줄처럼 눌러도 아무것도 안 열린다)
+    openNameFill(card, btn);
+  });
+}
+
+export function applyUnnamedNameRows(paper) {
+  const provider = nameFillProvider;
+  if (!paper || !provider) return 0;
+  let n = 0;
+  paper.querySelectorAll('.homePaper__card--piggy').forEach((card) => {
+    const nameEl = card.querySelector('.homePaper__name');
+    if (!nameEl) return;
+    // 마크업이 처음부터 밑줄 버튼으로 찍은 줄(residents[].unnamed) 은 아직 탭이 안 묶였다 — 묶기만 한다.
+    if (nameEl.getAttribute('data-name-fill') === 'underline') {
+      if (!nameEl.hasAttribute('data-name-bound')) { bindUnnamedButton(card, nameEl); n += 1; }
+      return;
+    }
+    if (nameEl.hasAttribute('data-name-fill')) return;
+    let unnamed = false;
+    try { unnamed = provider.isUnnamed(card) === true; } catch { unnamed = false; }
+    if (!unnamed) return;
+    const holder = document.createElement('div');
+    holder.innerHTML = unnamedNameRowMarkup();
+    const btn = holder.firstElementChild;
+    nameEl.replaceWith(btn);
+    bindUnnamedButton(card, btn);
+    n += 1;
+  });
+  return n;
+}
+// ── [A-897] end ───────────────────────────────────────────────────────────────────────────────────────────
 
 // ---- Money mode / Piggy 상세 (A-412-b/c) ----------------------------------------------
 //
@@ -430,7 +542,7 @@ export function confirmButtonMarkup({ id = "homeActionOk", label = "ok", enabled
 // 사용자에게 보이는 것은 **돈이 어디서 오는지**이지 네트워크·브리지·스왑이 아니다.
 
 const FUNDING_METHOD_LABEL = Object.freeze({
-  bank_card_apple_pay: "Bank · card · Apple Pay",
+  bank_card_apple_pay: "Bank · card", // [A-898] the wallet-pay wording is never a first-level option (Owner); it lives inside the card step later
   from_another_wallet: "From another wallet",
   other_options: "Other ways",
 });
@@ -450,10 +562,12 @@ const ADD_MONEY_TAP_STYLE = "pointer-events:auto;min-height:36px";
 const ADD_MONEY_INPUT_STYLE = "pointer-events:auto;font:700 15px/1.25 Georgia,'Times New Roman',serif;color:#141210;background:transparent;border:0;"
   + "border-bottom:1px solid currentColor;border-radius:0;min-height:36px;padding:0 2px;text-align:right;box-sizing:border-box";
 
-/** MY MONEY 의 `Add money` 입구 하나. 호출자가 게이트(Second 뒤·조용한 Home)를 판단한다. */
+/** MY MONEY 의 `Add money` 입구 하나 + [A-898] `Send a Piggy`. 호출자가 게이트(Second 뒤·조용한 Home)를 판단한다. */
 export function addMoneyEntryMarkup() {
   return `<button class="homePaper__records" id="homeAddMoney" type="button" style="${ADD_MONEY_TAP_STYLE}">&gt; Add money</button>`;
 }
+
+// [A-905] The Send a Piggy / Add money entries are replaced by the honey jar -> Money tab (money-tab.js); the A-898 `Send a Piggy` entry and its gate were removed here.
 
 function addMoneyBackMarkup() {
   return `<button class="homePaper__records" id="homeAddMoneyBack" type="button" style="${ADD_MONEY_TAP_STYLE}">&lt; back</button>`;

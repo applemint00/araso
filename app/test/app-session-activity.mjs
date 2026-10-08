@@ -273,7 +273,20 @@ check("after signer expiry, continued trusted activity keeps the app-idle sessio
 
 // ══ 9. Piggy switch / Gate C money functions are untouched by this card ════════════════════════
 check("Piggy-switch and Gate C money functions are byte-identical to the pre-A-565 snapshot (out of scope for this card)", () => {
-  assert.equal(extractFunction(MAIN, "authorizeMoneyAction"), extractFunction(PRE, "authorizeMoneyAction"));
+  // [A-791 re-pin, named reason: A-763 destination producer wired at the authorize boundary (card A-791 criterion 1).]
+  // Proven as an exact, refuse-only delta: the authorize(...) call is byte-identical (only `return` -> `const authorized =`), and
+  // the ONLY added lines return that result unchanged when it refused, else a destination refusal or that same result. Removing
+  // exactly those lines restores the pre-A-565 bytes. Nothing in the delta can turn a refusal into ok or widen the request.
+  const A791_AUTH_TAIL =
+    "  // [A-791] destination provenance can only refuse: a refusal above is returned as is, and an authorized request that carries\n" +
+    "  // a destination still needs that destination vouched by main's own records (moneyDestinationRefusal). Never the other way.\n" +
+    "  if (!authorized.ok) return authorized;\n" +
+    "  return moneyDestinationRefusal(state.moneyIntent?.permission?.destination ?? null) || authorized;\n";
+  const authNow = extractFunction(MAIN, "authorizeMoneyAction");
+  assert.ok(authNow.includes("  const authorized = authorize(state.moneyIntent?.permission ?? null, request, {\n") && authNow.includes(A791_AUTH_TAIL));
+  assert.equal(authNow.replace("  const authorized = authorize(", "  return authorize(").replace(A791_AUTH_TAIL, ""), extractFunction(PRE, "authorizeMoneyAction"));
+  const refusal = extractFunction(MAIN, "moneyDestinationRefusal");
+  assert.equal(/ok:\s*true|issuePermission|authorize\(|consume\(/.test(refusal), false, "the destination check can only answer null or a refusal");
   assert.equal(extractFunction(MAIN, "applyPiggySelection"), extractFunction(PRE, "applyPiggySelection"));
   assert.equal(extractFunction(MAIN, "consumeMoneyPermission"), extractFunction(PRE, "consumeMoneyPermission"));
 });
@@ -285,6 +298,8 @@ const A633_IDLE_LOCK_LINES =
   "    // [A-633 B] 모바일/app 표면만: 풀린 Home 을 잠금 화면처럼 남기지 않고 LOGIN_CHECKING 으로 잠근다.\n" +
   "    // 웹(641+)·지원되지 않는 origin 은 아래 기존 resting 동작 그대로다.\n" +
   "    if (lockAppAfterIdle()) return;\n";
+const A896_CLEAR_LINE = "  signerSince = 0; // [A-896]\n  signerMono = -1; // [A-896 R1]\n";
+const A896_STAMP_LINE = "    signerSince = Date.now(); // [A-896]\n    signerMono = typeof performance !== \"undefined\" && typeof performance.now === \"function\" ? performance.now() : -1; // [A-896 R1]\n";
 check("endSignerSession/endActiveSession/touchAppSession/armSignerExpiry/activateSigningSession are byte-identical to the pre-A-565 snapshot", () => {
   for (const name of ["endSignerSession", "endActiveSession", "touchAppSession", "armSignerExpiry", "activateSigningSession"]) {
     let now = extractFunction(MAIN, name);
@@ -292,6 +307,12 @@ check("endSignerSession/endActiveSession/touchAppSession/armSignerExpiry/activat
       assert.equal(now.split(A633_IDLE_LOCK_LINES).length, 2, "A-633 idle-lock branch present exactly once");
       now = now.replace(A633_IDLE_LOCK_LINES, "");
     }
+    // [A-896 re-pin, named reason: 99e M-L-2 60 s signer margin] endSignerSession / activateSigningSession each gain exactly ONE signerSince line
+    // (clear / wall-clock stamp). Remove exactly that line and the body must be byte-identical to the pre-A-565 snapshot; nothing else may differ.
+    // pre-A-896 baseline: both bodies byte-identical to the pre-A-565 snapshot (no stamp lines).
+    if (name === "endSignerSession") { assert.equal(now.split(A896_CLEAR_LINE).length, 2, "A-896 clear line present exactly once"); now = now.replace(A896_CLEAR_LINE, ""); }
+    // extractFunction() stops at activateSigningSession's `{ persistAddress }` parameter brace, so the stamp line is asserted on the whole source instead.
+    if (name === "activateSigningSession") assert.equal(MAIN.split(A896_STAMP_LINE).length, 2, "A-896 stamp line present exactly once in main.js");
     assert.equal(now, extractFunction(PRE, name), `${name} changed — this card must only ADD a new hook, never edit these`);
   }
 });

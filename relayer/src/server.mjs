@@ -1,4 +1,4 @@
-// Araso relayer — 엔드포인트 정확히 2개: GET /health, POST /grant.
+// Araso relayer — 엔드포인트 정확히 3개: GET /health, POST /grant, POST /gift-gas([A-874], 기본 503).
 // 실제 tx 제출은 "submitter" 로 추상화해서 주입한다 — smoke 테스트는 가짜 submitter 로
 // 네트워크·키 접촉 없이 서버 로직(검증·원장·상한·잠금)만 검증한다.
 //
@@ -18,6 +18,8 @@ import {
   validateGrantRequest,
 } from "./policy.mjs";
 import { createLock, openLedger } from "./ledger.mjs";
+import { createGiftGasService } from "./gift-gas-service.mjs";
+import { createGiftSponsorRoute } from "./gift-sponsor-service.mjs";
 
 export const monadTestnet = defineChain({
   id: CHAIN_ID,
@@ -31,6 +33,159 @@ function respond(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+// ─── [A-874] POST /gift-gas ─────────────────────────────────────────────────────────────────────────
+// 라우트는 경계만 맡는다: 메서드·설정·Origin·Content-Type·크기·인증 훅 → 그 다음 A-869 서비스 handle() 에만 위임.
+// 원장·체인·서명자는 직접 만지지 않는다(서비스 생성에 넘기기만). /grant 와 원장·정책·락을 공유하지 않는다.
+// - 설정(ledger·policy·chain·signer) 중 하나라도 없으면 503(전송 0). main() 은 아무것도 연결하지 않으므로 기본 = 503.
+// - 인증 훅 authorize(ctx) 는 주입식이며 기본 = 거부. 정확히 `true` 를 돌려줄 때만 통과, 예외·그 밖의 값 = 401.
+//   공개 인증 방식(토큰·쿠키·서명 등)은 여기서 만들지 않는다 — Owner 게이트(A-869 RECEIPT).
+// - Origin: 있으면 allowedOrigins 에 정확히 있어야 함("null" 포함 나머지 403). 없으면 비브라우저 호출로 보고
+//   인증 훅만이 경계다(Origin 은 위조 가능 — A-865). Sec-Fetch-Site 가 cross-site/same-site 면 Origin 없이도 403.
+// - CORS 헤더 없음, OPTIONS 미지원(405). 응답 = cache-control: no-store.
+// - 본문: application/json 만, GIFT_GAS_MAX_BODY_BYTES 이하, UTF-8, 정확히 {giftId,to}(엄격 검사는 A-869 정책 모듈).
+// - 로그 = 고정 코드만(헤더·본문·giftId 를 라우트가 찍지 않는다; 서비스 로그는 A-869 규칙 그대로).
+export const GIFT_GAS_MAX_BODY_BYTES = 256;
+// [A-895 P-C / A-874 R1,R2] 기본 데드라인. 호출자가 cfg.authTimeoutMs / cfg.bodyTimeoutMs 로 1..60000 안에서 조정.
+export const GIFT_GAS_AUTH_TIMEOUT_MS = 3000;
+export const GIFT_GAS_BODY_TIMEOUT_MS = 5000;
+const GIFT_GAS_CT = /^application\/json(?:\s*;\s*charset=utf-8)?$/i;
+const ORIGIN_SHAPE = /^https?:\/\/[^\s/?#]+$/;
+const denyAll = () => false;
+
+function respondGiftGas(res, status, body, { close = false } = {}) {
+  if (res.writableEnded || res.headersSent) return;
+  const headers = { "content-type": "application/json", "cache-control": "no-store" };
+  if (close) headers.connection = "close";
+  res.writeHead(status, headers);
+  res.end(JSON.stringify(body));
+}
+
+/**
+ * @param {object | null} cfg
+ * @param {object} cfg.ledger  openGiftGasLedger(...) 결과
+ * @param {object} cfg.policy  createGiftGasPolicy(...) 결과(null = 미설정)
+ * @param {object} cfg.chain   A-869 chain 인터페이스
+ * @param {{ signNativeTransfer: Function }} cfg.signer
+ * @param {(ctx: { method: string, url: string, headers: object }) => boolean | Promise<boolean>} [cfg.authorize]  기본 거부
+ * @param {string[]} [cfg.allowedOrigins]  정확 일치 목록, 기본 없음
+ * @param {number} [cfg.authTimeoutMs]  [A-895 P-C / A-874 R2] authorize 훅 데드라인(기본 3000ms). 넘기면 401 — 서명 0.
+ * @param {number} [cfg.bodyTimeoutMs]  [A-895 P-C / A-874 R1] 인증 이후 body 수신 데드라인(기본 5000ms). 넘기면 408 — 서비스 호출 0.
+ * @param {(msg: string) => void} [cfg.log]
+ */
+export function createGiftGasRoute(cfg) {
+  const c = cfg && typeof cfg === "object" ? cfg : {};
+  const log = typeof c.log === "function" ? c.log : () => {};
+  const say = (code) => { try { log(`gift-gas route ${code}`); } catch { /* logger must not break flow */ } };
+  const authorize = typeof c.authorize === "function" ? c.authorize : denyAll;
+  const origins = new Set(
+    (Array.isArray(c.allowedOrigins) ? c.allowedOrigins : []).filter((o) => typeof o === "string" && ORIGIN_SHAPE.test(o)),
+  );
+  const configured = !!(
+    c.ledger && typeof c.ledger.get === "function" && typeof c.ledger.isFailStopped === "function"
+    && c.policy && typeof c.policy === "object"
+    && c.chain && typeof c.chain === "object"
+    && c.signer && typeof c.signer.signNativeTransfer === "function"
+  );
+  const service = configured
+    ? createGiftGasService({ ledger: c.ledger, policy: c.policy, chain: c.chain, signer: c.signer, log })
+    : null;
+
+  const deadline = (v, dflt) => (Number.isSafeInteger(v) && v >= 1 && v <= 60000 ? v : dflt);
+  const authTimeoutMs = deadline(c.authTimeoutMs, GIFT_GAS_AUTH_TIMEOUT_MS);
+  const bodyTimeoutMs = deadline(c.bodyTimeoutMs, GIFT_GAS_BODY_TIMEOUT_MS);
+
+  const reject = (res, status, error, code) => { say(code); respondGiftGas(res, status, { ok: false, error }, { close: true }); };
+
+  return function giftGasRoute(req, res) {
+    if (req.method !== "POST") return reject(res, 405, "method not allowed", "rejected(method)");
+    if (!service) return reject(res, 503, "unavailable", "rejected(not configured)");
+
+    const h = req.headers ?? {};
+    const origin = h.origin;
+    if (origin !== undefined && !origins.has(origin)) return reject(res, 403, "forbidden", "rejected(origin)");
+    if (origin === undefined && h["sec-fetch-site"] !== undefined && !["same-origin", "none"].includes(h["sec-fetch-site"])) {
+      return reject(res, 403, "forbidden", "rejected(fetch-site)");
+    }
+    if (typeof h["content-type"] !== "string" || !GIFT_GAS_CT.test(h["content-type"].trim())) {
+      return reject(res, 415, "unsupported media type", "rejected(content-type)");
+    }
+    if (h["content-length"] !== undefined) {
+      const n = /^[0-9]{1,6}$/.test(String(h["content-length"])) ? Number(h["content-length"]) : NaN;
+      if (Number.isNaN(n)) return reject(res, 400, "bad_request", "rejected(content-length)");
+      if (n > GIFT_GAS_MAX_BODY_BYTES) return reject(res, 413, "payload too large", "rejected(size)");
+    }
+
+    void (async () => {
+      let allowed = false;
+      let authTimer = null;
+      try {
+        // [A-874 R2] 훅이 끝내 settle 하지 않아도 연결을 붙잡지 않는다: 데드라인 초과 = 거부(401).
+        const timeout = new Promise((resolve) => { authTimer = setTimeout(() => resolve(false), authTimeoutMs); });
+        allowed = (await Promise.race([
+          Promise.resolve(authorize(Object.freeze({ method: req.method, url: req.url, headers: Object.freeze({ ...h }) }))),
+          timeout,
+        ])) === true;
+      } catch {
+        allowed = false;
+      } finally {
+        if (authTimer !== null) clearTimeout(authTimer);
+      }
+      if (!allowed) return reject(res, 401, "unauthorized", "rejected(unauthorized)");
+
+      const chunks = [];
+      let size = 0;
+      let closed = false;
+      // [A-874 R1] 인증 이후 body 를 끝까지 못 받으면(slowloris) 데드라인에서 408 — 서비스 호출 0.
+      const bodyTimer = setTimeout(() => {
+        if (closed) return;
+        closed = true;
+        reject(res, 408, "request timeout", "rejected(body timeout)");
+        req.destroy();
+      }, bodyTimeoutMs);
+      const stop = () => clearTimeout(bodyTimer);
+      req.on("error", () => { closed = true; stop(); });
+      req.on("close", () => { stop(); });
+      req.on("data", (chunk) => {
+        if (closed) return;
+        const b = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+        size += b.length;
+        if (size > GIFT_GAS_MAX_BODY_BYTES) {
+          closed = true;
+          stop();
+          reject(res, 413, "payload too large", "rejected(size)");
+          req.destroy();
+          return;
+        }
+        chunks.push(b);
+      });
+      req.on("end", () => {
+        stop();
+        if (closed) return;
+        closed = true;
+        void (async () => {
+          let parsed;
+          try {
+            parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(Buffer.concat(chunks)));
+          } catch {
+            return reject(res, 400, "bad_request", "rejected(json)");
+          }
+          let out;
+          try {
+            out = await service.handle(parsed);
+          } catch {
+            out = null;
+          }
+          if (!out || !Number.isInteger(out.status) || typeof out.body !== "object" || out.body === null) {
+            say("service_error");
+            return respondGiftGas(res, 503, { ok: false, error: "unavailable" });
+          }
+          return respondGiftGas(res, out.status, out.body);
+        })();
+      });
+    })();
+  };
+}
+
 /**
  * @param {object} opts
  * @param {{ getBalance: () => Promise<bigint>, send: (args: { to: string, valueWei: bigint }) => Promise<string> }} opts.submitter
@@ -39,11 +194,20 @@ function respond(res, status, body) {
  * @param {(msg: string) => void} [opts.log]
  * @param {number | null} [opts.chainId]  [relayer safety] RPC 로 **검증된** chainId 만. 없으면 health ok:false.
  * @param {ReturnType<typeof createGrantPolicy>} [opts.policy]  [relayer safety] 실행 한정 지급 정책. null = /grant 전부 거부.
+ * @param {Parameters<typeof createGiftGasRoute>[0]} [opts.giftGas]  [A-874] /gift-gas 구성. null/불완전 = /gift-gas 전부 503.
  */
-export function createRelayServer({ submitter, ledger, ledgerError = null, log = () => {}, chainId = null, policy = null }) {
+export function createRelayServer({ submitter, ledger, ledgerError = null, log = () => {}, chainId = null, policy = null, giftGas = null, giftSponsor = null }) {
   const lock = createLock();
+  // [A-874] /grant 와 상태(원장·정책·락) 공유 0. log 는 따로 주지 않으면 서버 log 를 쓴다.
+  const giftGasRoute = createGiftGasRoute(giftGas && typeof giftGas === "object" && giftGas.log === undefined ? { ...giftGas, log } : giftGas);
+
+  // [A-906] /gift-sponsor: default OFF (giftSponsor null => 503, 0 sends). Own ledger/policy; shares nothing with /grant or /gift-gas.
+  const giftSponsorRoute = createGiftSponsorRoute(giftSponsor && typeof giftSponsor === "object" && giftSponsor.log === undefined ? { ...giftSponsor, log } : giftSponsor);
 
   return createHttpServer((req, res) => {
+    if (req.url === "/gift-gas") return giftGasRoute(req, res);
+    if (req.url === "/gift-sponsor") return giftSponsorRoute(req, res);
+
     if (req.url === "/health") {
       if (req.method !== "GET") return respond(res, 405, { ok: false, error: "method not allowed" });
       // [relayer safety] 검증 전·다른 chain 값으로 준비 성공을 말하지 않는다.

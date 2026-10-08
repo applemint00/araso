@@ -336,7 +336,8 @@ const PIGGY = "piggy-1";
 const SIGNER = { address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" };
 function clients() {
   const sent = [];
-  const walletClient = { async sendTransaction(tx) { sent.push(tx); return `0x${String(sent.length).repeat(64).slice(0, 64)}`; } };
+  // [A-791 harness wiring] VIEM_SEND prepares + runs the A-768 pre-sign assertion before sendTransaction (well-formed eip1559 here).
+  const walletClient = { async prepareTransactionRequest(t) { return { ...t, type: "eip1559", chainId: 10143, maxFeePerGas: 2n, maxPriorityFeePerGas: 1n, nonce: 7, gas: 21000n }; }, async sendTransaction(tx) { sent.push(tx); return `0x${String(sent.length).repeat(64).slice(0, 64)}`; } };
   const publicClient = { async waitForTransactionReceipt() { return { status: "success", blockNumber: 1n }; }, async readContract() { return BigInt(sent.length * 100); } };
   return { sent, walletClient, publicClient };
 }

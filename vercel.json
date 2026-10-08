@@ -5,10 +5,27 @@
   "functions": {
     "api/grant.js": {
       "includeFiles": "relayer/src/policy.mjs"
+    },
+    "api/gift-sponsor.js": {
+      "maxDuration": 60,
+      "includeFiles": "relayer/src/**"
+    },
+    "api/gift-sponsor-reconcile.js": {
+      "maxDuration": 60,
+      "includeFiles": "relayer/src/**"
     }
   },
+  "crons": [
+    {
+      "path": "/api/gift-sponsor-reconcile",
+      "schedule": "* * * * *"
+    }
+  ],
   "rewrites": [
-    { "source": "/claim", "destination": "/index.html" }
+    {
+      "source": "/claim",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {
@@ -16,10 +33,16 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self' https://testnet-rpc.monad.xyz; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'"
+          "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self' https://testnet-rpc.monad.xyz https://rpc.monad.xyz; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'"
         },
-        { "key": "Referrer-Policy", "value": "no-referrer" },
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        {
+          "key": "Referrer-Policy",
+          "value": "no-referrer"
+        },
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
         {
           "key": "Permissions-Policy",
           "value": "publickey-credentials-create=(self), publickey-credentials-get=(self), accelerometer=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), interest-cohort=()"

@@ -53,6 +53,7 @@ function world({ session = false, locked = false, unsupported = false, recover =
     MONAD_TESTNET: { id: 10143 },
     publicClient: { sendRawTransaction: async () => { calls.sendTx += 1; return "0x"; } },
     state: { address: "0xabc", appLock: locked ? { phase: "waiting", cancelled: false } : null, credential: { credentialId: "c" }, scene: "sendstay", authPhase: "x", authCancelled: true },
+    signerSince: session ? Date.now() : 0, // [A-896 harness wiring] live signer stamped now (wall clock) so sendPiggyOnce's 60 s margin check sees a fresh signer
     activeAccount: session ? { address: "0xabc" } : null,
     activeSession: session ? { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } } : null,
     isAllowedPiggyRpId: () => true,
@@ -73,10 +74,10 @@ function world({ session = false, locked = false, unsupported = false, recover =
     recoverPiggy: (opts = {}) => {
       calls.recover += 1;
       ctx.lastRecoverOpts = opts;
-      if (recover === "resolve") return Promise.resolve().then(() => { ctx.activeAccount = { address: "0xabc" }; ctx.activeSession = { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } }; });
+      if (recover === "resolve") return Promise.resolve().then(() => { ctx.signerSince = Date.now(); ctx.activeAccount = { address: "0xabc" }; ctx.activeSession = { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } }; });
       if (recover === "cancel") return Promise.reject(Object.assign(new Error("x"), { name: "NotAllowedError" }));
       // "pending": settled by hand; like the real recoverPiggy, a result that is no longer current is discarded (no signer set).
-      return new Promise((resolve, reject) => { deferred = { resolve: () => { if (opts.isCurrent()) { ctx.activeAccount = { address: "0xabc" }; ctx.activeSession = { signDigest: async () => { calls.sign += 1; return {}; } }; } resolve(); }, reject }; });
+      return new Promise((resolve, reject) => { deferred = { resolve: () => { if (opts.isCurrent()) { ctx.signerSince = Date.now(); ctx.activeAccount = { address: "0xabc" }; ctx.activeSession = { signDigest: async () => { calls.sign += 1; return {}; } }; } resolve(); }, reject }; });
     },
   };
   vm.createContext(ctx);

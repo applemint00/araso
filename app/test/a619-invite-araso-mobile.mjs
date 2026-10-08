@@ -46,38 +46,17 @@ const mediaBlock = CSS.slice(mediaStart, mediaEnd + 2); // include the block's o
 check("the common mobile .arasoBrand rule (left: var(--mobile-inset)) is still present, unchanged, inside this block",
   /\.arasoBrand \{[^}]*left:\s*var\(--mobile-inset\);[^}]*top:\s*var\(--mobile-top-safe\);/.test(mediaBlock), true);
 
-const inviteRuleMatch = mediaBlock.match(/\.stage--invite \.arasoBrand \{([^}]*)\}/);
-check("a .stage--invite .arasoBrand override rule exists inside the SAME ≤640px block (not a new @media)",
-  !!inviteRuleMatch, true);
-
-const inviteRuleBody = inviteRuleMatch ? inviteRuleMatch[1] : "";
-check("Invite-only override sets left:60px (A-619)",
-  /left:\s*60px;/.test(inviteRuleBody), true);
-check("Invite-only override sets top:62px (A-625 — glyph moved into the notebook paper, x unchanged)",
-  /top:\s*62px;/.test(inviteRuleBody), true);
-
-// exactly TWO declarations in the override body (left + top) — nothing else changed
-// (transform/font/etc. all keep inheriting from the common mobile rule above via the cascade).
-const declCount = inviteRuleBody.split(";").map((s) => s.trim()).filter(Boolean).length;
-check("Invite-only override changes exactly two properties (left, top) — no transform/font/etc. added",
-  declCount, 2);
-
-// ── 3. selector specificity: .stage--invite .arasoBrand (0,0,2,0) beats .arasoBrand (0,0,1,0) ──
-// regardless of source order, so this also guards against someone "simplifying" it back to a
-// single class selector that would lose to source order rather than specificity.
-check("override selector is compound (two classes) so it wins on specificity, not source order",
-  /^\s*\.stage--invite \.arasoBrand \{/m.test(mediaBlock), true);
-
-// ── 4. it lives inside stage--invite's own block-comment scope, not a sibling/global block ──
-const inviteRuleIndexInMedia = mediaBlock.indexOf(".stage--invite .arasoBrand {");
-const commonRuleIndexInMedia = mediaBlock.indexOf(".arasoBrand {");
-check("the Invite override is declared AFTER the common mobile rule inside the same block (order is irrelevant to outcome, but this locks the actual authored layout)",
-  inviteRuleIndexInMedia > commonRuleIndexInMedia, true);
-
-// ── 5. [A-625] the override's top must NOT equal the common rule's top token — it is a
-// deliberate departure (dark band -> inside paper), not an accidental inherit/typo.
-check("Invite-only override's top is a fixed px value, not the shared --mobile-top-safe token (deliberately different from the common rule)",
-  !/top:\s*var\(--mobile-top-safe\)/.test(inviteRuleBody), true);
+// pre-A-839 baseline (A-619 / A-625): inside the SAME <=640px block a compound `.stage--invite .arasoBrand` override set `left: 60px` (right of the hole rail) and `top: 62px` (inside the old
+// notebook paper), exactly two declarations, declared after the common mobile rule, top not the --mobile-top-safe token. A-839 (A-835 items 6 + 8): the notebook is full-bleed and ARASO is on
+// the left margin line in every scene, so the Invite exception is gone from the media block and replaced by the shared rail rule (all widths).
+check("the <=640px block no longer carries an Invite-only ARASO override (the comment may name it; no live rule)",
+  /\n\s*\.stage--invite \.arasoBrand \{/.test(mediaBlock.replace(/\/\*[\s\S]*?\*\//g, "")), false);
+const railMatch = CSS.replace(/\/\*[\s\S]*?\*\//g, "").match(/\.stage--invite \.arasoBrand \{([^}]*)\}/);
+check("a shared .stage--invite .arasoBrand rail rule exists outside the media block (all widths)", !!railMatch, true);
+const railBody = railMatch ? railMatch[1] : "";
+check("Invite ARASO: left = the side margin line (--hlM), top = 2 x font (--hlAsTop + safe-area), font = card width x .064 (--hlAsFont)",
+  /left:\s*var\(--hlM, 140px\);/.test(railBody) && /top:\s*calc\(var\(--hlAsTop, 32px\) \+ var\(--hk-safe-top, 0px\)\);/.test(railBody) && /font-size:\s*var\(--hlAsFont, 12px\);/.test(railBody), true);
+check("the old fixed Invite offsets left:60px / top:62px are gone", /left:\s*60px;|top:\s*62px;/.test(railBody), false);
 
 console.log(`\n${pass}/${pass + fail} PASS`);
 process.exit(fail === 0 ? 0 : 1);

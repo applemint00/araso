@@ -11,6 +11,7 @@ import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { layoutOracle } from "./helpers/a831-sweep.mjs"; // [A-839] pure Home layout (k = HomeCard / 282) for the k-scaled B1 baseline
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const css = readFileSync(path.join(REPO, "app/src/style.css"), "utf8");
@@ -137,7 +138,20 @@ await check("C6 main.js wiring: cue drawn on the real clock then the frame loop 
 // [A-748] RE-PIN: for viewports >=641 A-744 (intentional canon) raised card/paper type 13->15 / 12->14px, so the text-box sizes of these controls grew
 // (e.g. sendCard__stay 38.9x11.82 -> 44.88x13.65 = exactly the 390/430 values). Only the stale size numbers below were re-measured (A-748 m748_after.json); positions shifted
 // consistently, tolerance (<0.6) and the unchanged-visible-box invariant are unchanged. 390x844/430x932 and controls A-744 did not touch keep their original A-735 values.
-const BASEVIS = {"390x844":{"hatch.skip":[38.34,19],"sendcard.sendCard__stay":[44.88,13.65],"interests.item0":[88.11,18.2],"interests.item1":[80.6,18.2],"interests.homeBack":[60.24,13.65],"candidates.back":[23.94,23.4],"candidates.ok":[79.3,26],"home.homeRecords":[85.85,16.14],"home.flap2":[202.51,15.38],"home.flap1":[212.76,15.38],"history.recordsClose":[30.52,16.8]},"430x932":{"hatch.skip":[38.34,19],"sendcard.sendCard__stay":[44.88,13.65],"interests.item0":[88.11,18.2],"interests.item1":[80.6,18.2],"interests.homeBack":[60.24,13.65],"candidates.back":[23.94,23.4],"candidates.ok":[79.3,26],"home.homeRecords":[85.85,16.14],"home.flap2":[202.51,15.38],"home.flap1":[212.76,15.38],"history.recordsClose":[30.52,16.8]},"700x900":{"hatch.skip":[35.09,17],"sendcard.sendCard__stay":[44.88,13.65],"interests.item0":[88.11,18.2],"interests.item1":[80.6,18.2],"interests.homeBack":[60.24,13.65],"candidates.back":[23.94,23.4],"candidates.ok":[79.3,26],"home.homeRecords":[57.24,10.76],"home.flap2":[202.51,15.38],"home.flap1":[212.76,15.38],"history.recordsClose":[30.52,16.8]},"1024x768":{"hatch.skip":[35.09,17],"sendcard.sendCard__stay":[44.88,13.65],"interests.item0":[88.11,18.2],"interests.item1":[80.6,18.2],"interests.homeBack":[60.24,13.65],"candidates.back":[23.94,23.4],"candidates.ok":[79.3,26],"home.homeRecords":[57.24,10.76],"home.flap2":[202.51,15.38],"home.flap1":[212.76,15.38],"history.recordsClose":[30.52,16.8]},"1180x820":{"hatch.skip":[35.09,17],"sendcard.sendCard__stay":[44.88,13.65],"interests.item0":[88.11,18.2],"interests.item1":[80.6,18.2],"interests.homeBack":[60.24,13.65],"candidates.back":[23.94,23.4],"candidates.ok":[79.3,26],"home.homeRecords":[57.24,10.76],"home.flap2":[202.51,15.38],"home.flap1":[212.76,15.38],"history.recordsClose":[30.52,16.8]},"1440x900":{"hatch.skip":[35.09,17],"sendcard.sendCard__stay":[44.88,13.65],"interests.item0":[88.11,18.2],"interests.item1":[80.6,18.2],"interests.homeBack":[60.24,13.65],"candidates.back":[23.94,23.4],"candidates.ok":[79.3,26],"home.homeRecords":[57.24,10.76],"home.flap2":[202.51,15.38],"home.flap1":[212.76,15.38],"history.recordsClose":[30.52,16.8]}};
+// [A-779 RE-PIN] A-777 §8.2/§8.3 LOCKED: Explore items now use the shared supporting size --type-support (15 -> 18px css, x.65 card
+// scale = 11.7px rendered), so the two interest-row text boxes grew 88.11x18.2 -> 102.61x20.54 and 80.6x18.2 -> 91.53x20.54 (measured, A779
+// after/measure.json; same at every width because the card scale is the constant .65). Only those two numbers changed; tolerance unchanged.
+// [A-779 v2 RE-PIN] Owner 2026-10-05: the Second card Home link is the label tier --type-label 16px (was 15px), so interests.homeBack
+// 60.24x13.65 -> 64.25x14.55 and candidates.back 23.94x23.4 -> 25.53x23.4 (A779 after_v2/measure.json). Nothing else changed.
+// [A-786 RE-PIN] Home paper scaled x1.10 (style.css --homePaperK; whole .homePaper incl. its "no records yet" link), so home.homeRecords visible box grew
+// exactly x1.10: 85.85x16.14 -> 94.44x17.76 (<=640) and 57.24x10.76 -> 62.96x11.84 (>=641) (A786 after/measure.json). home.flap2 202.51x15.38 -> 222.76x16.92 and home.flap1 212.76x15.38 -> 234.04x16.92 are the same x1.10 (they live inside .homePaper). Nothing else in BASEVIS changed.
+// [A-845 RE-PIN] A-843 text styles (Label 13 / Body 14 on-screen at the phone card): only the TEXT boxes of these five controls grew with their font
+// (local font 15->19.98 stay, 18->21.74 items, 16->20.19 back to Home / Home, Home line box 20px -> 20/13 em = the A-845 fit rule). Values = old box with
+// the text part x the font ratio (fixed checkbox 14 + gap 7 + padding 3 / padding 8+8 kept), in the same .65-scale frame; cross-checked with the A-845
+// measured local widths (items cw 186 / 165, back to Home 125, Home 50; stay 59.82x18.2 at 390 / factor 1.0011). Tolerance unchanged.
+// pre-A-845 baseline (every viewport): sendcard.sendCard__stay [44.88,13.65] · interests.item0 [102.61,20.54] · interests.item1 [91.53,20.54] ·
+// interests.homeBack [64.25,14.55] · candidates.back [25.53,23.4]
+const BASEVIS = {"390x844":{"hatch.skip":[38.34,19],"sendcard.sendCard__stay":[59.75,18.18],"interests.item0":[120.7,23.46],"interests.item1":[107.32,23.46],"interests.homeBack":[81.08,18.37],"candidates.back":[32.22,30.59],"candidates.ok":[79.3,26],"home.homeRecords":[94.44,17.76],"home.flap2":[222.76,16.92],"home.flap1":[234.04,16.92],"history.recordsClose":[30.52,16.8]},"430x932":{"hatch.skip":[38.34,19],"sendcard.sendCard__stay":[59.75,18.18],"interests.item0":[120.7,23.46],"interests.item1":[107.32,23.46],"interests.homeBack":[81.08,18.37],"candidates.back":[32.22,30.59],"candidates.ok":[79.3,26],"home.homeRecords":[94.44,17.76],"home.flap2":[222.76,16.92],"home.flap1":[234.04,16.92],"history.recordsClose":[30.52,16.8]},"700x900":{"hatch.skip":[35.09,17],"sendcard.sendCard__stay":[59.75,18.18],"interests.item0":[120.7,23.46],"interests.item1":[107.32,23.46],"interests.homeBack":[81.08,18.37],"candidates.back":[32.22,30.59],"candidates.ok":[79.3,26],"home.homeRecords":[62.96,11.84],"home.flap2":[222.76,16.92],"home.flap1":[234.04,16.92],"history.recordsClose":[30.52,16.8]},"1024x768":{"hatch.skip":[35.09,17],"sendcard.sendCard__stay":[59.75,18.18],"interests.item0":[120.7,23.46],"interests.item1":[107.32,23.46],"interests.homeBack":[81.08,18.37],"candidates.back":[32.22,30.59],"candidates.ok":[79.3,26],"home.homeRecords":[62.96,11.84],"home.flap2":[222.76,16.92],"home.flap1":[234.04,16.92],"history.recordsClose":[30.52,16.8]},"1180x820":{"hatch.skip":[35.09,17],"sendcard.sendCard__stay":[59.75,18.18],"interests.item0":[120.7,23.46],"interests.item1":[107.32,23.46],"interests.homeBack":[81.08,18.37],"candidates.back":[32.22,30.59],"candidates.ok":[79.3,26],"home.homeRecords":[62.96,11.84],"home.flap2":[222.76,16.92],"home.flap1":[234.04,16.92],"history.recordsClose":[30.52,16.8]},"1440x900":{"hatch.skip":[35.09,17],"sendcard.sendCard__stay":[59.75,18.18],"interests.item0":[120.7,23.46],"interests.item1":[107.32,23.46],"interests.homeBack":[81.08,18.37],"candidates.back":[32.22,30.59],"candidates.ok":[79.3,26],"home.homeRecords":[62.96,11.84],"home.flap2":[222.76,16.92],"home.flap1":[234.04,16.92],"history.recordsClose":[30.52,16.8]}};
 if (process.env.A735_NODE_ONLY === "1") console.log("SKIP  Part B (A735_NODE_ONLY=1) — browser scenarios not run");
 else await runBrowser();
 console.log(`\n${pass}/${pass + fail} PASS`);
@@ -198,9 +212,25 @@ async function walk(browser, BASE, w, h) {
     for (let dy = 0; dy < b.height / 2; dy += 1) for (const sy of [1, -1]) for (let dx = 0; dx < b.width / 2; dx += 2) for (const sx of [1, -1]) { const x = b.left + b.width / 2 + sx * dx, y = b.top + b.height / 2 + sy * dy; if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue; const t = document.elementFromPoint(x, y); if (t && (t === el || el.contains(t))) return { x, y }; } return null; }, [sel, idx]);
   const realClick = async (sel, idx = 0) => { const r = await pointAt(sel, idx); if (!r) return "unreachable"; await p.mouse.click(r.x, r.y); return "pointer"; };
   const mustTap = async (sel, lab, idx = 0) => { for (let i = 0; i < 8; i += 1) { if ((await realClick(sel, idx)) === "pointer") return; await sleep(500); } throw new Error(`${lab}: ${sel} unreachable`); };
+  // [A-891 CG-04/05] pre-A-891 baseline: after a reload with First done / Second not done, Explore opened by itself (~1.2 s, waitScene(["explore"])).
+  // Now (Owner 2026-10-08): quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore. forgetIntro() drops the once-per-user intro fact
+  // before a reload so a later reopen takes the same product path (Cowork 2026-10-08: before the intro the cue returns on every reload).
+  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const exploreViaTapMe = async (ms = 16000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
+    if (!(await p.locator(".chogHome__tapCue").count())) return `NOCUE:${await scene()}`;
+    await mustTap("#chogHomeHit", "Chog (tap me!)");
+    return waitScene(["explore"], 5000);
+  };
   const unlock = async () => { for (let i = 0; i < 4; i += 1) { if (!(await p.locator("#loginChogButton").count())) return; await p.locator("#loginChogButton").click(); await sleep(2500); } };
   const M = {};
-  const sameVis = (key, got) => { const want = BASEVIS[vp]?.[key]; assert.ok(want, `baseline for ${key}@${vp}`); assert.ok(Math.abs(got.vis[0] - want[0]) < 0.6 && Math.abs(got.vis[1] - want[1]) < 0.6, `${key}@${vp} visible box changed ${want} -> ${got.vis}`); };
+  // pre-A-839 baseline: assert.ok(Math.abs(got.vis[0] - want[0]) < 0.6 && Math.abs(got.vis[1] - want[1]) < 0.6, `${key}@${vp} visible box changed ${want} -> ${got.vis}`) (the pre-A-735 sizes at k = 1)
+  // A-839 (Cowork add-on): card contents scale with the card, k = HomeCard / 282 (A-829 item 4): Home family (First Send, paper, History) x k; the Second card is 1.0 x HomeCard on its 285 box, so its
+  // controls carry k x 282 / 285; the hatch skip is not on a card. Expected visible box = baseline x factor.
+  const kOf = layoutOracle(readFileSync(path.join(REPO, "app/src/main.js"), "utf8"))(w, h).k;
+  const factor = (key) => (/^hatch\./.test(key) ? 1 : /^(interests|candidates|action)\./.test(key) ? (kOf * 282) / 285 : kOf);
+  const sameVis = (key, got) => { const want = BASEVIS[vp]?.[key]; assert.ok(want, `baseline for ${key}@${vp}`); const f = factor(key); assert.ok(Math.abs(got.vis[0] - want[0] * f) < 0.6 * Math.max(1, f) && Math.abs(got.vis[1] - want[1] * f) < 0.6 * Math.max(1, f), `${key}@${vp} visible box ${want} x ${f.toFixed(4)} -> ${got.vis}`); };
   try {
     await p.goto(BASE, { waitUntil: "networkidle" });
     for (let a = 0; a < 4; a += 1) {
@@ -228,7 +258,7 @@ async function walk(browser, BASE, w, h) {
     await p.evaluate(() => document.querySelector("#stayButton")?.click()); await sleep(900);
     await p.evaluate(() => { const rec = { before: "1000000000000000000", after: "900000000000000000", gas: "21000", sent: "100000000000000000", txHash: "0x" + "a735f1f5eed".padEnd(64, "0") + "1", depositTxHash: "0xa735-dep", redeemTxHash: "0xa735-red", grantTxHash: "0xa735-grant", status: "success", at: Date.parse("2026-10-04T00:00:00Z") }; localStorage.setItem("araso.receipts", JSON.stringify([rec])); localStorage.setItem("araso.txHash", rec.txHash); localStorage.setItem("araso.tripClosed", "1"); });
     await p.reload({ waitUntil: "networkidle" }); await sleep(800); await unlock();
-    assert.equal(await waitScene(["explore"], 12000), "explore"); await sleep(2200);
+    assert.equal(await exploreViaTapMe(), "explore"); await sleep(2200); // [A-891] pre-A-891 baseline: await waitScene(["explore"], 12000)
     M.item0 = await m(".secondJourney__item", 0); M.item1 = await m(".secondJourney__item", 1); M.iBack = await m("#stayButton");
     await mustTap("#exploreSaveButton", "save none"); await sleep(900);
     const ids = await p.evaluate(() => [...document.querySelectorAll("#exploreForm input[data-errand-id]")].map((e) => e.dataset.errandId));
@@ -271,7 +301,9 @@ async function walk(browser, BASE, w, h) {
   });
   await check(`B2 [${vp}] hit areas grew to practical size (A-732 floors) — skip/stay/back/close/pick >=40 tall, flap2 >=30, records >=44 tall, interest rows to their pitch`, () => {
     const hh = (o, min, k) => assert.ok(o.hit && o.hit.h >= min, `${k}@${vp} hit h ${o.hit && o.hit.h} < ${min}`);
-    hh(M.skip, 40, "skip"); hh(M.stay, 40, "sendCard__stay"); assert.ok(M.stay.hit.w >= 44, `stay hit w ${M.stay.hit.w}`);
+    hh(M.skip, 40, "skip");
+    // [A-779 RE-PIN] First Send "stay home" is removed from view (A-777 §8.2 LOCKED): visibility:hidden — it must own NO hit area now.
+    assert.equal(M.stay.hit, null, "First Send stay home is not hit-testable");
     hh(M.iBack, 40, "interests Home"); hh(M.cBack, 40, "candidates Home"); hh(M.aBack, 40, "action Home");
     assert.ok(M.cBack.hit.w >= 28, `back hit w ${M.cBack.hit.w}`);
     for (const [i, p] of M.picks.entries()) hh(p, 40, `pick${i}`);
@@ -283,18 +315,23 @@ async function walk(browser, BASE, w, h) {
     assert.ok(M.item0.hit.b < M.item1.hit.t || M.item0.hit.b <= M.item1.box[1] + 1, "interest rows: item0 hit stays above item1");
     assert.ok(M.cBack.hit.r < M.cOk.box[0], `Home hit right ${M.cBack.hit.r} must stop left of ok ${M.cOk.box[0]}`);
     assert.ok(M.aBack.hit.r < M.cOk.box[0] + 1);
-    assert.ok(M.stay.hit.r < M.sendOk.box[0], `stay hit right ${M.stay.hit.r} must stop left of Send ${M.sendOk.box[0]}`);
-    if (web) assert.ok(M.flap1.hit.h >= 30 && M.rec.hit.b <= M.flap1.hit.t + 2, `records hit bottom ${M.rec.hit.b} vs flap1 hit top ${M.flap1.hit.t}`); // <=640 keeps the pre-A-735 A-621/A-623 boxes, unchanged
+    assert.equal(M.stay.hit, null, "[A-779] hidden stay home steals nothing from Send");
+    // pre-A-839 baseline: M.rec.hit.b <= M.flap1.hit.t + 2 (a 2 px graze was tolerated at k = 1). A-839: the hit extensions scale with the card and the records hit never overlaps flap1's.
+    if (web) assert.ok(M.flap1.hit.h >= 30 && M.rec.hit.b <= M.flap1.hit.t + 0.01, `records hit bottom ${M.rec.hit.b} vs flap1 hit top ${M.flap1.hit.t}`); // <=640 keeps the pre-A-735 A-621/A-623 boxes, unchanged
     assert.ok(M.flap2.hit.t >= M.flap1.hit.t, "flap2 hit never starts above flap1's");
   });
-  await check(`B4 [${vp}] candidate shell: pkbtn surface (texture, radius 20, shadow identical to the live .pkbtn), title font/size unchanged, 3px clip gone, picked underline kept, no overflow`, () => {
+  // [A-779 RE-PIN] A-777 §8.2 LOCKED: Second candidates are selectable TEXT lines, not paper buttons — the A-735 .pkbtn surface
+  // (texture/radius/shadow) is removed and the title uses the shared supporting size (--type-support 18px). Kept from A-735: the 40px
+  // box, no clip/overflow, and the yellow underline as the only picked mark.
+  await check(`B4 [${vp}] candidate rows: plain text lines (no paper texture / shadow / radius), choice size (A-786: 28px <=640 / 24px >=641, > 18px support), no clip, picked underline kept, no overflow`, () => {
     for (const [i, c] of M.picks.entries()) {
-      assert.match(c.bgi, /paper_tex_ivory\.png/, `row${i} paper texture`); assert.equal(c.radius, "20px"); assert.equal(c.shadow, M.sendOk.shadow, `row${i} shadow == .pkbtn shadow`); assert.equal(c.border, "0px");
-      assert.equal(c.bgc, M.sendOk.bgc, `row${i} paper colour == .pkbtn`);
+      assert.equal(/paper_tex_ivory\.png/.test(c.bgi), false, `row${i} no paper texture`); assert.equal(c.radius, "0px"); assert.equal(c.shadow, "none", `row${i} no shadow`); assert.equal(c.border, "0px");
       assert.ok(/Delicious Handrawn|Cherry|cursive/i.test(c.family) || /--font-cj/.test(c.family) || c.family.length > 0, "handwriting family");
-      assert.equal(c.font, web ? "24px" : "28px", `row${i} title size unchanged`);
+      // [A-845 RE-PIN] A-843 Choice style: 18 on-screen at the phone card = 18 / (.65 x 282.3239 / 285) = 27.9548 css at every width (no 640 step;
+      // measured "27.9548px" at 390 / 700 / 1440, A845 browser_suites/a735). pre-A-845 baseline: w > 640 ? "24px" : "28px"
+      assert.equal(c.font, "27.9548px", `row${i} choice size (A-845 Choice style; A-786: was supporting 18px; restores pre-A-779 hierarchy)`);
       assert.ok(c.sh <= c.ch, `row${i} clip: scrollHeight ${c.sh} > clientHeight ${c.ch}`); assert.ok(c.sw <= c.cw + 1, `row${i} width overflow`);
-      assert.equal(c.oh, 40, `row${i} layout height == .pkbtn 40px`);
+      assert.equal(c.oh, 40, `row${i} layout height unchanged (40px)`);
     }
     assert.match(M.picked.bgi, /linear-gradient\(.*(224, 177, 0|e0b100)/i, "picked keeps the yellow underline gradient"); assert.equal(/linear-gradient/.test(M.unpicked.bgi), false, "only the picked row carries it");
   });

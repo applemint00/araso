@@ -34,7 +34,7 @@ const ID = /^[A-Za-z0-9_.:-]{1,80}$/;
 // 받지 않고, 새 행은 항상 provenance 없이 들어가며, 백업 봉투는 순번·시각만 담는다.
 // 표식 이전 설치의 "승급"은 **없다**: 행의 출처(원 기기 행인가)를 배타적으로 증명하는 증거가 없다
 // (araso.birthPlayed 는 생성 전용이지만, 색인이 사라졌다 옛 빌드의 되찾기로 다시 만들어진 행도 같은 birthPlayed=1 을 가진다).
-const ROW_FIELDS = Object.freeze(["id", "name", "address", "locator", "createdAt", "lastControlProofAt", "sequence", "provenance"]);
+const ROW_FIELDS = Object.freeze(["id", "name", "address", "locator", "createdAt", "lastControlProofAt", "sequence", "provenance", "promotedAt", "firstJourney"]);
 export const ISSUANCE_PROVENANCE = Object.freeze({ BIRTH: "birth" });
 const PROVENANCE_VALUES = new Set(Object.values(ISSUANCE_PROVENANCE));
 const SECRET_LIKE = /private|secret|seed|mnemonic|prfoutput|sessionkey|signingkey|keymaterial|authorization/i;
@@ -80,7 +80,20 @@ function normalizeRow(row) {
     if (!PROVENANCE_VALUES.has(row.provenance) || row.sequence !== undefined && row.sequence !== null) return null;   // 모르는 출처/순번 행의 출처 = 줄 버림
     provenance = row.provenance;
   }
-  return { id, name, address: row.address, locator, createdAt, lastControlProofAt, ...(sequence ? { sequence } : {}), ...(provenance ? { provenance } : {}) };
+  // [A-897] `promotedAt` = this row is the SAME #1 admitted from the testnet scope (promoteFirstPiggyToScope). #1 only: a sequenced
+  // row never carries it. A malformed value drops the row (no owner is invented).
+  let promotedAt = null;
+  if (row.promotedAt !== undefined && row.promotedAt !== null) {
+    if (typeof row.promotedAt !== "string" || row.promotedAt.trim() === "" || sequence) return null;
+    promotedAt = row.promotedAt;
+  }
+  // [A-897 P1-fix C3] the persisted First Journey verdict of a promoted #1 ("has" = stamp + Second · "none" = First Journey). Only on a promoted row.
+  let firstJourney = null;
+  if (row.firstJourney !== undefined && row.firstJourney !== null) {
+    if (!promotedAt || (row.firstJourney !== "has" && row.firstJourney !== "none")) return null;
+    firstJourney = row.firstJourney;
+  }
+  return { id, name, address: row.address, locator, createdAt, lastControlProofAt, ...(sequence ? { sequence } : {}), ...(provenance ? { provenance } : {}), ...(promotedAt ? { promotedAt } : {}), ...(firstJourney ? { firstJourney } : {}) };
 }
 
 // [A-531] `issuedThrough` = 성공적으로 입장한 순번의 최댓값(워터마크). 없으면 0 — 기존 v1 데이터와 호환.
@@ -280,6 +293,90 @@ export function renameIndexedPiggy(storage, chainId, { id, name } = {}) {
   const next = { ...index, piggies };
   if (!writeIndex(storage, chainId, next)) return refuse("storage_write_failed");
   return { ok: true, reason: null, index: next, piggy: piggies[at] };
+}
+
+// ── [A-897] Release 2 — the SAME #1 is admitted into another chain scope (testnet -> mainnet). No new Piggy, no sequence. ─────
+// Identity is root passkey + salt -> address; the chain is not identity (same address on both). The app's records are chain-scoped
+// (`araso.myPiggiesIndex.v1.<chainId>`), so "promotion" = read the #1 row in the SOURCE scope and register the same address in the TARGET
+// scope. Only #1 (the row without a sequence). Testnet #2/#3 stay in the testnet history. The decision "is there First Journey evidence"
+// is NOT made here (gift-claim-entry.js readFirstJourneyEvidence); this only writes the row, and only after the caller proved control.
+export const PROMOTION_STATUS = Object.freeze({
+  CANDIDATE: "candidate",          // target scope has no Piggy except (at most) this unpromoted, unborn #1 row -> promotion applies
+  PROMOTED: "promoted",            // this #1 was already promoted -> a later Gift is case 3 (A-567 new Gift Piggy)
+  NOT_CANDIDATE: "not_candidate",  // a mainnet Piggy already exists / born here / sequenced rows -> case 3 (A-567), unchanged
+  UNREADABLE: "unreadable",        // target index could not be read -> neither promote nor create (caller: unopened, retry)
+});
+
+export function firstPiggyPromotionStatus(storage, chainId, address) {
+  if (!myPiggiesKeyOk(chainId) || !storage || !ADDR.test(address || "")) return { status: PROMOTION_STATUS.UNREADABLE, reason: "invalid_input" };
+  const loaded = loadMyPiggiesIndex(storage, chainId);
+  if (loaded.error && loaded.error !== "absent") return { status: PROMOTION_STATUS.UNREADABLE, reason: "index_unreadable" };
+  if (loaded.tainted) return { status: PROMOTION_STATUS.UNREADABLE, reason: "index_tainted" };
+  const rows = loaded.index.piggies;
+  const mine = rows.find((p) => lower(p.address) === lower(address)) || null;
+  if (rows.some((p) => p.sequence) || rows.some((p) => lower(p.address) !== lower(address))) return { status: PROMOTION_STATUS.NOT_CANDIDATE, reason: "target_has_other_piggy" };
+  if (mine && mine.promotedAt) return { status: PROMOTION_STATUS.PROMOTED, reason: null, piggy: mine };
+  if (mine && mine.provenance) return { status: PROMOTION_STATUS.NOT_CANDIDATE, reason: "born_in_target_scope" };
+  return { status: PROMOTION_STATUS.CANDIDATE, reason: null, piggy: mine };
+}
+
+function myPiggiesKeyOk(chainId) {
+  return !!myPiggiesIndexKey(chainId);
+}
+
+export function promoteFirstPiggyToScope(storage, { fromChainId, toChainId, address, signerAddress, locator, id = null, at, firstJourney = null } = {}) {
+  if (!myPiggiesKeyOk(fromChainId) || !myPiggiesKeyOk(toChainId) || fromChainId === toChainId) return refuse("invalid_chain");
+  if (!storage) return refuse("no_storage");
+  if (!ADDR.test(address || "")) return refuse("invalid_address");
+  const proof = bindSigner(Object.freeze({ id: "proof", address }), signerAddress);   // control proof: the live signer IS the #1 address
+  if (!proof.ok) return refuse(proof.reason === "no_signer" ? "no_control_proof" : "control_proof_mismatch");
+  const { locator: loc, error: locError } = normalizeLocator(locator);
+  if (locError) return refuse(locError);
+  if (typeof at !== "string" || at.trim() === "") return refuse("missing_time");
+  const wantId = typeof id === "string" && id.trim() !== "" ? id.trim() : `piggy-${lower(address)}`;
+  if (!ID.test(wantId)) return refuse("invalid_id");
+
+  if (firstJourney !== null && firstJourney !== "has" && firstJourney !== "none") return refuse("invalid_first_journey");
+  const status = firstPiggyPromotionStatus(storage, toChainId, address);
+  if (status.status === PROMOTION_STATUS.UNREADABLE) return refuse(status.reason);
+  if (status.status === PROMOTION_STATUS.NOT_CANDIDATE) return refuse(status.reason === "born_in_target_scope" ? "not_promotable_born_here" : "not_promotable_target_has_other_piggy");
+  if (status.status === PROMOTION_STATUS.PROMOTED) {
+    const loadedDone = loadMyPiggiesIndex(storage, toChainId);
+    return { ok: true, reason: null, index: loadedDone.index, piggy: status.piggy, alreadyPromoted: true };
+  }
+  const target = loadMyPiggiesIndex(storage, toChainId).index;
+
+  // Source (read-only): the SAME address' first row in the source scope supplies the name, and the origin-device provenance only when
+  // it is the same passkey and the source index is trustworthy. A missing/unreadable source is not an error: name UNKNOWN, no provenance.
+  let carriedName = null;
+  let carriedProvenance = null;
+  let sourceCreatedAt = null;
+  const source = loadMyPiggiesIndex(storage, fromChainId);
+  if (!source.error && !source.tainted) {
+    const row = source.index.piggies.find((p) => lower(p.address) === lower(address) && !p.sequence) || null;
+    if (row) {
+      carriedName = row.name || null;
+      sourceCreatedAt = row.createdAt || null;
+      if (row.provenance === ISSUANCE_PROVENANCE.BIRTH && row.locator?.credentialId === loc.credentialId) carriedProvenance = ISSUANCE_PROVENANCE.BIRTH;
+    }
+  }
+
+  const at0 = target.piggies.findIndex((p) => lower(p.address) === lower(address));
+  const piggies = target.piggies.map((p) => ({ ...p }));
+  let piggy;
+  if (at0 >= 0) {
+    const prev = piggies[at0];
+    if (prev.id !== wantId && wantId !== `piggy-${lower(address)}`) return refuse("id_conflict");
+    piggy = { ...prev, locator: loc, lastControlProofAt: at, promotedAt: at, ...(firstJourney ? { firstJourney } : {}), ...(prev.name ? {} : carriedName ? { name: carriedName } : {}), ...(carriedProvenance ? { provenance: carriedProvenance } : {}) };
+    piggies[at0] = piggy;
+  } else {
+    if (piggies.some((p) => p.id === wantId)) return refuse("id_conflict");
+    piggy = { id: wantId, name: carriedName, address, locator: loc, createdAt: sourceCreatedAt || at, lastControlProofAt: at, promotedAt: at, ...(firstJourney ? { firstJourney } : {}), ...(carriedProvenance ? { provenance: carriedProvenance } : {}) };
+    piggies.push(piggy);
+  }
+  const next = { ...target, piggies };
+  if (!writeIndex(storage, toChainId, next)) return refuse("storage_write_failed");
+  return { ok: true, reason: null, index: next, piggy, alreadyPromoted: false, carriedName: !!carriedName };
 }
 
 // ---- [A-531] 모델 A 추가 Piggy 입장 — 탭 사이 직렬화 + 고정 credential + 통제 증명 ---------------------

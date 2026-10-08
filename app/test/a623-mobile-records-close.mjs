@@ -22,6 +22,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
+import { layoutOracle } from "./helpers/a831-sweep.mjs";
 
 import { admitSequencedPiggy, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
@@ -64,6 +66,15 @@ function fnBody(src, name) {
   return "";
 }
 const code = stripComments(MAIN);
+// [A-833] test-side placement oracle: computeHistoryPlacement() evaluated in a vm on the pure keyframe layout (replaces the live whitespace rect-math).
+const A833_LAYOUT = layoutOracle(MAIN);
+const A833_PLACE = (() => {
+  const ctx = { Math, __layout: A833_LAYOUT };
+  vm.createContext(ctx);
+  const i = MAIN.indexOf("function computeHistoryPlacement("); const j = MAIN.indexOf("\n}\n", i);
+  vm.runInContext(["function desktopFormat(vw, vh) { const L = __layout(vw, vh, 0); return { s: L.s, L }; }", MAIN.slice(i, j + 3), "globalThis.__P = computeHistoryPlacement;"].join("\n"), ctx);
+  return ctx.__P;
+})();
 const sync = fnBody(code, "syncRecordsViewportState");
 check("syncRecordsViewportState() exists", sync.length > 0, true);
 // [A-662] "mobile" → "stackedMode", literal `window.innerWidth <= 640` → the one shared
@@ -357,20 +368,17 @@ async function live() {
     // "not a one-off viewport hack") — this asserts by the SAME rect-math the real function uses
     // (live `.homePaper` rect + RECORDS_CARD_GAP=24 whitespace), not a hardcoded 640/641 pixel
     // pair, so it stays correct if the paper size/gap ever changes the exact crossover.
-    async function expectedStacked() {
-      return ev(`(() => {
-        const paper = document.querySelector(".homePaper");
-        if (!paper) return true;
-        const r = paper.getBoundingClientRect();
-        if (!r.width || !r.height) return true;
-        const candidateRight = r.right + 24 + r.width;
-        return (window.innerWidth - candidateRight) < 24;
-      })()`);
+    // pre-A-833 baseline: expectedStacked() = live .homePaper rect whitespace test: (innerWidth - (r.right + 24 + r.width)) < 24
+    async function expectedStacked(w, h) {
+      // HARD-CODED expectations (v10 canon pictures / A-829 item 6; not derived from the implementation): phones 390x844 and 430x900 = stacked;
+      // 660x900 = fan (picture 04), 900x900 (square) = fan (never stacked at w/h >= 1), 1440x900 = pair.
+      const EXPECT_STACKED = { "390x844": true, "430x900": true, "660x900": false, "900x900": false, "1440x900": false };
+      return EXPECT_STACKED[`${w}x${h}`];
     }
     async function checkLiveCrossing(label, w, h) {
       await c.viewport(w, h);
       await wait(600);
-      const stackedExpected = await expectedStacked();
+      const stackedExpected = await expectedStacked(w, h);
       const snapped = await snap();
       check(`${label}: shift/inert follow live rect-math (computeHistoryFitMode(), stacked=${stackedExpected})`,
         [snapped.shift, snapped.inert], stackedExpected ? [false, true] : [true, false]);
@@ -392,7 +400,8 @@ async function live() {
     await c.viewport(1440, 900);
     await wait(600);
     const webClosed = (await snap()).home;
-    check(`web two-card shift = −46px exactly when open (after a mobile→web crossing)`, near(webOpen.home.l, webClosed.l - 46, 0.6), true);
+    // pre-A-833 baseline: web two-card shift = −46px exactly when open: near(webOpen.home.l, webClosed.l - 46, 0.6)
+    check(`web two-card shift = the placement's computed Home move when open (after a mobile→web crossing; 1440x900 pair)`, near(webOpen.home.l, webClosed.l + A833_PLACE(1440, 900).homeDx, 0.6), true); // tolerance restored to the original 0.6 (not browser-run by the writer in round 3; if 0.6 fails, record the measured gap here)
     await c.viewport(W, H);
     await wait(700);
 

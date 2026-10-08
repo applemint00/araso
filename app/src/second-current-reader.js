@@ -299,3 +299,106 @@ export async function readSecondCurrent({ profile, piggyAddress, rpcUrl, fetchIm
   for (const u of UNAVAILABLE) candidates.push(row(u.id, CURRENT_READER_STATUS.UNAVAILABLE, u.reason));
   return { kind: "second_current_read", piggyAddress: address || null, candidates };
 }
+
+// ── [Second mainnet merge] read-only routing ─────────────────────────────────────────────────────────────────
+// Routes each reader row to its own protocol. Nothing is decided, coerced or filled in here:
+//   · `read` is a deep, frozen copy of the row's own read (null stays null; "UNKNOWN" stays "UNKNOWN");
+//   · the row's own `unknown`, `unknownClass`, `assumptions` and `note` are carried over untouched, and each
+//     protocol adds only the gaps this reader itself knows it does not read (`readerGaps`);
+//   · a status that does not belong to the row's protocol is not trusted: evidence becomes "unknown" with
+//     unknownClass "conflicting", and the original status and read are still kept for inspection;
+//   · a missing row is a route with evidence "unknown" / unknownClass "missing", never an omission.
+// Every route is decision "unknown", action "none", no permission, no live execution.
+const S = CURRENT_READER_STATUS;
+const SHARED_FAILURE = Object.freeze([S.READ_FAILED, S.ASSUMPTION_BROKEN, S.TARGET_MISSING, S.UNKNOWN, S.UNAVAILABLE]);
+export const SECOND_READER_ROUTES = Object.freeze({
+  "aave-usdc": Object.freeze({
+    protocol: "aave", observedStatuses: Object.freeze([S.AAVE_BUILDABLE]),
+    evidenceKeys: Object.freeze(["reserve", "receiptToken", "holdings"]),
+    readerGaps: Object.freeze(["gas_fee_usd"]),
+  }),
+  "neverland-usdc": Object.freeze({
+    protocol: "neverland", observedStatuses: Object.freeze([S.NEVERLAND_DERIVED_ASSUMED]),
+    evidenceKeys: Object.freeze(["receiptToken", "holdings"]),
+    // The receipt token is derived through an assumed pool shape (see readNeverland); the reader never proves it.
+    readerGaps: Object.freeze(["receipt_token_shape_assumed", "reserve_flags", "exit_timing", "exit_liquidity", "gas_fee_usd"]),
+  }),
+  "curvance-usdc": Object.freeze({
+    protocol: "curvance", observedStatuses: Object.freeze([S.CURVANCE_ERC4626]),
+    evidenceKeys: Object.freeze(["holdings", "vaultTotalAssetsRaw"]),
+    // assetsRaw is the vault's own conversion view at one block, not a realized exit amount.
+    readerGaps: Object.freeze(["realized_exit_assets", "holding_period", "exit_liquidity", "gas_fee_usd"]),
+  }),
+  "abil-spot": Object.freeze({
+    protocol: "abil", observedStatuses: Object.freeze([S.ABIL_QUOTE_INCOMPLETE]),
+    evidenceKeys: Object.freeze(["identityMatchesRecorded", "holdings", "quote", "recorded"]),
+    readerGaps: ABIL_ALWAYS_UNKNOWN,
+  }),
+  "kintsu-smon": Object.freeze({
+    protocol: "kintsu", observedStatuses: Object.freeze([S.KINTSU_OBSERVATION]),
+    evidenceKeys: Object.freeze([]),
+    // Contract-state observation only (see readKintsu): the account's balance and any return are never read.
+    readerGaps: Object.freeze(["account_share_balance", "return_eta", "final_return_value"]),
+  }),
+});
+export const SECOND_READER_ROUTE_IDS = Object.freeze(Object.keys(SECOND_READER_ROUTES));
+
+const ownHas = (o, k) => !!o && typeof o === "object" && Object.prototype.hasOwnProperty.call(o, k);
+function frozenCopy(value) {
+  if (value === null || value === undefined) return null;
+  let copy;
+  try { copy = structuredClone(value); } catch { return null; }
+  const freeze = (v) => { if (v && typeof v === "object") { for (const k of Object.keys(v)) freeze(v[k]); Object.freeze(v); } return v; };
+  return freeze(copy);
+}
+const stringList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === "string") : []);
+
+/**
+ * One reader row routed to its protocol. `jobId` picks the route when the row is missing.
+ * @returns {object} frozen route; never throws.
+ */
+export function routeSecondCurrentRow(rowIn, jobId = null) {
+  const id = ownHas(rowIn, "id") && typeof rowIn.id === "string" ? rowIn.id : jobId;
+  const lock = { decision: "unknown", action: "none", actionCount: 0, executionPermission: false, liveExecution: false };
+  if (typeof id !== "string" || !ownHas(SECOND_READER_ROUTES, id)) {
+    return Object.freeze({ kind: "second_reader_route", jobId: null, protocol: null, status: S.UNKNOWN, reason: "unrouted_candidate", evidence: "unknown", unknownClass: "unsupported", read: null, unknown: Object.freeze([]), assumptions: Object.freeze([]), note: null, ...lock });
+  }
+  const route = SECOND_READER_ROUTES[id];
+  const gaps = (own) => Object.freeze([...new Set([...own, ...route.readerGaps])]);
+  if (!rowIn || typeof rowIn !== "object" || (jobId && rowIn.id !== jobId)) {
+    return Object.freeze({ kind: "second_reader_route", jobId: id, protocol: route.protocol, status: S.UNKNOWN, reason: "row_missing", evidence: "unknown", unknownClass: "missing", read: null, unknown: gaps([]), assumptions: Object.freeze([]), note: null, ...lock });
+  }
+  const status = typeof rowIn.status === "string" ? rowIn.status : S.UNKNOWN;
+  const read = frozenCopy(rowIn.read);
+  const own = stringList(rowIn.unknown);
+  const ownClass = typeof rowIn.unknownClass === "string" ? rowIn.unknownClass : null;
+  let evidence = "unknown";
+  let unknownClass = ownClass;
+  let reason = typeof rowIn.reason === "string" ? rowIn.reason : "no_reason";
+  if (route.observedStatuses.includes(status)) {
+    const missingKey = route.evidenceKeys.find((k) => !ownHas(read, k));
+    if (read && !missingKey) evidence = "observed";
+    else { unknownClass = unknownClass || "missing"; reason = `evidence_missing:${missingKey || "read"}`; }
+  } else if (!SHARED_FAILURE.includes(status)) {
+    unknownClass = "conflicting";
+    reason = `status_not_for_protocol:${status}`;
+  } else {
+    unknownClass = unknownClass || (status === S.ASSUMPTION_BROKEN ? "conflicting" : "missing");
+  }
+  return Object.freeze({
+    kind: "second_reader_route", jobId: id, protocol: route.protocol, status, reason, evidence, unknownClass,
+    read, unknown: gaps(own), assumptions: Object.freeze(stringList(rowIn.assumptions)), note: typeof rowIn.note === "string" ? rowIn.note : null,
+    ...lock,
+  });
+}
+
+/**
+ * The whole reader result routed: one route per Second mainnet protocol (missing rows included), plus every
+ * other row kept as-is under `unrouted` (copied, never dropped).
+ */
+export function routeSecondCurrentRead(result) {
+  const rows = result && typeof result === "object" && Array.isArray(result.candidates) ? result.candidates : [];
+  const routes = SECOND_READER_ROUTE_IDS.map((id) => routeSecondCurrentRow(rows.find((r) => r && r.id === id) || null, id));
+  const unrouted = rows.filter((r) => !(r && typeof r.id === "string" && ownHas(SECOND_READER_ROUTES, r.id))).map((r) => frozenCopy(r));
+  return Object.freeze({ kind: "second_reader_routes", piggyAddress: result?.piggyAddress ?? null, routes: Object.freeze(routes), unrouted: Object.freeze(unrouted) });
+}

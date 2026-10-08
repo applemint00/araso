@@ -278,7 +278,7 @@ export function mergeSecondJourneyStates(stored, incoming) {
     receipts: [...incomingOnly, ...stored.receipts].slice(0, RECEIPT_CAP),
     evidenceState: {
       ...stored.evidenceState,
-      pointers: unionBy(stored.evidenceState.pointers || [], incoming.evidenceState.pointers || [], (item) => JSON.stringify(item)).slice(-POINTER_CAP),
+      pointers: unionBy(Array.isArray(stored.evidenceState.pointers) ? stored.evidenceState.pointers : [], Array.isArray(incoming.evidenceState.pointers) ? incoming.evidenceState.pointers : [], (item) => JSON.stringify(item)).slice(-POINTER_CAP), // [A-895 M-F-2] non-array pointers = empty, never throws (pre-A-895: `|| []`)
     },
   };
 }
@@ -505,7 +505,16 @@ function validateDecisionSnapshot(receipt, state) {
   for (const field of DECISION_FORBIDDEN_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(receipt, field)) return { error: "forbidden_field_present" };
   }
-  const shapeError = decisionShapeError(receipt, 0);
+  // [A-859] A finalized block hash is public chain data but is 32-byte-hex shaped, so the secret-shape scan would reject it.
+  // Exempt exactly one slot: evidence.provenance.observation.blockHash, and only when it is a well-formed hash.
+  // Everything else (any other key/value, any other path) is still scanned.
+  const shapeSubject = (() => {
+    const obs = receipt.evidence?.provenance?.observation;
+    if (!obs || typeof obs !== "object" || obs.finality !== "finalized" || obs.tagUsed !== "finalized" || !Number.isInteger(obs.block)
+      || typeof obs.blockHash !== "string" || !/^0x[0-9a-f]{64}$/.test(obs.blockHash)) return receipt;
+    return { ...receipt, evidence: { ...receipt.evidence, provenance: { ...receipt.evidence.provenance, observation: { ...obs, blockHash: "0xFINALIZED_BLOCK_HASH" } } } };
+  })();
+  const shapeError = decisionShapeError(shapeSubject, 0);
   if (shapeError) return { error: shapeError };
   if (!nonEmpty(receipt.eventId) || receipt.eventId.length > 200) return { error: "missing_event_id" };
   if (receipt.accountId !== state.accountId || receipt.chainId !== state.chainId) return { error: "scope_mismatch" };
@@ -520,6 +529,15 @@ function validateDecisionSnapshot(receipt, state) {
   if (receipt.decision === "nah" && (!nonEmpty(evidence.source) || !nonEmpty(evidence.observedAt))) return { error: "nah_without_provenance" };
   // [A-579] nah is `expected · found · (block N)`: it names the block its evidence was read at.
   if (receipt.decision === "nah" && (!Number.isInteger(evidence.block) || evidence.block < 0)) return { error: "nah_without_block" };
+  // [A-859] A receipt that claims a finalized observation must carry the integer block it was pinned to and its hash.
+  const observed = evidence.provenance && typeof evidence.provenance === "object" ? evidence.provenance.observation : null;
+  if (observed && typeof observed === "object" && observed.finality === "finalized") {
+    if (!Number.isInteger(observed.block) || observed.block < 0) return { error: "finalized_block_mismatch" };
+    // Block equality is required only where the Receipt rests on the read (nah / live_observation). Conflict and stale
+    // paths keep evidence.block null by design and must still be recordable as UNKNOWN.
+    if ((receipt.decision === "nah" || evidence.evidenceMode === "live_observation") && observed.block !== evidence.block) return { error: "finalized_block_mismatch" };
+    if (typeof observed.blockHash !== "string" || !/^0x[0-9a-f]{64}$/.test(observed.blockHash)) return { error: "finalized_without_hash" };
+  }
   // [A-579] Chain honesty: the Receipt says which runtime chain it was decided in and that
   // it is not executable there. Evidence from another chain may be cited, never executed.
   const context = receipt.executionContext;
@@ -671,4 +689,29 @@ export function clearSecondJourneyDraft(storage, scope = {}) {
   } catch {
     return { key, cleared: false };
   }
+}
+
+// ── [A-851] Home re-check: which candidates just became go-able ─────────────────────────────────────────────────
+// Pure. A candidate in the picked lanes (visibleIds) counts only when its own reader row is readable AND its decision is
+// a match (go-able: ask for the exact permission next, never a permission itself). STRICT fail-closed (Cowork: "any
+// unreadable row = no new candidate"): if ANY picked-lane row is unreadable (missing, failed, no reading), nothing counts,
+// even a readable go-able row beside it. nah / unknown decisions and ids already rung this session never count.
+// Reads nothing, stores nothing, grants nothing.
+const A851_UNREADABLE_ROW = Object.freeze(["read_failed", "unknown", "assumption_broken", "target_missing", "unavailable"]);
+export function newlyGoableCandidateIds({ read = null, decisions = [], visibleIds = [], rungIds = [] } = {}) {
+  const rows = Array.isArray(read?.candidates) ? read.candidates : [];
+  const visible = Array.isArray(visibleIds) ? visibleIds : [];
+  const rung = new Set(rungIds instanceof Set ? [...rungIds] : Array.isArray(rungIds) ? rungIds : []);
+  const readable = (id) => {
+    const row = rows.find((r) => r && r.id === id);
+    return !!row && typeof row.status === "string" && !A851_UNREADABLE_ROW.includes(row.status) && !!row.read && typeof row.read === "object";
+  };
+  if (visible.some((id) => !readable(id))) return [];
+  const out = [];
+  for (const d of Array.isArray(decisions) ? decisions : []) {
+    if (!d || typeof d.candidateId !== "string" || d.decision !== "match" || d.action !== "ask" || d.executionPermission !== false) continue;
+    if (!visible.includes(d.candidateId) || rung.has(d.candidateId) || out.includes(d.candidateId)) continue;
+    out.push(d.candidateId);
+  }
+  return out;
 }

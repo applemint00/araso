@@ -283,6 +283,10 @@ export function evaluateExecution({
       firstSeen: fields.destinationFirstSeen === true, lookalike: fields.destinationLookalike === true,
     });
   }
+  // [A-763] 출처 생산자가 "모른다"(null)고 말했으면 모름이다 — false 로 읽어 통과시키지 않는다.
+  if (fields.destinationFirstSeen === null || fields.destinationLookalike === null || present(fields.destinationProvenanceUnknown)) {
+    gate.add(DECISION.UNKNOWN, "destination_provenance_unknown", { reason: fields.destinationProvenanceUnknown ?? null });
+  }
 
   // 7) 승인/permit 경계(§6).
   if (present(fields.spender)) {
@@ -313,6 +317,9 @@ export function evaluateExecution({
   // 8) 견적 신선도(§2-8). 만료 = 재견적. 정책이 준 수명 외의 기준은 쓰지 않는다.
   if (Number(fields.quoteExpiry) <= nowMs) {
     gate.add(DECISION.NAH, "quote_expired", { quoteExpiry: fields.quoteExpiry, requote: true });
+  } else if (Number(fields.quoteTimestamp) > nowMs) {
+    // [A-895 N2] 미래 시각의 견적은 "방금 받은 신선한 견적"이 아니다 — 나이가 음수라 stale 검사를 영원히 통과한다. 거절한다.
+    gate.add(DECISION.NAH, "quote_timestamp_in_future", { quoteTimestamp: fields.quoteTimestamp, nowMs, requote: true });
   } else if (nowMs - Number(fields.quoteTimestamp) > policy.quoteMaxAgeMs) {
     gate.add(DECISION.NAH, "quote_stale", { ageMs: nowMs - Number(fields.quoteTimestamp), requote: true });
   }
@@ -517,4 +524,144 @@ export function residualAllowance({ remaining = "0", stillNeeded = false, spende
     spender,
     remaining: String(remaining),
   });
+}
+
+// ── [A-763] 목적지 출처 생산자(§3·§5) ─────────────────────────────────────────────
+// 첫 목적지 / 유사 주소 플래그를 **호출자의 주장**이 아니라 실제 출처 기록에서 만든다.
+// 기록(records)은 "이 주소를 어디서 알았나" 의 목록이다: { address, source }.
+//  · 기록 자체가 없으면(배열이 아님) 판단 근거가 없다 → 두 플래그 모두 null = UNKNOWN. false 가 아니다.
+//  · 목적지가 완전한 주소가 아니면 → UNKNOWN.
+//  · 정체성은 **전체 주소 동일성**으로만 본다. 앞뒤 몇 글자는 정체성 근거가 아니고, 유사 주소 탐지에만 쓴다.
+//  · 이력(history)은 목적지를 보증하지 못한다: 이력에만 있는 주소는 여전히 "처음" 이다(오염 공격은 이력에 심는다).
+//  · 이 생산자는 권한·READY·실행을 만들지 않는다. 출력은 게이트의 입력일 뿐이다.
+export const DESTINATION_SOURCE = Object.freeze({
+  PIGGY_REGISTRY: "piggy_registry",
+  PROTOCOL_REGISTRY: "protocol_registry",
+  USER_TYPED: "user_typed",
+  HISTORY: "history",
+});
+const VOUCHING_SOURCES = new Set([DESTINATION_SOURCE.PIGGY_REGISTRY, DESTINATION_SOURCE.PROTOCOL_REGISTRY, DESTINATION_SOURCE.USER_TYPED]);
+const REGISTRY_SOURCES = new Set([DESTINATION_SOURCE.PIGGY_REGISTRY, DESTINATION_SOURCE.PROTOCOL_REGISTRY]);
+const KNOWN_SOURCES = new Set(Object.values(DESTINATION_SOURCE));
+const FULL_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+// 오염 주소가 흉내 내는 보이는 끝자리 폭(앞 4 · 뒤 4 hex). 탐지 전용 — 통과 기준이 아니다.
+const LOOKALIKE_EDGE = 4;
+
+function edgesMatch(a, b) {
+  const x = a.slice(2).toLowerCase();
+  const y = b.slice(2).toLowerCase();
+  return x !== y && x.slice(0, LOOKALIKE_EDGE) === y.slice(0, LOOKALIKE_EDGE) && x.slice(-LOOKALIKE_EDGE) === y.slice(-LOOKALIKE_EDGE);
+}
+
+function unknownProvenance(reason, ignored = 0) {
+  return Object.freeze({
+    kind: "destination_provenance",
+    status: DECISION.UNKNOWN,
+    reason,
+    destinationFirstSeen: null,
+    destinationLookalike: null,
+    vouchedBy: null,
+    lookalikeOf: Object.freeze([]),
+    ignoredRecords: ignored,
+    createsPermission: false,
+  });
+}
+
+// 실제 출처 기록 → { destinationFirstSeen, destinationLookalike } (모르면 null). 순수 함수, 던지지 않는다.
+// 기록 필드는 **자기 속성(own property)** 만 읽는다 — 프로토타입에서 물려받은 address/source 는 출처가 아니다.
+// 입력의 getter 가 던지면 그 입력은 읽을 수 없는 것이다 → UNKNOWN (fail closed).
+// [A-791] Safari-safe own-property check. `Object.hasOwn` is ES2022 (Safari 15.4+) and the build does not polyfill it, so an
+// older engine would throw "Object.hasOwn is not a function" here. Use it when the engine has it, otherwise the equivalent
+// `Object.prototype.hasOwnProperty.call` (captured at load, so a later reassignment of either cannot change the answer).
+// Same semantics on both paths: own properties only, inherited/prototype keys are false.
+const NATIVE_HAS_OWN = typeof Object.hasOwn === "function" ? Object.hasOwn : null;
+const PROTO_HAS_OWN = Object.prototype.hasOwnProperty;
+export function hasOwnSafe(o, k) {
+  if (o === null || o === undefined) return false;
+  return NATIVE_HAS_OWN ? NATIVE_HAS_OWN(o, k) : PROTO_HAS_OWN.call(o, k);
+}
+/** Which path hasOwnSafe took when this module loaded ("native" | "fallback"). For tests and diagnostics only. */
+export const HAS_OWN_PATH = NATIVE_HAS_OWN ? "native" : "fallback";
+const ownString = (o, k) => (hasOwnSafe(o, k) && typeof o[k] === "string" ? o[k] : null);
+
+export function deriveDestinationProvenance(input = {}) {
+  try {
+    return deriveDestinationProvenanceUnguarded(input);
+  } catch {
+    return unknownProvenance("provenance_input_unreadable");
+  }
+}
+
+function deriveDestinationProvenanceUnguarded(input) {
+  if (!input || typeof input !== "object") return unknownProvenance("destination_unreadable");
+  const destination = hasOwnSafe(input, "destination") ? input.destination : null;
+  const records = hasOwnSafe(input, "records") ? input.records : undefined;
+  if (typeof destination !== "string" || !FULL_ADDRESS.test(destination)) return unknownProvenance("destination_unreadable");
+  if (!Array.isArray(records)) return unknownProvenance("provenance_unavailable");
+  // 한 번만 읽어 평범한 값으로 굳힌다 — 두 번째 읽기에서 다른 답을 주는 getter 가 판정을 바꾸지 못하게.
+  const usable = [];
+  let ignored = 0;
+  const total = records.length;
+  for (let i = 0; i < total; i += 1) {
+    const r = hasOwnSafe(records, i) ? records[i] : null;
+    const address = r && typeof r === "object" ? ownString(r, "address") : null;
+    const source = r && typeof r === "object" ? ownString(r, "source") : null;
+    if (address && FULL_ADDRESS.test(address) && KNOWN_SOURCES.has(source)) usable.push({ address, source });
+    else ignored += 1;
+  }
+  // 기록이 있었는데 하나도 읽을 수 없으면 "비어 있음" 이 아니라 "모름" 이다.
+  if (total > 0 && usable.length === 0) return unknownProvenance("provenance_unreadable", ignored);
+  const exact = usable.filter((r) => sameAddress(r.address, destination));
+  const vouching = exact.filter((r) => VOUCHING_SOURCES.has(r.source));
+  const lookalikeOf = [...new Set(usable.filter((r) => edgesMatch(r.address, destination)).map((r) => r.address.toLowerCase()))];
+  return Object.freeze({
+    kind: "destination_provenance",
+    status: "known",
+    reason: null,
+    destinationFirstSeen: vouching.length === 0,
+    destinationLookalike: lookalikeOf.length > 0,
+    vouchedBy: vouching.length ? Object.freeze([...new Set(vouching.map((r) => r.source))]) : null,
+    lookalikeOf: Object.freeze(lookalikeOf),
+    ignoredRecords: ignored,
+    createsPermission: false,
+  });
+}
+
+// 출처에 묶인 실행 게이트. 첫 목적지·유사 플래그는 **호출자가 넣은 값을 버리고** 생산자 값으로 덮는다
+// (호출자가 false 라고 주장해도 통과 근거가 되지 못한다). 레지스트리 출처를 주장했는데 그 레지스트리 기록에
+// 정확히 같은 주소가 없으면 그 주장도 모름이다. 결과는 게이트 판정일 뿐 — 권한을 만들지 않는다.
+// 입력을 읽다가 던지면 판정은 UNKNOWN 이다 — 예외가 호출자에게 새어 나가 "검사 없음" 이 되지 않는다.
+export function evaluateDestinationBoundExecution(input = {}) {
+  let args;
+  let destinationRecords;
+  let inFields;
+  try {
+    const { destinationRecords: recs, ...rest } = input && typeof input === "object" ? input : {};
+    destinationRecords = recs;
+    args = rest;
+    inFields = args.fields && typeof args.fields === "object" ? { ...args.fields } : {};
+  } catch {
+    const prov = unknownProvenance("provenance_input_unreadable");
+    const out = evaluateExecution({ fields: { destinationProvenanceUnknown: prov.reason } });
+    return Object.freeze({ ...out, destinationProvenance: prov, createsPermission: false });
+  }
+  const prov = deriveDestinationProvenance({ destination: inFields.destination, records: destinationRecords });
+  let unknownReason = prov.status === DECISION.UNKNOWN ? prov.reason : null;
+  const claimed = inFields.destinationIdentitySource;
+  if (!unknownReason && REGISTRY_SOURCES.has(claimed) && !(prov.vouchedBy || []).includes(claimed)) {
+    unknownReason = "destination_source_claim_unbacked";
+  }
+  const fields = {
+    ...inFields,
+    destinationFirstSeen: prov.destinationFirstSeen,
+    destinationLookalike: prov.destinationLookalike,
+    destinationProvenanceUnknown: unknownReason,
+  };
+  try {
+    const out = evaluateExecution({ ...args, fields });
+    return Object.freeze({ ...out, destinationProvenance: prov, createsPermission: false });
+  } catch {
+    const out = evaluateExecution({ fields: { destinationProvenanceUnknown: "gate_input_unreadable" } });
+    return Object.freeze({ ...out, destinationProvenance: prov, createsPermission: false });
+  }
 }

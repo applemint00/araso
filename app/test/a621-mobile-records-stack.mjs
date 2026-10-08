@@ -89,7 +89,8 @@ const alignSrc = cut(SRC, "function alignRecordsCardToHomePaper() {", "\n}\n");
 // the raw width itself. The web side-by-side formula below it is unchanged.
 check("alignRecordsCardToHomePaper(): stacked mode (computeHistoryFitMode()) → stackMobileRecordsOverHome(); web branch keeps the live .homePaper + RECORDS_CARD_GAP side-by-side",
   /if \(computeHistoryFitMode\(\) === "stacked"\) \{\s*\n\s*stackMobileRecordsOverHome\(\);\s*\n\s*return;/.test(alignSrc) &&
-  /const left = paperRect\.right - stageRect\.left \+ RECORDS_CARD_GAP;/.test(alignSrc), true);
+  // pre-A-833 baseline: /const left = paperRect\.right - stageRect\.left \+ RECORDS_CARD_GAP;/ (History left = live Home right + gap)
+  /placement\.histLeft - stageRect\.left/.test(alignSrc) && /computeHistoryPlacement\(\)/.test(alignSrc), true);
 check("no bare `window.innerWidth <= 640` left inside alignRecordsCardToHomePaper() (the shared decision owns it now)",
   /window\.innerWidth <= 640/.test(alignSrc), false);
 
@@ -114,8 +115,12 @@ check("closeRecordsCard(): stacked mode + motion → --closing then hide after R
   /\} else \{\s*\n\s*anchor\.hidden = true;/.test(closeSrc), true);
 check("closeRecordsCard(): exit timer only hides if Records was not reopened meanwhile",
   /if \(!state\.recordsCardVisible\) anchor\.hidden = true;/.test(closeSrc), true);
-check("RECORDS_EXIT_MS (180) >= the 160ms .recordsCardAnchor transition",
-  /const RECORDS_EXIT_MS = 180;/.test(SRC) && /transition: opacity 160ms ease, transform 160ms ease;/.test(CSS), true);
+// pre-A-833 baseline: RECORDS_EXIT_MS (180) >= the 160ms .recordsCardAnchor transition:
+//   /const RECORDS_EXIT_MS = 180;/ && /transition: opacity 160ms ease, transform 160ms ease;/ (base rule text still present, kept below)
+check("RECORDS_EXIT_MS (260) >= the 240ms close (A-833); base 160ms rule text kept; stacked 320/240 rules added",
+  /const RECORDS_EXIT_MS = 260;/.test(SRC) && /transition: opacity 160ms ease, transform 160ms ease;/.test(CSS) &&
+  /\.recordsCardAnchor--stackedMode\.recordsCardAnchor--closing \{\s*\n\s*transition: opacity 240ms/.test(CSS) &&
+  /\.recordsCardAnchor--stackedMode:not\(\.recordsCardAnchor--opening\):not\(\.recordsCardAnchor--closing\) \{\s*\n\s*transition: opacity 320ms/.test(CSS), true);
 
 // ── 3. CSS — mobile only; web rules untouched ──────────────────────────────────────────────
 const stackCss = cut(CSS, "/* [A-621 OWNER CONFIRMED · MOBILE RECORDS STACK", "\n}\n\n.recordsCard__body");
@@ -159,10 +164,13 @@ check("web .homePaper__records base font stays 12px", /\.homePaper__records \{[^
 const fitModeSrc = cut(SRC, "function computeHistoryFitMode() {", "\n}\n");
 check("computeHistoryFitMode(): reads the live .homePaper rect (never cached)",
   /document\.querySelector\("\.homePaper"\)/.test(fitModeSrc) && /paper\.getBoundingClientRect\(\)/.test(fitModeSrc), true);
-check("computeHistoryFitMode(): whitespace check reuses RECORDS_CARD_GAP as the required safe margin (not --mobile-inset)",
-  (fitModeSrc.match(/RECORDS_CARD_GAP/g) || []).length >= 2 && !/--mobile-inset/.test(fitModeSrc), true);
-check("computeHistoryFitMode(): also checks the character-safe box (not whitespace-only)",
-  /homeCharacterSafeBoxViewport\(/.test(fitModeSrc), true);
+// pre-A-833 baseline: whitespace check reused RECORDS_CARD_GAP (>= 2 mentions, no --mobile-inset) and homeCharacterSafeBoxViewport( was called in the fit mode.
+// A-833: the decision is computeHistoryPlacement() (pure layout rule, gap 24 x k, free span ends 12 px before the stage when the cards reach the characters).
+const placementSrc = cut(SRC, "function computeHistoryPlacement(", "\n}\n");
+check("computeHistoryFitMode(): decided by computeHistoryPlacement() (not --mobile-inset)",
+  /computeHistoryPlacement\(\)/.test(fitModeSrc) && !/--mobile-inset/.test(fitModeSrc), true);
+check("computeHistoryPlacement(): gap 24 x k, character clearance = free span ends at stageLeft - 12 when the cards reach the characters",
+  /const gap = 24 \* L\.k;/.test(placementSrc) && /L\.stageLeft - 12/.test(placementSrc) && /L\.cardY \+ L\.cardH > L\.stageTop/.test(placementSrc), true);
 check("computeHistoryFitMode(): missing/unmeasurable .homePaper never claims side-by-side",
   /if \(!stage \|\| !paper\) return "stacked";/.test(fitModeSrc) &&
   /if \(!paperRect\.width \|\| !paperRect\.height\) return "stacked";/.test(fitModeSrc), true);

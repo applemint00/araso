@@ -47,7 +47,9 @@ async function loadMainSecondJourney({ readConfig = null } = {}) {
   const url = (file) => new URL(file, SRC_DIR).href;
   let consts = [cutConst("SECOND_DECISION_SELECTION_SOURCE"), cutConst("RETURN_EVIDENCE_READ_CONFIG"),
     cutConst("LOCAL_TEST_RETURN_READ_HOOK"), cutConst("LOCAL_TEST_JOB_BINDINGS_HOOK"), "const LOCAL_DEV_ENTRY = false;"].join("\n");
-  if (readConfig) consts = consts.replace("const RETURN_EVIDENCE_READ_CONFIG = null;", `const RETURN_EVIDENCE_READ_CONFIG = ${JSON.stringify(readConfig)};`);
+  // pre-A-859 baseline: the product const was null here and was replaced only when readConfig was given.
+  // Now the product const is the finalized mainnet config, so the harness rebinds it: null by default, readConfig when given.
+  consts = consts.replace(/const RETURN_EVIDENCE_READ_CONFIG = [^\n]*;/, `const RETURN_EVIDENCE_READ_CONFIG = ${readConfig ? JSON.stringify(readConfig) : "null"};`);
   const body = FUNCTIONS.map(cutFunction).join("\n\n").replaceAll("import.meta.env.DEV", "__env.DEV");
   const code = `
 import { runSecondJourney } from ${JSON.stringify(url("job-feed.js"))};
@@ -104,9 +106,11 @@ function fakeRpc({ block = 107600000, chainHex = "0x8f", fee = 10, fail = false 
 }
 
 // ── 1. source contract ─────────────────────────────────────────────────────────
-await check("main.js keeps the decision-time reader config null (no mainnet RPC literal)", () => {
-  assert.match(MAIN, /\nconst RETURN_EVIDENCE_READ_CONFIG = null;\n/);
-  assert.doesNotMatch(MAIN, /https:\/\/rpc\.monad\.xyz/);
+await check("main.js decision-time reader config is the A-859 finalized config (was null pre-A-859); single RPC literal", () => {
+  // pre-A-859 baseline: assert.match(MAIN, /\nconst RETURN_EVIDENCE_READ_CONFIG = null;\n/);
+  // pre-A-859 baseline: assert.doesNotMatch(MAIN, /https:\/\/rpc\.monad\.xyz/);
+  assert.match(MAIN, /\nconst RETURN_EVIDENCE_READ_CONFIG = Object\.freeze\(\{ rpcUrl: "https:\/\/rpc\.monad\.xyz", finality: "finalized" \}\);\n/);
+  assert.equal((MAIN.match(/https:\/\/rpc\.monad\.xyz/g) || []).length, 1);
   assert.doesNotMatch(MAIN, /["'`]https?:\/\/[^"'`]*monad[^"'`]*mainnet/i);
 });
 

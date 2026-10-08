@@ -34,10 +34,13 @@ import {
   GIFT_ESCROW_CLAIM_ABI,
   bindGiftToNewPiggy,
   createGiftClaimSubmitter,
+  createGiftGasClientDelivery,
   giftCommitHash,
   isGiftBinding,
 } from "../src/gift-claim-entry.js";
 import { CLAIM_STATUS, TRANSFER_STATUS, attachGiftValue, createClaimLink, sealClaimLink } from "../src/gift-piggy-claim-link.js";
+import { createGiftGasClient } from "../src/gift-gas-client.js";
+import { createGiftGasLedger, createMemoryGiftGasStore } from "../src/gift-gas-ledger.js";
 import { GIFT_GAS_POLICY, buildGiftValueBinding, giftGasBudget } from "../src/gift-value-spec.js";
 
 const REPO = new URL("../../", import.meta.url);
@@ -179,9 +182,14 @@ function fakeChain({ chainId = CHAIN_ID, frozen = false } = {}) {
   return { chain, admin };
 }
 
-function gasDeliveryOver(admin, { mutate = null, throwIt = false, badHash = false } = {}) {
+// [A-895 P-B] The submitter now accepts ONLY a createGiftGasClientDelivery() object (A-887 R1). The fake sender-side
+// gas layer below keeps its pre-A-895 deliver(req) body (it plays the SERVER: it decides the amount and mines the
+// delivery tx); this wrapper is the A-884-client-shaped front of it. `calls` still records what the server received.
+// pre-A-895 baseline: gasDeliveryOver() returned the bare { calls, deliver } object as the submitter's gasDelivery.
+const SERVER_WEI = BigInt(FIX.fundValueWei); // the amount the fake server echoes = the client's fee-derived bound (A-577 fund value)
+function gasDeliveryOver(admin, { mutate = null, throwIt = false, badHash = false, serverWei = SERVER_WEI, response = null } = {}) {
   const calls = [];
-  return {
+  const fake = {
     calls,
     async deliver(req) {
       calls.push({ keys: Object.keys(req).sort(), ...req });
@@ -191,6 +199,21 @@ function gasDeliveryOver(admin, { mutate = null, throwIt = false, badHash = fals
       return { txHash: admin.transfer(t), extra: "ignored" };
     },
   };
+  // [A-895 P-B F1] a REAL createGiftGasClient() over a fake fetch (the adapter accepts only branded clients). The fake fetch plays
+  // the HTTP side of the server: `response({giftId,to})` may force a { status, body } (or throw = network failure); null => normal.
+  const fakeFetch = async (url, init) => {
+    const { giftId, to } = JSON.parse(init.body);
+    const forced = response ? response({ giftId, to }) : null;
+    let r = forced;
+    if (!r) {
+      let d;
+      try { d = await fake.deliver({ allowanceRef: giftId, to, valueWei: serverWei }); } catch { throw new TypeError("connection lost"); }
+      r = { status: 200, body: { ok: true, state: "SENT", giftId, to, valueWei: String(serverWei), txHash: d.txHash } };
+    }
+    return { status: r.status, url, redirected: false, type: "basic", headers: { get: () => "application/json" }, text: async () => (typeof r.body === "string" ? r.body : JSON.stringify(r.body)) };
+  };
+  const client = createGiftGasClient({ fetch: fakeFetch, transport: "https", endpoint: "https://relay.example/gift-gas" });
+  return { calls, delivery: createGiftGasClientDelivery(client) };
 }
 
 async function makeGift({ admin, giftIdHex = `0x${crypto.randomBytes(32).toString("hex")}`, sender = SENDER, expirySec = BigInt(FIX.gift1.expiry) } = {}) {
@@ -210,7 +233,7 @@ function bindFor(giftId, token, address = PIGGY.address) {
 
 function submitterFor(chain, gasDelivery, over = {}) {
   return createGiftClaimSubmitter({
-    chain, gasDelivery, chainScope: SCOPE, escrowAddress: ESCROW,
+    chain, gasDelivery: gasDelivery?.delivery ?? gasDelivery, chainScope: SCOPE, escrowAddress: ESCROW,
     gasUnits: A577_UNITS, safety: { bufferBps: 0 }, readFeeInputs: async () => A577_FEES,
     sleep: async () => {}, maxPolls: 3, ...over,
   });
@@ -259,13 +282,16 @@ await check("A2. binding refusals: no intent / bad address / missing pre-existin
 await check("B1. createGiftClaimSubmitter is null unless every piece is present; claimSigner / unknown keys / shared chain+gas object / missing fundingTransfer all refuse", () => {
   const { chain, admin } = fakeChain();
   const gd = gasDeliveryOver(admin);
-  const ok = { chain, gasDelivery: gd, chainScope: SCOPE, escrowAddress: ESCROW, gasUnits: A577_UNITS, safety: { bufferBps: 0 }, readFeeInputs: async () => A577_FEES };
+  const ok = { chain, gasDelivery: gd.delivery, chainScope: SCOPE, escrowAddress: ESCROW, gasUnits: A577_UNITS, safety: { bufferBps: 0 }, readFeeInputs: async () => A577_FEES };
   assert.ok(createGiftClaimSubmitter(ok));
   for (const [label, over] of [
     ["no chain", { chain: null }],
     ["chain missing a method", { chain: { ...chain, getBlockNumber: undefined } }],
     ["no gasDelivery", { gasDelivery: null }],
     ["gasDelivery === chain", { gasDelivery: Object.assign(chain, { deliver() {} }) }],
+    ["hand-written gasDelivery (not an A-884-client delivery) [A-895 P-B R1]", { gasDelivery: { async deliver() { return { txHash: `0x${"11".repeat(32)}`, valueWei: 1n }; } } }],
+    ["bare { calls, deliver } fake [A-895 P-B R1]", { gasDelivery: { calls: [], deliver: gd.delivery.deliver } }],
+    ["cloned adapter (unregistered copy) [A-895 P-B R1]", { gasDelivery: { ...gd.delivery } }],
     ["no scope", { chainScope: "" }],
     ["bad escrow", { escrowAddress: "0x1234" }],
     ["no fee reader", { readFeeInputs: undefined }],
@@ -304,7 +330,7 @@ await check("C1. value_transferred: delivery (exactly {allowanceRef,to,valueWei}
   assert.equal(gd.calls.length, 1);
   assert.deepEqual(gd.calls[0].keys, ["allowanceRef", "to", "valueWei"]);
   assert.equal(gd.calls[0].allowanceRef, g.giftId);
-  assert.equal(gd.calls[0].to, binding.recipientAddress);
+  assert.equal(lower(gd.calls[0].to), lower(binding.recipientAddress)); // pre-A-895 baseline: strict equal; the adapter lowercases `to`
   assert.equal(gd.calls[0].valueWei, BigInt(FIX.fundValueWei)); // 20,298,700,000,000,000 wei = (commit+claim limits) × 100 gwei
   assert.deepEqual(admin.log.map((l) => l.kind), ["delivery", "commitClaim", "claim"]);
   assert.ok(admin.log.every((l) => l.status === "success"));
@@ -504,6 +530,157 @@ await check("F. gas layer has no entitlement: the only object handed to gasDeliv
   for (const banned of ["relayer/", "fetch(", "privateKey", "claimSigner:", "localStorage", "sessionStorage"]) {
     assert.equal(ENTRY_SRC.includes(banned), false, banned);
   }
+});
+
+// ═══ P-B. [A-895] amount authority · definite-refusal release · non-adapter refusal ════════════════════════
+const ERR = (status, error) => ({ status, body: { ok: false, error } });
+const RESP = {
+  bad_request: ERR(400, "bad_request"), unauthorized: ERR(401, "unauthorized"), forbidden: ERR(403, "forbidden"), not_found: ERR(404, "not found"),
+  method_not_allowed: ERR(405, "method not allowed"), request_timeout: ERR(408, "request timeout"), payload_too_large: ERR(413, "payload too large"),
+  unsupported_media_type: ERR(415, "unsupported media type"), unavailable_not_sent: ERR(503, "unavailable_not_sent"),
+  not_available_409: ERR(409, "not_available"), unavailable_503: ERR(503, "unavailable"),
+};
+async function pbScenario(gdOpts, { ledger = true } = {}) {
+  const { chain, admin } = fakeChain();
+  const store = createMemoryGiftGasStore();
+  const led = createGiftGasLedger({ store, deviceId: "dev-pb" });
+  const gd = gasDeliveryOver(admin, gdOpts);
+  const g = await makeGift({ admin });
+  const sub = submitterFor(chain, gd, ledger ? { giftGasLedger: led } : {});
+  const run = () => sub.submit({ binding: bindFor(g.giftId, g.token), record: g.record, token: g.token, account: PIGGY.account });
+  return { run, led, admin, gd, g, store };
+}
+
+await check("P-B1. amount authority: an echo ABOVE the client's fee-derived bound is refused BEFORE markSent (ledger UNKNOWN, no hash recorded, no commit/claim); the chain is never consulted for it", async () => {
+  const s = await pbScenario({ serverWei: SERVER_WEI + 1n });
+  const out = await s.run();
+  assert.equal(out.status, S.GAS_DELIVERY_FAILED, big(out));
+  const e = (await s.led.get(s.g.giftId)).entry;
+  assert.equal(e.state, "UNKNOWN"); assert.equal(e.txHash, null, "markSent never ran");
+  assert.deepEqual(s.admin.log.map((l) => l.kind), ["delivery"], "only the server-side delivery exists; nothing signed by the Piggy");
+  assert.equal((await s.run()).status, S.GAS_RECONCILE_REQUIRED, "stays blocked: no automatic redelivery");
+  assert.equal(s.gd.calls.length, 1);
+});
+
+await check("P-B2. amount authority: echoed valueWei missing / 0 / negative-looking / non-decimal / hex => refused (UNKNOWN), never markSent", async () => {
+  for (const bad of [undefined, "0", "-1", "1.5", "0x10", "", "01", 5]) {
+    const s = await pbScenario({ response: ({ giftId, to }) => ({ status: 200, body: { ok: true, state: "SENT", giftId, to, txHash: `0x${"ab".repeat(32)}`, ...(bad === undefined ? {} : { valueWei: bad }) } }) });
+    const out = await s.run();
+    assert.equal(out.status, S.GAS_DELIVERY_FAILED, `${String(bad)} ${big(out)}`);
+    const e = (await s.led.get(s.g.giftId)).entry;
+    assert.equal(e.state, "UNKNOWN"); assert.equal(e.txHash, null);
+  }
+});
+
+await check("P-B3. amount authority: the on-chain check uses the ECHOED value — echo below the bound is accepted and recorded, and a tx whose value differs from the echo (even if equal to the bound) is GAS_DELIVERY_UNVERIFIED", async () => {
+  // echo = bound - 1 and the chain agrees => delivery verified, ledger holds the echoed amount (CONFIRMED); the Piggy is 1 wei short of the claim gas
+  const a = await pbScenario({ serverWei: SERVER_WEI - 1n });
+  const outA = await a.run();
+  assert.equal(outA.status, S.GAS_INSUFFICIENT_AFTER_DELIVERY, big(outA));
+  const eA = (await a.led.get(a.g.giftId)).entry;
+  assert.equal(eA.state, "CONFIRMED"); assert.equal(eA.valueWei, String(SERVER_WEI - 1n), "ledger carries the echoed amount, not the reserved bound");
+  // echo = bound - 1 but the chain tx carries the bound => value != echo => unverified (the old check against deliverWei would have passed)
+  const b = await pbScenario({ serverWei: SERVER_WEI - 1n, mutate: () => ({ value: SERVER_WEI }) });
+  const outB = await b.run();
+  assert.equal(outB.status, S.GAS_DELIVERY_UNVERIFIED, big(outB));
+  assert.equal((await b.led.get(b.g.giftId)).entry.state, "UNKNOWN");
+  // echo == bound exactly (the A-577 case) still completes
+  const c = await pbScenario({});
+  assert.equal((await c.run()).status, S.VALUE_TRANSFERRED);
+  assert.equal((await c.led.get(c.g.giftId)).entry.valueWei, String(SERVER_WEI));
+});
+
+await check("P-B4. definite pre-action refusals (400/401/403/404/405/408/413/415, 503 unavailable_not_sent) release the local ledger entry: 1 request, entry gone, an immediate retry is allowed and succeeds", async () => {
+  const defs = [["bad_request", 400], ["unauthorized", 401], ["forbidden", 403], ["not_found", 404], ["method_not_allowed", 405], ["request_timeout", 408], ["payload_too_large", 413], ["unsupported_media_type", 415], ["unavailable_not_sent", 503]];
+  for (const [name, status] of defs) {
+    let refuseNext = true;
+    const s = await pbScenario({ response: () => (refuseNext ? RESP[name] : null) });
+    const first = await s.run();
+    assert.equal(first.status, S.GAS_DELIVERY_FAILED, name);
+    assert.equal((await s.led.get(s.g.giftId)).reason, "not_found", `${name}: reservation released`);
+    assert.equal(s.admin.log.length, 0);
+    assert.equal(s.gd.calls.length, 0, `${name}: the server-side fake never delivered`);
+    refuseNext = false; // the retry reserves afresh and the server now delivers
+    const second = await s.run();
+    assert.equal(second.status, S.VALUE_TRANSFERRED, `${name}: retry allowed ${big(second)}`);
+    assert.equal(s.gd.calls.length, 1);
+  }
+});
+
+await check("P-B5. every ambiguous outcome stays UNKNOWN and BLOCKED: timeout / network / aborted / malformed / 409 not_available / 503 unavailable (ambiguous) / pending / unknown / forged status pairing / ok:true wrong echo", async () => {
+  const garbage = { status: 200, body: "not json" };
+  const cases = {
+    network_error: () => { throw new TypeError("Failed to fetch"); },
+    malformed_response: () => garbage,
+    not_available_409: () => RESP.not_available_409,
+    unavailable_503: () => RESP.unavailable_503,
+    forged_not_sent_body_wrong_status: () => ERR(400, "unavailable_not_sent"),
+    forged_400_body_wrong_status: () => ERR(503, "bad_request"),
+    unknown_status_429: () => ERR(429, "rate_limited"),
+    pending: ({ giftId, to }) => ({ status: 200, body: { ok: true, state: "PENDING", giftId, to, valueWei: String(SERVER_WEI), txHash: null } }),
+    unknown_state: ({ giftId, to }) => ({ status: 200, body: { ok: true, state: "UNKNOWN", giftId, to, valueWei: String(SERVER_WEI), txHash: null } }),
+    echo_wrong_destination: ({ giftId }) => ({ status: 200, body: { ok: true, state: "SENT", giftId, to: `0x${"11".repeat(20)}`, valueWei: String(SERVER_WEI), txHash: `0x${"ab".repeat(32)}` } }),
+  };
+  for (const [name, response] of Object.entries(cases)) {
+    const s = await pbScenario({ response });
+    const out = await s.run();
+    assert.equal(out.status, S.GAS_DELIVERY_FAILED, name);
+    assert.equal((await s.led.get(s.g.giftId)).entry.state, "UNKNOWN", `${name}: stays UNKNOWN`);
+    assert.equal((await s.run()).status, S.GAS_RECONCILE_REQUIRED, `${name}: retry blocked`);
+  }
+  // a throwing fetch is ambiguous too
+  const t = await pbScenario({ response: () => { throw new Error("boom"); } });
+  assert.equal((await t.run()).status, S.GAS_DELIVERY_FAILED);
+  assert.equal((await t.led.get(t.g.giftId)).entry.state, "UNKNOWN");
+});
+
+await check("P-B6. release is refused unless PENDING + no txHash + this device; a ledger without release() or whose release fails falls back to UNKNOWN", async () => {
+  const s = await pbScenario({});
+  const gid = s.g.giftId;
+  assert.equal((await s.led.release(gid)).reason, "not_found");
+  assert.equal((await s.led.reserve(gid, PIGGY.address, 5n)).ok, true);
+  const other = createGiftGasLedger({ store: s.store, deviceId: "dev-other" });
+  assert.equal((await other.release(gid)).ok, false, "other device");
+  assert.equal((await s.led.get(gid)).ok, true, "still reserved after the refused foreign release");
+  assert.equal((await s.led.release(gid)).released, true, "PENDING + no hash + same device => released");
+  assert.equal((await s.led.get(gid)).reason, "not_found");
+  assert.equal((await s.led.reserve(gid, PIGGY.address, 5n)).ok, true);
+  assert.equal((await s.led.markSent(gid, `0x${"cd".repeat(32)}`)).ok, true);
+  assert.equal((await s.led.release(gid)).ok, false, "has a txHash => never released");
+  assert.equal((await s.led.markUnknown(gid)).state, "UNKNOWN");
+  assert.equal((await s.led.release(gid)).ok, false, "UNKNOWN => never released");
+  const gid2 = `0x${"12".repeat(32)}`;
+  assert.equal((await s.led.reserve(gid2, PIGGY.address, 5n)).ok, true);
+  await s.led.markUnknown(gid2);
+  assert.equal((await s.led.release(gid2)).ok, false, "UNKNOWN without hash => never released");
+  assert.equal((await s.led.markSent(gid2, `0x${"ee".repeat(32)}`, 7n)).ok, true);
+  assert.equal((await s.led.get(gid2)).entry.valueWei, "7", "markSent(…, valueWei) records the echoed amount on the first hash write");
+  assert.equal((await s.led.markSent(gid2, `0x${"ee".repeat(32)}`, 9n)).ok, true);
+  assert.equal((await s.led.get(gid2)).entry.valueWei, "7", "a repeat markSent never rewrites the amount");
+  assert.equal((await s.led.markSent(gid2, `0x${"ee".repeat(32)}`, 0n)).reason, "bad_input");
+  // injected ledger lacking release(): a definite refusal degrades to the old UNKNOWN behaviour
+  const { chain, admin } = fakeChain();
+  const base = createGiftGasLedger({ store: createMemoryGiftGasStore(), deviceId: "dev-norelease" });
+  const noRelease = { reserve: base.reserve, markSent: base.markSent, confirm: base.confirm, markUnknown: base.markUnknown, reconcile: base.reconcile, get: base.get };
+  const gd = gasDeliveryOver(admin, { response: () => RESP.bad_request });
+  const g = await makeGift({ admin });
+  const sub = submitterFor(chain, gd, { giftGasLedger: noRelease });
+  assert.equal((await sub.submit({ binding: bindFor(g.giftId, g.token), record: g.record, token: g.token, account: PIGGY.account })).status, S.GAS_DELIVERY_FAILED);
+  assert.equal((await base.get(g.giftId)).entry.state, "UNKNOWN");
+  // release() that reports failure => UNKNOWN
+  const failing = { ...noRelease, release: async () => ({ ok: false }) };
+  const g2 = await makeGift({ admin });
+  const sub2 = submitterFor(chain, gd, { giftGasLedger: failing });
+  assert.equal((await sub2.submit({ binding: bindFor(g2.giftId, g2.token), record: g2.record, token: g2.token, account: PIGGY.account })).status, S.GAS_DELIVERY_FAILED);
+  assert.equal((await base.get(g2.giftId)).entry.state, "UNKNOWN");
+});
+
+await check("P-B7. a thrown error that only LOOKS like the adapter's not-sent refusal (same code, forged object) never releases", async () => {
+  // gasDelivery must be an adapter, so the forgery goes through a client that throws: that is CLIENT_FAILED => UNKNOWN
+  const forged = Object.assign(new Error("gift_gas_delivery_refused_not_sent"), { code: "gift_gas_delivery_refused_not_sent" });
+  const s = await pbScenario({ response: () => { throw forged; } });
+  assert.equal((await s.run()).status, S.GAS_DELIVERY_FAILED);
+  assert.equal((await s.led.get(s.g.giftId)).entry.state, "UNKNOWN");
 });
 
 console.log(`\n${pass}/${pass} PASS`);

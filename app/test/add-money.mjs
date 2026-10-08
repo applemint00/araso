@@ -1,6 +1,7 @@
 // [A-493 Lane A] Add money 계약 — 네트워크 0 · 체인 0.
 //   node app/test/add-money.mjs
 // 핵심: **레일이 없으면 열리지 않는다.** 그리고 **가스 후원을 Add money 라고 부르지 않는다.**
+// pre-A-911 baseline: addMoneyEntryAllowed() text pinned below is unchanged; [A-911] reassigns it at runtime to also allow while the Money screen is open (a911-own-screens.mjs G1).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
@@ -113,7 +114,8 @@ check("only an enabled user-funds rail opens the request", () => {
 // 이 입구가 가짜 방법/레일을 켜지 않는다.
 check("the one Add money entry is gated and still opens no fake rail", () => {
   assert.equal((HOME.match(/id="homeAddMoney"/g) || []).length, 1, "exactly one entry markup");
-  assert.match(MAIN, /const addMoneyEntry = addMoneyEntryAllowed\(\) \? addMoneyEntryMarkup\(\) : "";/);
+  // pre-A-905 baseline: /const addMoneyEntry = addMoneyEntryAllowed\(\) \? addMoneyEntryMarkup\(\) : "";/ — the entry moved to the honey jar -> Money tab (A-905); MY MONEY renders no Add money line.
+  assert.match(MAIN, /const addMoneyEntry = ""; \/\/ \[A-905\]/);
   assert.match(MAIN, /function addMoneyEntryAllowed\(\) \{\n\s+return state\.secondJourneyCompletedOnce === true && state\.scene === "sendstay" && state\.homePaperMode === "money";/);
   assert.match(MAIN, /const FUNDING_ADAPTERS = \[\];/);
   assert.equal(REGISTERED_RAILS.length, 0);

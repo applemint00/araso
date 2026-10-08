@@ -175,11 +175,14 @@ function interestsStepMarkup({ errands = [], selectedIds = [], note = null }) {
 }
 
 // [A-421 INBOX 최신] 후보 = 행동 하나씩(합성 금지), checking… 은 제목 한 곳만(행별 중복 제거, nah. 만 행에 남김).
-function candidatesStepMarkup({ destinations = [], errandLabelById = {}, pickedCandidateId = null }) {
+function candidatesStepMarkup({ destinations = [], errandLabelById = {}, pickedCandidateId = null, selectedIds = [], pickedErrandIds = null, reading = false }) {
   // [A-421 Owner 정본] "Select one → OK confirms the errand → amount/return card → Send grants
   // current execution permission." 고른 행동들을 .job 형식으로 보여주고, 누르면 선택(노란 표시),
   // 다른 걸 누르면 선택이 바뀐다. ok = 이 일 확정/다음 Paper 이동일 뿐 permission 아님.
-  // Home 은 왼쪽에 항상. checking… 은 제목 한 곳.
+  // Home 은 왼쪽에 항상.
+  // [A-849 UI-24] 제목: "checking…" 은 실제 읽기가 진행 중일 때만. 고른 관심이 있는데 후보가 0 이면
+  // WAIT 상태 = "wait."(A-571: no-match = wait, nah. 아님). 그 외(후보 있음/읽기 끝) 는 기존 승인 문구
+  // "places to explore?". 고른 관심 한 줄은 제목 바로 아래 — 기존 errand 라벨, " · " 로 잇는다(새 문구 0).
   const picks = destinations
     .map((destination) => {
       const title = secondActionTitle(destination) || destinationDisplayLabel(destination, errandLabelById);
@@ -188,8 +191,15 @@ function candidatesStepMarkup({ destinations = [], errandLabelById = {}, pickedC
       return `<button class="job secondJourney__pick${picked ? " is-picked" : ""}" type="button" data-destination-id="${escapeHtml(destination.id)}" aria-pressed="${picked}"${nah ? " disabled" : ""}>${escapeHtml(title)}</button>`;
     })
     .join("");
+  const pickedLabels = (Array.isArray(pickedErrandIds) ? pickedErrandIds : Array.isArray(selectedIds) ? selectedIds : []).map((id) => errandLabelById?.[id]).filter(Boolean);
+  const waiting = !reading && destinations.length === 0 && pickedLabels.length > 0;
+  const heading = reading ? paperStatusCopy() : waiting ? "wait." : "places to explore?";
+  const pickedLine = pickedLabels.length
+    ? `<p class="secondJourney__picked" id="secondPickedLine">${escapeHtml(pickedLabels.join(" · "))}</p>`
+    : "";
   return `
-    <h2 class="secondJourney__heading secondJourney__heading--interests"><span class="secondJourney__exploreText">${escapeHtml(paperStatusCopy())}</span></h2>
+    <h2 class="secondJourney__heading secondJourney__heading--interests" id="secondCandidatesHeading" data-state="${reading ? "reading" : waiting ? "wait" : "ready"}"><span class="secondJourney__exploreText">${escapeHtml(heading)}</span></h2>
+    ${pickedLine}
     ${picks}
     <div class="footer">
       <button class="back" id="stayButton" type="button">Home</button>
@@ -242,7 +252,7 @@ export const SECOND_FAMILY_TITLES_EN = Object.freeze({
 });
 
 export function secondActionTitle(destination) {
-  if (destination?.laneCandidate === true && Object.hasOwn(SECOND_FAMILY_TITLES_EN, destination.family ?? "")) {
+  if (destination?.laneCandidate === true && Object.prototype.hasOwnProperty.call(SECOND_FAMILY_TITLES_EN, destination.family ?? "")) {
     return SECOND_FAMILY_TITLES_EN[destination.family];
   }
   const ids = destination?.errandIds || [];
@@ -419,11 +429,12 @@ function readinessStepMarkup(model) {
   //   없으면 자리를 비운다. 데모 상수를 앱에 넣지 않는다.
   // [A-421 Owner] 거래 없는 미리보기도 시안 배치 그대로 — 실제 값이 들어올 자리에
   // 무엇이 표시될지만 적는다(숫자 발명 0, DEV 미리보기에서만).
+  // [A-912 · item 2] unknown value = "—" (pre-A-912 baseline: each placeholder was a parenthesised stand-in phrase).
   if (devPreview) {
-    balanceLine = balanceLine || "> remaining amount at home · USDC (shows here)";
-    costLine = costLine || "cost · (shows here)";
-    returnEstimate = returnEstimate || "return time (shows here)"; // 지연귀환형에서만 그려짐(conditionLineMarkup kind==="wait")
-    if (readinessCardKind(chosen) === "collect") claimValue = claimValue ?? "(shows here)"; // 값 자리만 표시
+    balanceLine = balanceLine || "> remaining amount at home · USDC —";
+    costLine = costLine || "cost · —";
+    returnEstimate = returnEstimate || "return time —"; // 지연귀환형에서만 그려짐(conditionLineMarkup kind==="wait")
+    if (readinessCardKind(chosen) === "collect") claimValue = claimValue ?? "—"; // 값 자리만 표시
   }
   const amountBlock =
     kind === "collect" || kind === "status"
@@ -505,7 +516,7 @@ export function secondJourneyCardMarkup(model = {}) {
           ? noteStepMarkup(model.note || {})
           : readinessStepMarkup(model);
   return `
-    <div class="sendCard secondJourneyCard" id="secondJourneyCard">
+    <div class="sendCard secondJourneyCard${step === "candidates" ? " secondJourneyCard--candidates" : ""}" id="secondJourneyCard">
       <span class="sendCard__dot" aria-hidden="true"></span>
       ${mastheadMarkup(model.journeyNumber)}<div class="secondJourney__body"><svg class="secondJourney__inkDefs" aria-hidden="true"><defs><filter id="a373-askink" x="-15%" y="-15%" width="130%" height="130%">
       <feTurbulence type="fractalNoise" baseFrequency="0.10" numOctaves="3" seed="4" result="t"/>

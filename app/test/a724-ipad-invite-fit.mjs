@@ -69,6 +69,9 @@ async function measure(page) {
       doc: { sw: de.scrollWidth, cw: de.clientWidth, sh: de.scrollHeight, ch: de.clientHeight },
       scroll: { x: window.scrollX, y: window.scrollY },
       board: R(inv), paper: R(paper), face: R(face),
+      // [A-839] the content group (the art margins of the board are transparent now) and the group scale fitInvite writes
+      s: inv ? parseFloat(getComputedStyle(inv).getPropertyValue("--invS")) : null,
+      content: [".invite__hero", "#inviteFaceButton", ".invite__chog", ".invite__chogNative", ".invite__burst"].map((q) => R(document.querySelector(q))).filter(Boolean),
       faceHit: !!(face && hitEl && (hitEl === face || face.contains(hitEl))),
     };
   });
@@ -123,7 +126,9 @@ async function main() {
       const bL = m.board ? m.board.l : NaN, bR = m.board ? +(vp.w - m.board.r).toFixed(2) : NaN;
       check(`${tag} invite present, kind=${vp.w >= 900 ? "wide" : "mobile"}`, m.kind === (vp.w >= 900 ? "wide" : "mobile"), String(m.kind));
       check(`${tag} grid track width <= viewport (no oversized implicit track)`, m.track != null && m.track <= vp.w + 0.5, m.cols);
-      check(`${tag} no stage horizontal overflow (scrollWidth <= clientWidth)`, m.stage && m.stage.sw <= m.stage.cw, JSON.stringify(m.stage));
+      // pre-A-839 baseline: check(`${tag} no stage horizontal overflow (scrollWidth <= clientWidth)`, m.stage && m.stage.sw <= m.stage.cw, ...) - the board (art margins included) was always inside the viewport.
+      // A-839: the board's art margins are transparent and may extend past the viewport (clipped by .stage--invite, no scrollbar: doc check below); the CONTENT group must stay inside (A-724 containment intent).
+      check(`${tag} content group fully inside the viewport (A-724 containment; the transparent board margins may overhang)`, m.content.length > 0 && m.content.every((c) => c.l >= -0.5 && c.r <= vp.w + 0.5 && c.t >= -0.5 && c.b <= vp.h + 0.5), JSON.stringify(m.content));
       check(`${tag} no page scroll/overflow`, m.doc.sw <= m.doc.cw && m.doc.sh <= m.doc.ch && m.scroll.x === 0 && m.scroll.y === 0, JSON.stringify({ doc: m.doc, scroll: m.scroll }));
       check(`${tag} Face ID reachable (elementFromPoint)`, m.faceHit);
       check(`${tag} no page errors`, errors.length === 0, errors.join(" | "));
@@ -131,9 +136,10 @@ async function main() {
         const pL = m.paper.l, pR = +(vp.w - m.paper.r).toFixed(2);
         check(`${tag} A-697 mobile paper centred (L ${pL} / R ${pR}, ±1px)`, Math.abs(pL - pR) <= 1);
       } else {
-        const s = Math.min(vp.w / 1280, vp.h / 800);
+        // pre-A-839 baseline: const s = Math.min(vp.w / 1280, vp.h / 800); A-839: the group scale is fitInvite's --invS (HomeCard rule + containment guard)
+        const s = m.s;
         check(`${tag} board L/R margins symmetric (L ${bL} / R ${bR}, ±1px)`, Math.abs(bL - bR) <= 1);
-        check(`${tag} board fully inside viewport horizontally (no right clipping)`, bL >= -0.5 && m.board.r <= vp.w + 0.5, JSON.stringify(m.board));
+        // pre-A-839 baseline: check(`${tag} board fully inside viewport horizontally (no right clipping)`, bL >= -0.5 && m.board.r <= vp.w + 0.5, ...) - see the content check above.
         check(`${tag} board width = 1280 x fitInvite scale (${s.toFixed(4)})`, Math.abs(m.board.w - 1280 * s) <= 1, String(m.board.w));
         check(`${tag} board left = (W - 1280s)/2`, Math.abs(bL - (vp.w - 1280 * s) / 2) <= 1, String(bL));
       }

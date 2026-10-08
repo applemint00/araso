@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { layoutOracle } from "./helpers/a831-sweep.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -65,12 +66,12 @@ await check("N1 same Piggy ids + same Home-life nonce → identical assignment; 
   assert.ok(differs > 30, "a new Home-life nonce re-randomizes");
 });
 
-await check("N2 density over 3000 cycles: ≤1 flop-sleep, no duplicate prop-heavy, distinct phase buckets; weights hold", () => {
+await check("N2 [A-790 re-pin] density over 3000 cycles: 0 flop-sleep (never random), no duplicate prop-heavy, distinct phase buckets; weights hold over the non-sleep pool", () => {
   const ids = ["a1", "b2", "c3", "d4"];
   const counts = {};
   for (let i = 0; i < 3000; i += 1) {
     const x = [...M.assignHomeAmbient(ids, `cycle-${i}`).values()];
-    assert.ok(x.filter((v) => v.state === "flop-sleep").length <= 1);
+    assert.equal(x.filter((v) => v.state === "flop-sleep").length, 0, "A-790: sleep is never randomly assigned");
     for (const s of ["watching", "listen", "drink"]) assert.ok(x.filter((v) => v.state === s).length <= 1, s);
     const buckets = x.map((v) => v.phaseS / M.AMBIENT_CYCLE_S[v.state]);
     assert.equal(new Set(buckets.map((b) => b.toFixed(9))).size, 4, "staggered phases");
@@ -79,8 +80,11 @@ await check("N2 density over 3000 cycles: ≤1 flop-sleep, no duplicate prop-hea
     const st = M.assignHomeAmbient([`solo${i}`], "w").get(`solo${i}`).state;
     counts[st] = (counts[st] || 0) + 1;
   }
+  // A-790 re-pin: the sleep weight (5) is no longer drawn; the other weights hold, normalised over the remaining 95.
+  assert.equal(counts["flop-sleep"] || 0, 0);
   for (const [s, w] of Object.entries(M.AMBIENT_WEIGHTS)) {
-    assert.ok(Math.abs(counts[s] / 20000 - w / 100) < 0.02, `${s} ${counts[s]}`);
+    if (s === "flop-sleep") continue;
+    assert.ok(Math.abs(counts[s] / 20000 - w / 95) < 0.02, `${s} ${counts[s]}`);
   }
 });
 
@@ -130,14 +134,14 @@ await check("N4 [A-681 re-pin] measured slot formulas: 390/430 = M0+M1+M2 (main 
   const cases = [
     [390, 844, R(290.3, 622.49, 368.3, 715.09), R(222.4, 642.19, 286.3, 708.59), R(20, 14, 65.5, 25), 370, ["M0", "M1", "M2"]],
     [430, 900, R(323.5, 669.18, 401.5, 761.78), R(255.5, 688.88, 319.5, 755.28), R(24, 14, 69.5, 25), 406, ["M0", "M1", "M2"]],
-    [700, 900, R(538.5, 508.9, 622.0, 608.3), R(465.6, 530.1, 534.2, 601.3), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WN2", "WN3"]],
-    [900, 900, R(692.3, 525.8, 799.8, 653.5), R(598.7, 553.0, 686.8, 644.5), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WN2", "WN3"]],
+    [700, 900, R(538.5, 508.9, 622.0, 608.3), R(465.6, 530.1, 534.2, 601.3), R(140, 32, 190.2, 44), 0, ["SEAT"]], // [A-831 RE-PIN] pre-A-831 baseline: ["SEAT", "WN1", "WN2", "WN3"] (these synthetic anchors are the pre-v10 centred paper: no strip under its footprint; the v10 anchors are pinned in N4c below)
+    [900, 900, R(692.3, 525.8, 799.8, 653.5), R(598.7, 553.0, 686.8, 644.5), R(140, 32, 190.2, 44), 0, ["SEAT"]], // [A-831 RE-PIN] pre-A-831 baseline: ["SEAT", "WN1", "WN2", "WN3"] (these synthetic anchors are the pre-v10 centred paper: no strip under its footprint; the v10 anchors are pinned in N4c below)
     // [A-728 4:3 mid-band coverage] iPad 4:3 heights (measured live, a172-local): WN2/WN3 cannot fit
     // (viewport-margin), so the WA1 fallback (seat floor line, left of foot) gives a 3rd slot.
-    [1024, 768, R(787.7, 512.9, 910.0, 658.3), R(688.7, 543.8, 764.5, 640.6), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WA1"]],
-    [1180, 820, R(907.7, 536.9, 1048.6, 704.4), R(793.6, 572.5, 881.0, 684.0), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WA1"]],
-    [1200, 900, R(923.0, 551.0, 1066.4, 721.3), R(798.3, 587.3, 915.8, 709.3), R(140, 32, 190.2, 44), 0, ["W1", "W2", "W3", "W4", "WA1", "WA2"]],
-    [1440, 900, R(1107.7, 571.2, 1279.6, 775.6), R(957.9, 614.7, 1098.9, 761.2), R(140, 32, 190.2, 44), 0, ["W1", "W2", "WA1", "WA2"]],
+    [1024, 768, R(787.7, 512.9, 910.0, 658.3), R(688.7, 543.8, 764.5, 640.6), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WN2"]], // [A-831 RE-PIN] pre-A-831 baseline: ["SEAT", "WN1", "WA1"]
+    [1180, 820, R(907.7, 536.9, 1048.6, 704.4), R(793.6, 572.5, 881.0, 684.0), R(140, 32, 190.2, 44), 0, ["SEAT", "WN1", "WN2"]], // [A-831 RE-PIN] pre-A-831 baseline: ["SEAT", "WN1", "WA1"]
+    [1200, 900, R(923.0, 551.0, 1066.4, 721.3), R(798.3, 587.3, 915.8, 709.3), R(140, 32, 190.2, 44), 0, ["W1", "WA1", "WA2"]], // [A-831 RE-PIN] pre-A-831 baseline: ["W1", "W2", "W3", "W4", "WA1", "WA2"]
+    [1440, 900, R(1107.7, 571.2, 1279.6, 775.6), R(957.9, 614.7, 1098.9, 761.2), R(140, 32, 190.2, 44), 0, ["W1", "WA1", "WA2"]], // [A-831 RE-PIN] pre-A-831 baseline: ["W1", "W2", "WA1", "WA2"]
   ];
   const HOME_EXTRA_A_SCALE = 0.425, HOME_EXTRA_B_SCALE = 0.375;
   for (const [vw, vh, seat, chog, brand, hr, want] of cases) {
@@ -149,7 +153,13 @@ await check("N4 [A-681 re-pin] measured slot formulas: 390/430 = M0+M1+M2 (main 
       // shrink" contract exactly.
       const expectScale = s.name === "M1" ? HOME_EXTRA_A_SCALE : s.name === "M2" ? HOME_EXTRA_B_SCALE : 1;
       const sw = s.rect.r - s.rect.x, sh = s.rect.b - s.rect.y;
-      if (expectScale === 1) {
+      // [A-831 RE-PIN] mid/web companions (Cowork Q-A) are the same smaller cluster as the mobile one: A <= .425, B <= .375 of the seat (shrunk only to fit under the card footprint).
+      // pre-A-831 baseline: every mid/web slot keeps the approved size (sw === seat.w && sh === seat.h)
+      const clusterNames = ["WN1", "WN2", "WA1", "WA2"];
+      if (clusterNames.includes(s.name)) {
+        assert.ok(sw / seat.w <= HOME_EXTRA_A_SCALE + 0.01 && sw / seat.w >= 0.1 && Math.abs(sw / seat.w - sh / seat.h) < 0.01, `${vw} ${s.name} companion scale ${sw / seat.w}`);
+        assert.ok(Math.abs(s.rect.b - seat.b) <= 0.5 * seat.h * 0.2 + 0.5 || s.rect.b <= seat.b + 0.5, `${vw} ${s.name} sits on/above the seat floor line`);
+      } else if (expectScale === 1) {
         assert.ok(sw === seat.w && sh === seat.h, `${vw} ${s.name} keeps the approved size (no shrink)`);
       } else {
         assert.ok(Math.abs(sw / seat.w - expectScale) < 0.01, `${vw} ${s.name} width ratio ${sw / seat.w} vs expected ${expectScale}`);
@@ -161,10 +171,14 @@ await check("N4 [A-681 re-pin] measured slot formulas: 390/430 = M0+M1+M2 (main 
       assert.equal(M.rectsTouch(p.slots[i].rect, p.slots[j].rect, 0), false, `${vw} ${p.slots[i].name}/${p.slots[j].name} overlap`);
     }
   }
-  const wa = planAt(1440, 900, R(1107.7, 571.2, 1279.6, 775.6), R(957.9, 614.7, 1098.9, 761.2), R(140, 32, 190.2, 44), 0).slots;
-  const byName = Object.fromEntries(wa.map((s) => [s.name, s.rect]));
-  assert.ok(Math.abs(byName.WA1.x - 317.9) < 0.2 && Math.abs(byName.WA1.y - 571.2) < 0.2, "WA1 = measured [317.9,571.2,…]");
-  assert.ok(Math.abs(byName.WA2.x - 317.9) < 0.2 && Math.abs(byName.WA2.y - 220) < 0.2, "WA2 = measured [317.9,220,…]");
+  // [A-831 RE-PIN] pre-A-831 baseline: wa = planAt(1440, 900, R(1107.7, 571.2, 1279.6, 775.6), R(957.9, 614.7, 1098.9, 761.2), ...): WA1 = measured [317.9,571.2,…], WA2 = measured [317.9,220,…].
+  // v10 anchors at 1440x900 (card zone-placed, footprint F = [268.6,112.5]..[1064,722], seat on the 828 floor, Chog ink left 959): the lower-left cluster sits on the floor line, left of Chog, below F.
+  const v10 = M.planHomeSlots({ width: 1440, seat: R(1120.4, 619.5, 1320, 828), chog: R(959, 640, 1111, 828), foot: R(268.6, 112.5, 1064.3, 722), paper: R(329.7, 112.5, 706, 647), brand: R(120, 48, 200, 72), safe: R(16, 16, 1424, 884) });
+  const byName = Object.fromEntries(v10.slots.map((s) => [s.name, s.rect]));
+  assert.deepEqual(v10.slots.map((s) => s.name), ["W1", "WA1", "WA2"], JSON.stringify(v10.rejected.map((r) => [r.name, r.why])));
+  assert.ok(byName.WA1.r <= 959 - 24 + 0.01 && byName.WA2.r <= byName.WA1.x + 0.01, "cluster is left of Chog, WA2 left of WA1");
+  assert.ok(Math.abs(byName.WA1.b - 828) < 0.5, "WA1 sits on the Main floor line");
+  assert.ok(byName.WA1.y >= 722 + 24 - 0.5 && byName.WA2.y >= 722 + 24 - 0.5, "cluster is below the two-card footprint");
 });
 
 // [A-681 re-pin — supersedes the old N4b] The old N4b asserted the ≤2-total "M2/M3/M4 absent"
@@ -208,7 +222,8 @@ await check("N5 visual-only: living-Home code calls no signer/permission/money/s
   }
   assert.match(fnBody("startHomeLife"), /sessionStorage\.setItem\(HOME_LIFE_KEY/);
   assert.match(MAIN, /const HOME_LIFE_KEY = "araso\.homeLife\.v1";/);
-  assert.match(fnBody("mountHomeAmbientResidents"), /indexedResidents\(\)\.length < 2\) return;/, "one Piggy → nothing runs");
+  // [A-803 RE-PIN] one Piggy now mounts a sleep-only seat layer (hidden while awake): only zero Piggies run nothing
+  assert.match(fnBody("mountHomeAmbientResidents"), /indexedResidents\(\)\.length < 1\) \{ homeActiveSleep\?\.reset\(\); return; \}/, "no Piggy → nothing runs");
 });
 
 await check("N5b F1: the ambient projection is decided over the FULL resident set; runtime Piggies are only dropped", () => {
@@ -241,7 +256,13 @@ const WIDTHS = [[390, 844], [430, 900], [700, 900], [900, 900], [1200, 900], [14
 // data path never touched by planHomeSlots()) — residents beyond the visible cap fall back to
 // the existing "card-only"/list/HISTORY representation, which B3's own `g.layer.off` assertion
 // below already covers. 700/900/1200/1440 unchanged (Δ0).
-const CAP = { 390: 3, 430: 3, 700: 4, 900: 4, 1200: 6, 1440: 4 };
+// [A-786 RE-PIN] 1200: 6 -> 5. The open Home paper (and HISTORY, derived from it) is drawn x1.10 (style.css --homePaperK), and main.js
+// planHomeAmbient's foot/paper footprint now uses the same factor (HOME_PAPER_SCALE_K), so one wide-web floor slot no longer fits beside it at 1200.
+// Residents beyond capacity stay off Home exactly as before (never shrunk). Every other width is unchanged.
+// [A-788 RE-PIN] Owner decision 2026-10-05: Home DRAWS at most Main + 2 companions on every band — 700/900 4 -> 3, 1200 5 -> 3, 1440 4 -> 3
+// (390/430 already 3). Display-only cap in main.js capHomeVisibleSlots(); planHomeSlots() itself (Part N4 above) and the logical Piggy
+// set are unchanged; residents beyond the cap stay card-only/HISTORY/list exactly like the mobile overflow already did.
+const CAP = { 390: 3, 430: 3, 700: 3, 900: 3, 1200: 3, 1440: 3 };
 // Pre-A-654 one-Piggy Home (measured on the pre tree, same harness): seat and name rects.
 // [A-656 decision 2, 2026-09-30] 700's reference is intentionally superseded: the mid-band
 // (641≤vw<1200) vertical-anchor repair moves the settled cluster down by +154.36px (translate
@@ -480,9 +501,15 @@ async function browserRun(browser, BASE, shots) {
       await check(`B1 [${w}] one Piggy: no living layer, seat visible, seat foot follows the iPhone-safe mobile bottom anchor at 390/430 (A-681, Owner direction 2026-10-03) and the 1440-canon normalized ratio unchanged at 700/1440 (Δ0), name stays directly under the seat with no overlap`, async () => {
         await atWidth(w, h);
         const g = await living();
-        assert.equal(g.layer, null); assert.equal(g.res.length, 0); assert.equal(g.seatHidden, false);
+        // [A-803 RE-PIN] a lone Piggy mounts a sleep-only layer: it exists but draws nothing while awake (hidden resident, #homeChar untouched)
+        // pre-A-841 baseline: assert.ok(g.res.length <= 1 && g.res.every((r) => !r.shown), JSON.stringify(g.res)); assert.equal(g.seatHidden, false);
+        // [A-841 UI-27 RE-PIN, Cowork-approved on the C1 basis] a lone awake Piggy is drawn by the layer (Idle blink + breath) and the seat image steps aside
+        assert.ok(g.res.length === 1 && g.res.every((r) => r.shown), JSON.stringify(g.res)); assert.equal(g.seatHidden, true);
         const old = PRE_ONE[w];
-        const target = w <= 640 ? MOBILE_FOOT_TARGET(h) : WEB_FOOT_TARGET(h);
+        // [A-831 RE-PIN, every width] the foot target is the A-829 bottom margin (7.1 / 8 / 8 % of vh by width): foot = vh - bottom. pre-A-831 baseline:
+        // const target = w <= 640 ? MOBILE_FOOT_TARGET(h) : WEB_FOOT_TARGET(h);
+        const KL831 = layoutOracle(readFileSync(path.join(REPO, "app/src/main.js"), "utf8"))(w, h);
+        const target = KL831.floorY;
         assert.ok(Math.abs(g.seat[3] - target) < 2, `seat foot ${g.seat[3]} vs target ${target}`);
         const dy = g.seat[3] - old.seat[3];
         // [A-681 OWNER VISUAL DECISION — MOBILE MULTI-PIGGY HOME, 2026-10-03 / OWNER DIRECTION
@@ -497,7 +524,16 @@ async function browserRun(browser, BASE, shots) {
         // drift), bottom edge is the already-asserted `target`. 700/1440 keep the original
         // byte-identical pure-translate assertion (boost is an exact no-op there,
         // homeCharMobileBoost() returns 1 for width>640).
-        if (w <= 640) {
+        // [A-831 RE-PIN] the group scale is the stage-width keyframe at every width (seat width = 150 S), the seat's right edge sits on vw - side margin.
+        // pre-A-831 baseline: `if (w <= 640) { ...width/height = reference x HOME_CHAR_MOBILE_GROUP_BOOST (1.5), right edge = vw - --mobile-inset ... } else { translate-only shape vs PRE_ONE }`
+        {
+          const oldW = old.seat[2] - old.seat[0], oldH = old.seat[3] - old.seat[1];
+          const gw = g.seat[2] - g.seat[0], gh = g.seat[3] - g.seat[1];
+          assert.ok(Math.abs(gw - 150 * KL831.S) < 2, `seat width ${gw} vs keyframe ${150 * KL831.S}`);
+          assert.ok(Math.abs(gh / gw - oldH / oldW) < 0.01, `seat aspect ${gh / gw} vs reference ${oldH / oldW}`);
+          assert.ok(Math.abs(g.seat[2] - (w - KL831.M)) <= 1, `seat right edge ${g.seat[2]} vs rail ${w - KL831.M} (vw - side margin)`);
+        }
+        if (false && w <= 640) {
           const oldW = old.seat[2] - old.seat[0], oldH = old.seat[3] - old.seat[1];
           const gw = g.seat[2] - g.seat[0], gh = g.seat[3] - g.seat[1];
           assert.ok(Math.abs(gw - oldW * HOME_CHAR_MOBILE_GROUP_BOOST) < 2, `seat width ${gw} vs reference×boost ${oldW * HOME_CHAR_MOBILE_GROUP_BOOST}`);
@@ -510,7 +546,7 @@ async function browserRun(browser, BASE, shots) {
           // rules above are unchanged. 700/1440 keep the original pure-translate check below.
           const inset = w <= 400 ? 20 : 24;
           assert.ok(Math.abs(g.seat[2] - (w - inset)) <= 1, `seat right edge ${g.seat[2]} vs rail ${w - inset} (vw - --mobile-inset)`);
-        } else {
+        } else if (false) {
           assert.ok(near([old.seat[0], old.seat[1] + dy, old.seat[2], old.seat[3] + dy], g.seat), `seat translate-only shape drifted ${g.seat}`);
         }
         // [A-666 re-pin, named reason] Owner's global mobile type-scale decision
@@ -528,9 +564,13 @@ async function browserRun(browser, BASE, shots) {
         } else {
           const oldGap = old.name[1] - old.seat[3];
           const newGap = g.name[1] - g.seat[3];
-          assert.ok(Math.abs(newGap - oldGap) < 0.6, `name→seat relative offset drifted: old ${oldGap} new ${newGap}`);
-          assert.ok(Math.abs((old.name[2] - old.name[0]) - (g.name[2] - g.name[0])) < 0.6, "name width unchanged");
-          assert.ok(Math.abs((old.name[3] - old.name[1]) - (g.name[3] - g.name[1])) < 0.6, "name height unchanged");
+          // [A-831 RE-PIN] the gap is board-local, so it scales with the group scale. pre-A-831 baseline: assert.ok(Math.abs(newGap - oldGap) < 0.6, `name→seat relative offset drifted: old ${oldGap} new ${newGap}`);
+          const kapName = (g.seat[2] - g.seat[0]) / (old.seat[2] - old.seat[0]);
+          assert.ok(Math.abs(newGap - oldGap * kapName) < 0.6, `name→seat relative offset drifted: old ${oldGap} x ${kapName} new ${newGap}`);
+          // [A-831 RE-PIN] the name label is board-local too: width x group scale. pre-A-831 baseline: assert.ok(Math.abs((old.name[2] - old.name[0]) - (g.name[2] - g.name[0])) < 0.6, "name width unchanged");
+          assert.ok(Math.abs((old.name[2] - old.name[0]) * kapName - (g.name[2] - g.name[0])) < 0.6 + 0.01 * (g.name[2] - g.name[0]), "name width unchanged (x group scale)");
+          // [A-831 RE-PIN] board-local: x group scale. pre-A-831 baseline: assert.ok(Math.abs((old.name[3] - old.name[1]) - (g.name[3] - g.name[1])) < 0.6, "name height unchanged");
+          assert.ok(Math.abs((old.name[3] - old.name[1]) * kapName - (g.name[3] - g.name[1])) < 0.6 + 0.01 * (g.name[3] - g.name[1]), "name height unchanged (x group scale)");
         }
         assert.ok(g.sw <= g.iw);
         await shot(`n1_w${w}`);
@@ -556,7 +596,8 @@ async function browserRun(browser, BASE, shots) {
           assert.equal(g.layer.off, Math.max(0, n - CAP[w]), "residents beyond capacity stay off Home (never shrunk)");
           assert.equal(new Set(g.res.map((r) => r.slot)).size, g.res.length);
           assert.equal(new Set(g.res.map((r) => r.id)).size, g.res.length);
-          if (w === 1440 && n === 4) assert.deepEqual(g.res.map((r) => r.slot).sort(), ["W1", "W2", "WA1", "WA2"]);
+          // [A-788 RE-PIN] 1440 x 4 Piggies: W1 + the two LEFT-side slots only (W2, right of the paper, is no longer drawn — Main + max 2 companions on the left).
+          if (w === 1440 && n === 4) assert.deepEqual(g.res.map((r) => r.slot).sort(), ["W1", "WA1", "WA2"]);
           for (const r of g.res) {
             assert.ok(r.shown, `${r.slot} drawn`);
             assert.ok(r.r[0] >= 0 && r.r[2] <= w && r.r[1] >= 0 && r.r[3] <= h, `${r.slot} inside viewport`);
@@ -686,7 +727,12 @@ async function browserRun(browser, BASE, shots) {
       try {
         assert.equal(g2.res.some((r) => r.id === leaver), false, "away Piggy has no ambient copy");
         assert.ok(g2.res.length >= 1);
-        assert.deepEqual(sp(g2.res, [seatId, leaver]), sp(g0.res, [seatId, leaver]), "remaining Piggies keep state + phase (2 Piggies gone)");
+        // [A-788 RE-PIN] with the visible cap (Main + 2), a Piggy that was beyond capacity in g0 may now claim a slot the two gone Piggies freed
+        // (A-656 P4 "over-capacity resident claims the freed slot", unchanged logic; at 1440 x 4 everyone used to fit, so nobody was beyond capacity).
+        // The Piggies that WERE drawn in g0 still keep state + phase exactly; a claimant is only extra and the total stays <= 3.
+        const drawn0 = new Set(g0.res.map((r) => r.id));
+        assert.deepEqual(sp(g2.res.filter((r) => drawn0.has(r.id)), [seatId, leaver]), sp(g0.res, [seatId, leaver]), "remaining Piggies keep state + phase (2 Piggies gone)");
+        assert.ok(g2.res.length <= 3, "visible cap holds while Piggies are away");
       } finally {
         await p.evaluate((s) => { localStorage.setItem(s.key, s.raw); dispatchEvent(new Event("resize")); }, saved);
         await sleep(1200);

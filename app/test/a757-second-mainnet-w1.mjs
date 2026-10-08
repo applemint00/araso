@@ -274,8 +274,12 @@ await check("K7 execution gate is never open: every step × profile × executor 
   assert.ok(n > 300);
   assert.equal(kintsuExecutionGate({ profile: MAINNET, piggy: PIGGY, executor: FORK_EXECUTOR, step: "redeem" }).reason, "unproven_step:redeem");
   assert.equal(kintsuExecutionGate({ profile: MAINNET, piggy: PIGGY, executor: FORK_EXECUTOR, step: "deposit" }).reason, "profile_not_kintsu_lane");
-  // a profile forged to name Kintsu still cannot bind a MON errand: chain-profile.js binds USDC only
-  assert.equal(kintsuExecutionGate({ profile: { ...MAINNET, jobId: KINTSU_JOB_ID }, piggy: PIGGY, executor: FORK_EXECUTOR, step: "deposit" }).reason, "asset_not_in_profile");
+  // [A-791 re-pin, named reason: Kintsu now refuses explicitly when liveExecution !== true, BEFORE binding. A Kintsu-named profile
+  // with liveExecution:false (every real profile) stops there; the binding boundary below is still asserted, reached by forging
+  // liveExecution:true — which then still cannot bind a MON errand (chain-profile.js binds USDC only).]
+  assert.equal(kintsuExecutionGate({ profile: { ...MAINNET, jobId: KINTSU_JOB_ID }, piggy: PIGGY, executor: FORK_EXECUTOR, step: "deposit" }).reason, "live_execution_disabled");
+  // a profile forged to name Kintsu (and forged live) still cannot bind a MON errand: chain-profile.js binds USDC only
+  assert.equal(kintsuExecutionGate({ profile: { ...MAINNET, jobId: KINTSU_JOB_ID, liveExecution: true }, piggy: PIGGY, executor: FORK_EXECUTOR, step: "deposit" }).reason, "asset_not_in_profile");
   // Past every boundary the gate still refuses: the source has no "allowed: true" and ends on the not-wired refusal.
   const code = strip(SRC("mainnet-job-kintsu.js"));
   assert.equal(/allowed\s*:\s*(true|!|[a-z])/i.test(code.replace(/allowed: false/g, "")), false);
@@ -347,7 +351,7 @@ await check("S4 import graph: the Kintsu module is imported by no product file; 
   const importers = (mod) => files.filter((f) => f !== mod && new RegExp(`from "\\./${mod.replace(/\./g, "\\.")}"`).test(SRC(f)));
   assert.deepEqual(importers("mainnet-job-kintsu.js"), []);
   assert.deepEqual(importers("mainnet-job-aave.js"), ["mainnet-job-lane.js"]);
-  assert.deepEqual(importers("mainnet-job-common.js").sort(), ["mainnet-job-aave.js", "mainnet-job-kintsu.js", "mainnet-job-lane.js"]);
+  assert.deepEqual(importers("mainnet-job-common.js").sort(), ["mainnet-job-aave.js", "mainnet-job-abil.js", "mainnet-job-curvance.js", "mainnet-job-kintsu.js", "mainnet-job-lane.js", "mainnet-job-neverland.js"]);
   assert.equal(/mainnet-job-(kintsu|aave|common)/.test(SRC("main.js")), false);
 });
 

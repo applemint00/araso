@@ -12,6 +12,7 @@
 //        and kills it); A646_WIDTHS=390,430,700,1440 (default 390); A646_SHOTS=<dir> saves PNGs;
 //        A646_NODE_ONLY=1 skips Part B (prints SKIP; not a PASS).
 // On the pre-A-646 tree the Add money markup helpers do not exist → Part N fails → exit 1.
+// pre-A-911 baseline: addMoneyEntryAllowed() text pinned below is unchanged; [A-911] reassigns it at runtime to also allow while the Money screen is open (a911-own-screens.mjs G1). The allocation markup (with %) stays pinned; the screen shows amounts only.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { spawn } from "node:child_process";
@@ -111,16 +112,23 @@ await check("N5 S8/T7 at home unknown ≠ $0; working with only when real; retur
 
 await check("N6 main.js S1 gate: entry only after confirmed Second, on quiet Home, in MY MONEY; state dies off the MY MONEY face (Q4)", () => {
   assert.match(fnBody("addMoneyEntryAllowed"), /state\.secondJourneyCompletedOnce === true && state\.scene === "sendstay" && state\.homePaperMode === "money"/);
-  assert.match(MAIN, /const addMoneyEntry = addMoneyEntryAllowed\(\) \? addMoneyEntryMarkup\(\) : "";/);
+  // pre-A-905 baseline: /const addMoneyEntry = addMoneyEntryAllowed\(\) \? addMoneyEntryMarkup\(\) : "";/ — the entry moved to the honey jar -> Money tab (A-905); MY MONEY renders no Add money line.
+  assert.match(MAIN, /const addMoneyEntry = ""; \/\/ \[A-905\]/);
   assert.match(fnBody("homePadMarkup"), /if \(mode !== "money"\) state\.addMoney = null;/);
   assert.match(fnBody("openAddMoney"), /if \(piggies\.length <= 1\)/, "one Piggy → picker skip");
 });
 
 await check("N7 T8 Add money code paths call no WebAuthn / signer / tx / funding-open / proof", () => {
-  const bodies = ["openAddMoney", "recomputeAddMoney", "addMoneyPlanRows", "confirmAddMoney", "addMoneyBodyMarkup", "handleAddMoneyInput", "piggyMoneyStateMarkupFor", "addMoneyPiggies"].map((n) => stripComments(fnBody(n))).join("\n");
+  const bodies = ["openAddMoney", "recomputeAddMoney", "addMoneyPlanRows", "confirmAddMoney", "addMoneyBodyMarkup", "handleAddMoneyInput", "piggyMoneyStateMarkupFor", "addMoneyPiggies", "a898OpenFundingPaper"].map((n) => stripComments(fnBody(n))).join("\n");
   for (const re of [/requestPrf|requestMoneyPermission|activateSigningSession|proveFundingTargetControl|beginFundingForPiggy|settleFunding|startFunding|planLegIntent/, /navigator\.credentials|signMessage|sendTransaction|writeContract|fetch\(/, /localStorage\.setItem/, /\bcash\b/i]) {
     assert.equal(re.test(bodies), false, String(re));
   }
+  // pre-A-898 baseline: T8 said Add money calls no WebAuthn / proof anywhere. A-898 (Cowork C2 -> (c), 2026-10-08): the entry and the Funding Paper's
+  // FIRST screen still use 0 WebAuthn; the ONLY exception is choosing the crypto row, which runs the A-555 destination proof before the Piggy address is shown.
+  assert.equal(/a898ProveDestination|proveFundingTargetControl/.test(bodies), false, "entry / first screen: no proof (the opener only builds the paper)");
+  const act = stripComments(MAIN.slice(MAIN.indexOf("async function a898Act("), MAIN.indexOf("// ── [A-898] end ──")));
+  assert.equal((act.match(/a898ProveDestination\(/g) || []).length, 1, "exactly one proof call site");
+  assert.ok(act.indexOf("arg === \"crypto\"") > -1 && act.indexOf("arg === \"crypto\"") < act.indexOf("a898ProveDestination("), "the proof sits inside the crypto-row branch only");
   assert.match(MAIN, /const FUNDING_ADAPTERS = \[\];/, "rails stay 0");
   assert.match(fnBody("confirmAddMoney"), /saveLastSplit\(safeLocalStorage\(\), scope, approved\.plan, approval\)/, "only ratios are remembered, via the closed store");
 });
@@ -214,8 +222,22 @@ async function browserWidth(browser, BASE, w, shots) {
   const realClick = async (sel, idx = 0) => { const r = await pointAt(sel, idx); if (!r) return "unreachable"; await p.mouse.click(r.x, r.y); return "pointer"; };
   const mustTap = async (sel, label, idx = 0) => {
     for (let i = 0; i < 6; i += 1) { if ((await realClick(sel, idx)) === "pointer") return; await sleep(600); }
-    throw new Error(`${label}: ${sel} not pointer-reachable`);
+    // [A-898] probe: name what sits at the toggle centre so the next run identifies the cover (assertion unchanged: still throws)
+    const cover = await p.evaluate(([s, i]) => {
+      const el = document.querySelectorAll(s)[i]; if (!el) return "target missing";
+      const b = el.getBoundingClientRect(); const x = b.left + b.width / 2; const y = b.top + b.height / 2;
+      const t = document.elementFromPoint(x, y); if (!t) return `rect=${[b.left, b.top, b.width, b.height].map(Math.round)} elementFromPoint=null`;
+      const c = t.closest("section, article, [class*=card], [class*=Card], [id]");
+      return `rect=${[b.left, b.top, b.width, b.height].map(Math.round)} at=(${Math.round(x)},${Math.round(y)}) vp=${innerWidth}x${innerHeight} elementFromPoint=<${t.tagName.toLowerCase()} id="${t.id}" class="${String(t.className).slice(0, 80)}"> closest=<${c ? c.tagName.toLowerCase() : "none"} id="${c ? c.id : ""}" class="${c ? String(c.className).slice(0, 80) : ""}">`;
+    }, [sel, idx]).catch(() => "probe failed");
+    throw new Error(`${label}: ${sel} not pointer-reachable | ${cover}`);
   };
+  // [A-905] Add money is reached the new way: tap the honey jar -> Money tab -> `> Move money` (default `in`). pre-A-905 baseline: mustTap("#homeAddMoney").
+  // [A-911] pre-A-911 baseline: the Money tab and Move money were faces of the Home paper. They are now own full screens (.a911-screen[data-a911="money"|"move"]); the way out is the back sticker (.a911-back).
+  const viaJar = async () => { await mustTap("#a905Jar", "honey jar"); await sleep(700); await mustTap("#a905MoveMoney", "Move money"); await sleep(700); };
+  const closeScreens = async () => { for (let i = 0; i < 4 && (await p.locator(".a911-screen").count()); i += 1) { await mustTap(".a911-back", "back sticker"); await sleep(700); } };
+  const blurField = async () => { await p.evaluate(() => document.activeElement?.blur?.()); await sleep(500); }; // typing mode hides ok until the field is left
+  const moveFacts = () => p.evaluate(() => { const m = document.querySelector(".a911-move"); return { dir: m?.dataset.a905Dir ?? null, step: m?.dataset.a905Step ?? null, text: m?.innerText ?? "", inputs: [...document.querySelectorAll(".a911-move input")].map((i) => i.value) }; });
   // real tap on a field, select its content, then type through the keyboard.
   const typeInto = async (sel, text) => {
     await mustTap(sel, `field ${sel}`);
@@ -232,8 +254,11 @@ async function browserWidth(browser, BASE, w, shots) {
   const recOpen = () => p.evaluate(() => { const a = document.querySelector("#recordsCardAnchor"); return !!a && !a.hidden && a.getBoundingClientRect().width > 1; });
   const closeRecords = async () => { if (!(await recOpen())) return; await mustTap("#recordsCardClose", "HISTORY close"); await sleep(900); };
   const waitMoneyRead = async () => { for (let i = 0; i < 30; i += 1) { const t = await p.evaluate(() => document.querySelector("#homePaper")?.innerText || ""); if (!/checking/i.test(t)) return; await sleep(500); } };
-  const toMoney = async () => { await closeRecords(); await openHomePaper(); await sleep(800); if ((await paperMode()) === "home") { await mustTap("#homePaperMoneyToggle", "stamp"); await sleep(1500); } await waitMoneyRead(); };
-  const toHomeFace = async () => { await closeRecords(); if ((await paperMode()) !== "home") { await mustTap("#homePaperMoneyToggle", "stamp back"); await sleep(900); } };
+  // [A-905 follow-up] the Money tab (opened via the honey jar) is a different face of mode "money"; the steps that mean the old MY MONEY face first leave it through the
+  // stamp (homePadMarkup resets the tab off the money face), then open MY MONEY the usual way. pre-A-905 baseline: no tab existed.
+  const leaveMoneyTab = async () => { if ((await paperMode()) === "money" && (await p.locator(".a905-money").count())) { await mustTap("#homePaperMoneyToggle", "stamp back"); await sleep(900); } };
+  const toMoney = async () => { await closeScreens(); await closeRecords(); await openHomePaper(); await sleep(800); await leaveMoneyTab(); if ((await paperMode()) === "home") { await mustTap("#homePaperMoneyToggle", "stamp"); await sleep(1500); } await waitMoneyRead(); };
+  const toHomeFace = async () => { await closeScreens(); await closeRecords(); if ((await paperMode()) !== "home") { await mustTap("#homePaperMoneyToggle", "stamp back"); await sleep(900); } };
   const unlockIfLocked = async () => { for (let i = 0; i < 3; i += 1) { if (!(await p.locator("#loginChogButton").count())) return; await p.locator("#loginChogButton").click(); await sleep(2500); } };
   const allocationLeft = () => p.evaluate(() => ({
     inputs: document.querySelectorAll('#homePaper input, [id^="homeAddMoneyAmount--"], [id^="homeAddMoneyPercent--"], #homeAddMoneyTotal').length,
@@ -277,9 +302,20 @@ async function browserWidth(browser, BASE, w, shots) {
 
     await check(`B1 ${T} T1 pre-Second: MY MONEY shows no Add money entry`, async () => {
       assert.equal(await p.evaluate(() => localStorage.getItem("araso.secondJourneyClosed")), null);
+      // [A-905 follow-up] Pre-Second the paper can stay closed (the Send card owns the shared slot, or the collapsed stamp is a 2x2 target under Chog's own hit area: this
+      // predates A-905, it showed in the A-898 runs before the jar existed). A closed paper has no MY MONEY face at all, so there is no entry to find: assert exactly that.
+      // pre-A-905 baseline: await toMoney(); assert.equal(await paperMode(), "money");
+      await closeRecords();
+      if (!(await openHomePaper())) {
+        assert.equal(await paperOpen(), false);
+        assert.equal(await p.locator("#homeAddMoney").count(), 0); assert.equal(await p.locator("#a905Jar").count(), 0);
+        await shot("T1_preSecond_closed");
+        return;
+      }
       await toMoney();
       assert.equal(await paperMode(), "money");
-      assert.equal(await p.locator("#homeAddMoney").count(), 0);
+      // pre-A-905 baseline: #homeAddMoney count 0. Same meaning: before Second there is no money entry at all (no jar, no old line).
+      assert.equal(await p.locator("#homeAddMoney").count(), 0); assert.equal(await p.locator("#a905Jar").count(), 0);
       await shot("T1_preSecond_money");
       await toHomeFace();
     });
@@ -312,30 +348,35 @@ async function browserWidth(browser, BASE, w, shots) {
       assert.equal(await scene(), "sendstay");
     });
 
-    await check(`B3 ${T} T1/T8 one Piggy: entry → 1 tap → that Piggy named, no percent/multi-row UI, methods all disabled; WebAuthn Δ0 tx Δ0`, async () => {
+    await check(`B3 ${T} T1/T8 one Piggy: entry → 1 tap → Funding Paper first screen: that Piggy named, 3 rows (card/bank disabled), no percent/multi-row UI; WebAuthn Δ0 tx Δ0`, async () => {
+      // pre-A-898 baseline: kind "single" + every method disabled via #homeAddMoneyBack. A-898: single Piggy → the Funding Paper (data-add-money="a898-funding"); the first screen
+      // uses 0 WebAuthn (only choosing the crypto row may run the A-555 destination proof, exercised in a898-funding-gift-browser.mjs).
       await toMoney();
-      const box = await pointAt("#homeAddMoney");
+      const box = await pointAt("#a905Jar"); // pre-A-905 baseline: pointAt("#homeAddMoney")
       assert.ok(box, "entry pointer-reachable");
       assert.ok(box.h >= 20, `entry tap height ${box.h}`);
       await shot("T1_1piggy_money_entry");
       const c0 = await counters();
-      await mustTap("#homeAddMoney", "Add money"); await sleep(700);
+      await mustTap("#a905Jar", "honey jar"); await sleep(700);
+      // pre-A-911 baseline: the Piggy was named inside the Funding Paper. A-911: the Money tab screen names it (Piggy row), the Move money screen below carries the rows.
+      assert.match(await p.evaluate(() => document.querySelector('.a911-screen[data-a911="money"]')?.innerText ?? ""), /Honeybun/);
+      await mustTap("#a905MoveMoney", "Move money"); await sleep(700);
       const v = await p.evaluate(() => ({
-        kind: document.querySelector(".homePaper__addMoney")?.dataset.addMoney ?? null,
-        text: document.querySelector(".homePaper__addMoney")?.innerText ?? "",
+        dir: document.querySelector(".a911-move")?.dataset.a905Dir ?? null,
+        step: document.querySelector(".a911-move")?.dataset.a905Step ?? null,
         percentFields: document.querySelectorAll('[id^="homeAddMoneyPercent--"]').length,
         rows: document.querySelectorAll("[data-add-money-row]").length,
-        methods: [...document.querySelectorAll(".homePaper__choices--funding button")].map((b) => b.disabled),
+        paperRows: [...document.querySelectorAll("[data-a898-row]")].map((b) => ({ id: b.dataset.a898Row, disabled: Boolean(b.disabled) || b.getAttribute("aria-disabled") === "true" })),
       }));
-      assert.equal(v.kind, "single");
-      assert.match(v.text, /Honeybun/);
+      assert.equal(v.dir, "in"); assert.equal(v.step, "rows");
       assert.equal(v.percentFields, 0); assert.equal(v.rows, 0);
-      assert.ok(v.methods.length >= 1 && v.methods.every(Boolean), "rails 0 → every method disabled");
+      assert.deepEqual(v.paperRows, [{ id: "card", disabled: true }, { id: "bank", disabled: true }, { id: "crypto", disabled: false }]);
       assert.deepEqual(delta(c0, await counters()), { webauthn: 0, tx: 0 });
       await shot("T1_1piggy_single");
-      await mustTap("#homeAddMoneyBack", "back"); await sleep(600);
+      await closeScreens();
       assert.deepEqual(await allocationLeft(), { inputs: 0, addMoneyBox: 0, percentText: false, slider: 0 });
-      assert.equal(await p.locator("#homeAddMoney").count(), 1, "entry back in place");
+      assert.equal(await p.locator("#a905Jar").count(), 1, "entry back in place"); // pre-A-905 baseline: #homeAddMoney count 1 (the entry is now the honey jar)
+      await toMoney(); // B4 expects the old MY MONEY face (the Money tab is left through the stamp)
     });
 
     await check(`B4 ${T} T12 A-644 Slice 1 unchanged: one-Piggy detail still shows the 3 control labels; S8 at home row present, no returning`, async () => {
@@ -367,20 +408,21 @@ async function browserWidth(browser, BASE, w, shots) {
       const rows = await p.evaluate(() => [...document.querySelectorAll('[id^="homeMoneyPiggyRow--"]')].map((e) => ({ id: e.id.slice("homeMoneyPiggyRow--".length), text: e.textContent.replace(/\s+/g, " ").trim() })));
       assert.equal(rows.length, 2);
       ids = { honey: rows.find((r) => r.text.startsWith("Honeybun")).id, mochi: rows.find((r) => r.text.startsWith("Mochi")).id };
-      assert.equal(await p.locator("#homeAddMoney").count(), 1);
+      assert.equal(await p.locator("#a905Jar").count(), 1);
       await shot("T2_2piggies_money_entry");
     });
 
     await check(`B6 ${T} T2/T10/Q2 first allocation: one screen, a row per Piggy (names, no address), nothing pre-filled/selected, ok disabled`, async () => {
       assert.equal(await p.evaluate((k) => localStorage.getItem(k), await splitKey()), null, "no memory yet");
       const c0 = await counters();
-      await mustTap("#homeAddMoney", "Add money"); await sleep(700);
+      await viaJar(); // pre-A-905 baseline: await mustTap("#homeAddMoney", "Add money"); await sleep(700);
+      // pre-A-911 baseline: kind "allocation" inside .homePaper__addMoney with amount + percent fields. A-911: the Move money screen, step "split", amount fields only (Owner answer 5: no %).
       const v = await p.evaluate(() => ({
-        kind: document.querySelector(".homePaper__addMoney")?.dataset.addMoney ?? null,
-        rows: [...document.querySelectorAll("[data-add-money-row]")].map((r) => r.querySelector(".homePaper__rowLabel").textContent),
-        values: [...document.querySelectorAll(".homePaper__addMoney input")].map((i) => i.value),
-        text: document.querySelector(".homePaper__addMoney")?.innerText ?? "",
-        html: document.querySelector(".homePaper__addMoney")?.innerHTML ?? "",
+        kind: document.querySelector(".a911-move")?.dataset.a905Step === "split" ? "allocation" : (document.querySelector(".a911-move")?.dataset.a905Step ?? null),
+        rows: [...document.querySelectorAll("[data-add-money-row]")].map((r) => r.querySelector("span").textContent),
+        values: [...document.querySelectorAll(".a911-move input")].map((i) => i.value),
+        text: document.querySelector(".a911-move")?.innerText ?? "",
+        html: document.querySelector(".a911-move")?.innerHTML ?? "",
       }));
       assert.equal(v.kind, "allocation");
       assert.deepEqual(v.rows.sort(), ["Honeybun", "Mochi"]);
@@ -390,18 +432,21 @@ async function browserWidth(browser, BASE, w, shots) {
       assert.equal(/value="0x|placeholder="0x|name="(address|to|destination)"/.test(v.html), false, "no address input");
       assert.equal(NUDGE.test(v.text), false, "no nudge wording");
       assert.equal(await okDisabled(), true);
+      assert.equal(/%/.test(v.text), false, "amounts only, no percent");
       assert.deepEqual(delta(c0, await counters()), { webauthn: 0, tx: 0 });
       await shot("T2_allocation_empty");
     });
 
-    await check(`B7 ${T} T2 amount↔percent both ways via real taps + keyboard; Σ≠total blocks ok; tap targets ≥ 20px on screen`, async () => {
+    // pre-A-911 baseline: B7 also typed the percent field and pinned amount -> percent -> amount both ways. The % input is not rendered on the screen (Owner answer 5); the ratio maths stays
+    // pinned in a646-money-placement-model.mjs and by the remembered-split ratios in B8/B10. Here: amounts via real taps + keyboard, Σ != total blocks ok, tap targets on screen.
+    await check(`B7 ${T} T2 amounts via real taps + keyboard; Σ≠total blocks ok; tap targets ≥ 20px on screen`, async () => {
       const c0 = await counters();
-      for (const sel of ["#homeAddMoneyTotal", `[id="homeAddMoneyAmount--${ids.honey}"]`, `[id="homeAddMoneyPercent--${ids.mochi}"]`, "#homeAddMoneyOk", "#homeAddMoneyBack"]) {
+      for (const sel of ["#homeAddMoneyTotal", `[id="homeAddMoneyAmount--${ids.honey}"]`, `[id="homeAddMoneyAmount--${ids.mochi}"]`, "#homeAddMoneyOk", ".a911-back"]) {
         const b = await pointAt(sel); assert.ok(b, `${sel} reachable`); assert.ok(b.h >= 20, `${sel} tap height ${b.h}`);
       }
       await typeInto("#homeAddMoneyTotal", "100");
       // the fields are really visible (not just present): text color, size, box.
-      const look = await p.evaluate(() => [...document.querySelectorAll(".homePaper__addMoney input")].map((i) => {
+      const look = await p.evaluate(() => [...document.querySelectorAll(".a911-move input")].map((i) => {
         const cs = getComputedStyle(i); const b = i.getBoundingClientRect();
         return { id: i.id, color: cs.color, fill: cs.webkitTextFillColor, fs: cs.fontSize, vis: cs.visibility, op: cs.opacity, w: Math.round(b.width), h: Math.round(b.height), disp: cs.display };
       }));
@@ -413,18 +458,15 @@ async function browserWidth(browser, BASE, w, shots) {
         assert.ok(rgb[0] + rgb[1] + rgb[2] < 200, `field ink too light on paper: ${l.color}`);
       }
       await typeInto(`[id="homeAddMoneyAmount--${ids.honey}"]`, "60");
-      assert.equal(await val(`[id="homeAddMoneyPercent--${ids.honey}"]`), "60", "amount → percent");
       assert.equal(await okDisabled(), true, "Σ 60 ≠ 100");
-      await typeInto(`[id="homeAddMoneyPercent--${ids.mochi}"]`, "40");
-      assert.equal(await val(`[id="homeAddMoneyAmount--${ids.mochi}"]`), "40", "percent → amount");
+      await typeInto(`[id="homeAddMoneyAmount--${ids.mochi}"]`, "40");
       assert.equal(await okDisabled(), false, "Σ = total");
       await typeInto(`[id="homeAddMoneyAmount--${ids.mochi}"]`, "30");
-      assert.equal(await val(`[id="homeAddMoneyPercent--${ids.mochi}"]`), "30");
       assert.equal(await okDisabled(), true, "Σ 90 ≠ 100 → blocked, no remainder dump");
       await typeInto(`[id="homeAddMoneyAmount--${ids.mochi}"]`, "40");
       assert.equal(await okDisabled(), false);
       await typeInto("#homeAddMoneyTotal", "200");
-      assert.equal(await val(`[id="homeAddMoneyPercent--${ids.honey}"]`), "30", "total change keeps typed amounts, recomputes percent");
+      assert.equal(await val(`[id="homeAddMoneyAmount--${ids.honey}"]`), "60", "total change keeps typed amounts");
       assert.equal(await okDisabled(), true);
       await typeInto("#homeAddMoneyTotal", "100");
       assert.equal(await okDisabled(), false);
@@ -435,17 +477,24 @@ async function browserWidth(browser, BASE, w, shots) {
 
     await check(`B8 ${T} T8/T9 ok = ONE tap → plan (names + amounts) + truthful unavailable methods; nothing sent; memory = ratios only`, async () => {
       const c0 = await counters();
+      await blurField(); // pre-A-911 baseline: ok was always visible; A-911 hides it while typing
       await mustTap("#homeAddMoneyOk", "ok"); await sleep(700);
       const v = await p.evaluate(() => ({
-        kind: document.querySelector(".homePaper__addMoney")?.dataset.addMoney ?? null,
+        kind: document.querySelector(".a911-move")?.dataset.a905Step === "rows" && document.querySelector("[data-add-money-leg]") ? "plan" : (document.querySelector(".a911-move")?.dataset.a905Step ?? null),
         legs: [...document.querySelectorAll("[data-add-money-leg]")].map((r) => r.innerText.replace(/\s+/g, " ").trim()),
         methods: [...document.querySelectorAll(".homePaper__choices--funding button")].map((b) => b.disabled),
-        inputs: document.querySelectorAll(".homePaper__addMoney input").length,
+        fundingRows: [...document.querySelectorAll("[data-a898-row]")].map((b) => ({ id: b.dataset.a898Row, label: (b.querySelector("span")?.textContent || b.textContent).replace(/^[>\s]+/, "").trim(), disabled: Boolean(b.disabled) || b.getAttribute("aria-disabled") === "true", plan: b.dataset.a905Act === "plan-fund" })),
+        inputs: document.querySelectorAll(".a911-move input").length,
       }));
       assert.equal(v.kind, "plan");
       assert.equal(v.legs.length, 2);
-      assert.ok(v.legs.some((l) => /^Honeybun 60 USDC$/.test(l)) && v.legs.some((l) => /^Mochi 40 USDC$/.test(l)), v.legs.join(" | "));
-      assert.ok(v.methods.length >= 1 && v.methods.every(Boolean), "rails 0 → all disabled");
+      assert.ok(v.legs.some((l) => /^Honeybun\s*60\s*USDC$/.test(l)) && v.legs.some((l) => /^Mochi\s*40\s*USDC$/.test(l)), v.legs.join(" | "));
+      // pre-A-905 baseline: assert.ok(v.methods.length >= 1 && v.methods.every(Boolean), "rails 0 → all disabled") over `.homePaper__choices--funding button`.
+      // A-905 (Cowork decision): 2+ `in` goes allocation → the Funding rows (Card / Bank transfer / Crypto); card/bank are disabled and crypto enabled INSIDE the Funding Paper
+      // that a row tap opens (a898-funding-gift-browser pins that). Here, before any row is tapped, the plan offers exactly the three rows and nothing was sent.
+      // pre-A-911 baseline: three plan-fund buttons. A-911: card + bank are always dim ("Not ready yet", not a button), crypto is the one enabled plan-fund row.
+      assert.deepEqual(v.fundingRows, [{ id: "card", label: "Pay with card", disabled: true, plan: false }, { id: "bank", label: "Bank transfer", disabled: true, plan: false }, { id: "crypto", label: "Pay with crypto", disabled: false, plan: true }]);
+      assert.equal(v.methods.length, 0, "the old methods list is gone");
       assert.equal(v.inputs, 0);
       assert.deepEqual(delta(c0, await counters()), { webauthn: 0, tx: 0 });
       const raw = await p.evaluate((k) => localStorage.getItem(k), await splitKey());
@@ -458,39 +507,43 @@ async function browserWidth(browser, BASE, w, shots) {
     });
 
     await check(`B9 ${T} T9/Q4 after close: no allocation element in MY MONEY or Home; re-entering MY MONEY shows rows + entry only`, async () => {
-      await mustTap("#homeAddMoneyBack", "back"); await sleep(600);
+      await mustTap(".a911-back", "back sticker"); await sleep(700);
+      // pre-A-911 baseline: back landed on the Money tab (.a905-money__piggy rows). Now one back sticker tap leaves the plan; the Money tab screen lists the 2 Piggies (.a911-piggy), the Move money screen is gone.
+      await closeScreens();
       assert.deepEqual(await allocationLeft(), { inputs: 0, addMoneyBox: 0, percentText: false, slider: 0 });
-      assert.equal(await p.locator('[id^="homeMoneyPiggyRow--"]').count(), 2);
+      // pre-A-905 baseline: the old MY MONEY face (2 × homeMoneyPiggyRow--) was shown after back. A-905: back lands on the Money tab (2 Piggy rows in its list); the old face follows via toMoney() below.
+      await mustTap("#a905Jar", "honey jar"); await sleep(700);
+      assert.equal(await p.locator('.a911-screen[data-a911="money"] .a911-piggy').count(), 2);
+      await closeScreens();
       await toHomeFace();
       assert.deepEqual(await allocationLeft(), { inputs: 0, addMoneyBox: 0, percentText: false, slider: 0 });
       await shot("T9_home_after_close");
       await toMoney();
       assert.deepEqual(await allocationLeft(), { inputs: 0, addMoneyBox: 0, percentText: false, slider: 0 });
-      assert.equal(await p.locator("#homeAddMoney").count(), 1);
+      assert.equal(await p.locator("#a905Jar").count(), 1);
     });
 
     await check(`B10 ${T} T3 remembered split: next Add money prefills the same ratios as plain numbers; nothing runs until ok`, async () => {
       const c0 = await counters();
-      await mustTap("#homeAddMoney", "Add money"); await sleep(700);
-      assert.equal(await val(`[id="homeAddMoneyPercent--${ids.honey}"]`), "60");
-      assert.equal(await val(`[id="homeAddMoneyPercent--${ids.mochi}"]`), "40");
-      assert.equal(await val(`[id="homeAddMoneyAmount--${ids.honey}"]`), "", "amounts wait for this deposit's total");
+      await viaJar(); // pre-A-905 baseline: await mustTap("#homeAddMoney", "Add money"); await sleep(700);
+      // pre-A-911 baseline: the remembered 60 / 40 showed as percent numbers. The % field is not rendered now; the remembered ratio shows as the amounts it makes once this deposit's total is typed.
+      assert.deepEqual((await moveFacts()).inputs, ["", "", ""], "nothing pre-filled before this deposit's total");
       assert.equal(await okDisabled(), true, "prefill never skips confirm");
-      const text = await p.evaluate(() => document.querySelector(".homePaper__addMoney")?.innerText ?? "");
+      const text = (await moveFacts()).text;
       assert.equal(NUDGE.test(text), false, "no recommended / like-last-time wording");
       await typeInto("#homeAddMoneyTotal", "250");
       assert.equal(await val(`[id="homeAddMoneyAmount--${ids.honey}"]`), "150");
       assert.equal(await val(`[id="homeAddMoneyAmount--${ids.mochi}"]`), "100");
       assert.equal(await okDisabled(), false);
-      assert.equal(await p.evaluate(() => document.querySelector(".homePaper__addMoney")?.dataset.addMoney), "allocation", "still a preview");
+      assert.equal((await moveFacts()).step, "split", "still a preview");
       assert.deepEqual(delta(c0, await counters()), { webauthn: 0, tx: 0 });
       await shot("T3_prefilled");
-      // 100% to one Piggy in minimal taps: Honeybun percent = 100, Mochi cleared.
-      await typeInto(`[id="homeAddMoneyPercent--${ids.honey}"]`, "100");
+      // 100% to one Piggy in minimal taps: Honeybun = the whole total, Mochi cleared.
+      await typeInto(`[id="homeAddMoneyAmount--${ids.honey}"]`, "250");
       await typeInto(`[id="homeAddMoneyAmount--${ids.mochi}"]`, "");
       assert.equal(await val(`[id="homeAddMoneyAmount--${ids.honey}"]`), "250");
       assert.equal(await okDisabled(), false, "100% to one Piggy is a valid plan");
-      await mustTap("#homeAddMoneyBack", "back"); await sleep(500);
+      await closeScreens();
     });
 
     await check(`B11 ${T} T3 tampered memory (permission field / bad version) → no prefill`, async () => {
@@ -498,15 +551,19 @@ async function browserWidth(browser, BASE, w, shots) {
       const good = await p.evaluate((kk) => localStorage.getItem(kk), k);
       for (const bad of [{ ...JSON.parse(good), permission: { auto: true } }, { ...JSON.parse(good), version: 2 }]) {
         await p.evaluate(([kk, v]) => localStorage.setItem(kk, v), [k, JSON.stringify(bad)]);
-        await mustTap("#homeAddMoney", "Add money"); await sleep(600);
-        const values = await p.evaluate(() => [...document.querySelectorAll(".homePaper__addMoney input")].map((i) => i.value));
-        assert.ok(values.every((x) => x === ""), `no prefill: ${values}`);
-        await mustTap("#homeAddMoneyBack", "back"); await sleep(500);
+        await viaJar(); // pre-A-905 baseline: await mustTap("#homeAddMoney", "Add money"); await sleep(600);
+        assert.ok((await moveFacts()).inputs.every((x) => x === ""), `no prefill: ${(await moveFacts()).inputs}`);
+        // stronger than the pre-A-911 check (empty % fields): with a tampered memory a typed total must NOT spread into remembered amounts
+        await typeInto("#homeAddMoneyTotal", "100");
+        const after = (await moveFacts()).inputs;
+        assert.deepEqual(after.slice(1), ["", ""], `no prefill after the total: ${after}`);
+        await closeScreens();
       }
       await p.evaluate(([kk, v]) => localStorage.setItem(kk, v), [k, good]);
     });
 
     await check(`B12 ${T} T7/S8 selected Piggy shows at home (verified value or unknown, never invented $0), no returning; Slice 1 selector intact`, async () => {
+      await toMoney(); // [A-905] back to the old MY MONEY face (the Money tab is left through the stamp). pre-A-905 baseline: already there.
       const reg = await p.evaluate(() => { const k = Object.keys(localStorage).find((x) => x.startsWith("araso.piggyRegistry.")); return k ? JSON.parse(localStorage.getItem(k)) : null; });
       for (const [name, id] of [["Mochi", ids.mochi], ["Honeybun", ids.honey]]) {
         await mustTap(`[id="homeMoneyPiggyRow--${id}"]`, `${name} row`); await sleep(1500);
@@ -522,7 +579,7 @@ async function browserWidth(browser, BASE, w, shots) {
         assert.equal(YIELD.test(s.text), false);
         await shot(`T7_${name}_selected_state`);
       }
-      assert.equal(await p.locator("#homeAddMoney").count(), 1, "entry still there alongside the selection");
+      assert.equal(await p.locator("#a905Jar").count(), 1, "entry still there alongside the selection");
     });
 
     await check(`B13 ${T} whole run: tx 0, pageerror 0, credentials.create 0 since the last reload`, async () => {

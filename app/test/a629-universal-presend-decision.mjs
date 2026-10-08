@@ -190,7 +190,9 @@ let mainModule = null;
 async function loadMain() {
   if (mainModule) return mainModule;
   const url = (file) => new URL(file, SRC_DIR).href;
-  const consts = [cutConst("SECOND_DECISION_SELECTION_SOURCE"), cutConst("RETURN_EVIDENCE_READ_CONFIG"), cutConst("LOCAL_TEST_RETURN_READ_HOOK"), cutConst("LOCAL_TEST_JOB_BINDINGS_HOOK")].join("\n");
+  // pre-A-859 baseline: cutConst("RETURN_EVIDENCE_READ_CONFIG") was the null product config. The harness keeps testing
+  // the unconfigured-reader path, so it rebinds the const to null here; the real product value is pinned in E1 below.
+  const consts = [cutConst("SECOND_DECISION_SELECTION_SOURCE"), cutConst("RETURN_EVIDENCE_READ_CONFIG").replace(/^const RETURN_EVIDENCE_READ_CONFIG = .*;$/, "const RETURN_EVIDENCE_READ_CONFIG = null;"), cutConst("LOCAL_TEST_RETURN_READ_HOOK"), cutConst("LOCAL_TEST_JOB_BINDINGS_HOOK")].join("\n");
   const body = FUNCTIONS.map(cutFunction).join("\n\n").replaceAll("import.meta.env.DEV", "__env.DEV").replaceAll("LOCAL_DEV_ENTRY", "__env.LOCAL");
   const code = `
 import { runSecondJourney } from ${JSON.stringify(url("job-feed.js"))};
@@ -282,9 +284,11 @@ await check("D3 malformed LOCAL hooks fail closed (http URL, array bindings, non
 });
 
 // ── E. source contract ─────────────────────────────────────────────────────────────
-await check("E1 product reader config stays null; no RPC URL literal; hooks locked behind LOCAL_DEV_ENTRY", () => {
-  assert.match(MAIN, /\nconst RETURN_EVIDENCE_READ_CONFIG = null;\n/);
-  assert.doesNotMatch(MAIN, /https:\/\/rpc\.monad\.xyz/);
+await check("E1 product reader config is the A-859 finalized config (was null pre-A-859); single RPC literal; hooks locked behind LOCAL_DEV_ENTRY", () => {
+  // pre-A-859 baseline: assert.match(MAIN, /\nconst RETURN_EVIDENCE_READ_CONFIG = null;\n/);
+  // pre-A-859 baseline: assert.doesNotMatch(MAIN, /https:\/\/rpc\.monad\.xyz/);
+  assert.match(MAIN, /\nconst RETURN_EVIDENCE_READ_CONFIG = Object\.freeze\(\{ rpcUrl: "https:\/\/rpc\.monad\.xyz", finality: "finalized" \}\);\n/);
+  assert.equal((MAIN.match(/https:\/\/rpc\.monad\.xyz/g) || []).length, 1, "exactly one mainnet RPC literal in main.js");
   assert.match(cutFunction("localTestReturnReadConfig"), /^function localTestReturnReadConfig\(\) \{\n  if \(!LOCAL_DEV_ENTRY\) return null;/);
   assert.match(cutFunction("localTestJobBindings"), /^function localTestJobBindings\(\) \{\n  if \(!LOCAL_DEV_ENTRY\) return undefined;/);
   assert.match(cutFunction("recordSecondJourneyDecisionForAnswer"), /RETURN_EVIDENCE_READ_CONFIG \? null : localTestReturnReadConfig\(\)/);

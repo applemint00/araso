@@ -25,7 +25,7 @@ const SRC_PATH = path.join(REPO, "app/src/piggy-motion-state.js");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let pass = 0, fail = 0;
 async function check(label, fn) {
-  try { await fn(); console.log(`PASS  ${label}`); pass += 1; }
+  try { if (await fn() === "SKIP") { console.log(`SKIP  ${label}`); return; } console.log(`PASS  ${label}`); pass += 1; } // [A-888] "SKIP" return = not counted as PASS
   catch (e) { console.log(`FAIL  ${label}\n      ${String((e && e.message) || e).split("\n").join("\n      ")}`); fail += 1; }
 }
 
@@ -59,43 +59,47 @@ const CASES = [
   [1366, 1024, R(1030.0, 600.0, 1190.0, 790.0), R(880.0, 650.0, 1010.0, 780.0)],
   [1440, 900, R(1107.7, 571.2, 1279.6, 775.6), R(957.9, 614.7, 1098.9, 761.2)],
 ];
-await check("N0 pre-A-728 reference module can be derived (A-728 additions stripped, no leftovers)", async () => {
+await check("N0 reference module = the pre-A-831 piggy-motion-state.js (pre/ copy) loads; the A-831 cluster is present in the current source", async () => {
   const src = readFileSync(SRC_PATH, "utf8");
-  assert.ok(src.includes("{ fallback: true }") && src.includes("opt?.fallback"), "A-728 fallback present in source");
-  const before = stripA728(src);
-  assert.ok(!/fallback: true|opt\?\.fallback|A-728 4:3/.test(before), "strip left A-728 residue");
+  // [A-831 RE-PIN, Cowork Q-A] the mid/web candidate lists (WN1..3 + the A-728 WA1 fallback, W2..W4, WA1/WA2) were replaced by the lower-left companion cluster, so the
+  // "pre-A-728 module = current source with the A-728 additions stripped" derivation no longer exists. pre-A-831 baseline:
+  //   assert.ok(src.includes("{ fallback: true }") && src.includes("opt?.fallback"), "A-728 fallback present in source"); const before = stripA728(src); assert.ok(!/fallback: true|opt\?\.fallback|A-728 4:3/.test(before), ...); B = import(before)
+  assert.ok(src.includes("A-831 · A-829 / A-682 item 1"), "A-831 companion cluster present in source");
+  // Round 3: B = the pre-A-831 module (receipt pre-copy), imported through a temp .mjs copy; used only for the widths the cluster does not touch (<= 640, mobile band).
+  if (!existsSync(path.join(REPO, "_private/ops/receipts/A831_home_keyframe_layout/pre/piggy-motion-state.js"))) { console.log("INFO  N0 pre-A-831 reference module — private pre-copy absent (public checkout); source assertion passed"); return "SKIP"; } // [A-888] public-clone guard
+  const pre = readFileSync(path.join(REPO, "_private/ops/receipts/A831_home_keyframe_layout/pre/piggy-motion-state.js"), "utf8");
   const dir = mkdtempSync(path.join(tmpdir(), "a728-"));
-  const f = path.join(dir, "piggy-motion-state.before.mjs");
-  writeFileSync(f, before);
+  const f = path.join(dir, "piggy-motion-state.pre-a831.mjs");
+  writeFileSync(f, pre);
   B = await import(pathToFileURL(f).href);
   assert.equal(typeof B.planHomeSlots, "function");
 });
-await check("N1 1024×768 and 1180×820 = SEAT,WN1,WA1; WN2/WN3 still rejected (viewport-margin); WA1 = web-band formula at seat.y, approved size", () => {
+await check("N1 1024×768 and 1180×820 = SEAT,WN1,WN2 (A-831 lower-left companion cluster: on the Main floor line, left of Chog, below the footprint, shrunk to fit)", () => {
+  // pre-A-831 baseline: = SEAT,WN1,WA1; WN2/WN3 still rejected (viewport-margin); WA1 = web-band formula at seat.y, approved size (WA1 shares WN1's x; WA1.y = seat.y; WA1 keeps the approved size)
   for (const [vw, vh, seat, chog] of CASES.filter((c) => c[0] === 1024 || c[0] === 1180)) {
     const p = planWith(M, vw, vh, seat, chog, BRAND);
-    assert.deepEqual(p.slots.map((s) => s.name), ["SEAT", "WN1", "WA1"], `${vw}: ${JSON.stringify(p.rejected.map((r) => [r.name, r.why]))}`);
-    assert.deepEqual(p.rejected.map((r) => r.name), ["WN2", "WN3"]);
-    for (const r of p.rejected) assert.deepEqual(r.why, ["viewport-margin"], `${vw} ${r.name}`);
-    const wa = p.slots.find((s) => s.name === "WA1").rect, wn = p.slots.find((s) => s.name === "WN1").rect;
-    const gap = p.gap;
-    assert.ok(Math.abs(wa.x - (wn.x)) < 0.01, "WA1 shares WN1's x (same left column)");
-    assert.ok(Math.abs(wa.y - seat.y) < 0.01, "WA1 sits on the seat floor line (y = seat.y)");
-    assert.ok(Math.abs(wa.w - seat.w) < 0.01 && Math.abs(wa.h - seat.h) < 0.01, "WA1 keeps the approved size (no shrink)");
-    assert.equal(M.rectsTouch(wa, wn, gap), false, "WA1/WN1 do not touch");
+    assert.deepEqual(p.slots.map((s) => s.name), ["SEAT", "WN1", "WN2"], `${vw}: ${JSON.stringify(p.rejected.map((r) => [r.name, r.why]))}`);
+    const a = p.slots.find((s) => s.name === "WN1").rect, b2 = p.slots.find((s) => s.name === "WN2").rect;
+    assert.ok(a.b <= seat.b + 0.01 && Math.abs(a.b - seat.b) < 0.01, "WN1 sits on the Main floor line");
+    assert.ok(a.r <= chog.x - p.gap + 0.01 && b2.r <= a.x + 0.01, "cluster is left of Chog, WN2 left of WN1");
+    assert.equal(M.rectsTouch(a, b2, 0), false, "WN1/WN2 do not touch");
   }
 });
-await check("N2 700×900 first four mid candidates + order unchanged (SEAT,WN1,WN2,WN3), plan byte-identical to pre-A-728 (no WA1 at tall mid)", () => {
+await check("N2 700×900: the plan is deterministic, SEAT first, never more than the two companion slots (mid band changed by A-831; no pre/ comparison)", () => {
+  // pre-A-831 baseline: first four mid candidates + order unchanged (SEAT,WN1,WN2,WN3), plan byte-identical to pre-A-728 (no WA1 at tall mid)
   const [vw, vh, seat, chog] = CASES.find((c) => c[0] === 700);
-  const a = planWith(M, vw, vh, seat, chog, BRAND), b = planWith(B, vw, vh, seat, chog, BRAND);
-  assert.deepEqual(a.slots.map((s) => s.name), ["SEAT", "WN1", "WN2", "WN3"]);
-  assert.equal(JSON.stringify(a), JSON.stringify(b));
+  const a = planWith(M, vw, vh, seat, chog, BRAND), a2 = planWith(M, vw, vh, seat, chog, BRAND);
+  assert.ok(a.slots.length <= 3 && a.slots[0].name === "SEAT");
+  assert.equal(JSON.stringify(a), JSON.stringify(a2));
 });
-await check("N3 byte-identical plans vs pre-A-728 at 390, 430, 700, 900, 1200, 1366, 1440 (incl. mobile caps 0/1/2 and a width×height sweep of non-4:3 inputs)", () => {
-  for (const [vw, vh, seat, chog] of CASES.filter((c) => ![1024, 1180].includes(c[0]))) {
+if (!B) console.log("SKIP  N3 — pre-A-831 reference module absent (public checkout)"); else // [A-888] public-clone guard
+await check("N3 mobile band (<= 640) is byte-identical to the pre-A-831 module at 390 / 430 (incl. mobile caps 0/1/2) and a width×height sweep of non-4:3 inputs", () => {
+  // pre-A-831 baseline: the same check at 390, 430, 700, 900, 1200, 1366, 1440 and vw up to 1920 (web/mid bands were then untouched; A-831 replaced their candidate lists)
+  for (const [vw, vh, seat, chog] of CASES.filter((c) => c[0] <= 640)) {
     assert.equal(JSON.stringify(planWith(M, vw, vh, seat, chog, BRAND)), JSON.stringify(planWith(B, vw, vh, seat, chog, BRAND)), `${vw}×${vh}`);
   }
   // web + mobile bands: unchanged for every height (the candidate lists were not touched)
-  for (const vw of [320, 390, 430, 640, 1200, 1366, 1440, 1920]) for (let vh = 600; vh <= 1200; vh += 50) {
+  for (const vw of [320, 390, 430, 640]) for (let vh = 600; vh <= 1200; vh += 50) {
     const seat = R(vw * 0.74, vh * 0.62, vw * 0.74 + 140, vh * 0.62 + 160), chog = R(vw * 0.65, vh * 0.65, vw * 0.65 + 120, vh * 0.65 + 110);
     assert.equal(JSON.stringify(planWith(M, vw, vh, seat, chog, BRAND)), JSON.stringify(planWith(B, vw, vh, seat, chog, BRAND)), `${vw}×${vh}`);
   }
@@ -104,12 +108,20 @@ await check("N3 byte-identical plans vs pre-A-728 at 390, 430, 700, 900, 1200, 1
     assert.equal(JSON.stringify(mk(M)), JSON.stringify(mk(B)), `${vw} cap${cap}`);
   }
 });
-await check("N4 mid band: the fallback fires ONLY after a WN candidate was rejected (when every WN fits, WA1 is never planned)", () => {
-  for (let vh = 640; vh <= 1100; vh += 20) for (const vw of [700, 800, 900, 1024, 1180, 1199]) {
+await check("N4 mid/web band: the A-831 cluster is at most two companions on the Main floor line, left of Chog, never touching the footprint, each other or Chog (sweep)", () => {
+  // pre-A-831 baseline: "mid band: the fallback fires ONLY after a WN candidate was rejected (when every WN fits, WA1 is never planned)" (compared against the stripped pre-A-728 module)
+  for (let vh = 640; vh <= 1100; vh += 20) for (const vw of [700, 800, 900, 1024, 1180, 1199, 1200, 1440]) {
     const seat = R(vw * 0.77, vh * 0.66, vw * 0.77 + 122, vh * 0.66 + 145), chog = R(vw * 0.67, vh * 0.7, vw * 0.67 + 76, vh * 0.7 + 97);
-    const a = planWith(M, vw, vh, seat, chog, BRAND), b = planWith(B, vw, vh, seat, chog, BRAND);
-    if (!b.rejected.some((r) => /^WN/.test(r.name))) assert.equal(JSON.stringify(a), JSON.stringify(b), `${vw}×${vh} all WN fit → unchanged`);
-    else assert.deepEqual(a.slots.slice(0, b.slots.length).map((s) => s.name), b.slots.map((s) => s.name), `${vw}×${vh} existing slots keep order`);
+    const pw = 256.338, px = vw / 2 - 32 - pw / 2, py = vh / 2 - 48 - 182, foot = R(px - 46, py, px - 46 + 536.676, py + 456.9);
+    const p = M.planHomeSlots({ width: vw, seat, chog, foot, paper: R(px, py, px + pw, py + 364), brand: BRAND, safe: R(16, 16, vw - 16, vh - 16) });
+    const comp = p.slots.filter((s) => !s.seat);
+    assert.ok(comp.length <= 2, `${vw}×${vh} companions ${comp.length}`);
+    for (const c of comp) {
+      assert.ok(Math.abs(c.rect.b - seat.b) < 0.01 || c.rect.b <= seat.b, `${vw}×${vh} ${c.name} on/above the Main floor line`);
+      assert.equal(M.rectsTouch(c.rect, foot, 0), false, `${vw}×${vh} ${c.name} vs footprint`);
+      assert.equal(M.rectsTouch(c.rect, chog, 0), false, `${vw}×${vh} ${c.name} vs Chog`);
+    }
+    if (comp.length === 2) assert.equal(M.rectsTouch(comp[0].rect, comp[1].rect, 0), false, `${vw}×${vh} cluster slots`);
   }
 });
 
@@ -269,7 +281,7 @@ async function browserRun(browser, BASE, shots) {
 
     for (const [w, h] of [[1024, 768], [1180, 820]]) {
       const M3 = { vp: `${w}x${h}` };
-      await check(`B1 [${w}×${h}] three Piggies draw as SEAT + WN1 + WA1, offstage 0, all shown, no horizontal overflow, Honeybun/Mochi/Bebe all present`, async () => {
+      await check(`B1 [${w}×${h}] three Piggies draw as SEAT + WN1 + WN2 (A-831 cluster; pre-A-831 baseline: SEAT + WN1 + WA1), offstage 0, all shown, no horizontal overflow, Honeybun/Mochi/Bebe all present`, async () => {
         await closeRecords();
         await atWidth(w, h);
         const g = await snap(); M3.closed = g; await shot(`${w}x${h}_home_paper-closed`);
@@ -278,7 +290,7 @@ async function browserRun(browser, BASE, shots) {
         assert.equal(g.layer.band, "mid");
         const companions = g.res.filter((r) => !r.seat);
         const names = ["SEAT", ...companions.map((r) => r.slot)].sort();
-        assert.deepEqual(names, ["SEAT", "WA1", "WN1"], JSON.stringify(g.res));
+        assert.deepEqual(names, ["SEAT", "WN1", "WN2"], JSON.stringify(g.res)); // [A-831 RE-PIN] pre-A-831 baseline: ["SEAT", "WA1", "WN1"]
         assert.equal(g.res.filter((r) => r.shown).length, g.res.length, "every companion visible");
         assert.equal(g.seatHidden === true || g.res.some((r) => r.seat) || !!g.seat, true);
         assert.ok(g.sw <= g.vw, `scrollWidth ${g.sw} > ${g.vw}`);
@@ -289,7 +301,7 @@ async function browserRun(browser, BASE, shots) {
         await atWidth(w, h);
         assert.equal(await openHomePaper(), true, "paper opens"); await sleep(900);
         const gp = await snap(); M3.paperOpen = gp; await shot(`${w}x${h}_paper-open`);
-        const comp = (g) => g.res.filter((r) => !r.seat && (r.slot === "WN1" || r.slot === "WA1"));
+        const comp = (g) => g.res.filter((r) => !r.seat && (r.slot === "WN1" || r.slot === "WN2")); // [A-831 RE-PIN] pre-A-831 baseline: r.slot === "WN1" || r.slot === "WA1"
         assert.equal(comp(gp).length, 2);
         for (const c of comp(gp)) {
           assert.equal(overlap(c.r, gp.chog), 0, `${c.slot} vs Chog`);

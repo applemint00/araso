@@ -528,9 +528,12 @@ await check("N16 main.js seam: profile from build config only; no mainnet litera
   assert.match(MAIN, /const LEGACY_TESTNET_PATH = legacyTestnetPathOpen\(CHAIN_PROFILE\);/);
   assert.equal((MAIN.match(/["'`]monad-mainnet["'`]/g) || []).length, 0, "no app-level mainnet literal in main.js");
   assert.equal((MAIN.match(/\b143\b/g) || []).length, 0, "no mainnet chain id in main.js");
-  // CSP connect-src still names the testnet RPC only (live mainnet reads are not enabled)
+  // CSP connect-src: testnet RPC + (A-859, was testnet-only) exactly one extra evidence host https://rpc.monad.xyz
   assert.match(VERCEL, /testnet-rpc\.monad\.xyz/);
-  assert.equal(/rpc\.monad\.xyz(?!")/.test(VERCEL.replace(/testnet-rpc\.monad\.xyz/g, "")), false);
+  // pre-A-859 baseline: assert.equal(/rpc\.monad\.xyz(?!")/.test(VERCEL.replace(/testnet-rpc\.monad\.xyz/g, "")), false);
+  // A-859: exactly one extra exact host (https://rpc.monad.xyz) is allowed in connect-src, nothing else.
+  assert.equal((VERCEL.replace(/testnet-rpc\.monad\.xyz/g, "").match(/rpc\.monad\.xyz/g) || []).length, 1);
+  assert.match(VERCEL, /connect-src 'self' https:\/\/testnet-rpc\.monad\.xyz https:\/\/rpc\.monad\.xyz;/);
   const scope = fnBody("secondJourneyScope");
   assert.match(scope, /chainId: typeof RUNTIME_CHAIN_SCOPE === "string" \? RUNTIME_CHAIN_SCOPE : "monad-testnet"/);
   // evaluated: blocked profile -> "" (refused by every store); testnet -> identical to before

@@ -300,6 +300,17 @@ async function browserWidth(browser, BASE, w, shots) {
   const storeModes = () => p.evaluate(() => Object.fromEntries(Object.keys(localStorage).filter((k) => k.startsWith("araso.piggyControlMode.")).map((k) => [k.split(".").pop(), JSON.parse(localStorage.getItem(k))])));
   const lsSnapshot = () => p.evaluate(() => Object.fromEntries(Object.keys(localStorage).map((k) => [k, localStorage.getItem(k)])));
   const unlockIfLocked = async () => { for (let i = 0; i < 3; i += 1) { if (!(await p.locator("#loginChogButton").count())) return; await p.locator("#loginChogButton").click(); await sleep(2500); } };
+  // [A-891 CG-04/05] pre-A-891 baseline: after a reload with First done / Second not done, Explore opened by itself (~1.2 s, waitScene(["explore"])).
+  // Now (Owner 2026-10-08): quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore. forgetIntro() drops the once-per-user intro fact
+  // before a reload so a later reopen takes the same product path (Cowork 2026-10-08: before the intro the cue returns on every reload).
+  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const exploreViaTapMe = async (ms = 16000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
+    if (!(await p.locator(".chogHome__tapCue").count())) return `NOCUE:${await scene()}`;
+    await mustTap("#chogHomeHit", "Chog (tap me!)");
+    return waitScene(["explore"], 5000);
+  };
   const rowSelectedLook = (id) => p.evaluate((rid) => {
     document.activeElement?.blur?.();
     const el = document.getElementById(rid); if (!el) return null;
@@ -341,7 +352,7 @@ async function browserWidth(browser, BASE, w, shots) {
     });
     await p.reload({ waitUntil: "networkidle" }); await sleep(600);
     await unlockIfLocked();
-    await waitScene(["explore"], 9000);
+    await exploreViaTapMe(); // [A-891] pre-A-891 baseline: await waitScene(["explore"], 9000) (opened by itself)
     await realClick("#stayButton"); await waitScene(["sendstay"], 4000); await sleep(3000);
 
     // ── S1 Second incomplete ─────────────────────────────────────────────────────────────────
@@ -364,9 +375,11 @@ async function browserWidth(browser, BASE, w, shots) {
     // ── S4 unconfirmed / garbage gate never unlocks ────────────────────────────────────────────
     await check(`B2 ${T} S4 unconfirmed Second (closed key garbage "true") + reload → still no selector, no +Piggy`, async () => {
       await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "true"));
+      await forgetIntro(); // [A-891] the Second entry is offered again only through the cue; a completed Second never arms it
       await p.reload({ waitUntil: "networkidle" }); await sleep(600); await unlockIfLocked();
-      // unconfirmed → quiet Home is NOT held: Explore auto-opens again (same as pre-Second)
-      assert.equal(await waitScene(["explore"], 9000), "explore", "Explore still auto-reopens (not unlocked)");
+      // [A-895 P-D] pre-A-895 text: "Explore auto-opens again". Since A-891 Explore never auto-opens; it opens only after the Chog tap (exploreViaTapMe).
+      // unconfirmed → Explore is offered again through the cue (same as pre-Second), the gate stays locked
+      assert.equal(await exploreViaTapMe(), "explore", "Explore is reachable again (cue tap, or this copy of exploreViaTapMe accepts an auto-open) - gate not unlocked"); // [A-891] pre-A-891 baseline: await waitScene(["explore"], 9000)
       if ((await scene()) === "explore") { await realClick("#stayButton"); await waitScene(["sendstay"], 4000); await sleep(2500); }
       await openHomePaper(); await sleep(800);
       assert.equal(await p.locator(".homePlusPiggyTab").count(), 0);

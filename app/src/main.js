@@ -13,10 +13,14 @@ import { WORK_CUE, createDepartPlayback, createDepartRenderer, loadDepartAssets 
 import {
   assignHomeAmbient,
   buildPiggyMotionStateMap,
+  ACTIVE_SLEEP_INTERACTION_EVENTS,
+  createActiveSleepClock,
   fitWideSlot,
+  wideSlotRect,
   hashSeed,
   homeSlotBand,
   isRuntimeMotionState,
+  homeSleepEligible,
   orderHomeResidents,
   PIGGY_MOTION_STATE,
   piggyMotionStateFromMap,
@@ -29,6 +33,7 @@ import {
 } from "./piggy-motion-state.js";
 import { nameCardMarkup, mountNameCard } from "./name-card.js";
 import { returnSceneMarkup, mountReturnView, RETURN_VIEW_GEOMETRY } from "./return-view.js";
+import { setReceiptLegacySizeProvider } from "./piggy-return.js";
 import {
   homePaperMarkup,
   homePaperRecordsEntryMarkup,
@@ -68,6 +73,17 @@ import {
 } from "./gift-claim-entry.js";
 import { giftValueLabel } from "./gift-value-spec.js";
 import { createGiftRecordSource } from "./gift-record-source.js";
+// ── [A-887] non-design runtime wiring imports (Gift gas client · First receipt evidence sidecar) ──
+import { createGiftGasClient, GIFT_GAS_TRANSPORT } from "./gift-gas-client.js";
+import { createGiftGasClientDelivery } from "./gift-claim-entry.js";
+import { mapFirstEvidence } from "./receipt-evidence-first.js";
+import { readTxEvidence } from "./receipt-evidence-reader.js";
+import { evidenceStoreKey } from "./receipt-evidence-store.js";
+// ── [A-887] end imports ──
+// ── [A-897] P2 imports (stamp scene · unnamed tap-to-fill) ──
+import { promotionStampMarkup, mountPromotionStamp } from "./promotion-stamp.js";
+import { setUnnamedNameFill, applyUnnamedNameRows } from "./home-paper.js";
+// ── [A-897] end P2 imports ──
 import { filterHistory, historyIdentityLabel, resolveHistorySelection } from "./history-filter.js";
 import { issuePermission, authorize, consume, permissionNonce, cancel as cancelPermission, PERMISSION_STATE } from "./permission-envelope.js";
 import {
@@ -84,6 +100,23 @@ import { recoverProductList } from "./gate-b-recovery.js";
 import { listFundingMethods, startFunding, applyFundingResult, FUNDING_STATE } from "./funding-entry.js";
 import { checkIntentFunding, fundingRequestForShortfall, resumeAfterFunding, markPlanApproved } from "./funding-intent-bridge.js";
 import { buildFundingContext, validateFundingContext, scopeForChainId, FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "./funding-context.js";
+// ── [A-898] imports (Funding Paper + Send a Piggy; logic lives in the two modules) ──
+import { FUNDING_PAPER_CONFIG, fundingPaperBalanceGrew, fundingPaperMarkup, fundingPaperReduce, fundingPaperReturnsToDraft, fundingPaperView, openFundingPaper } from "./funding-paper.js";
+import { GIFT_SEND_CONFIG, giftDraftRestore, giftDraftSnapshot, giftSendEvaluate, giftSendFundingArgs, giftSendPaperMarkup, giftSendReduce, giftSendResumeCheck, giftSendView, lockQuote, openGiftSend, planGiftSend, quoteRefreshDue, reconcileQuote } from "./gift-send-paper.js";
+// ── [A-898] end imports ──
+// ── [A-905] imports (honey jar + Money tab; logic lives in the two modules) ──
+import { JAR_BUMP_FALLBACK_MS, JAR_MIN_TAP_PX, bumpJarElement, createJarArrivals, honeyJarLayerMarkup, jarGate, planJarSlot } from "./honey-jar.js";
+import { fundingRowsMarkup, nextPlanLeg, planLegsInit, planLegsReduce, MONEY_SWITCH, MONEY_TAB_CONFIG, MONEY_TAB_TITLE, giftPayStepMarkup, giftPayStepView, isSelectablePiggy, moneyTabMarkup, moneyTabOpen, moneyTabReduce, moneyTabView, moveMoneyMarkup, outMarkup, outReduce, outView, selectablePiggies } from "./money-tab.js";
+// ── [A-905] end imports ──
+// ── [A-911] imports (own screens: markup + geometry live in a911-screens.js) ──
+import { a911Fit, a911FitList, a911GiftMarkup, a911MoneyMarkup, a911MoveMarkup, a911Share } from "./a911-screens.js";
+import { fundingPaperAdapters, fundingPaperRows } from "./funding-paper.js";
+import { HOME_UNKNOWN_LABEL } from "./home-paper.js";
+// ── [A-911] end imports ──
+// ── [A-915] imports (Gift create on Monad mainnet: exact-shape step helpers + the create-step runner) ──
+import { GIFT_CREATE_CHAIN_ID, buildGiftCreateStepCalls, confirmGiftCreateStep, giftCreateConfigProblem, needsGasRegistration, registerGasDeposit } from "./gift-create-plan.js";
+import { runGiftCreateCalls } from "./gift-send-paper.js";
+// ── [A-915] end imports ──
 import { legacyTestnetPathOpen, profileScope, resolveChainProfile } from "./chain-profile.js";
 import { reconcileConfirmedFunding } from "./funding-reconcile.js";
 import {
@@ -101,7 +134,7 @@ import { readReturnObservation, listVisibleJobFamilies } from "./second-job-read
 // Second lane candidates for product Explore: the read-only current reader (no reader config is passed, so it
 // reads nothing and every row says why) → the decision core (every row decided, action 0) → family rows.
 // Nothing here reaches a permission, an executor or a lane intent.
-import { readSecondCurrent } from "./second-current-reader.js";
+import { readSecondCurrent, routeSecondCurrentRead } from "./second-current-reader.js";
 import { decideCurrentCandidate, decideCurrentCandidates, exploreCandidateRows } from "./mainnet-job-lane.js";
 import { commitSecondJourneyReceipt, isDevMockReceipt } from "./second-journey-receipt-bridge.js";
 // [A-663] Second-owned testnet execution plumbing proof — LOCAL_ONLY harness call site only
@@ -109,6 +142,12 @@ import { commitSecondJourneyReceipt, isDevMockReceipt } from "./second-journey-r
 // handleSecondSend/canSend. Per Owner correction: shMON is First-lineage plumbing proof, not a
 // Second Journey product destination.
 import { reconcileSecondPendingOnBoot, runSecondPlumbingProof } from "./second-execution-adapter.js";
+// [A-791] A-762 Second mainnet routing, consumed as EVIDENCE ONLY (secondLaneRouteEvidence below): no lane module is imported,
+// no lane is bound and no executor exists, so every route can only list its refusals. Nothing here grants anything.
+import { routeSecondMainnetExecution, SECOND_MAINNET_DESCRIPTORS } from "./second-execution-adapter.js";
+// [A-791] A-763 destination provenance producer: at the money authorize boundary a destination must be vouched by main's own
+// Piggy records. It can only REFUSE an already-authorized request; it never creates or widens a permission.
+import { deriveDestinationProvenance, DESTINATION_SOURCE } from "./execution-safety.js";
 // [A-472] 개인화 학습은 **기존** updatePreference 를 그대로 쓴다 — 새 engine 0.
 import { updatePreference } from "./job-selector.js";
 import {
@@ -125,6 +164,8 @@ import {
   recordSecondJourneyDecisionReceipt,
   // durable action-0 decision Receipt (store-level merge + reopen verify) for the Second lane candidates.
   recordSecondJourneyDecisionReceiptDurably,
+  // [A-851] Home re-check: which candidates just became go-able (pure).
+  newlyGoableCandidateIds,
 } from "./second-journey-state.js";
 import {
   paperStatusCopy,
@@ -170,6 +211,8 @@ const RUNTIME_CHAIN_SCOPE = profileScope(CHAIN_PROFILE);
 const LEGACY_TESTNET_PATH = legacyTestnetPathOpen(CHAIN_PROFILE);
 // 기본값 = 같은 origin 의 서버리스(`/api/grant`). 로컬 relayer 로 붙일 때만 VITE_RELAYER_URL 로 덮는다.
 const RELAYER_URL = import.meta.env.VITE_RELAYER_URL ?? "/api";
+// [A-912] true in the product build (import.meta.env.DEV false): the "UI preview" tag is then not rendered. Read through typeof so a663's vm cut (no import.meta) still sees the DEV preview.
+const A912_PRODUCT_BUILD = !import.meta.env?.DEV;
 const SEND_AMOUNT = parseEther("0.001");
 // [A-756] TESTNET 표시 규칙(Owner decision A): 사용자에게 보이는 금액은 USD-first "$5", 실제 실행은 고정 MON 이며
 // MON 은 pre-send/Receipt 에서만 2차(faint) 기술 상세다. 환산·오라클·반올림 0 — 고정 문구일 뿐 동적 USD 한도 주장이 아니다.
@@ -255,7 +298,8 @@ function hasPlayedBirth() {
 }
 
 function displayPiggyName() {
-  const name = readPiggyName().trim();
+  // [A-897 P1-fix · P2 Q5] the name source is the chain-scoped index: an indexed name shows when the device-level name is empty.
+  const name = readPiggyName().trim() || (typeof a897IndexedFirstName === "function" ? a897IndexedFirstName() : "");
   return name || "Piggy";
 }
 
@@ -300,7 +344,8 @@ function computeInitialScene(hasCredential, hasClosedTrip, hasAddress) {
   // 이름을 끝내지 않고 나간 사람은 Name it 으로 되돌아온다. 이때 Piggy 는 숨은 상태로
   // 기다리고 Save 로만 다시 나온다(A-288·A-290). 탄생 연출은 다시 돌지 않는다 —
   // 이미 한 번 처리됐기 때문이다(BIRTH_PLAYED_KEY).
-  if (!readPiggyName()) return "name";
+  // [A-897 P1-fix · P2 Q1] a promoted #1 / an already registered Piggy (chain-scoped index record) is never sent back to Name-it for an empty name.
+  if (!readPiggyName() && !(typeof a897RegisteredUnnamedHome === "function" && a897RegisteredUnnamedHome())) return "name";
   // [A-411-p] 옛 "hasClosedTrip → filebox" 분기를 없앤다. Owner 확정(A-411-n §1):
   // First 가 끝난 뒤의 초기 재방문은 "정리된 서류철 화면"이 아니라 "Chog+Piggy 가 함께
   // Home 에 정착한 조용한 상태"다 — filebox 는 이제 방금 File it 한 직후에만 지나가는
@@ -461,7 +506,7 @@ const state = {
   // 목적지(Name/Home/Away)를 그대로 들고 있고, render() 가 그 위에 LOGIN_CHECKING 만 그린다(목적지 mount 0).
   appLock: null,
   // [A-633 C/D] 부팅 때 읽은 First Send 미확정 기록의 read-only 조회 표시(Away 의 Chog 머리 위 한 줄).
-  // null | "checking" | "pending"(still out.) | "unknown"(can't tell yet.) — 메모리 값뿐.
+  // null | "checking" | "pending"(still out working. / not back yet., A-893b) | "unknown"(can't tell yet.) — 메모리 값뿐.
   awayRestore: null,
 };
 state.scene = computeInitialScene(!!state.credential, state.tripClosed, !!state.address);
@@ -501,6 +546,8 @@ let activeSession = null;
 let activeAccount = null;
 let idleTimer = null; // [A-556] app-idle 만의 타이머 (10분) — 서명자 5분 절대 만료와 분리
 let signerExpiryTimer = null; // [A-556] 서명자 5분 절대 만료 — activateSigningSession 이후로만 다시 잰다
+let signerMono = -1; // [A-896 R1] 같은 서명자의 단조 시각(performance.now) — 벽시계가 뒤로/앞으로 조작돼도 남은-수명 검사를 같이 건다. -1 = 없음/미지원.
+let signerSince = 0; // [A-896] 서명자가 세워진 벽시계 시각(Date.now) — sendPiggyOnce 입구의 남은-수명 검사용. 타이머는 믿지 않는다.
 
 function readCredential() {
   try {
@@ -723,6 +770,8 @@ function endSignerSession() {
   state.activeSignerAddress = "";
   clearTimeout(signerExpiryTimer);
   signerExpiryTimer = null;
+  signerSince = 0; // [A-896]
+  signerMono = -1; // [A-896 R1]
 }
 
 // [A-556] 앱을 실제로 잠그거나(app-idle 만료·beforeunload·dev reset) 지금 살아 있는 서명자가
@@ -811,6 +860,8 @@ function activateSigningSession(prfOutput, { persistAddress = true } = {}) {
       localStorage.setItem("araso.address", address);
       state.address = address;
     }
+    signerSince = Date.now(); // [A-896]
+    signerMono = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : -1; // [A-896 R1]
     armSignerExpiry();
     touchAppSession();
     return { account: activeAccount, address };
@@ -1076,15 +1127,8 @@ function savePiggyName(event) {
     state.homeStartPose = null;
     state.chogStartRect = null;
     // Chog 도 같은 Save 전환에서 같이 출발한다. 그래서 rect 를 같은 순간에 잡는다.
-    // [A-608 OWNER CORRECTION — FREEZE ALL WEB] `.nameScene__chog`(A-607의 master-size 판)는
-    // 이제 웹에서 display:none — 그 자리는 `.nameScene__chogWeb`(원래 웹 레퍼런스, 되살림)가
-    // 대신 보인다. 어느 쪽이 실제로 보이는지(0이 아닌 rect)를 직접 확인해 그 쪽을 쓴다 —
-    // 웹/좁은화면 어느 쪽이든 항상 "지금 화면에 실제로 있는" Chog를 잡는다.
-    const chogCandidates = [
-      document.querySelector(".nameScene__chogWeb"),
-      document.querySelector(".nameScene__chog"),
-    ];
-    const chogArt = chogCandidates.find((el) => el && el.getBoundingClientRect().width > 0) || null;
+    // [A-837] `.nameScene__chog` is the only Name Chog at every width (the legacy in-board second Chog <img> is gone).
+    const chogArt = document.querySelector(".nameScene__chog");
     const cbox = chogArt?.getBoundingClientRect();
     if (cbox && cbox.width > 0 && cbox.height > 0) {
       state.chogStartRect = {
@@ -1602,11 +1646,60 @@ const GIFT_RECORD_SOURCE = GIFT_RECORD_CONFIG
     })
   : null;
 
+// ── [A-887] Gift gas client wiring (A-884 client → A-874 POST /gift-gas) ─────────────────────────────────────────────
+// The Gift submitter's gasDelivery comes ONLY from this injected client (createGiftGasClientDelivery). Enabling the
+// submitter later means `const GIFT_CLAIM_SUBMIT_CONFIG = a887GiftClaimSubmitConfig({ chain, chainScope, ... })`: a
+// config that brings its own gasDelivery is refused (null => no submitter) — no /grant fallback, no requestGrant, no
+// RELAYER_URL. Product default GIFT_GAS_CLIENT_CONFIG = null (and GIFT_CLAIM_SUBMIT_CONFIG = null) => no client, no
+// submitter => the existing "claim_transport_unavailable" result, byte-for-byte as before. Same-origin only (A-874 sends no CORS headers, A-884 A1);
+// pageOrigin = location.origin (A-884 I3); config read by own data keys only (A-884 L1). No auth is invented (A-884 A2:
+// a 401 stays a refusal). Every client outcome is observation-only; only a SENT/CONFIRMED txHash goes on, and the
+// submitter re-verifies it on chain. Nothing here stores, logs, retries, signs or grants permission.
+const GIFT_GAS_CLIENT_CONFIG = null; // e.g. { endpoint: "/gift-gas", timeoutMs: 15000 } — 검증된 서버 배선이 생기기 전까지 null.
+const A887_GIFT_GAS_CONFIG_KEYS = Object.freeze(["endpoint", "timeoutMs"]);
+function a887GiftGasClient(cfg) {
+  if (cfg === null || cfg === undefined) return null;
+  try {
+    if (typeof cfg !== "object" || Array.isArray(cfg) || Object.getPrototypeOf(cfg) !== Object.prototype) return null;
+    const keys = Reflect.ownKeys(cfg);
+    if (keys.some((k) => !A887_GIFT_GAS_CONFIG_KEYS.includes(k))) return null;
+    const read = (k) => {
+      const d = Object.getOwnPropertyDescriptor(cfg, k);
+      return d && Object.prototype.hasOwnProperty.call(d, "value") ? d.value : undefined;
+    };
+    if (keys.some((k) => read(k) === undefined)) return null; // accessor => refused
+    const pageOrigin = typeof location === "object" && location ? location.origin : null;
+    const nativeFetch = typeof globalThis.fetch === "function" ? globalThis.fetch : null;
+    if (!nativeFetch || typeof pageOrigin !== "string") return null;
+    const client = createGiftGasClient({
+      fetch: (url, init) => nativeFetch.call(globalThis, url, init),
+      transport: GIFT_GAS_TRANSPORT.SAME_ORIGIN,
+      endpoint: read("endpoint"),
+      pageOrigin,
+      ...(keys.includes("timeoutMs") ? { timeoutMs: read("timeoutMs") } : {}),
+    });
+    return client && !client.configError ? client : null;
+  } catch {
+    return null;
+  }
+}
+const GIFT_GAS_CLIENT = a887GiftGasClient(GIFT_GAS_CLIENT_CONFIG);
+function a887GiftClaimSubmitConfig(base) {
+  try {
+    if (!base || typeof base !== "object" || Object.prototype.hasOwnProperty.call(base, "gasDelivery")) return null;
+    const gasDelivery = createGiftGasClientDelivery(GIFT_GAS_CLIENT);
+    return gasDelivery ? { ...base, gasDelivery } : null;
+  } catch {
+    return null;
+  }
+}
+// ── [A-887] end Gift gas client wiring ─────────────────────────────────────────────────────────────────────────
+
 // [A-579 Lane G] Gift commit→claim **제출** seam — 제품 기본값은 없음(null). 켜려면 검증된 chain transport
 // (읽기 + 서명된 raw tx 전달) 와 **별도의** 보내는 쪽 gas allowance(deliver 만) 와 배포된 escrow 주소, 측정된
 // gas units 가 모두 있어야 한다 — 아무것도 아직 없다(GiftPiggyUSDC 미배포, A-577 은 로컬 fork 증거). 레코드
 // 원천(GIFT_RECORD_CONFIG)이 없으면 이것도 만들지 않는다. debug hook 0 — 값을 바꾸려면 이 줄 자체를 고친다.
-const GIFT_CLAIM_SUBMIT_CONFIG = null; // e.g. { chain, gasDelivery, chainScope, escrowAddress, gasUnits, safety, readFeeInputs } — 검증된 값이 생기기 전까지 null.
+const GIFT_CLAIM_SUBMIT_CONFIG = null; // e.g. <branded helper over the injected Gift gas client> { chain, chainScope, escrowAddress, gasUnits, safety, readFeeInputs } + a gasDelivery built ONLY by createGiftGasClientDelivery(GIFT_GAS_CLIENT) — never a hand-written gasDelivery object. 검증된 값이 생기기 전까지 null.
 const GIFT_CLAIM_SUBMITTER = GIFT_CLAIM_SUBMIT_CONFIG && GIFT_RECORD_CONFIG
   ? createGiftClaimSubmitter(GIFT_CLAIM_SUBMIT_CONFIG)
   : null;
@@ -2053,10 +2146,12 @@ async function reconciledSendReceipt(pending, depositReceipt, redeemReceipt) {
   }
 }
 
-// 문구 = A-633 카드 문자열 그대로(checking… / still out. / can't tell yet.) — 그 밖의 문구 0. `coming home` 은
+// 문구 = A-633 카드 문자열(checking… / can't tell yet.) + A-893b pending(still out working. / not back yet.) — 그 밖의 문구 0. `coming home` 은
 // 여기 없다(기존 returnArrivalAlarm). Owner 시각 검토 OPEN.
 function awayRestoreLineMarkup(kind) {
-  if (kind === "pending") return "still out.";
+  // [A-893b CG-02 · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로"] pending wording only (same meaning, same kind): first open in this Away
+  // "still out working.", later opens "not back yet." (count in the [A-893] block; `typeof` keeps cut-out harnesses working). pre-A-893: "still out."
+  if (kind === "pending") return typeof awayOpenCount === "number" && awayOpenCount > 1 ? "not back yet." : "still out working.";
   if (kind === "unknown") return "can't tell yet.";
   return "checking…";
 }
@@ -2212,7 +2307,143 @@ async function simulateSend(account) {
 //   unconfirmed / reverted → 실행 실패  (tx 가 성공하지 않았다)
 //   balance-unavailable    → 완료       (tx 는 성공했고 숫자만 못 읽었다)
 //   ok                     → 완료       (영수증까지 있다)
+// ── [A-887] First receipt-evidence sidecar (observation only · A-878 mapper · A-866 reader · A-868 store) ────────────────
+// FIRST_EVIDENCE_SIDECAR is the injected store seam. Product default = null => every call below returns at its first line:
+// nothing is read, mapped, stored or reported, and the First path runs exactly as before. When a store is injected it
+// must be an A-868 evidence store bound to the chain the First path signs on (storeKey araso.txEvidence.v1.10143 —
+// never araso.receipts / araso.sendPending). An optional injected read-only `rpc` lets the A-866 reader fill rows in the
+// background (never awaited by the money path, bounded, one sweep at a time).
+// Observation only: the sweep READS the First send-pending record (readSendPending) and the in-memory First receipts
+// (state.receipts) and returns nothing. It writes no app state, no First/receipt storage, no permission, no lock; it is
+// called synchronously, never throws, and its failures (store refused/threw/async, mapping refused, read failure) only
+// end up in the optional onReport. Evidence is never an input to send, settle, reconcile, finishTrip or the Send lock.
+const FIRST_EVIDENCE_SIDECAR = null; // e.g. { store: createEvidenceStore({ storage: localStorage, chainId: 10143 }), rpc, finality: { tags: ["finalized"] }, onReport } — 검증된 배선 전까지 null.
+const A887_FIRST_RECEIPT_SWEEP_MAX = 20;
+const A887_FIRST_READ_MAX = 4;
+// [A-895 P-D · A-887 REVIEW I1] each background read is raced against this deadline so a never-settling injected rpc cannot leave a887FirstReadBusy true forever
+// (pre-A-895 baseline: the read was awaited without a deadline). Observation liveness only; a timed-out read's late result is dropped.
+const A887_FIRST_READ_TIMEOUT_MS = 15000;
+const A887_UNSETTLED = new Set(["unknown", "not_found", null, undefined]);
+let a887FirstReadBusy = false;
+
+function a887Swallow(value) {
+  try {
+    if (value && typeof value.then === "function") value.then(undefined, () => {});
+  } catch { /* evidence layer only */ }
+}
+
+function a887FirstEvidenceConfig() {
+  const cfg = FIRST_EVIDENCE_SIDECAR;
+  if (!cfg || typeof cfg !== "object") return null;
+  if (typeof LEGACY_TESTNET_PATH !== "boolean" || LEGACY_TESTNET_PATH !== true) return null; // First runs on the testnet path only
+  const chainId = MONAD_TESTNET.id;
+  const store = cfg.store;
+  if (!store || typeof store !== "object" || typeof store.append !== "function") return null;
+  if (store.storeKey !== evidenceStoreKey(chainId)) return null;
+  const finality = cfg.finality && typeof cfg.finality === "object" && Array.isArray(cfg.finality.tags) ? { tags: cfg.finality.tags.slice(0, 4) } : null;
+  return { store, chainId, rpc: typeof cfg.rpc === "function" ? cfg.rpc : null, finality, onReport: typeof cfg.onReport === "function" ? cfg.onReport : null };
+}
+
+function a887StoredFirstRow(store, key) {
+  try {
+    if (typeof store.get !== "function") return null;
+    const g = store.get(key);
+    return g && g.ok === true && g.row && typeof g.row === "object" ? g.row : null;
+  } catch {
+    return null;
+  }
+}
+
+function a887AppendFirstSeed(store, item) {
+  try {
+    const existing = a887StoredFirstRow(store, item.evidenceKey);
+    if (existing) return { ok: true, outcome: "already_observed", unsettled: A887_UNSETTLED.has(existing.status) };
+    const res = store.append(item.seed);
+    if (res && typeof res.then === "function") { a887Swallow(res); return { ok: false, reason: "evidence_store_async_unconfirmed" }; }
+    if (res && res.ok === true) return { ok: true, outcome: typeof res.outcome === "string" ? res.outcome.slice(0, 32) : null, unsettled: true };
+    return { ok: false, reason: typeof res?.reason === "string" ? res.reason.slice(0, 64) : "evidence_store_refused" };
+  } catch {
+    return { ok: false, reason: "evidence_store_threw" };
+  }
+}
+
+async function a887ReadFirstEvidence(cfg, items) {
+  a887FirstReadBusy = true;
+  try {
+    for (const item of items) {
+      const stored = a887StoredFirstRow(cfg.store, item.evidenceKey);
+      if (stored && !A887_UNSETTLED.has(stored.status)) continue; // a settled fact is not re-read
+      let res = null;
+      let timer = null;
+      try {
+        const reading = Promise.resolve(readTxEvidence({ ...item.readRequest, rpc: cfg.rpc, stored, ...(cfg.finality ? { finality: cfg.finality } : {}) }));
+        a887Swallow(reading); // a late rejection after the deadline must stay silent
+        res = await Promise.race([reading, new Promise((resolve) => { timer = setTimeout(() => resolve(null), A887_FIRST_READ_TIMEOUT_MS); })]);
+      } catch { res = null; }
+      if (timer !== null) clearTimeout(timer);
+      if (!res || res.ok !== true || !res.row) continue;
+      try { a887Swallow(cfg.store.append(res.row)); } catch { /* evidence layer only */ }
+    }
+  } catch {
+    /* evidence layer only */
+  } finally {
+    a887FirstReadBusy = false;
+  }
+}
+
+function a887ObserveFirstEvidence(trigger) {
+  try {
+    const cfg = a887FirstEvidenceConfig();
+    if (!cfg) return;
+    const report = { journey: "first", authority: "observation_only", trigger: String(trigger || "").slice(0, 32), staged: [], stored: [], refused: [], evidenceErrors: [] };
+    const records = [];
+    const pending = readSendPending();
+    if (pending && typeof pending === "object" && pending.stage !== "unknown" && pending.stage !== "reserved") records.push(["send_pending", pending]);
+    const receipts = Array.isArray(state.receipts) ? state.receipts : [];
+    for (const r of receipts) {
+      if (records.length >= A887_FIRST_RECEIPT_SWEEP_MAX) break; // [A-895 P-D · I2] pre-A-895 baseline: `>` allowed MAX+1 records (pending + 20 receipts); now MAX records in total
+      if (r && typeof r === "object" && r.kind !== RECEIPT_KIND.ADD_MONEY) records.push(["send_receipt", r]);
+    }
+    const toRead = [];
+    const observedAt = new Date().toISOString();
+    for (const [sourceKind, record] of records) {
+      const mapped = mapFirstEvidence({
+        record,
+        sourceKind,
+        chainId: cfg.chainId,
+        chainLabel: MONAD_TESTNET.name,
+        piggyAddress: sourceKind === "send_pending" ? record.address : undefined,
+        now: observedAt,
+      });
+      if (!mapped || mapped.ok !== true) {
+        report.evidenceErrors.push(Object.freeze({ sourceKind, reason: typeof mapped?.reason === "string" ? mapped.reason : "evidence_mapping_failed" }));
+        continue;
+      }
+      for (const x of mapped.refused) report.refused.push(Object.freeze({ sourceKind, ...x }));
+      for (const item of mapped.items) {
+        report.staged.push(item.evidenceKey);
+        const r = a887AppendFirstSeed(cfg.store, item);
+        report.stored.push(Object.freeze({ evidenceKey: item.evidenceKey, ok: r.ok, ...(r.ok ? { outcome: r.outcome } : { reason: r.reason }) }));
+        if (!r.ok) report.evidenceErrors.push(Object.freeze({ evidenceKey: item.evidenceKey, reason: r.reason }));
+        else if (cfg.rpc && r.unsettled && toRead.length < A887_FIRST_READ_MAX && !toRead.some((t) => t.evidenceKey === item.evidenceKey)) toRead.push(item);
+      }
+    }
+    if (toRead.length && !a887FirstReadBusy) a887Swallow(a887ReadFirstEvidence(cfg, toRead));
+    if (!cfg.onReport) return;
+    for (const k of ["staged", "stored", "refused", "evidenceErrors"]) Object.freeze(report[k]);
+    a887Swallow(cfg.onReport(Object.freeze(report)));
+  } catch {
+    /* evidence layer only: never reaches the First path */
+  }
+}
+// One read-only boot sweep, scheduled as a microtask after the module has finished evaluating. [A-895 P-D · I4] pre-A-895 text said it runs "after the boot reconcile":
+// an async reconcile may still be in flight when it runs; harmless, because the sweep only READS (readSendPending / state.receipts) and writes nothing.
+// Default FIRST_EVIDENCE_SIDECAR = null => nothing is scheduled at all.
+if (FIRST_EVIDENCE_SIDECAR) a887Swallow(Promise.resolve().then(() => a887ObserveFirstEvidence("boot")));
+// ── [A-887] end First receipt-evidence sidecar ──────────────────────────────────────────────────────────────────
+
 async function waitForSuccess(hash) {
+  if (typeof a887ObserveFirstEvidence === "function") a887ObserveFirstEvidence("broadcast"); // [A-887] observation only; default none
   let receipt;
   try {
     receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -2822,8 +3053,15 @@ async function sendPiggyOnce(markSettling) {
   }
   const reservation = reserved.reservation;
 
+  // [A-896 99e M-L-2 · Owner 60 s] 살아 있는 서명자라도 5분 절대 수명이 60초 미만 남았으면(벽시계 기준 — 타이머는 믿지 않는다,
+  // 스로틀·절전으로 늘어날 수 있다) "세션 없음"으로 본다 → 아래 기존 복구 경로(recoverPiggy, Face ID 한 번). 도장이 없거나 시계가
+  // 뒤로 간 경우도 닫는 쪽으로. 5분 상한·연장 없음(A-556)은 그대로.
+  const signerAge = Date.now() - signerSince;
+  // [A-896 R1] 단조 시각도 같은 한도(둘 다 통과해야). performance.now 가 없으면(찍힌 값 -1 포함) 벽시계만.
+  const signerMonoAge = typeof signerMono === "number" && signerMono >= 0 && typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() - signerMono : 0;
+  const signerMarginOk = signerSince > 0 && signerAge >= 0 && signerAge <= 5 * 60 * 1000 - 60 * 1000 && signerMonoAge >= 0 && signerMonoAge <= 5 * 60 * 1000 - 60 * 1000;
   // 생성 폴백 없음 — 저장된 credential 이 없으면 기존 패스키로 복구를 시도한다.
-  if (!activeAccount || !activeSession) {
+  if (!activeAccount || !activeSession || !signerMarginOk) {
     // [A-698 M3] Send 복구는 Check/Open 과 같은 시도 칸(authAttempt)·플랫폼 요청 표(platformAuthInflight)를 나눠 쓴다 —
     // 이미 살아 있는 시도나 아직 안 끝난 플랫폼 요청이 있으면 두 번째 WebAuthn get 을 겹쳐 내지 않고 기존 실패 문구로
     // fail-closed(자동 재시도 0 · 새 문구 0). get 을 못 쓰는 기기도 시도 토큰 전에 같은 실패로(A-687).
@@ -3029,6 +3267,8 @@ async function sendPiggyOnce(markSettling) {
 
 function createEmptySecondJourney() {
   return {
+    waitingForPlace: false, // [A-851] Home was chosen from a candidates card with nothing go-able — memory only
+    bellCandidateId: null, // [A-851] the candidate the Home bell is ringing for — memory only
     step: "interests", // interests | candidates | readiness | note
     selectedIds: [],
     chosenDestinationId: null,
@@ -3074,6 +3314,8 @@ function createEmptySecondJourney() {
     chogSay: null,
     // candidatesRevealed: 이번 저장 뒤 후보 행을 이미 보여줬는지 — 선택 재렌더 때 다시 숨기지 않는다.
     candidatesRevealed: true,
+    // laneReading: true only while refreshSecondLaneCandidates() has a read in flight ("checking…" shows only then).
+    laneReading: false,
     // note/noteQueue: 목록 없이 문구만 보여주고 Home 으로 닫는 종결 화면(seed B 소진,
     // 본편 반복 none). render() 가 이 큐를 sceneTimeout 으로 한 걸음씩 넘긴다.
     note: null,
@@ -3088,6 +3330,8 @@ function createEmptySecondJourney() {
     laneEventId: null,
     laneRead: null,
     laneDecisions: [],
+    // [A-791] A-762 route evidence for the same read (memory only; evidence, never permission — see secondLaneRouteEvidence).
+    laneRoutes: null,
   };
 }
 
@@ -3107,15 +3351,20 @@ const CANDIDATES_REVEAL_MS = 1500;
 const SECOND_DECISION_SELECTION_SOURCE = "app_ui_jit_answer";
 // [A-579] 판정 시점 read-only 관측 설정. null = 읽지 않는다 → 판정은 unknown(never nah).
 // 켜려면 { rpcUrl } 과 CSP connect-src 가 함께 필요하다 — RELEASE/HUMAN 게이트, 이 카드 밖.
-const RETURN_EVIDENCE_READ_CONFIG = null;
+// [A-859] 이제 켜져 있다: 아래 const 는 Owner 승인 공개 RPC + finalized 읽기(증거 전용, 실행 없음). 위 "null" 문구는 A-579 당시 기준.
+// pre-A-859 baseline: const RETURN_EVIDENCE_READ_CONFIG = null;
+// [A-859] Owner-approved public Monad mainnet RPC, finalized reads only (evidence-only, never executes).
+const RETURN_EVIDENCE_READ_CONFIG = Object.freeze({ rpcUrl: "https://rpc.monad.xyz", finality: "finalized" });
 // [A-629] LOCAL_ONLY decision-harness hooks. Same first lock as the WebAuthn hook (A-463 ①):
 // outside LOCAL_DEV_ENTRY (a172-local mode + VITE_ARASO_LOCAL_DEV_ENTRY=1) they are never read,
-// so the product path is unchanged: RETURN_EVIDENCE_READ_CONFIG stays null and no extra fixture
+// so the product path is unchanged: RETURN_EVIDENCE_READ_CONFIG is the product config (null before A-859) and no extra fixture
 // is bound to a Job. The harness supplies the read-only RPC URL at runtime; app source holds
 // none. A malformed hook is ignored (fail-closed). A read made through the hook is labelled
 // `local_test_reader:` on the Receipt, so it can never pass as the product reader.
 const LOCAL_TEST_RETURN_READ_HOOK = "__ARASO_LOCAL_TEST_RETURN_READ__";
 const LOCAL_TEST_JOB_BINDINGS_HOOK = "__ARASO_LOCAL_TEST_JOB_BINDINGS__";
+// [A-851] LOCAL_ONLY: lets a test stand in for the unconfigured product reader on the Home re-check only.
+const LOCAL_TEST_SECOND_LANE_READ_HOOK = "__ARASO_LOCAL_TEST_SECOND_LANE_READ__";
 
 // [A-663] seedStage 는 이제 **라운드 인덱스**(0, 1, 2, … — 세트 하나당 MAX_EXPLORE_VISIBLE
 // 개) 또는 "done" 이다. 옛 이름("A"/"B" 두 세트짜리 이원 모델)을 그대로 쓰지 않는다 — 8개
@@ -3390,6 +3639,13 @@ function recomputeSecondJourneyFlow() {
   });
 }
 
+// [A-849] ONE definition of "the user has picks" for the candidates card: picked errand ids that exist in the visible choices.
+// The heading ("wait.") and the Chog wait lines both read this, so they cannot disagree.
+function secondPickedErrandIds(sj = state.secondJourney) {
+  const visible = new Set(buildVisibleLaneChoices().map((e) => e.id));
+  return (sj?.selectedIds || []).filter((id) => visible.has(id));
+}
+
 function buildSecondJourneyViewModel() {
   const sj = state.secondJourney;
   // [A-421 Owner] 몇 번째 Journey: 첫 Journey 닫힘(tripClosed) + 이번 세션 Second 완료 수 + 지금 것.
@@ -3437,6 +3693,8 @@ function buildSecondJourneyViewModel() {
     destinations,
     pickedCandidateId: sj.pickedCandidateId,
     errandLabelById,
+    reading: sj.laneReading === true,
+    pickedErrandIds: secondPickedErrandIds(sj),
     chosen,
     decision: laneMode ? null : chosen?.decision || null,
     // No JIT question on a lane candidate (JIT 0~1): nothing a user answers here could make it runnable.
@@ -3497,6 +3755,7 @@ function openSecondJourneyExplore() {
   sj.amount = "";
   sj.interestsNote = null;
   sj.chogSay = null;
+  sj.exploreOfferedIds = null; // [A-893 CG-05] a new visit has no saved offer set; the current one is derived
   sj.note = null;
   sj.noteQueue = [];
   sj.decisionEventId = null;   // [A-579] 이전 판정 이벤트/읽기를 이어받지 않는다
@@ -3505,6 +3764,7 @@ function openSecondJourneyExplore() {
   sj.laneEventId = null;
   sj.laneRead = null;
   sj.laneDecisions = [];
+  sj.laneRoutes = null;
   // [A-411-p] 옛 A-405-a 회귀동작("관심 있으면 곧장 candidates")을 Owner 확정으로 대체한다:
   // Second 를 이 세션에서 아직 한 번도 끝내지 않았으면 관심이 저장돼 있어도 항상 시작
   // Paper(interests)로 돌아간다("Second 이탈은 항상 시작점", A-411-n §1/A-411-p 대조).
@@ -3523,6 +3783,7 @@ function openSecondJourneyExplore() {
   applySecondDraftIfAny(sj, domainState);
   recomputeSecondJourneyFlow();
   if (laneMode) keepSecondLaneDraftIfValid(sj);
+  sj.laneReading = laneMode;   // [A-849] the read below is real; "checking…" is true only until it settles
   setScene("explore", "", "");
   if (laneMode) refreshSecondLaneCandidates().catch(() => {});
 }
@@ -3570,6 +3831,8 @@ async function refreshSecondLaneCandidates() {
   sj.laneEventId = eventId;
   const shown = () => secondLaneDestinations(sj).map((d) => `${d.id}:${d.derivedStatus}`).join("|");
   const before = shown();
+  const wasReading = sj.laneReading === true;   // the heading drawn so far said "checking…" -> redraw once it settles
+  sj.laneReading = true;   // [A-849] a real read is in flight
   let currentRead;
   try {
     // No rpcUrl / transport / clock: the product reader stays unconfigured (gate G3), so this reads nothing.
@@ -3578,7 +3841,10 @@ async function refreshSecondLaneCandidates() {
     currentRead = { kind: "second_current_read", piggyAddress: null, candidates: [] };
   }
   if (state.secondJourney !== sj || sj.laneEventId !== eventId) return;
+  sj.laneReading = false;   // [A-849] settled (a superseded read leaves the flag to the newer read)
   sj.laneRead = currentRead;
+  // [A-791] the same read routed through the A-762 surface — evidence only; the decisions below do not read it.
+  sj.laneRoutes = secondLaneRouteEvidence(currentRead);
   sj.laneDecisions = decideCurrentCandidates({
     currentRead,
     scope: secondJourneyScope(),
@@ -3587,7 +3853,135 @@ async function refreshSecondLaneCandidates() {
     nowMs: Date.now(),
     nowIso: new Date().toISOString(),
   });
-  if (shown() !== before && state.scene === "explore" && (sj.step === "candidates" || sj.step === "readiness")) render();
+  if ((shown() !== before || wasReading) && state.scene === "explore" && (sj.step === "candidates" || sj.step === "readiness")) render();
+}
+
+// ── [A-851] Home wait + in-app bell ───────────────────────────────────────────────────────────────────────────────
+// After Home is chosen from a candidates card with nothing go-able, Home re-checks with the same read (no new data
+// source) when it is entered and when the app becomes visible again — never on a timer. If a picked-lane candidate
+// has become readable and go-able, the existing bell asset rings once per candidate id this session (memory only);
+// tapping it calls openSecondJourneyExplore(). In-app only: no OS notification, no scheduling, no auto-open.
+const secondBellRung = new Set();
+let secondHomeRecheckBusy = false;
+let secondVisibilityArmed = false;
+
+function markSecondWaitingForPlace() {
+  const sj = state.secondJourney;
+  if (!secondLaneMode(sj) || sj.step !== "candidates") return;
+  sj.waitingForPlace = true;
+  // Whatever is already go-able at this click did not "appear" later: mark it rung so it never rings on Home.
+  sj.waitBaseline = secondHomeGoableIds(sj, new Set())
+    .then((ids) => { for (const id of ids) secondBellRung.add(id); })
+    .catch(() => {});
+}
+
+// Go-able picked-lane candidate ids from one re-check read (strict: any unreadable picked-lane row = none).
+async function secondHomeGoableIds(sj, rungIds) {
+  sj.decisionEventSeq += 1;
+  const eventId = `home-recheck:${new Date().toISOString()}:${sj.decisionEventSeq}`;
+  const { currentRead, agreedRules } = await secondHomeRecheckRead(eventId);
+  const decisions = decideCurrentCandidates({
+    currentRead, agreedRules, scope: secondJourneyScope(), eventId,
+    selectionSource: SECOND_LANE_SELECTION_SOURCE.explore, nowMs: Date.now(), nowIso: new Date().toISOString(),
+  });
+  const visibleIds = secondLaneDestinations({ selectedIds: sj.selectedIds, laneDecisions: decisions }).map((d) => d.id);
+  return newlyGoableCandidateIds({ read: currentRead, decisions, visibleIds, rungIds });
+}
+
+function secondHomeRecheckAllowed() {
+  const sj = state.secondJourney;
+  return sj.waitingForPlace === true && secondLaneMode(sj) && state.scene === "sendstay" && !state.sendCardVisible;
+}
+
+// Test-only stand-in for the unconfigured product reader. Dead outside LOCAL_DEV_ENTRY.
+async function secondHomeRecheckRead(eventId) {
+  if (LOCAL_DEV_ENTRY) {
+    let hook = null;
+    try { hook = window[LOCAL_TEST_SECOND_LANE_READ_HOOK]; } catch { hook = null; }
+    if (typeof hook === "function") {
+      const out = await hook(eventId);
+      return { currentRead: out?.currentRead, agreedRules: out?.agreedRules && typeof out.agreedRules === "object" ? out.agreedRules : {} };
+    }
+  }
+  return { currentRead: await readSecondCurrent({ profile: CHAIN_PROFILE, piggyAddress: state.address || "" }), agreedRules: {} };
+}
+
+async function recheckSecondCandidatesOnHome() {
+  if (secondHomeRecheckBusy || !secondHomeRecheckAllowed()) return;
+  const sj = state.secondJourney;
+  secondHomeRecheckBusy = true;
+  try {
+    try { await sj.waitBaseline; } catch { /* baseline failure = nothing marked */ }
+    const fresh = await secondHomeGoableIds(sj, secondBellRung);
+    if (state.secondJourney !== sj || !secondHomeRecheckAllowed()) return;
+    if (!fresh.length) return;
+    secondBellRung.add(fresh[0]);
+    sj.bellCandidateId = fresh[0];
+    mountSecondHomeBell();
+  } catch {
+    console.info("[A-851] Home re-check UNKNOWN — no candidate");
+  } finally {
+    secondHomeRecheckBusy = false;
+  }
+}
+
+function mountSecondHomeBell() {
+  const sj = state.secondJourney;
+  if (!sj.bellCandidateId || state.scene !== "sendstay" || state.sendCardVisible) return;
+  const stage = document.querySelector('.stage[data-scene="sendstay"]');
+  if (!stage || stage.querySelector("#secondHomeBell")) return;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.id = "secondHomeBell";
+  btn.className = "secondHomeBell";
+  btn.setAttribute("aria-label", "bell");
+  btn.innerHTML = '<img src="/card/crayon-bell.svg" alt="" draggable="false" />';
+  btn.addEventListener("click", () => {
+    sj.bellCandidateId = null;
+    sj.waitingForPlace = false;
+    btn.remove();
+    openSecondJourneyExplore();
+    if (state.scene === "explore" && sj.selectedIds.length && sj.step !== "candidates") {
+      sj.step = "candidates";
+      render();
+    }
+  });
+  stage.appendChild(btn);
+}
+
+// Called once per Home settle: draws a pending bell, re-checks on entry, and re-checks when the app is visible again.
+function armSecondHomeWait() {
+  mountSecondHomeBell();
+  recheckSecondCandidatesOnHome();
+  if (secondVisibilityArmed) return; // one listener per scene, however many times settle runs
+  secondVisibilityArmed = true;
+  onSceneTeardown(() => { secondVisibilityArmed = false; });
+  sceneListener(document, "visibilitychange", () => {
+    if (document.visibilityState === "visible") recheckSecondCandidatesOnHome();
+  });
+}
+
+// [A-791] A-762 routing consumed as evidence. The reader result is routed per protocol (routeSecondCurrentRead) and each
+// protocol's entry step is put through routeSecondMainnetExecution with NO lanes bound and NO executor, on the product profile.
+// The answer is a list of refusals kept for inspection only: nothing in main reads it to decide, permit, sign or send.
+// Fail-closed both ways: if any route ever claimed anything other than "not allowed / no permission / not live / nothing sent",
+// the whole evidence is dropped (null) instead of being kept, and a throw is also null. Evidence never becomes permission.
+const SECOND_ROUTE_LOCKS = Object.freeze(["allowed", "ready", "executable", "executionPermission", "createsPermission", "liveExecution", "sent"]);
+function secondLaneRouteEvidence(currentRead) {
+  try {
+    const routed = routeSecondCurrentRead(currentRead);
+    const routes = [];
+    for (const jobId of Object.keys(SECOND_MAINNET_DESCRIPTORS)) {
+      const route = routed.routes.find((r) => r && r.jobId === jobId) || null;
+      const step = SECOND_MAINNET_DESCRIPTORS[jobId].steps[0];
+      const out = routeSecondMainnetExecution({ jobId, step, route, profile: CHAIN_PROFILE, piggy: null, executor: null });
+      if (!out || SECOND_ROUTE_LOCKS.some((k) => out[k] !== false) || out.actionCount !== 0 || out.action !== "none") return null;
+      routes.push(Object.freeze({ jobId, step, readerEvidence: out.readerEvidence, reason: out.reason, blockedBy: out.blockedBy, unknown: out.unknown }));
+    }
+    return Object.freeze({ kind: "second_lane_route_evidence", routes: Object.freeze(routes) });
+  } catch {
+    return null;
+  }
 }
 
 // One user action (try = ok on a candidate) → one action-0 decision Receipt per
@@ -3730,13 +4124,14 @@ function handleExploreSave(ids) {
   // 시퀀스를 벗어나 기존 bounded preference + checking 흐름으로 합류한다(§A-405-a 3).
   sj.seedStage = "done";
   sj.interestsNote = null;
-  sj.chogSay =
-    selectedErrands.length === displayed.length && displayed.length > 1
-      ? "all of them?"
-      : selectedErrands.length === 2
-        ? "these two?"
-        : null;
-  sj.candidatesRevealed = false;
+  // [A-893 CG-05] the confirmation now follows the CURRENT picks (exploreChogConfirmLine, read again at every render);
+  // this keeps only the set the picks were made from. sj.chogSay mirrors the derived line for existing readers.
+  sj.exploreOfferedIds = displayedIds;
+  sj.chogSay = exploreChogConfirmLine(sj);
+  // [A-849 UI-24] no fake "checking…": rows show immediately. The pinned render() reveal block (CANDIDATES_REVEAL_MS) is
+  // only entered while candidatesRevealed is false, so it stays true here and that block never runs.
+  sj.candidatesRevealed = true;
+  sj.laneReading = secondLaneMode(sj);   // a real read starts right after this render (refreshSecondLaneCandidates)
   sj.step = "candidates";
   sj.chosenDestinationId = null;
   sj.pickedCandidateId = null;
@@ -3943,6 +4338,9 @@ function secondMoneyLock() {
 }
 async function runLocalSecondPlumbingProofIfHarnessed(request = {}) {
   if (!LOCAL_DEV_ENTRY) return { ran: false, reason: "not_local_dev_entry" };
+  // [A-763] This proof is testnet (shMON) lineage only. On any other build profile (mainnet included, whose live
+  // gate/config is off) it refuses before the injected clients are even looked at: main has no mainnet send path.
+  if (typeof LEGACY_TESTNET_PATH !== "boolean" || LEGACY_TESTNET_PATH !== true) return { ran: false, reason: "not_testnet_profile" };
   const deps = request && typeof request === "object" ? request.deps : null;
   if (
     !deps ||
@@ -4054,10 +4452,16 @@ async function recordSecondJourneyDecisionForAnswer() {
   const read = readConfig
     ? await readReturnObservation(jobId, {
       rpcUrl: readConfig.rpcUrl,
+      finality: readConfig.finality,
       fetchImpl: (...args) => fetch(...args),
       now: () => new Date().toISOString(),
     })
     : { observation: null, status: "reader_unconfigured" };
+  // [A-859] a finalized-only config never accepts a non-finalized observation (fail closed → UNKNOWN).
+  if (readConfig?.finality === "finalized" && read.observation && read.observation.finality !== "finalized") {
+    read.observation = null;
+    read.status = "not_finalized";
+  }
   // 읽는 동안 사용자가 다른 곳으로 갔으면 이 판정은 버린다(늦게 온 읽기가 새 이벤트에 붙지 않는다).
   if (state.secondJourney !== sj || sj.decisionEventId !== eventId || sj.jitAnswer !== answer || sj.chosenDestinationId !== destinationId) return;
   const readStatus = localReadConfig ? `local_test_reader:${read.status}` : read.status;
@@ -4065,6 +4469,9 @@ async function recordSecondJourneyDecisionForAnswer() {
   recomputeSecondJourneyFlow();
   const receipt = sj.flow?.decisionReceipt;
   if (!receipt) return;
+  // [A-859] the Receipt's finalized block hash must be the hash the RPC returned for this read; otherwise do not record.
+  const receiptObs = receipt.evidence?.provenance?.observation;
+  if (receiptObs && receiptObs.finality === "finalized" && receiptObs.blockHash !== sj.returnRead?.observation?.blockHash) return;
   const out = recordSecondJourneyDecisionReceipt(ensureSecondJourneyDomainState(), receipt);
   if (!out.recorded) return;
   sj.domainState = out.state;
@@ -4179,6 +4586,9 @@ function wireExploreCard() {
     btn.addEventListener("click", () => handleCandidatePick(btn.dataset.destinationId));
   });
   document.querySelector("#secondOkButton")?.addEventListener("click", handleCandidateOk);
+  // [A-851] Home from a candidates card with nothing go-able = wait for a place (memory only; picks and decisions untouched).
+  // Conditional on A-849's empty card: until it lands, any Home click at step "candidates" with no go-able row waits.
+  document.querySelector("#stayButton")?.addEventListener("click", markSecondWaitingForPlace);
   // A-727: Home on the candidates card records nothing (merely-shown rows are not decisions; Home is not nah).
   document.querySelectorAll(".secondJourney__jitBtn").forEach((btn) => {
     btn.addEventListener("click", () => handleJitAnswer(btn.dataset.jitAnswer));
@@ -4202,6 +4612,7 @@ function renderExplore() {
   return `
     <section class="stage" data-scene="explore">
       ${buttonInkFilter()}
+      ${arasoBrandMarkup()}
       ${corner("explore")}
       <canvas class="departStage" id="secondWorkStage" aria-hidden="true"></canvas>
       ${homeCharacter(piggyName)}
@@ -4237,7 +4648,7 @@ function renderSecondAway() {
         // 새 문구를 넣지 않는다. 승인된 Away 문장이 오면 그때 이 자리에 붙인다.
         ""
       }
-      <p class="secondJourney__mockTag">UI preview — no transaction</p>
+      ${/* [A-912] preview tag: DEV preview only (0 in the product build) */ (typeof A912_PRODUCT_BUILD !== "undefined" && A912_PRODUCT_BUILD) ? "" : `<p class="secondJourney__mockTag">UI preview — no transaction</p>`}
       ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
@@ -4376,7 +4787,7 @@ function renderSecondReturn() {
     // 문구만 숨긴다(새 문구를 더하지 않는다, 기존 reset 버튼 줄은 유지).
     devExtra: hasRealReceipt
       ? (isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : "")
-      : `<p class="secondJourney__mockTag">UI preview — no transaction</p>${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}`,
+      : `${/* [A-912] preview tag: DEV preview only (0 in the product build) */ (typeof A912_PRODUCT_BUILD !== "undefined" && A912_PRODUCT_BUILD) ? "" : `<p class="secondJourney__mockTag">UI preview — no transaction</p>`}${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}`,
   });
 }
 
@@ -4384,6 +4795,7 @@ function renderSecondReturn() {
 // 그대로 같이 쓸 수 있다. onOpenFilebox 를 filebox 가 아니라 곧장 Home 으로 접는다
 // (§3 "정리→Home", 첫 Journey 의 "정리→filebox" 와 다르다 — 스펙이 그렇게 못박았다).
 function mountSecondReturn() {
+  mountReturnBrand();
   const token = sceneToken;
   let stopped = false;
   onSceneTeardown(() => {
@@ -4449,13 +4861,7 @@ function mountSecondReturn() {
     // [A-656 decision 4] Same Home anchor math (mobile floor / mid-band) as Home settled —
     // wraps #returnChogHop + #returnName, and hands the canvas consumer (return-view.js fit())
     // the viewport-space k/nudge it needs to resize/reposition itself the same way.
-    fitBoard: () => {
-      const fit = fitHomeBoard();
-      const plan = applyHomeFloorToReturnCluster(fit);
-      return { ...fit, floor: computeHomeFloorViewportNudge(plan, fit.s) };
-    },
-    // [A-681 FINAL CLOSEOUT A] mobile-only Receipt rail target (null at >640 -> legacy anchor).
-    getReceiptRail: homeReturnReceiptRail,
+    fitBoard: returnFitBoard, // [A-837] Home stage + the Return group offset (returnLayout)
     mountHomeChog: (chogRoot, o) => {
       homeChog = mountChogHome(chogRoot, {
         startRect: null,
@@ -4488,6 +4894,7 @@ function mountSecondReturn() {
     },
   });
   // [A-421] 파일링 완료 시 알람 제거 — First 와 같은 공용 구현.
+  a902WatchReturn(returnView, valid); // [A-902] bell + toss sounds
   endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid);
 }
 
@@ -4530,6 +4937,8 @@ function goHomeFromFilebox() {
 function openRecordsCard() {
   const anchor = document.querySelector("#recordsCardAnchor");
   if (!anchor) return;
+  // [A-833] an identity switch while open re-enters here: do not replay the open motion (History is already out).
+  const alreadyOpen = !anchor.hidden && Boolean(state.recordsCardVisible);
   state.recordsCardVisible = true;
   state.recordsDetailIndex = null;
   // [A-411] 두 카드 왼쪽 이동은 anchor.hidden 을 풀기 전, opening 클래스를 걸기 전에
@@ -4549,12 +4958,22 @@ function openRecordsCard() {
   // 떼면 CSS transition 이 자연스럽게 걸린다(순서를 반대로 하면 한 프레임 풀-오퍼시티로
   // 반짝인 뒤 되감기는 것처럼 보인다). reduced-motion 은 즉시 표시(클래스를 아예 걸지
   // 않는다 — CSS 쪽에도 안전망으로 media query 를 뒀다).
-  const reduced = prefersReducedMotion();
+  // [A-833] side modes (pair/fan) animate with WAAPI (animateRecordsCard), so they skip the CSS `--opening` slide; stacked keeps it.
+  const sideOpen = !anchor.classList.contains("recordsCardAnchor--stackedMode");
+  const reduced = prefersReducedMotion() || sideOpen;
   // [A-621] a reopen during the mobile exit cancels it (no stale `--closing` class/timer).
+  const wasAnimating = Boolean(recordsCardAnim);
   clearRecordsExitTimer();
   anchor.classList.remove("recordsCardAnchor--closing");
+  anchor.classList.remove("recordsCardAnchor--sideClosing");
   if (!reduced) anchor.classList.add("recordsCardAnchor--opening");
   anchor.hidden = false;
+  if (sideOpen) {
+    if (prefersReducedMotion() || alreadyOpen) cancelRecordsCardAnim();
+    else animateRecordsCard(anchor, true);
+  } else if (wasAnimating) {
+    cancelRecordsCardAnim();
+  }
   if (!reduced) {
     requestAnimationFrame(() => {
       requestAnimationFrame(() => anchor.classList.remove("recordsCardAnchor--opening"));
@@ -4585,9 +5004,22 @@ function closeRecordsCard() {
         anchor.classList.remove("recordsCardAnchor--closing");
         if (!state.recordsCardVisible) anchor.hidden = true;
       }, RECORDS_EXIT_MS);
+    } else if (computeHistoryFitMode() === "side-by-side" && !anchor.hidden && !prefersReducedMotion() && animateRecordsCard(anchor, false)) {
+      // [A-833] side modes close with the reversed preset-C path (Home moves back in parallel via the CSS transition), then hide.
+      anchor.classList.add("recordsCardAnchor--sideClosing");
+      recordsExitTimer = window.setTimeout(() => {
+        recordsExitTimer = 0;
+        anchor.classList.remove("recordsCardAnchor--sideClosing");
+        if (!state.recordsCardVisible) {
+          anchor.hidden = true;
+          cancelRecordsCardAnim();
+        }
+      }, RECORDS_EXIT_MS);
     } else {
       anchor.hidden = true;
       anchor.classList.remove("recordsCardAnchor--closing");
+      anchor.classList.remove("recordsCardAnchor--sideClosing");
+      cancelRecordsCardAnim();
     }
   }
   // [A-411 → A-608] 기록 카드를 치우면 두 카드 이동도 즉시 되돌린다 — web 에서만 걸었던
@@ -4619,6 +5051,13 @@ function syncRecordsViewportState() {
   if (!mount) return;
   const shift = open && !stackedMode;
   if (mount.classList.contains("homePaperMount--twoCardShift") !== shift) setHomeTwoCardShift(shift);
+  else if (shift) {
+    // [A-833] live resize / mode change while open: re-place instantly (no animation), cancel a running open/close animation.
+    if (homeTwoCardShiftKey() !== recordsShiftKey) {
+      cancelRecordsCardAnim();
+      setHomeTwoCardShift(true, true);
+    }
+  }
   const background = open && stackedMode;
   if (mount.inert !== background) mount.inert = background;
   // [A-624] Chog 는 같은 배경 Home 의 일부다. 모바일 HISTORY 가 열린 동안 Chog 탭(chog-home.js
@@ -4635,8 +5074,50 @@ function syncRecordsViewportState() {
 
 // [A-621] mobile exit — matches the 160ms `.recordsCardAnchor` transition in style.css plus one
 // frame of slack. A reopen during the exit cancels it (openRecordsCard()).
-const RECORDS_EXIT_MS = 180;
+// [A-833] close = 240 ms (A-829 item 7) + 20 ms slack. pre-A-833 baseline: 180 (160 ms transition + one frame).
+const RECORDS_EXIT_MS = 260;
 let recordsExitTimer = 0;
+let recordsCardAnim = null;
+const RECORDS_OPEN_MS = 320;
+const RECORDS_CLOSE_MS = 240;
+
+function cancelRecordsCardAnim() {
+  if (recordsCardAnim) {
+    try {
+      recordsCardAnim.cancel();
+    } catch {
+      /* already finished */
+    }
+  }
+  recordsCardAnim = null;
+}
+
+// [A-833] Side-mode History motion = HISTORY_MOTION_PROTO preset C, frames copied from the proto (offsets .62/.63, per-segment easing).
+// Open: tucked under Home's final spot -> slides right until clear of Home (+10) -> rises above Home -> settles. Close = same frames
+// reversed (proto: offset 1-o, easings carried as written). Returns false when nothing was animated.
+function animateRecordsCard(anchor, toOpen) {
+  const placement = computeHistoryPlacement();
+  if (!placement || placement.histLeft === null || typeof anchor.animate !== "function") return false;
+  let cur = null;
+  if (recordsCardAnim) {
+    cur = getComputedStyle(anchor).transform;
+    cancelRecordsCardAnim();
+  }
+  const under = placement.underDx;
+  const clear = placement.clearDx;
+  const fwd = [
+    { transform: `translateX(${under}px)`, opacity: 1, zIndex: 0, offset: 0, easing: "cubic-bezier(.25,.8,.35,1)" },
+    { transform: `translateX(${clear}px)`, opacity: 1, zIndex: 0, offset: 0.62 },
+    { transform: `translateX(${clear}px)`, opacity: 1, zIndex: 2, offset: 0.63, easing: "cubic-bezier(.45,0,.35,1)" },
+    { transform: "translateX(0px)", opacity: 1, zIndex: 2, offset: 1 },
+  ];
+  const frames = toOpen ? fwd : [...fwd].reverse().map((fr) => (fr.offset === undefined ? fr : { ...fr, offset: 1 - fr.offset }));
+  if (cur && cur !== "none") frames[0] = { ...frames[0], transform: cur };
+  recordsCardAnim = anchor.animate(frames, { duration: toOpen ? RECORDS_OPEN_MS : RECORDS_CLOSE_MS, easing: "linear", fill: "both" });
+  const mine = recordsCardAnim;
+  mine.finished.then(() => { if (toOpen && recordsCardAnim === mine) cancelRecordsCardAnim(); }).catch(() => {});
+  return true;
+}
 
 function clearRecordsExitTimer() {
   if (recordsExitTimer) window.clearTimeout(recordsExitTimer);
@@ -4685,6 +5166,7 @@ function resetLocalTest() {
   // [A-462] Second 완료 사실도 리셋에서만 지운다 — 일반 Home 이동·기록 열기·새로고침에서는 0.
   localStorage.removeItem(SECOND_JOURNEY_CLOSED_KEY);
   localStorage.removeItem(RESULT_MOTION_SEEN_KEY);
+  localStorage.removeItem(SECOND_INTRO_SEEN_KEY); // [A-891] once-per-user Second intro fact, reset-only like the two above
   // 탄생 한 바퀴의 세 가지 사실도 함께 지운다 — 안 지우면 리셋 뒤에도 Open 이 숨고
   // 해치가 다시 돌지 않는다.
   localStorage.removeItem(PIGGY_RECEIVED_KEY);
@@ -4925,13 +5407,74 @@ function fitInvite() {
   const board = document.querySelector(".invite");
   if (!board) return;
   if (wantedInviteKind() !== inviteKind) {
-    render();
+    // [A-819 UI-03] crossing INVITE_WIDE_MIN swaps the artboard (a legitimate family-boundary composition change), but
+    // the re-render used to rebuild the board in phase "closed" with every animation at 0 — an in-flight envelope
+    // visibly restarted (measured 901 -> 899 mid-peek: phase peek1 -> closed, then catching up from the next timer).
+    // The scheduled timeline timers (inviteTimers) were never the problem — they survive the render — so only the
+    // DOM state is carried: phase + each layer's own animation clock. The `typeof` guard keeps this function
+    // self-contained for the vm harness in a697 (which cuts fitInvite alone).
+    if (typeof carryInviteTimelineAcross === "function") carryInviteTimelineAcross(render);
+    else render();
     return;
   }
   const w = board.dataset.kind === "wide" ? 1280 : 420;
   const h = board.dataset.kind === "wide" ? 800 : 840;
-  const scale = Math.min(window.innerWidth / w, window.innerHeight / h);
+  // [A-839 · A-835 item 6] the content group scales with the Home card (inviteGroupScale); the notebook (lines, hole column, tape) is positioned in board units from --invS / the viewport
+  // size, so it is full-bleed at any scale. pre-A-839 baseline: const scale = Math.min(window.innerWidth / w, window.innerHeight / h);
+  const f = syncDesktopFormatVars();
+  const scale = f ? inviteGroupScale(board.dataset.kind, f.L, window.innerWidth, window.innerHeight) : Math.min(window.innerWidth / w, window.innerHeight / h);
   board.style.transform = `scale(${scale})`;
+  board.style.setProperty("--invS", String(scale));
+  board.style.setProperty("--invVw", `${window.innerWidth}px`);
+  board.style.setProperty("--invVh", `${window.innerHeight}px`);
+  board.style.setProperty("--invHoleOff", `${f ? inviteHolePhase(board.dataset.kind, f.L, scale) : 0}px`);
+}
+// [A-839 · Cowork U-I1: no shrink] Invite content-group scale, pure. Landscape (wide 1280x800 arrangement) = today's board scale at 1440x900 (1.125) x HomeCard / 377 (1440x900 ~ today's
+// size); portrait (phone 420x840 arrangement) = today's rendered 390x844 phone scale (390/420) x min(HomeCard / 283, fit height (vh / 780 = the board fits the viewport height)).
+// Containment (A-724): the measured content (not the board art margins) never leaves the viewport: half extents 380 / 760 board px wide, 720 tall for the wide art.
+// Hole column (0.8 x the side margin) vs ARASO (on the margin line): when the hole circles and the wordmark share x, the column's vertical phase (board px, < one hole pitch) is moved the least
+// that keeps every circle clear of the ARASO line box (+-4 viewport px). 0 when they do not share x.
+function inviteHolePhase(kind, L, scale) {
+  const wide = kind === "wide";
+  const D = wide ? 16 : 13, pitch = wide ? 60 : 47, r = D / 2;
+  if (0.8 * L.M + r * scale <= L.M) return 0;
+  const a = (L.asTop - 4) / scale - r, b = (L.asTop + L.asFont + 4) / scale + r; // hole CENTRES must stay out of [a, b] (board px from the viewport top)
+  const clear = (o) => { for (let y = o + pitch / 2; y < b + pitch; y += pitch) if (y >= a && y <= b) return false; return true; };
+  for (let d = 0; d < pitch; d += 1) { if (clear(d)) return d; if (clear(pitch - d)) return pitch - d; }
+  return 0;
+}
+const INVITE_WIDE_ART_SCALE = 1.125;
+const INVITE_PHONE_ART_SCALE = 390 / 420;
+const INVITE_CONTENT_W = { mobile: 380, wide: 760 };
+const INVITE_CONTENT_H = { mobile: 768, wide: 720 };
+function inviteGroupScale(kind, L, vw, vh) {
+  const wide = kind === "wide";
+  const rule = wide ? (INVITE_WIDE_ART_SCALE * L.cardW) / 377 : INVITE_PHONE_ART_SCALE * Math.min(L.cardW / 283, vh / 780);
+  const key = wide ? "wide" : "mobile";
+  return Math.min(rule, vw / INVITE_CONTENT_W[key], vh / INVITE_CONTENT_H[key]);
+}
+
+// [A-819 UI-03] see fitInvite(). Reads the live phase and the elapsed time of each animated layer (the Web Animations
+// clock — exact, no second timer), lets the caller rebuild the board in the other artboard kind, then re-enters the SAME
+// phase through the existing setInvitePhase() and rewinds each layer's animation by its elapsed time so it continues
+// instead of restarting. Phase "closed" has nothing to carry. No timer is created, cleared or rescheduled here.
+function carryInviteTimelineAcross(renderFn) {
+  const before = document.querySelector(".invite");
+  const phase = (before && before.dataset.phase) || "closed";
+  const layers = [".invite__env", ".invite__egg", ".invite__burst"];
+  const elapsed = layers.map((sel) => {
+    const el = before && before.querySelector(sel);
+    const a = el && typeof el.getAnimations === "function" ? el.getAnimations()[0] : null;
+    return a && a.currentTime != null ? Number(a.currentTime) : 0;
+  });
+  renderFn();
+  if (phase === "closed") return;
+  setInvitePhase(phase);
+  const after = document.querySelector(".invite");
+  layers.forEach((sel, i) => {
+    const el = after && after.querySelector(sel);
+    if (el && el.style.animation && el.style.animation !== "none" && elapsed[i] > 0) el.style.animationDelay = `-${Math.round(elapsed[i])}ms`;
+  });
 }
 
 function setInvitePhase(phase) {
@@ -5037,7 +5580,6 @@ function inviteMobile(gift = null) {
           <img class="invite__trail" src="/invite/trail@2x.png" alt="" />
           ${chogInviteMarkup()}
         </div>
-        <p class="invite__copy">it's safe. only you can open it.</p>
         <div class="invite__corner" aria-hidden="true"></div>
         <div class="invite__cornerBack" aria-hidden="true"></div>
       </div>
@@ -5191,6 +5733,7 @@ function loginCheckingMarkup(phase) {
 
 function renderAppLock() {
   clearInviteTimers();
+  if (typeof noteAwayLocked === "function") noteAwayLocked(); // [A-893b F1] lock seen while an Away is mounted
   const failed = state.appLock.phase === "failed";
   app.innerHTML = failed
     ? renderAuthCard({
@@ -5658,7 +6201,6 @@ function renderName() {
       ${arasoBrandMarkup()}
       <div class="nameScene${state.nameResumed ? " is-hidden" : ""}" id="nameScene">
         <div class="nameScene__piggy" id="namePiggy" aria-hidden="true"></div>
-        <img class="nameScene__chogWeb" src="${MOTION_DIR}/assets/chog_idle_fill.png" alt="" aria-hidden="true" />
         <div class="nameScene__pad">
           ${nameCardMarkup(
             // [A-626 B] 추가 Piggy(pendingNamePiggyId, admitAddedPiggy)는 첫 탄생 도착 카드("you've got /
@@ -5692,48 +6234,34 @@ function renderName() {
 // `raw/*_facts.json`): 카드 우측 가장자리 390 폭에서도 뷰포트보다 13px 이상 안쪽,
 // Chog 좌측 가장자리 390/430 모두 뷰포트 안쪽 8px 이상 — 자세한 표는 WRITER.md.
 const NAME_SCENE_SCALE_FLOOR = 0.42;
-// [A-681 FINAL CLOSEOUT E — NAME IT: enlarge the COMPOSITION, not just the card] On a phone the whole
-// 1280x800 board sits at the 0.42 floor, so the 460x300 card reads ~193x126 — far lighter than the
-// First Send / Explore card (285x364). The card and the motion Piggy live in ONE scaled board
-// (#nameScene) with authored coordinates (Piggy wrapper left 380 — name-piggy.html inline;
-// card `.nameScene__pad` left 612 width 460 — style.css), and the peek/clip line, the arrival
-// "standing" slide and the Save->Home start rect (read LIVE from `#namePiggy .pgsvg`) all depend on
-// that relation. So the fix is a single mobile-only OUTER transform on the board — scale up and
-// re-anchor — and NO internal coordinate or per-part size changes: card and Piggy grow by the
-// same factor, Piggy stays the same secondary peek behind the card (ratio unchanged).
-//   Fit rule (derived, not a px constant): the composition's authored horizontal extent
-//   [NAME_COMP_LEFT, NAME_COMP_RIGHT] = [Piggy wrapper left, card right] must fit the mobile
-//   content rail [--mobile-inset, vw - --mobile-inset]: scale = (vw - 2*inset)/(RIGHT-LEFT)
-//   (390: 0.506, 430: 0.552 vs the old 0.42), capped by the board's natural HEIGHT fit (vh/800)
-//   so short landscape phones never exceed the screen. Left-anchored on the rail
-//   (tx = inset - LEFT*scale) so the card's right edge lands on the right rail margin. Only used
-//   when it beats the existing floor scale; above 640 this whole block is skipped (identity).
-//   Chog is a stage-level sibling on the separate onboarding anchor (applyOnboardingPhoneFoot): if
-//   the grown card's bottom edge would run into Chog's box, the board is lifted by exactly the
-//   overlap + one grid step (--grid-2), never above the Piggy wrapper's top reaching the top-safe.
-const NAME_COMP_LEFT = 380;
-const NAME_COMP_RIGHT = 612 + 460;
-const NAME_CARD_BOTTOM = 292 + 300;
-const NAME_PIGGY_WRAP_TOP = 252;
-function nameCompositionFit(base) {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  if (!(vw <= 640)) return null;
-  const inset = resolveCssLengthVarPx("--mobile-inset", 20);
-  const comp = Math.min((vw - 2 * inset) / (NAME_COMP_RIGHT - NAME_COMP_LEFT), vh / 800);
-  if (!(comp > base)) return null;
-  const out = { scale: comp, tx: inset - NAME_COMP_LEFT * comp, ty: (vh - 800 * comp) / 2 };
-  applyOnboardingPhoneFoot();
-  const chog = document.querySelector(".nameScene__chog");
-  const cr = chog ? chog.getBoundingClientRect() : null;
-  if (cr && cr.width > 0 && cr.right > out.tx + 612 * comp) {
-    const overlap = out.ty + NAME_CARD_BOTTOM * comp - (cr.top - resolveCssLengthVarPx("--grid-2", 8));
-    if (overlap > 0) {
-      const topSafe = resolveCssLengthVarPx("--mobile-top-safe", 14);
-      out.ty = Math.max(out.ty - overlap, Math.min(out.ty, topSafe - NAME_PIGGY_WRAP_TOP * comp));
-    }
-  }
-  return out;
+// [A-837 · A-835 item 4] Name on the v10 rules, a pure function of the A-831 layout (the A-681 composition fit and the A-819 NARROW->MID continuity blend
+// are gone). Card = min(1.55 x HomeCard, 0.9 x inner width), centred; the board (#nameScene, 1280x800 art, card = 460x300 at 612/292) is scaled so the card has
+// that width, so card text scales with it (identical line breaks). The Piggy peek rig is brought to the Home Piggy scale independent of the card scale with the
+// CSS individual `scale` property (the `transform` property carries the pinned A-415 slide). Chog = Home Chog scale, ink left on the left margin line
+// (+6 % width x t in landscape, t = L.posT), feet on the floor line.
+const NAME_CARD_BOARD_W = 460;
+const NAME_CARD_BOARD_CX = 612 + 230;
+const NAME_CARD_BOARD_TOP = 292;
+const NAME_PEEK_CONTACT_X = 800; // board x of the peek head where it meets the card top (A-607 arrival pose: ink x685-915)
+const NAME_PEEK_VISIBLE = 147; // board px of head above the card top (A-607 name_arrival_1440: top ink y 145 at board scale 1.125)
+const NAME_RIG_RATIO = 0.981; // Name rig scale / Home stage scale S at the pre-A-831 1440x900 reference (1.125 / 1.1465)
+const NAME_CHOG_BOX_W = 107.6; // style.css .nameScene__chog box
+const NAME_CHOG_BOX_H_PX = 139.9;
+const NAME_CHOG_INK = { l: 1.9, r: 104.2, b: 136.9 }; // ink box (incl. the black outline: pixels differing from the ground) inside the sibling at scale 1, box px (measured at 1440x900, g 1.202: ink x 194-317, bottom 828). pre-review baseline: { l: 12.2, r: 94, b: 130 } = bright pixels only (the outline was missed, ink sat ~12 px left of M + .06 W)
+const HOME_CHOG_INK_W = 92.3; // Home Chog ink width incl. outline, board units (123 px at S 1.33, 109 px at S 1.183). pre-review baseline: 73.9 (bright pixels only)
+const HOME_CHOG_FOOT_GAP = 0.4; // board units between the Home Chog ink bottom (incl. outline) and the floor line (ink row 827 vs floor 828 at S 1.33). pre-review baseline: 6.2 (bright pixels only)
+function nameSceneLayout(L, vw = window.innerWidth, vh = window.innerHeight) {
+  const cardW = Math.min(1.55 * L.cardW, 0.9 * (vw - 2 * L.M));
+  const sc = cardW / NAME_CARD_BOARD_W;
+  const rigScale = NAME_RIG_RATIO * L.S;
+  const cardTop = Math.max(vh / 2 - 108 * sc, L.asBottom + NAME_PEEK_VISIBLE * rigScale + 0.02 * vh);
+  const chogG = (L.S * HOME_CHOG_INK_W) / (NAME_CHOG_INK.r - NAME_CHOG_INK.l);
+  const inkLeft = L.M + 0.06 * vw * L.posT;
+  return {
+    cardW, sc, rigG: rigScale / sc, cardTop,
+    tx: vw / 2 - NAME_CARD_BOARD_CX * sc, ty: cardTop - NAME_CARD_BOARD_TOP * sc,
+    chogG, chogLeft: inkLeft - NAME_CHOG_INK.l * chogG, chogBottom: vh - (L.floorY - HOME_CHOG_FOOT_GAP * L.S + (NAME_CHOG_BOX_H_PX - NAME_CHOG_INK.b) * chogG),
+  };
 }
 function fitNameScene() {
   const board = document.querySelector("#nameScene");
@@ -5741,13 +6269,25 @@ function fitNameScene() {
   const natural = Math.min(window.innerWidth / 1280, window.innerHeight / 800);
   const scale = Math.max(natural, NAME_SCENE_SCALE_FLOOR);
   board.style.transform = `translate(${(window.innerWidth - 1280 * scale) / 2}px, ${(window.innerHeight - 800 * scale) / 2}px) scale(${scale})`;
-  // [A-681 FINAL CLOSEOUT E] mobile-only composition override of the line above (null = identity).
-  const composed = nameCompositionFit(scale);
-  if (composed) board.style.transform = `translate(${composed.tx}px, ${composed.ty}px) scale(${composed.scale})`;
-  // [A-662 OWNER DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY] see applyOnboardingPhoneFoot().
-  // `.nameScene__chog` is a `.stage`-level sibling of `#nameScene` (not inside this scaled board),
-  // so it needs its own placement call here — piggybacking this function's existing mount+resize
-  // wiring rather than adding a 2nd listener.
+  // [A-837] v10 override of the line above (the pinned literals stay): Home-grammar card, rig and Chog.
+  const f = syncDesktopFormatVars();
+  if (f) {
+    const n = nameSceneLayout(f.L);
+    board.style.transform = `translate(${n.tx}px, ${n.ty}px) scale(${n.sc})`;
+    const rig = document.querySelector("#namePiggy");
+    if (rig) { rig.style.transformOrigin = `${NAME_PEEK_CONTACT_X}px ${NAME_CARD_BOARD_TOP}px`; rig.style.scale = String(n.rigG); }
+    // [A-662] `.nameScene__chog` is a `.stage`-level sibling of `#nameScene`; applyOnboardingPhoneFoot() (shared with Hatch) writes its phone foot, the v10 placement follows it.
+    applyOnboardingPhoneFoot();
+    const chog = document.querySelector(".nameScene__chog");
+    if (chog) {
+      chog.style.left = `${n.chogLeft}px`;
+      chog.style.top = "auto";
+      chog.style.bottom = `${n.chogBottom}px`;
+      chog.style.transformOrigin = "left bottom";
+      chog.style.transform = `scale(${n.chogG})`;
+    }
+    return;
+  }
   applyOnboardingPhoneFoot();
 }
 
@@ -5866,8 +6406,26 @@ const HOME_CHAR_BOTTOM_ANCHOR_GAP_PX = 22;
 // writer has no browser access); see receipts/A681_mobile_scale/VERIFY.md for the derivation and
 // any later re-tune.
 const HOME_CHAR_MOBILE_GROUP_BOOST = 1.5;
+// [A-819 UI-14 — Home character continuity at the NARROW->MID family boundary] The boost above used to be a
+// STEP (1.5 at <=640, 1 at >640): 639/640/641 at 755 measured Piggy 117 -> 78 px wide (-33%) and the foot 694.5 -> 629.6
+// (65 px) in ONE css px. A-815 §6: a composition may switch only at a family boundary and, inside a family, sizing is
+// fluid. So the NARROW arrangement is carried over the gap between the two family representatives the canon names
+// (NARROW = 390/430 class, <=640 split already in code; MID = 700/768/1024/1180 class) and released to the MID value
+// at the MID class edge. `homeNarrowBlend()` is that single stage-level weight (1 at <=640, 0 at >=700, linear between);
+// the boost, the bottom-anchor target and the ink-overhang correction all read it, so Piggy and Chog (one stage) move
+// together and nothing here is a per-viewport offset. FAMILY_MID_MIN_VW is implementation-chosen from the A-815 §6
+// class list (OPEN OWNER VISUAL for an exact number); the existing a654/a656 contracts pin 700/900/1440 unchanged,
+// which is why the ramp must end at 700 and not later. Identity at every width <=640 and >=700.
+const FAMILY_NARROW_MAX_VW = 640;
+const FAMILY_MID_MIN_VW = 700;
+// [A-837] remaining consumer: Hatch (applyOnboardingPhoneFoot / computeHomeFootTargetViewportY); Home, Name, Second and Return no longer read it.
+function homeNarrowBlend(vw = window.innerWidth) {
+  if (vw <= FAMILY_NARROW_MAX_VW) return 1;
+  if (vw >= FAMILY_MID_MIN_VW) return 0;
+  return (FAMILY_MID_MIN_VW - vw) / (FAMILY_MID_MIN_VW - FAMILY_NARROW_MAX_VW);
+}
 function homeCharMobileBoost() {
-  return window.innerWidth <= 640 ? HOME_CHAR_MOBILE_GROUP_BOOST : 1;
+  return 1 + (HOME_CHAR_MOBILE_GROUP_BOOST - 1) * homeNarrowBlend();
 }
 
 // [A-681 iteration 2 — coordinator AFTER1 real-browser measurement] The floor transform anchors
@@ -5900,7 +6458,10 @@ const HOME_CHAR_FLOOR_INK_OVERHANG_PX = 12.48;
 // canvas) so continuity and the seat->Home foot relation hold. Scale untouched; y untouched. Identity
 // when boost===1 (every width >640 / 641-653 sliver) -> returns the old constant exactly.
 function homeFloorNudgeViewportX(s) {
-  const base = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x;
+  // [A-819 UI-14] the +6 px base fades with the same stage weight through the NARROW->MID gap (it was 6 below 653 and 0
+  // above — a 6 px step at 653/654); outside the gap (<=640, >=700 e.g. a landscape phone) it is the old constant.
+  const vwNow = window.innerWidth;
+  const base = HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x * (vwNow > FAMILY_NARROW_MAX_VW && vwNow < FAMILY_MID_MIN_VW ? homeNarrowBlend() : 1);
   const boost = homeCharMobileBoost();
   if (!(boost > 1) || !(s > 0) || !(s < HOME_CHAR_SCALE_FLOOR)) return base;
   const kb = (HOME_CHAR_SCALE_FLOOR / s) * boost;
@@ -5910,8 +6471,13 @@ function homeFloorNudgeViewportX(s) {
   const inset = resolveCssLengthVarPx("--mobile-inset", 20);
   return Math.min(base, vw - inset - rightAtZeroNudge);
 }
+// [A-819 UI-14] the mid-band (no floor) counterpart of the +6 px base above: same fading weight, 0 from 700 up.
+function homeMidBandNudgeViewportX() {
+  return HOME_CHAR_SCALE_FLOOR_NUDGE_VIEWPORT_PX.x * homeNarrowBlend();
+}
 function homeCharFloorInkOverhangCorrectionPx() {
-  return window.innerWidth <= 640 ? HOME_CHAR_FLOOR_INK_OVERHANG_PX * homeCharMobileBoost() : 0;
+  // [A-819] same family weight as the boost: full at <=640 (unchanged), fading to 0 at the MID class edge.
+  return HOME_CHAR_FLOOR_INK_OVERHANG_PX * homeCharMobileBoost() * homeNarrowBlend();
 }
 
 // production 은 계속 env() 기반(`--mobile-bottom-safe` 등, style.css :root)이다 — 이
@@ -5946,7 +6512,8 @@ function resolveCssLengthVarPx(varName, fallbackPx) {
 // 늘 "home" 두 카드만 보여준다 — state.homePaperMode 가 어쩌다 남아 있어도(§setScene 이
 // 보통 지운다) 새지 않는다.
 function homePaperEffectiveMode(scene) {
-  return scene === "sendstay" ? state.homePaperMode : "home";
+  const base = scene === "sendstay" ? state.homePaperMode : "home";
+  return typeof a905EffectiveMode === "function" ? a905EffectiveMode(scene, base) : base; // [A-905] the Money tab on an Away Home scene
 }
 
 // [A-412 §3] MON/shMON 값 하나를 사람이 읽는 자릿수로 줄인다. 기존 formatMoney()(receiptRows
@@ -6294,12 +6861,43 @@ async function requestMoneyPermission() {
 
 // 실행 직전 대조. 봉투가 지금 하려는 일과 정확히 같을 때만 통과한다.
 function authorizeMoneyAction(request) {
-  return authorize(state.moneyIntent?.permission ?? null, request, {
+  const authorized = authorize(state.moneyIntent?.permission ?? null, request, {
     nowMs: Date.now(),
     consumedNonces: consumedPermissionNonces,
     // [A-512] 지금 고른 Piggy 와 살아 있는 서명자 — 봉투와 전부 같아야 한다.
     context: selectionContext(state.selectedPiggy, activeAccount?.address ?? state.activeSignerAddress),
   });
+  // [A-791] destination provenance can only refuse: a refusal above is returned as is, and an authorized request that carries
+  // a destination still needs that destination vouched by main's own records (moneyDestinationRefusal). Never the other way.
+  if (!authorized.ok) return authorized;
+  return moneyDestinationRefusal(state.moneyIntent?.permission?.destination ?? null) || authorized;
+}
+
+// [A-791] A-763 producer fed from main's actual records. Every Piggy this device knows (registry + index) is a piggy_registry
+// record; an unreadable snapshot is "no records" (undefined), which the producer answers UNKNOWN. The verdict maps:
+//   no destination on the envelope       -> null (the existing no-destination path is unchanged)
+//   provenance UNKNOWN                   -> refuse destination_provenance_unknown
+//   first-seen or lookalike (gate: ASK)  -> refuse destination_needs_strong_confirmation (the product has no strong-confirmation
+//                                           step, so an ASK cannot be satisfied here; fail closed)
+//   vouched, not a lookalike             -> null (the authorize result above stands; nothing is added to it)
+function moneyDestinationRecords() {
+  try {
+    const piggies = moneyPiggiesSnapshot().piggies;
+    if (!Array.isArray(piggies)) return undefined;
+    return piggies
+      .filter((p) => p && typeof p.address === "string" && p.address)
+      .map((p) => ({ address: p.address, source: DESTINATION_SOURCE.PIGGY_REGISTRY }));
+  } catch {
+    return undefined;
+  }
+}
+
+function moneyDestinationRefusal(destination) {
+  if (destination === null || destination === undefined || destination === "") return null;
+  const prov = deriveDestinationProvenance({ destination, records: moneyDestinationRecords() });
+  if (prov.status !== "known") return { ok: false, reason: "destination_provenance_unknown" };
+  if (prov.destinationLookalike !== false || prov.destinationFirstSeen !== false) return { ok: false, reason: "destination_needs_strong_confirmation" };
+  return null;
 }
 
 // [A-512 Gate C] 고른 Piggy 바꾸기. **다른 Piggy 로 가면 이전 권한이 먼저 죽는다**:
@@ -6440,6 +7038,8 @@ function openAddMoney() {
   const piggies = addMoneyPiggies();
   if (piggies.length <= 1) {
     const only = piggies[0] || null;
+    // [A-898] one Piggy: Add money opens the Funding Paper (three rows) for that Piggy.
+    if (a898OpenFundingPaper(only, null)) return;
     state.addMoney = { kind: "single", piggyId: only?.id ?? null, name: only?.name || displayPiggyName() };
     return;
   }
@@ -6528,7 +7128,7 @@ function addMoneyBodyMarkup() {
     return addMoneyPlanMarkup({
       unit: ADD_MONEY_ASSET,
       legs: am.plan.legs.map((l) => ({ piggyId: l.piggyId, name: l.name, amount: unitsToQuantity(BigInt(l.amount), d) })),
-      methodsMarkup,
+      methodsMarkup: typeof a905PlanFundingMarkup === "function" ? a905PlanFundingMarkup(methodsMarkup) : methodsMarkup, // [A-905] the Funding rows instead of the methods list
     });
   }
   const names = new Map(addMoneyPiggies().map((p) => [p.id, p.name || p.id]));
@@ -6594,6 +7194,8 @@ function piggyMoneyStateMarkupFor(piggyId) {
 
 function homeMoneyBodyMarkup(name) {
   const time = homeTimeNow();
+  const a905Body = typeof a905BodyMarkup === "function" ? a905BodyMarkup(time) : null; // [A-905] the Money tab (opened by the honey jar)
+  if (a905Body !== null) return a905Body;
   if (state.homeMoneyStatus === "idle" || state.homeMoneyStatus === "loading") {
     return homeMoneyMarkup({
       title: "MY MONEY",
@@ -6614,11 +7216,15 @@ function homeMoneyBodyMarkup(name) {
       },
     });
   }
+  // [A-898] Funding Paper / Send a Piggy occupy the same slot while open.
+  if (a898Active() && addMoneyEntryAllowed()) {
+    return homeMoneyMarkup({ title: "MY MONEY", time, rows: [], afterRowsMarkup: a898BodyMarkup() });
+  }
   // [A-646] Add money 가 열려 있으면 행 카드 자리를 그 한 화면이 쓴다(새 종이 0). 닫히면 그 자리는 원래 행으로.
   if (state.addMoney && addMoneyEntryAllowed()) {
     return homeMoneyMarkup({ title: "MY MONEY", time, rows: [], afterRowsMarkup: addMoneyBodyMarkup() });
   }
-  const addMoneyEntry = addMoneyEntryAllowed() ? addMoneyEntryMarkup() : "";
+  const addMoneyEntry = ""; // [A-905] the Add money entry moved to the honey jar -> Money tab. pre-A-905: addMoneyEntryAllowed() ? addMoneyEntryMarkup() : ""
   const awayNow = homeMoneyAwayNow();
   const nativeAmount = formatHomeMoneyAmount(state.homeMoneyNativeWei);
   const shmonAmount = formatHomeMoneyAmount(state.homeMoneyShmonWei);
@@ -6763,6 +7369,89 @@ let homeLifeLeft = false;
 let homeLife = null;
 let homeAmbientResizeTimer = 0;
 const homeAmbient = { assignment: null, layer: null, cleanup: null, seq: 0 };
+// [A-790 OWNER DECISION LOCK 2026-10-05 (B)] Flop→roll→drowsy→sleep after 90 s with no meaningful interaction;
+// any pointerdown/keydown (tap Piggy/Home, Work, Away, Return) wakes it with the existing reverse-Flop
+// (piggyWakePhase). [A-803 2026-10-06 SUPERSEDES A-790's main-only rule] every Home Piggy whose resolved behavior is
+// plain IDLE sleeps (single, main or companion — homeSleepEligible); a Piggy in another ambient action or a runtime
+// action never does. assignHomeAmbient still never DRAWS a sleep state at random. The clock
+// (piggy-motion-state.js createActiveSleepClock) lives at module level so a re-mount (resize/re-render) keeps the
+// sleep/wake phase; it is reset whenever the seat leaves the Home layer (Work/Away/Return scenes, no seat art).
+// Created lazily (this slice is also evaluated alone by tests). Chog's own 60 s timer is untouched.
+let homeActiveSleep = null;
+let homeActiveSleepBoundToken = -1;
+function homeActiveSleepClock() {
+  if (!homeActiveSleep) {
+    // dev-server-only seam (a172-local) so browser tests do not wait 90 s; product never reads it
+    const seam = LOCAL_DEV_ENTRY ? Number(globalThis.__a790SleepAfterMs) : NaN;
+    homeActiveSleep = createActiveSleepClock(Number.isFinite(seam) && seam > 0 ? { afterMs: seam } : {});
+  }
+  return homeActiveSleep;
+}
+// The seat's art swaps between its assigned ambient art and a flop-sleep art by clock state alone (stateless
+// per frame, so a re-mount mid-sleep resumes the same phase). After a wake the seat stays on the awake seated
+// idle frame of the same rig (A-744: the approved Idle) until its next sleep — no snap to a mid-cycle pose.
+// [A-841 UI-27] persistent subtle breath: the first-arrival values (HOME_T_BREATHE sx 1-.008, sy 1+.014) on a slow loop, scaled about the
+// ink foot (transform-origin set on the wrapper), so the foot line never moves. Reduced motion: no transform at all (static pose).
+const AMB_BREATH_S = 4.4;
+function ambBreath(el, t, reduced) {
+  if (reduced) { if (el.style.transform) el.style.transform = ""; return; }
+  const b = 0.5 - 0.5 * Math.cos((2 * Math.PI * t) / AMB_BREATH_S);
+  el.style.transform = `scale(${(1 - 0.008 * b).toFixed(5)}, ${(1 + 0.014 * b).toFixed(5)})`;
+}
+function makeSeatSleeper(seatArt, assets, seed, normalEls, opts = null) {
+  const clock = homeActiveSleepClock();
+  // [A-803] opts.tag/opts.tagSleepTop: a companion's name label drops below the lying pose only while that pose is on screen.
+  // opts.solo: [A-841 UI-27] a lone Piggy is drawn by the layer while awake too (approved Idle blink + breath; #homeChar's seat image
+  // steps aside via data-ambient-seat) and through the Flop/sleep/wake-reverse; after the wake it stays on the awake Idle (no snap-back).
+  // pre-A-841 baseline: lone awake Piggy kept the original #homeChar drawing and the layer was hidden except while lying.
+  const tag = opts?.tag || null;
+  const solo = Boolean(opts?.solo);
+  const tagWake = tag ? { top: tag.style.top, left: tag.style.left } : null;
+  let flop = null;
+  let flopEl = null;
+  const setVis = (els, on) => els.forEach((el) => { el.style.visibility = on ? "" : "hidden"; });
+  let soloOn = null;
+  const soloShow = (on) => {
+    if (soloOn === on && document.querySelector("#homeChar")?.hasAttribute("data-ambient-seat") === on) return;
+    soloOn = on;
+    seatArt.el.style.visibility = on ? "" : "hidden";
+    const home = document.querySelector("#homeChar");
+    if (home) { if (on) home.setAttribute("data-ambient-seat", "1"); else home.removeAttribute("data-ambient-seat"); }
+  };
+  return {
+    draw(elapsedNormal, reduced) {
+      const snap = clock.snapshot();
+      const lying = solo ? snap.slept && snap.mode !== "awake" : snap.slept;
+      if (!lying) {
+        if (flopEl) { setVis([flopEl], false); setVis(normalEls, true); seatArt.el.dataset.motionState = seatArt.motion; }
+        if (tag) { tag.style.top = tagWake.top; tag.style.left = tagWake.left; }
+        delete seatArt.el.dataset.sleepPhase;
+        // [A-841 UI-27] a lone awake Piggy shows the layer's approved Idle (existing 3.2 s blink) with a persistent
+        // breath about the ink foot (own inner wrapper). pre-A-841 baseline: solo awake = soloShow(false), original #homeChar drawing
+        if (solo) soloShow(true);
+        seatArt.art.draw(elapsedNormal, reduced);
+        if (solo && opts?.breathEl) ambBreath(opts.breathEl, elapsedNormal, reduced);
+        return;
+      }
+      if (!flop) {
+        const before = new Set(seatArt.stageEl.children);
+        flop = buildAmbientArt(PIGGY_MOTION_STATE.FLOP_SLEEP, assets, seatArt.stageEl, seed);
+        if (flop && opts?.shiftPx) flop.setShift(opts.shiftPx);
+        flopEl = [...seatArt.stageEl.children].find((c) => !before.has(c)) || null;
+        if (!flop || !flopEl) { flop = null; flopEl = null; if (!solo) seatArt.art.draw(elapsedNormal, reduced); return; }
+      }
+      if (solo) soloShow(true);
+      if (solo && opts?.breathEl) opts.breathEl.style.transform = "";
+      setVis(normalEls, false);
+      setVis([flopEl], true);
+      if (tag && opts.tagSleepTop != null) { tag.style.top = opts.tagSleepTop; tag.style.left = `${parseFloat(tagWake.left) + (opts.tagShiftPx || 0)}px`; }
+      seatArt.el.dataset.motionState = PIGGY_MOTION_STATE.FLOP_SLEEP;
+      seatArt.el.dataset.sleepPhase = snap.mode; // sleeping | waking | awake (after-wake idle) — observable state, no visual
+      seatArt.el.dataset.sleepStartMs = String(snap.sleepStartMs);
+      flop.draw(snap.elapsedS, reduced, snap.mode === "sleeping" ? null : snap.wakeStartS);
+    },
+  };
+}
 
 function readHomeLife() {
   try {
@@ -6879,6 +7568,7 @@ function chogInkRect(root) {
 }
 
 // Live anchors → the measured slot formulas (piggy-motion-state.js planHomeSlots).
+const HOME_PAPER_SCALE_K = 1.1; // [A-786] mirrors style.css :root --homePaperK (paper footprint only; the art is CSS-scaled)
 function homeAmbientAnchors() {
   const seat = document.querySelector("#homeSeat");
   const name = document.querySelector("#homeName");
@@ -6894,21 +7584,32 @@ function homeAmbientAnchors() {
   const C = chogInkRect(chog);
   if (!C) return null;
   // Paper open = the shared card anchor chog-home.js docks it to (viewport centre −32/−48).
-  const paperScale = Math.min(285 / 400, 364 / 568);
+  // [A-786] the open paper is drawn x1.10 about the same centre (style.css --homePaperK), so the footprint is too.
+  const fmtF = desktopFormat(vw, vh); // [A-831] keyframe layout at every width: paper footprint = 282 x k, centre = the layout card centre
+  const fmtS = fmtF?.s ?? 1;
+  const paperScale = Math.min(285 / 400, 364 / 568) * HOME_PAPER_SCALE_K * fmtS;
   const paperW = 400 * paperScale;
   const paperH = 568 * paperScale;
-  const px = vw / 2 - 32 - paperW / 2;
-  const py = vh / 2 - 48 - paperH / 2;
+  const px = (fmtF ? fmtF.L.cx : vw / 2 - 32 * fmtS) - paperW / 2;
+  const py = (fmtF ? fmtF.L.cy : vh / 2 - 48 * fmtS) - paperH / 2;
   const P = slotRect(px, py, px + paperW, py + paperH);
   const band = homeSlotBand(vw);
   let F;
-  if (band === "mobile") {
+  const hpAll = computeHistoryPlacement(vw, vh); // [A-833] fan exists at <= 640 widths (640x900): the footprint follows the placement in every band
+  if (band === "mobile" && !(hpAll && hpAll.mode !== "stacked")) {
     const inset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--mobile-inset")) || 24;
     const historyRight = Math.max(P.x, vw - inset - paperW) + paperW;
     F = slotRect(P.x, P.y, Math.max(P.r, historyRight), P.y + HOME_AMBIENT_FOOT_H.mobile);
   } else {
-    const x = P.x - HOME_TWO_CARD_SHIFT_VIEWPORT_PX;
-    F = slotRect(x, P.y, x + paperW + RECORDS_CARD_GAP + paperW, P.y + HOME_AMBIENT_FOOT_H.web);
+    // [A-833] foot = the placement's two-card footprint (pair / fan), not P.x - 46 k .. + gap + 2 cards.
+    // pre-A-833 baseline: x = P.x - HOME_TWO_CARD_SHIFT_VIEWPORT_PX * fmtS; F = slotRect(x, P.y, x + paperW + RECORDS_CARD_GAP * fmtS + paperW, ...).
+    const hp = hpAll;
+    if (hp && hp.mode !== "stacked") {
+      F = slotRect(hp.homeLeft, P.y, hp.histLeft + paperW, P.y + (band === "mobile" ? HOME_AMBIENT_FOOT_H.mobile : HOME_AMBIENT_FOOT_H.web * fmtS));
+    } else {
+      const historyRight = Math.max(P.x, vw - 24 - paperW) + paperW;
+      F = slotRect(P.x, P.y, Math.max(P.r, historyRight), P.y + HOME_AMBIENT_FOOT_H.web * fmtS);
+    }
   }
   const brandEl = document.querySelector(".arasoBrand");
   const brandBox = brandEl ? brandEl.getBoundingClientRect() : null;
@@ -6933,7 +7634,9 @@ const HOME_AMBIENT_WIDE = Object.freeze({
   // now matches what actually renders once `.homeAmbient__flop{overflow:visible}` (style.css)
   // stops clipping it. Re-fit gives the SAME eligible slot set (900 WN1; 1200 WA1/WA2; 1440 W2/
   // WA1/WA2, A-656 P45 raw/p5_refit.json) — no slot newly gained or lost.
-  "flop-sleep": Object.freeze({ left: 0.36, right: 0.33, top: 0.2, bottom: 0.4 }),
+  // [A-803] right .33 -> .46: the measured 18 deg lying-pose adjustment (AMB_SLEEP_ADJUST, receipts A803 geometry) moves the ink union up to
+  // .44 of the slot width past the slot's right edge (1440 seat: ink right 1357 vs slot right 1280, w 172); the fit check must match what renders.
+  "flop-sleep": Object.freeze({ left: 0.36, right: 0.46, top: 0.2, bottom: 0.4 }),
 });
 
 // [A-656 P4] Stable seeded-random slot PREFERENCE — a Fisher–Yates shuffle of the free slot
@@ -7007,7 +7710,77 @@ function placeHomeAmbientSet(plan, anchors, ids, sceneId, nonce, keep = null) {
     if (fit) wideTaken.push(fit.rect);
     assignment.set(id, a);
   }
-  return { order, placed, slotOf, assignment, wide, fitAt };
+  // [A-803] a companion may lie down (Flop→sleep) only where its lying footprint clears Chog / Paper+HISTORY /
+  // brand / the safe viewport / every other slot and every other lying or wide rect already claimed (`extra`).
+  // Same align search as the other wide poses (center, then start/end); a non-zero dx is blended in over the landing rest
+  // (ambFlopSleep placeAdjusted), so the Flop's first frame is still the seated idle.
+  const sleepFit = (id, extra) => {
+    const slot = slotOf.get(id);
+    if (!slot || slot.seat) return null;
+    // [A-803 fix · A-831 slots] A-831 seats the companions on the Main floor line directly left of Chog, in the strip between the Paper/HISTORY footprint and the floor;
+    // the slot top already sits exactly `gap` under `foot`. The lying pose grows .2 of the slot upward (ink-true) and .46 rightward, so the center/start footprints touched
+    // Chog and the unshrunk `gap` margin touched Paper -> `!fit` -> the companion never slept. Fix = measure the footprint against the real A-831 slot box:
+    //  (1) the pose may slide LEFT (align "end": away from Chog, existing `end` search + placeAdjusted dx) — its right edge then equals the slot's, which is already `gap` clear of Chog;
+    //  (2) Paper is checked ink-true (0 px overlap) instead of slot-margin: the footprint's .2 top growth stays in the `gap` band under Paper (13 px of 24 at 1440), never over it.
+    // Chog / brand / other Piggies / safe viewport keep the full `gap`. 18 deg rotation, footprint fractions and Chog cadence unchanged.
+    const paperInk = anchors.foot ? slotRect(anchors.foot.x, anchors.foot.y, anchors.foot.r, anchors.foot.b - plan.gap) : null;
+    const clear = [...obstacles.filter((o) => o !== anchors.foot), paperInk, ...extra].filter(Boolean);
+    const fit = fitWideSlot({ slot, footprint: HOME_AMBIENT_WIDE["flop-sleep"], others: occupied, obstacles: clear, safe: anchors.safe, gap: plan.gap });
+    return fit || null;
+  };
+  // [A-803 fix · A-831 slots] debug only (read by planHomeSleepers when LOCAL_DEV_ENTRY): per align, why the lying footprint was refused. No behaviour.
+  const sleepWhy = (id, extra) => {
+    const slot = slotOf.get(id);
+    if (!slot) return { why: "no-slot" };
+    if (slot.seat) return { why: "seat" };
+    const paperInk = anchors.foot ? slotRect(anchors.foot.x, anchors.foot.y, anchors.foot.r, anchors.foot.b - plan.gap) : null;
+    const named = [["chog", anchors.chog], ["brand", anchors.brand], ["paperInk", paperInk], ...extra.map((r, i) => [`taken${i}`, r])];
+    const out = {};
+    for (const align of ["center", "start", "end"]) {
+      const { rect: r, dx } = wideSlotRect(slot.rect, HOME_AMBIENT_WIDE["flop-sleep"], align);
+      const hit = named.filter(([, o]) => o && rectsTouch(r, o, plan.gap)).map(([n]) => n);
+      occupied.forEach((o) => { if (o !== slot && rectsTouch(r, o.rect, plan.gap)) hit.push(`slot:${o.name}`); });
+      const sf = anchors.safe;
+      if (r.x < sf.x - 0.01 || r.y < sf.y - 0.01 || r.r > sf.r + 0.01 || r.b > sf.b + 0.01) hit.push("safe");
+      out[align] = { dx, rect: [r.x, r.y, r.r, r.b].map(Math.round), hit };
+    }
+    const f = (o) => (o ? [o.x, o.y, o.r, o.b].map(Math.round) : null);
+    return { slot: slot.name, slotRect: f(slot.rect), gap: plan.gap, anchors: { chog: f(anchors.chog), foot: f(anchors.foot), paper: f(anchors.paper), brand: f(anchors.brand), safe: f(anchors.safe), seat: f(anchors.seat), vw: anchors.vw, vh: anchors.vh }, aligns: out };
+  };
+  return { order, placed, slotOf, assignment, wide, fitAt, sleepFit, sleepWhy };
+}
+
+// [A-803] Who may sleep: resolved plain IDLE (homeSleepEligible) — main (seat) or companion alike — and, for a companion,
+// a clear centered lying footprint. Stable order (placed = seat first, then the seeded cycle order); the seat's own
+// lying rect and the wide rects of other Piggies are claimed first so two lying poses never meet.
+// Returns Map<id, dx> (viewport px the lying pose is shifted to clear its neighbours; 0 for the seat).
+// Eligibility never depends on how many Piggies there are.
+function planHomeSleepers(set, assignment, wide) {
+  const sleepers = new Map();
+  const taken = [];
+  for (const { id } of set.placed) {
+    const a = assignment.get(id);
+    const f = a && wide.get(`${id}|${a.state}`);
+    if (f) taken.push(f.rect);
+  }
+  const seatP = set.placed.find((p) => p.slot.seat);
+  if (seatP && homeSleepEligible(assignment.get(seatP.id)?.state)) {
+    sleepers.set(seatP.id, 0);
+    taken.push(wideSlotRect(seatP.slot.rect, HOME_AMBIENT_WIDE["flop-sleep"], "center").rect);
+  }
+  const dbg = [];
+  for (const { id, slot } of set.placed) {
+    const st = assignment.get(id)?.state;
+    if (slot.seat || !homeSleepEligible(st)) { if (LOCAL_DEV_ENTRY) dbg.push({ id, seat: slot.seat, state: st, fit: slot.seat ? sleepers.has(id) : false, reason: slot.seat ? "seat" : "not-plain-idle" }); continue; }
+    const fit = set.sleepFit(id, taken);
+    if (LOCAL_DEV_ENTRY) dbg.push({ id, seat: false, state: st, fit: fit ? { align: fit.align, dx: fit.dx, rect: [fit.rect.x, fit.rect.y, fit.rect.r, fit.rect.b].map(Math.round) } : null, reason: fit ? "ok" : "no-clear-footprint", ...(fit ? {} : set.sleepWhy(id, taken)) });
+    if (!fit) continue;
+    sleepers.set(id, fit.dx);
+    taken.push(fit.rect);
+  }
+  // [A-803 fix · A-831 slots] dev/test builds only (LOCAL_DEV_ENTRY, a172-local): last sleep plan readable from the page; never read by the product.
+  if (LOCAL_DEV_ENTRY) globalThis.__arasoSleepPlan = { at: Date.now(), takenN: taken.length, candidates: dbg, sleepers: [...sleepers.entries()] };
+  return sleepers;
 }
 
 // [A-654 F1] The ambient projection (state + phase + density rules) is decided once per Home-life
@@ -7021,15 +7794,53 @@ function placeHomeAmbientSet(plan, anchors, ids, sceneId, nonce, keep = null) {
 // 0 from their own call site (placeHomeAmbientResidents() below) so they show only the active
 // Piggy, never the left-side companion cluster this card adds for Home. Mid/web bands ignore the
 // parameter entirely (planHomeSlots() only reads it inside its own `band === "mobile"` branch).
+// [A-788 OWNER DECISION 2026-10-05 — HOME VISIBLE-PIGGY CAP] Home DRAWS at most Main + 2 companions on every
+// band (390/430 already did via planHomeSlots' mobile branch; mid/web used to draw up to 4–5). Display-only: this
+// only trims which measured slots may be drawn — the Piggy index / registry / balances / records / paper cards /
+// HISTORY / + Piggy are never touched (indexedResidents() is a separate data path), and a resident that gets no slot
+// already falls back to card-only ("offstage"). Selection rule: Main (seat) is always slot 0; companions are the
+// first two planner slots that sit in the LEFT supporting area (slot right edge <= the Paper+HISTORY footprint's
+// left edge), in planner order (WA1 lower-left, then WA2 upper-left on web). Web (>=1200) is left-only, so slots
+// right of / above / below the enlarged paper (W2/W3/W4) are no longer drawn. Mid (641–1199) prefers left slots and
+// then fills from the rest up to the same cap. Which Piggies take the 2 companion slots is the existing seeded,
+// stable-per-Home-life order (orderHomeResidents), so the shown pair rotates per Home-life, never by balance/age.
+const HOME_VISIBLE_COMPANION_CAP = 2;
+function capHomeVisibleSlots(plan, foot) {
+  const seats = plan.slots.filter((s) => s.seat);
+  const rest = plan.slots.filter((s) => !s.seat);
+  const isLeft = (s) => Boolean(foot) && s.rect.r <= foot.x + 0.5;
+  let picked;
+  if (plan.band === "mobile") picked = rest;
+  else if (plan.band === "mid") picked = [...rest.filter(isLeft), ...rest.filter((s) => !isLeft(s))];
+  else picked = rest; // [A-831] web: the planner's cluster (WA1, WA2) sits on the floor line below the card footprint (never over a card), so no left-of-footprint filter. pre-A-831: rest.filter(isLeft)
+  return { ...plan, slots: [...seats, ...picked.slice(0, HOME_VISIBLE_COMPANION_CAP)] };
+}
+
+// [A-803] dev-server-only seam (LOCAL_DEV_ENTRY, a172-local) so browser tests can pin each role's ambient state
+// ({ seat: "idle", companion: "drink" } — non-wide states only); the product never reads it.
+function devForcedAmbient(assignment, placed) {
+  const force = LOCAL_DEV_ENTRY ? globalThis.__a803AmbientForce : null;
+  if (!force || typeof force !== "object") return assignment;
+  const out = new Map(assignment);
+  for (const { id, slot } of placed) {
+    const st = slot.seat ? force.seat : force.companion;
+    if (typeof st === "string" && !HOME_AMBIENT_WIDE[st]) out.set(id, Object.freeze({ state: st, phaseS: out.get(id)?.phaseS || 0 }));
+  }
+  return out;
+}
+
 function planHomeAmbient(anchors, residents, runtime, sceneId, nonce, mobileVisibleCap = 2) {
-  const plan = planHomeSlots({ width: anchors.vw, seat: anchors.seat, chog: anchors.chog, foot: anchors.foot, paper: anchors.paper, brand: anchors.brand, safe: anchors.safe, mobileVisibleCap });
+  const plan = capHomeVisibleSlots(planHomeSlots({ width: anchors.vw, seat: anchors.seat, chog: anchors.chog, foot: anchors.foot, paper: anchors.paper, brand: anchors.brand, safe: anchors.safe, mobileVisibleCap }), anchors.foot);
   const everyone = residents.map((r) => r.id);
   const present = everyone.filter((id) => !isRuntimeMotionState(runtime.get(id)));
   const full = placeHomeAmbientSet(plan, anchors, everyone, sceneId, nonce);
   // [A-656 P4] Keep the full-cycle slots for the present subset — nobody shifts when one Piggy
   // leaves; only a Piggy that was off-slot (beyond capacity) may claim the freed slot.
   const now = present.length === everyone.length ? full : placeHomeAmbientSet(plan, anchors, present, sceneId, nonce, full.slotOf);
-  if (now === full) return { plan, placed: full.placed, assignment: full.assignment, wide: full.wide, offstage: full.order.filter((id) => !full.slotOf.has(id)) };
+  if (now === full) {
+    const assignment = devForcedAmbient(full.assignment, full.placed);
+    return { plan, placed: full.placed, assignment, wide: full.wide, sleepers: planHomeSleepers(full, assignment, full.wide), offstage: full.order.filter((id) => !full.slotOf.has(id)) };
+  }
   const assignment = new Map();
   const wide = new Map();
   const wideTaken = [];
@@ -7047,7 +7858,8 @@ function planHomeAmbient(anchors, residents, runtime, sceneId, nonce, mobileVisi
     }
     assignment.set(id, a);
   }
-  return { plan, placed: now.placed, assignment, wide, offstage: now.order.filter((id) => !now.slotOf.has(id)) };
+  const forced = devForcedAmbient(assignment, now.placed);
+  return { plan, placed: now.placed, assignment: forced, wide, sleepers: planHomeSleepers(now, forced, wide), offstage: now.order.filter((id) => !now.slotOf.has(id)) };
 }
 
 function unmountHomeAmbientLayer() {
@@ -7069,9 +7881,10 @@ function unmountHomeAmbientLayer() {
 function mountHomeAmbientResidents() {
   unmountHomeAmbientLayer();
   homeAmbient.assignment = null;
-  if (!HOME_LIFE_SCENES.includes(state.scene)) return;
+  if (!HOME_LIFE_SCENES.includes(state.scene)) { homeActiveSleep?.reset(); return; }
   syncHomeLifeCycle();
-  if (indexedResidents().length < 2) return;
+  // [A-803] a single Piggy mounts the layer too (sleep-only seat: the awake drawing stays #homeChar's own); none → no layer
+  if (indexedResidents().length < 1) { homeActiveSleep?.reset(); return; }
   // Chog's ink is read from its drawn pixels, so wait until every part image is decoded — the slot
   // set is planned once, never nudged after it is on screen.
   const seq = homeAmbient.seq;
@@ -7113,10 +7926,19 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
   // either way (planHomeSlots() only reads this inside its mobile branch).
   const mobileVisibleCap = (state.scene === "sendstay" && !state.sendCardVisible) ? 2 : 0;
   const planned = planHomeAmbient(anchors, residents, runtime, sceneId, homeLife.nonce, mobileVisibleCap);
-  homeAmbient.assignment = planned.assignment;
-  // The paper cards mirror the same projection (visual attribute only).
-  const paper = document.querySelector('.homePaper[data-paper-mode="home"]');
-  if (paper) applyHomeResidentMotionStates(paper);
+  // [A-803] single-Piggy Home: only the seat Piggy (plain idle, original #homeChar drawing) — no random ambient action is
+  // added to a lone Piggy (its Home looks exactly as before) and the paper cards keep their existing projection.
+  const solo = residents.length === 1;
+  if (solo) {
+    if (!(planned.placed.length === 1 && planned.placed[0].slot.seat)) { homeActiveSleep?.reset(); return; }
+    planned.assignment = new Map([[planned.placed[0].id, Object.freeze({ state: PIGGY_MOTION_STATE.IDLE, phaseS: 0 })]]);
+    planned.sleepers = new Map([[planned.placed[0].id, 0]]);
+  } else {
+    homeAmbient.assignment = planned.assignment;
+    // The paper cards mirror the same projection (visual attribute only).
+    const paper = document.querySelector('.homePaper[data-paper-mode="home"]');
+    if (paper) applyHomeResidentMotionStates(paper);
+  }
 
   const seq = homeAmbient.seq;
   const token = sceneToken;
@@ -7139,6 +7961,7 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
   const entries = [];
   for (const { id, slot } of planned.placed) {
     const projected = resolvePiggyMotionState({ piggyId: id, runtime, ambient: planned.assignment });
+    const sleepable = planned.sleepers.has(id) && homeSleepEligible(projected.state);
     const phaseS = planned.assignment.get(id)?.phaseS || 0;
     const fit = planned.wide.get(`${id}|${projected.state}`) || null;
     const dx = fit ? fit.dx : 0;
@@ -7177,6 +8000,14 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
     stageEl.style.top = `${seatOff.y - AMB_SEATED.y * q}px`;
     stageEl.style.transform = `scale(${q})`;
     el.append(stageEl);
+    let breathEl = null;
+    if (solo) {
+      // [A-841 UI-27] inner wrapper (the stage's own inline scale stays untouched); origin = seated ink foot, bottom centre of the art box.
+      breathEl = document.createElement("div");
+      breathEl.className = "homeLiving__breath";
+      breathEl.style.transformOrigin = `${AMB_SEATED.x + AMB_SEATED.w / 2}px ${AMB_SEATED.y + AMB_SEATED.h}px`;
+      stageEl.append(breathEl);
+    }
     if (!slot.seat) {
       const tag = document.createElement("span");
       tag.className = "homeLiving__name";
@@ -7199,7 +8030,7 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
       el.dataset.seat = "1";
     }
     layer.append(el);
-    entries.push({ id, el, stageEl, motion: projected.state, phaseS, seat: Boolean(slot.seat) });
+    entries.push({ id, el, stageEl, breathEl, motion: projected.state, phaseS, seat: Boolean(slot.seat), sleepable, sleepShiftPx: (planned.sleepers.get(id) || 0) / (sizeFrac || 1) / q, sleepShiftTagPx: (planned.sleepers.get(id) || 0) / (sizeFrac || 1), tag: el.querySelector(".homeLiving__name"), sleepTagTop: !slot.seat ? `${nameOff.y + S.b - anchors.name.y + 0.29 * S.h + 2}px` : null });
   }
 
   let stopped = false;
@@ -7212,14 +8043,16 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
     if (seq === homeAmbient.seq) unmountHomeAmbientLayer();
   });
   const alive = () => !stopped && seq === homeAmbient.seq && token === sceneToken;
-  loadHomeAmbientAssets([...new Set(entries.map((e) => e.motion))])
+  // [A-803 fix · A-831 slots] dev/test builds only: what the mount received from the sleep plan (no behaviour).
+  if (LOCAL_DEV_ENTRY && globalThis.__arasoSleepPlan) globalThis.__arasoSleepPlan.entries = entries.map((e) => ({ id: e.id, seat: e.seat, motion: e.motion, sleepable: e.sleepable, shiftPx: e.sleepShiftPx }));
+  loadHomeAmbientAssets([...new Set([...entries.map((e) => e.motion), ...(entries.some((e) => e.sleepable) ? [PIGGY_MOTION_STATE.FLOP_SLEEP] : [])])])
     .then((assets) => {
       if (!alive()) return;
       const arts = [];
       for (const entry of entries) {
         let art = null;
         try {
-          art = buildAmbientArt(entry.motion, assets, entry.stageEl, `${homeLife.nonce}|${entry.id}`);
+          art = buildAmbientArt(entry.motion, assets, entry.breathEl || entry.stageEl, `${homeLife.nonce}|${entry.id}`);
         } catch {
           art = null;
         }
@@ -7227,16 +8060,48 @@ function placeHomeAmbientResidents(mountSeq, mountToken, attempt) {
           entry.el.remove();
           continue;
         }
-        arts.push({ ...entry, art });
+        arts.push({ ...entry, art, normalEls: [...entry.stageEl.children] });
       }
       const elapsed = (entry) => Math.max(0, (Date.now() - homeLife.startedAt) / 1000 + entry.phaseS);
+      // [A-803] every plain-idle Piggy (single / main / companion — planHomeSleepers) shares the one inactivity clock: 90 s with no
+      // meaningful interaction → Flop→sleep; any pointerdown/keydown → the existing reverse-Flop wake. Piggies in another
+      // ambient action (or with no clear lying footprint) are never given a sleeper, so their assignment and phase are untouched.
+      // Reduced motion keeps its rules (static layer, no timers; sleeper = stable still pose, interaction = instantly awake).
+      const sleepArts = arts.filter((a) => a.sleepable);
+      const sleepers = new Map();
+      if (!sleepArts.length || !assets.text.rollRight) {
+        homeActiveSleep?.reset();
+      } else {
+        const clock = homeActiveSleepClock();
+        for (const a of sleepArts) {
+          sleepers.set(a, makeSeatSleeper(a, assets, `${homeLife.nonce}|${a.id}`, a.normalEls, { solo, breathEl: a.breathEl, tag: a.tag, tagSleepTop: a.sleepTagTop, shiftPx: a.sleepShiftPx, tagShiftPx: a.sleepShiftTagPx }));
+        }
+        // reduced motion: nothing animates — the sleeper is the stable still pose (piggyWakePhase reduced) and a
+        // meaningful interaction makes it awake at once (no reverse-Flop to play); redraw one static frame on change.
+        clock.setOnChange(() => { if (alive() && reduced) drawAll(); });
+        if (homeActiveSleepBoundToken !== token) {
+          homeActiveSleepBoundToken = token;
+          const instant = { instant: reduced };
+          for (const type of ACTIVE_SLEEP_INTERACTION_EVENTS) sceneListener(window, type, () => { clock.interact(instant); }, { passive: true });
+          onSceneTeardown(() => {
+            if (!HOME_LIFE_SCENES.includes(state.scene)) clock.reset();
+          });
+        }
+        clock.arm();
+      }
       const drawAll = () => {
-        for (const a of arts) a.art.draw(elapsed(a), reduced);
+        for (const a of arts) {
+          const sl = sleepers.get(a);
+          if (sl) sl.draw(elapsed(a), reduced);
+          else a.art.draw(elapsed(a), reduced);
+        }
       };
       drawAll();
-      for (const a of arts) {
-        a.el.style.removeProperty("visibility");
-        if (a.seat) document.querySelector("#homeChar")?.setAttribute("data-ambient-seat", "1");
+      if (!solo) {
+        for (const a of arts) {
+          a.el.style.removeProperty("visibility");
+          if (a.seat) document.querySelector("#homeChar")?.setAttribute("data-ambient-seat", "1");
+        }
       }
       if (reduced) return;
       stopFrames = runSceneFrames(() => {
@@ -7331,6 +8196,9 @@ const AMB_BLINK_KEYS = [
 // code defaults (face 0/0/0 · sleep face −70,0 · hand_L −18,18 · hand_R −50,0).
 const AMB_FACE_ADJUST = Object.freeze({ left: { x: 0, y: 0, angle: 0 }, center: { x: 0, y: 0, angle: 0 }, right: { x: 0, y: 0, angle: 0 } });
 const AMB_SLEEP_OFFSETS = Object.freeze({ face: { x: -70, y: 0 }, hand_L: { x: -18, y: 18 }, hand_R: { x: -50, y: 0 } });
+// [A-803] lying-pose placement adjustment (measured, see receipts A803 geometry): angle in degrees (+ = clockwise) about the seated foot
+// anchor, dx/dy in stage px; blended in over the landing rest (1.3–3.0 s, the existing smoothstep) so the Flop's first frame stays the seated idle.
+const AMB_SLEEP_ADJUST = Object.freeze({ angle: 18, dx: 0, dy: 0 });
 let ambUid = 0;
 
 function ambSmooth(value) {
@@ -7707,8 +8575,8 @@ function ambWatching(assets, mountEl) {
 }
 
 // Flop → right roll → drowsy → sleep — the connected sequence on one continuous body rig; sleep
-// holds (no wake trigger is recorded — Owner-open). [A-744] the reverse-Flop wake exists but is DORMANT:
-// piggy-motion-state.js PIGGY_WAKE/piggyWakePhase only wake when given an explicit start, which no product caller gives.
+// holds until a meaningful interaction. [A-790] only the ACTIVE (seat) Piggy ever mounts this art (after 90 s of inactivity,
+// makeSeatSleeper above) and the reverse-Flop wake (piggy-motion-state.js piggyWakePhase) is started by that clock's interact().
 function ambFlopSleep(assets, mountEl, seed) {
   const art = ambArt("homeAmbient__flop", false);
   mountEl.append(art);
@@ -7729,22 +8597,43 @@ function ambFlopSleep(assets, mountEl, seed) {
   const m = a / (scale * k);
   const tx = AMB_SEATED.x + a * (box.x + box.width / 2) - m * (ox + 1000 * k);
   const ty = AMB_SEATED.y + a * (box.y + box.height) - m * (oy + 1300 * k);
-  art.style.transform = `translate(${tx}px, ${ty}px) scale(${m})`;
+  const baseTransform = `translate(${tx}px, ${ty}px) scale(${m})`;
+  art.style.transform = baseTransform;
+  const ax = AMB_SEATED.x + a * (box.x + box.width / 2);
+  const ay = AMB_SEATED.y + a * (box.y + box.height);
+  let adjKey = "";
+  let shift = 0;
+  const placeAdjusted = (weight) => {
+    const adj = (LOCAL_DEV_ENTRY && globalThis.__a803SleepAdjust) || AMB_SLEEP_ADJUST;
+    const wt = Math.round(weight * 1000) / 1000;
+    const key = `${wt}|${adj.angle}|${adj.dx}|${adj.dy}|${shift}`;
+    if (key === adjKey) return;
+    adjKey = key;
+    art.style.transform = wt > 0 && (adj.angle || adj.dx || adj.dy || shift)
+      ? `translate(${((adj.dx || 0) + shift) * wt}px, ${(adj.dy || 0) * wt}px) translate(${ax}px, ${ay}px) rotate(${(adj.angle || 0) * wt}deg) translate(${-ax}px, ${-ay}px) ${baseTransform}`
+      : baseTransform;
+  };
   // [A-744] After the Flop-seated idle returns (wake end) the Piggy is the approved Idle: the same seated
   // drawing (frame 0 of this rig) with the approved 3.2s idle blink. Blink is parked open (t=0) in every
   // other phase so the forward frames are byte-identical to before.
   const idleFrame = art.querySelector(".flop-experiment-frame");
   const idleBlink = ambBlink([...idleFrame.querySelectorAll('[id="eye_L"], [id="eye_R"]')]);
   return {
-    draw(e, reduced) {
+    // [A-803] horizontal lying-pose shift (stage px) chosen by planHomeSleepers to clear neighbours; blended in with the same weight
+    setShift(px) { shift = Number.isFinite(px) ? px : 0; adjKey = ""; },
+    draw(e, reduced, wakeStartOverride) {
+      // [A-790] wakeStartOverride (a number = the wake start) is passed by the active-Piggy sleep clock while it is waking;
+      // null/undefined = asleep (the A-744 dev-server-only seam below can still drive a wake in tests).
       // [A-744] Wake = the forward sequence evaluated at the mirrored time (piggy-motion-state.js
       // piggyWakePhase/PIGGY_WAKE — same frames, same functions, no new art/beat). The asleep phase is the
       // old forward draw unchanged; reduced motion holds the cue at half its length (38.55s → persistent
       // sleep pose, the stable still) and never wakes.
-      // Product passes NO wake start (trigger is Owner-open) → never wakes. The dev-server-only seam below exists
-      // so tests can drive the reverse; gated by LOCAL_DEV_ENTRY (a172-local dev server only).
-      const w = piggyWakePhase(e, reduced, LOCAL_DEV_ENTRY ? globalThis.__a744WakeStartS : null);
+      // [A-895 P-D] pre-A-895 text: "Product passes NO wake start (trigger is Owner-open) → never wakes." — false since A-790/A-803: the ACTIVE (seat) Piggy's
+      // sleep clock passes the wake start (above) while it is waking, and asleep passes none. The dev-server-only seam below stays test-only:
+      // it lets tests drive the reverse without that clock; gated by LOCAL_DEV_ENTRY (a172-local dev server only).
+      const w = piggyWakePhase(e, reduced, wakeStartOverride != null ? wakeStartOverride : LOCAL_DEV_ENTRY ? globalThis.__a744WakeStartS : null);
       const t = w.forwardT;
+      placeAdjusted(w.phase === "awake" || t < 1.3 ? 0 : t < 3 ? ambSmooth((t - 1.3) / 1.7) : 1);
       ambDrawBlink(idleBlink, w.phase === "awake" ? w.awakeS : 0, reduced);
       if (w.phase === "awake") return ambFlopDraw(F, 0, "flop-experiment", reduced);
       if (t < 1.3 && !reduced) return ambFlopDraw(F, t, "flop-experiment", reduced);
@@ -8586,6 +9475,8 @@ function homePadMarkup(scene) {
   };
   // [A-646 Gate Q4] Add money 는 MY MONEY 면이 떠 있는 동안만 산다 — 다른 면이면 흔적 없이 닫는다.
   if (mode !== "money") state.addMoney = null;
+  if (mode !== "money") a898Close(); // [A-898]
+  if (mode !== "money" && typeof a905Reset === "function") a905Reset(); // [A-905]
   if (mode === "home") {
     const residents = homeResidents(base.label, recordsEnabled);
     return homePaperMarkup({ mode: "home", ...base, residents });
@@ -8696,6 +9587,161 @@ function teardownHomeResidentModule() {
   }
 }
 
+// ── [A-902] Sound set wiring (Owner-picked sounds, default ON; player + on/off flag = sound.js) ─────────────────────────────────
+// Exactly four moments: Home paper unfold, receipt toss, return bell, Chog speech bubble (babble A/B alternate, sound.js).
+// File it has no sound. Nothing plays before a user gesture (sound.js lazy unlock). Not coupled to prefers-reduced-motion.
+// Wiring is observation only (plus one a902WatchReturn() line in each Return mount): no render / money path is touched.
+//   unfold : a real gesture (click / tap / Enter / Space, never hover or focus) on the Chog hit of a free Home while the paper is closed,
+//            then the first frame whose progress moves up.
+//   toss   : Return playback frame time crosses 6.3 s (piggy-return.js delivery start). Skip = no sound.
+//   bell   : Return playback frame time crosses 0.7 s (piggy-return.js BELL_START_S). Reduced motion: one bell, no toss.
+//   chog   : a Chog cue .chogCheckLine bubble is added (or un-hidden); #awayRestoreLine and #returnArrivalAlarm (money-truth lines) are silent;
+//            one per element, same line within 12 s = re-render.
+import { playSound, setSoundOn, soundIsOn } from "./sound.js";
+const A902_NO_SOUND_IDS = new Set(["awayRestoreLine", "returnArrivalAlarm"]); // money-truth lines: never a babble
+const a902 ={ installed: false, unfoldBusy: false, unfoldAt: 0, chogKey: "", chogAt: 0, seen: new WeakSet() };
+
+function a902ChogBubbleSeen(el) {
+  if (!el || el.hidden || a902.seen.has(el) || A902_NO_SOUND_IDS.has(el.id)) return false;
+  const text = (el.textContent || "").trim();
+  if (!text) return false;
+  a902.seen.add(el);
+  const key = `${el.id || ""}|${text}`;
+  const now = Date.now();
+  if (key === a902.chogKey && now - a902.chogAt < 12000) return false; // same line drawn again by a re-render
+  a902.chogKey = key;
+  a902.chogAt = now;
+  return true;
+}
+
+function a902OnMutations(records) {
+  let hit = false;
+  for (const r of records) {
+    if (r.type === "attributes") {
+      if (r.target.classList?.contains("chogCheckLine") && r.oldValue !== null && a902ChogBubbleSeen(r.target)) hit = true;
+      continue;
+    }
+    for (const n of r.addedNodes) {
+      if (n.nodeType !== 1) continue;
+      const list = n.classList?.contains("chogCheckLine") ? [n] : [...(n.querySelectorAll?.(".chogCheckLine") || [])];
+      for (const el of list) if (a902ChogBubbleSeen(el)) hit = true;
+    }
+  }
+  if (hit) playSound("chog");
+}
+
+function a902Dbg(row) {
+  // DEV only: a small trail of the unfold arming decisions, read by the browser frames (window.__a902dbg)
+  if (!import.meta.env?.DEV) return;
+  (window.__a902dbg ||= []).push({ at: Math.round(performance.now()), ...row });
+  if (window.__a902dbg.length > 60) window.__a902dbg.shift();
+}
+
+function a902ArmUnfold(event) {
+  if (!event.target?.closest?.(".chogHome__hit")) return;
+  a902Dbg({ ev: event.type, scene: state.scene, card: !!state.sendCardVisible, lock: !!state.appLock, hasChog: !!homeChog, p: homeChog?.state?.progress, pin: homeChog?.state?.pinned, walking: homeChog?.state?.walking, busy: a902.unfoldBusy, since: Date.now() - a902.unfoldAt });
+  if (event.type === "keydown" && event.key !== "Enter" && event.key !== " ") return;
+  if (state.scene !== "sendstay" || state.sendCardVisible || state.appLock) return; // the paper only unfolds on a free Home
+  const p0 = homeChog?.state?.progress;
+  const pin0 = homeChog?.state?.pinned === true;
+  if (typeof p0 !== "number" || p0 >= 0.5 || pin0 || a902.unfoldBusy || Date.now() - a902.unfoldAt < 700) return;
+  a902.unfoldBusy = true;
+  let frames = 0;
+  const tick = () => {
+    const p = homeChog?.state?.progress;
+    if (frames % 20 === 0) a902Dbg({ tick: frames, p, pin: homeChog?.state?.pinned, walking: homeChog?.state?.walking, has: !!homeChog });
+    // the paper moved up from closed, or this real gesture pinned it open while it was still mostly closed (a hover racing the tap)
+    if (typeof p === "number" && ((p0 < 0.15 && p > p0 + 0.001) || homeChog?.state?.pinned === true)) {
+      a902.unfoldBusy = false;
+      a902.unfoldAt = Date.now();
+      playSound("unfold");
+      return;
+    }
+    frames += 1;
+    // wait up to ~5 s: Chog's hover progress is frozen while it walks, and the paper then opens late
+    if (frames < 300) requestAnimationFrame(tick);
+    else a902.unfoldBusy = false;
+  };
+  requestAnimationFrame(tick);
+}
+
+function a902OnSoundToggle(event) {
+  if (!event.target?.closest?.(".a902-sound")) return;
+  event.preventDefault();
+  const on = setSoundOn(!soundIsOn());
+  for (const btn of document.querySelectorAll(".a902-sound")) {
+    btn.classList.toggle("a902-sound--off", !on);
+    btn.setAttribute("aria-label", on ? "sound on" : "sound off");
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+}
+
+// Called once per Return mount (First and Second) right after mountReturnView(). Frame-aligned: bell when the playback frame time
+// crosses 0.7 s, toss when it crosses 6.3 s, each only when the crossing is seen live (a jump of 1 s or more = Skip = no sound).
+// Reduced motion draws neither: one bell, no toss (existing rule).
+function a902WatchReturn(returnView, valid) {
+  if (!returnView) return;
+  let prevT = null;
+  let skipped = false;
+  const onSkipClick = (e) => { if (e.target?.closest?.("#returnSkip")) skipped = true; };
+  document.addEventListener("click", onSkipClick, true);
+  onSceneTeardown(() => document.removeEventListener("click", onSkipClick, true));
+  runSceneFrames(() => {
+    // Skip (button, or the playback already filed) or a Return that ended early cancels every pending moment
+    if (!valid() || skipped || returnView.filed) return false;
+    const t = returnView.lastFrame?.t;
+    if (typeof t !== "number") return true;
+    if (prevT === null) {
+      if (prefersReducedMotion() && state.returnArrivalAlarm) playSound("bell");
+      if (prefersReducedMotion() || t >= 6.4) { prevT = t; return false; }
+    } else if (t - prevT < 1) {
+      if (prevT < 0.7 && t >= 0.7) playSound("bell");
+      if (prevT < 6.3 && t >= 6.3) playSound("toss");
+    }
+    prevT = t;
+    return t < 6.4;
+  });
+}
+
+// The speaker's tap box must be >= 44 on screen: the open paper is scaled, so grow the box (not the drawing) by 44 / measured width.
+function a902FitSoundTap() {
+  const btn = document.querySelector(".a902-sound");
+  if (!btn || !homePaperVisiblyOpen()) return false;
+  const k = parseFloat(btn.style.getPropertyValue("--a902k")) || 1;
+  const w = btn.getBoundingClientRect().width;
+  if (!(w > 0)) return false;
+  const next = Math.min(6, Math.max(1, (k * 44.5) / w));
+  btn.style.setProperty("--a902k", String(Math.round(next * 100) / 100));
+  return true;
+}
+function a902ScheduleFit() {
+  let frames = 0;
+  const tick = () => {
+    if (a902FitSoundTap()) return;
+    frames += 1;
+    if (frames < 90) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+function a902InstallSound() {
+  if (a902.installed || typeof document === "undefined") return;
+  a902.installed = true;
+  document.addEventListener("click", a902OnSoundToggle);
+  // real gestures only (tap / click / Enter / Space): hover or focus alone never plays the unfold
+  for (const type of ["click", "keydown", "touchstart"]) document.addEventListener(type, a902ArmUnfold, true);
+  // keep the speaker's tap box >= 44 on screen while the paper opens, and after a resize
+  for (const type of ["pointerover", "focusin", "click", "touchstart", "keydown"]) document.addEventListener(type, (e) => { if (e.target?.closest?.(".chogHome__hit, .homePaper")) a902ScheduleFit(); }, true);
+  window.addEventListener("resize", a902ScheduleFit);
+  try {
+    new MutationObserver(a902OnMutations).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden"], attributeOldValue: true });
+  } catch {
+    // no observer = no Chog babble; everything else still works
+  }
+}
+a902InstallSound();
+// ── [A-902] end ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
 // [A-626 E] Home 종이가 실제로 펼쳐져 보이는가 — chog-home.js 의 hover 진행값(progress, 0 = 손끝
 // 크기로 접힘, 1 = 공통 카드 자리에 도킹)이 유일한 소유자다. 거의 끝(≥0.99)만 "열림"으로 본다.
 function homePaperVisiblyOpen() {
@@ -8793,10 +9839,1586 @@ function refreshHomePaperMount() {
   const mount = document.querySelector(".homePaperMount");
   if (!mount) return;
   teardownHomeResidentModule();
+  const a898Scroll = typeof a898ScrollSnapshot === "function" ? a898ScrollSnapshot(mount) : null; // [A-898 fit] keep the Gift / Funding scroll position
   const inner = extractHomePaperInner(homePadMarkup(state.scene));
   if (inner) mount.innerHTML = inner;
+  if (a898Scroll) a898ScrollRestore(mount, a898Scroll); // [A-898 fit]
   mountHomeResidentModule();
 }
+
+// ── [A-898] Funding Paper + Send a Piggy (wiring only; logic = funding-paper.js / gift-send-paper.js) ─────────────────────────
+// Owner 2026-10-08 (INBOX A-898 · design gift_card_20261004/README). Every live seam stays null: card/bank are honest
+// "not available", the arrival reader / quote / gas / executor are null, so nothing here reaches a network or moves money.
+// All state lives on `state` (state.a898Paper · state.giftSend · state.a898Market · state.a898Timer): functions only, no
+// block-level consts, because render() can run before this block's position in the module is reached.
+function a898ChainId() {
+  return secondJourneyScope().chainId;
+}
+
+function a898RegistryPiggy(id) {
+  return moneyPiggiesSnapshot().piggies.find((p) => p.id === id && typeof p.address === "string" && /^0x[0-9a-fA-F]{40}$/.test(p.address)) || null;
+}
+
+// The payer is the SELECTED Piggy (Gate C: selected == signer). No picker: with several Piggies and none selected there
+// is no sender; with exactly one it is selected for the user.
+function a898SenderPiggy() {
+  const sel = state.selectedPiggy ? a898RegistryPiggy(state.selectedPiggy.id) : null;
+  if (sel) return sel;
+  const all = addMoneyPiggies();
+  if (all.length !== 1) return null;
+  const out = applyPiggySelection(all[0]);
+  return out.error ? null : all[0];
+}
+
+function a898Holdings(piggy) {
+  const home = piggy.location === "home";
+  const usdc = home ? (pieceHeld(piggy, "USDC")?.quantity ?? "0") : "0";
+  let mon = home ? (pieceHeld(piggy, "MON")?.quantity ?? null) : null;
+  if (mon === null && home && state.address && String(piggy.address).toLowerCase() === String(state.address).toLowerCase() && typeof state.homeMoneyNativeWei === "bigint") {
+    try { mon = formatEther(state.homeMoneyNativeWei); } catch { mon = null; }
+  }
+  return { usdc, mon };
+}
+
+function a898Active() {
+  a898DropStaleDraft();
+  return Boolean(state.a898Paper || state.giftSend);
+}
+
+function a898DropStaleDraft() {
+  const d = state.giftSend;
+  if (d && (d.stage === "closed" || (state.selectedPiggy && state.selectedPiggy.id !== d.payer.id))) a898Close();
+}
+
+function a898Close() {
+  if (state.a898CopyTimer) { clearTimeout(state.a898CopyTimer); state.a898CopyTimer = null; }
+  if (state.a898Timer) { clearInterval(state.a898Timer); state.a898Timer = null; }
+  state.a898Paper = null;
+  state.giftSend = null;
+  state.a898Market = null;
+}
+
+function a898OpenFundingPaper(piggy, draftArgs) {
+  if (!piggy) return false;
+  const opened = openFundingPaper(draftArgs
+    ? draftArgs
+    : { piggy, chainId: a898ChainId() });
+  if (!opened.ok) return false;
+  state.addMoney = null;
+  state.a898Paper = opened.paper;
+  return true;
+}
+
+function a898OpenGiftSend() {
+  if (!addMoneyEntryAllowed()) return;
+  const piggy = a898SenderPiggy();
+  if (!piggy) return;
+  // a draft saved earlier for this payer and chain scope comes back (reload / leaving MY MONEY); anything else starts fresh
+  const restored = giftDraftRestore(a898LoadDraft(), { piggy, selected: state.selectedPiggy, chainScope: a898ChainId() });
+  const opened = restored ? { ok: true, draft: restored } : openGiftSend({ piggy, selected: state.selectedPiggy, chainScope: a898ChainId() });
+  if (!opened.ok) return;
+  state.addMoney = null;
+  state.giftSend = opened.draft;
+  void a898RefreshMarket();
+  a898StartMarketLoop();
+}
+
+// Send a Piggy has a sender when the selected Piggy is a registry Piggy, or there is exactly one Piggy. No picker, ever.
+function a898CanSend() {
+  if (state.selectedPiggy && a898RegistryPiggy(state.selectedPiggy.id)) return true;
+  return addMoneyPiggies().length === 1;
+}
+
+function a898Evaluate() {
+  const d = state.giftSend;
+  if (!d) return null;
+  const piggy = a898RegistryPiggy(d.payer.id);
+  if (!piggy) return null;
+  return giftSendEvaluate(d, { holdings: a898Holdings(piggy), market: state.a898Market || null, gas: GIFT_SEND_CONFIG.gas, nowMs: Date.now() });
+}
+
+function a898BodyMarkup() {
+  if (state.a898Paper) {
+    return fundingPaperMarkup(fundingPaperView(state.a898Paper, { canCheck: typeof FUNDING_PAPER_CONFIG.arrivalReader === "function" }));
+  }
+  const d = state.giftSend;
+  if (!d) return "";
+  return giftSendPaperMarkup(giftSendView(d, a898Evaluate()));
+}
+
+// Live quote seam. Product default: GIFT_SEND_CONFIG.market is null, so this does nothing (no network).
+async function a898RefreshMarket() {
+  const read = GIFT_SEND_CONFIG.market;
+  if (typeof read !== "function" || !state.giftSend) return;
+  const ev = a898Evaluate();
+  try {
+    state.a898Market = await read({ targetUsd: state.giftSend.payWith === "mon" ? (ev?.shortfall ?? null) : null });
+  } catch {
+    state.a898Market = null;
+  }
+  if (state.giftSend) refreshHomePaperMount();
+}
+
+function a898StartMarketLoop() {
+  if (state.a898Timer) return;
+  const ms = GIFT_SEND_CONFIG.quoteRefreshMs;
+  if (typeof GIFT_SEND_CONFIG.market !== "function" || !Number.isFinite(ms) || ms <= 0) return; // interval is UNKNOWN: no loop
+  state.a898Timer = setInterval(() => {
+    if (!state.giftSend || state.giftSend.stage !== "compose") return;
+    if (quoteRefreshDue({ lastAtMs: state.a898Market?.receivedAtMs, nowMs: Date.now() })) void a898RefreshMarket();
+  }, ms);
+}
+
+// Destination proof before the Piggy address is shown (A-555 S2 rule, reused as is).
+async function a898ProveDestination(paperPiggy) {
+  const piggy = a898RegistryPiggy(paperPiggy.id);
+  if (!piggy) return { ok: false, reason: "missing_piggy" };
+  const { proof, error } = await proveFundingTargetControl(piggy);
+  if (!proof) return { ok: false, reason: error || "funding_target_unproven" };
+  const checked = await verifyFundingTargetProof(proof, {
+    piggy,
+    chainId: a898ChainId(),
+    now: Date.now,
+    recover: ({ message, signature }) => recoverMessageAddress({ message, signature }),
+    consumedNonces: consumedFundingProofNonces,
+  });
+  return checked.ok ? { ok: true } : { ok: false, reason: "funding_target_unproven" };
+}
+
+// Face ID for the payer Piggy only: derive its signer; the reducer then requires signer == payer (bindSigner).
+async function a898SignerForPayer(piggy) {
+  const { request, error } = authRequestForPiggy(piggy);
+  if (error) return { ok: false, reason: error };
+  let result = null;
+  try {
+    result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
+    const { address } = activateSigningSession(result.prfOutput, { persistAddress: false });
+    return { ok: true, signerAddress: address };
+  } catch {
+    return { ok: false, reason: "passkey_declined" };
+  } finally {
+    if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
+  }
+}
+
+// ── draft persistence: chain-scoped local storage, editable fields only (no lock, no stage, no link, no token) ──
+function a898DraftKey() {
+  return `araso.giftSendDraft.v1.${a898ChainId()}`;
+}
+function a898LoadDraft() {
+  try {
+    const raw = safeLocalStorage().getItem(a898DraftKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+function a898SaveDraft() {
+  try {
+    const d = state.giftSend;
+    const snap = d && d.stage === "compose" ? giftDraftSnapshot(d) : null;
+    if (snap) safeLocalStorage().setItem(a898DraftKey(), JSON.stringify(snap));
+  } catch {
+    // storage unavailable: the in-memory draft still lives for this session
+  }
+}
+function a898ForgetDraft() {
+  try { safeLocalStorage().removeItem(a898DraftKey()); } catch {
+    // nothing to clear
+  }
+}
+
+// Pick motion needs the SAME card nodes to change class (a transition has no "from" state after an innerHTML rebuild).
+// So pick / flip / re-pick patch only the card stage + the Face ID button; every other action still rebuilds the paper.
+function a898PatchGiftStage() {
+  const mount = document.querySelector(".homePaperMount");
+  const oldStage = mount ? mount.querySelector(".a898-stage") : null;
+  if (!oldStage || !state.giftSend) return false;
+  if (typeof a905PayStepStale === "function" && a905PayStepStale()) return false; // [A-905] the Gift pay step must appear / go: a full repaint, not the in-place stage patch
+  const tpl = document.createElement("template");
+  tpl.innerHTML = a898BodyMarkup();
+  const newStage = tpl.content.querySelector(".a898-stage");
+  if (!newStage) return false;
+  const oc = Array.from(oldStage.children);
+  const nc = Array.from(newStage.children);
+  if (oc.length !== nc.length) return false;
+  for (const attr of ["data-a898-picked", "data-a898-flipped"]) oldStage.setAttribute(attr, newStage.getAttribute(attr) || "");
+  for (let i = 0; i < oc.length; i += 1) {
+    oc[i].className = nc[i].className;
+    const oTap = oc[i].querySelector(".a898-cardTap");
+    const nTap = nc[i].querySelector(".a898-cardTap");
+    if (oTap && nTap) {
+      oTap.setAttribute("aria-pressed", nTap.getAttribute("aria-pressed") || "false");
+      if (nTap.hasAttribute("tabindex")) oTap.setAttribute("tabindex", nTap.getAttribute("tabindex")); else oTap.removeAttribute("tabindex");
+    }
+    const oInner = oc[i].querySelector(".a898-card__inner");
+    const nInner = nc[i].querySelector(".a898-card__inner");
+    if (!oInner || !nInner) continue;
+    const oBack = oInner.querySelector(".a898-cardFace--back");
+    const nBack = nInner.querySelector(".a898-cardFace--back");
+    if (nBack && !oBack) oInner.appendChild(nBack);
+    else if (!nBack && oBack) oBack.remove();
+    else if (nBack && oBack) {
+      const oIn = Array.from(oBack.querySelectorAll("input,textarea"));
+      const nIn = Array.from(nBack.querySelectorAll("input,textarea"));
+      oIn.forEach((el, k) => { if (nIn[k] && nIn[k].hasAttribute("tabindex")) el.setAttribute("tabindex", nIn[k].getAttribute("tabindex")); else el.removeAttribute("tabindex"); });
+    }
+  }
+  // the repick hook exists only while a card is picked; the Face ID button follows canFaceId
+  const oldRepick = mount.querySelector(".a898-repick");
+  const newRepick = tpl.content.querySelector(".a898-repick");
+  if (newRepick && !oldRepick) oldStage.parentNode.insertBefore(newRepick, oldStage);
+  else if (!newRepick && oldRepick) oldRepick.remove();
+  const oBtn = mount.querySelector('[data-a898-act="gift-faceid"]');
+  const nBtn = tpl.content.querySelector('[data-a898-act="gift-faceid"]');
+  if (oBtn && nBtn) {
+    oBtn.disabled = nBtn.disabled;
+    if (nBtn.hasAttribute("data-blocked")) oBtn.setAttribute("data-blocked", nBtn.getAttribute("data-blocked")); else oBtn.removeAttribute("data-blocked");
+  }
+  return true;
+}
+
+// [A-898 fit] The Gift / Funding scroll box (.a898-paper) is rebuilt with the paper on every render: keep its scroll position when the same surface
+// re-renders, and after the crypto proof bring the block's bottom edge (address + copy icon) into the box.
+function a898ScrollSnapshot(mount) {
+  const box = mount.querySelector(".a898-paper");
+  return box ? { root: box.dataset.a898Root, top: box.scrollTop, crypto: Boolean(box.querySelector(".a898-crypto")) } : null;
+}
+function a898ScrollRestore(mount, keep) {
+  const box = mount.querySelector(".a898-paper");
+  if (!box) return;
+  if (box.dataset.a898Root === keep.root) box.scrollTop = keep.top;
+  const crypto = box.querySelector(".a898-crypto");
+  if (crypto && !keep.crypto) box.scrollTop = Math.max(0, crypto.offsetTop + crypto.offsetHeight - box.clientHeight);
+}
+
+// Step 2 of the pick: once the lift has played (transitionend) or immediately when there is no motion, flip to the letter.
+function a898AutoFlip() {
+  const picked = state.giftSend && state.giftSend.front;
+  if (!picked || state.giftSend.flipped === true) return;
+  const flip = () => {
+    const d = state.giftSend;
+    if (!d || d.front !== picked || d.flipped === true) return;
+    state.giftSend = giftSendReduce(d, { type: "flip_front" });
+    if (!a898PatchGiftStage()) refreshHomePaperMount();
+  };
+  const el = document.querySelector(".a898-card.is-picked");
+  let dur = 0;
+  try { dur = el ? parseFloat(getComputedStyle(el).transitionDuration) || 0 : 0; } catch { dur = 0; }
+  if (!el || dur === 0) { flip(); return; }
+  // The lift ends either by finishing (transitionend) or by being interrupted (transitioncancel); both settle to the flip.
+  // Whichever comes first wins; no fixed delay is invented. A later tap on the lifted card also flips it (tap_front toggles).
+  const done = () => {
+    el.removeEventListener("transitionend", done);
+    el.removeEventListener("transitioncancel", done);
+    flip();
+  };
+  el.addEventListener("transitionend", done);
+  el.addEventListener("transitioncancel", done);
+}
+
+async function a898FundingArrival() {
+  const paper = state.a898Paper;
+  const reader = FUNDING_PAPER_CONFIG.arrivalReader;
+  if (!paper || typeof reader !== "function") return;
+  let result;
+  try {
+    result = await reader({ piggy: paper.piggy, asset: paper.cryptoAsset, chainId: paper.chainId, since: paper.intent?.startedAt ?? null });
+  } catch {
+    result = { status: FUNDING_STATE.UNKNOWN };
+  }
+  // the world may have moved while the reader ran: act only if it is still the same paper and intent
+  const now = state.a898Paper;
+  if (!now || now.piggy.id !== paper.piggy.id || now.intent !== paper.intent) return;
+  // Only a CONFIRMED result that credits this Piggy is reconciled into the registry (measured balance, never summed).
+  const applied = paper.intent ? applyFundingResult(paper.intent, result || {}) : null;
+  if (applied && applied.state === FUNDING_STATE.CONFIRMED && applied.creditsTarget === true && applied.receipt && typeof applied.receipt.txHash === "string") {
+    a905OfferArrival({ kind: "deposit_confirmed", confirmed: true, creditsTarget: true, evidenceId: applied.receipt.txHash }); // [A-905] the only wired real arrival
+    a905NoteLegConfirmed(paper.piggy.id); // [A-905] a funded allocation leg is recorded here, at the confirmed deposit itself
+  }
+  if (applied && applied.state === FUNDING_STATE.CONFIRMED && applied.creditsTarget === true && applied.receipt && paper.cryptoAsset === "USDC") {
+    const { context } = buildFundingContext({ chainId: paper.chainId, runtimeChainId: a898ChainId(), assetSymbol: "USDC", targetPiggyId: paper.piggy.id, targetAddress: paper.piggy.address });
+    if (context) {
+      await settleConfirmedFundingEvidence({ applied, context, client: publicClient, storage: safeLocalStorage(), now: () => new Date().toISOString(), priceQuote: null });
+    }
+  }
+  const after = state.a898Paper;
+  if (!after || after.piggy.id !== paper.piggy.id || after.intent !== paper.intent) return;
+  const fresh = a898RegistryPiggy(paper.piggy.id);
+  const available = fresh ? a898Holdings(fresh).usdc : undefined;
+  state.a898Paper = fundingPaperReduce(after, { type: "arrival", result, available });
+  a898AfterFunding();
+}
+
+// A confirmed arrival opened from a draft returns to that SAME draft (fields untouched); back/close does too.
+function a898AfterFunding() {
+  const paper = state.a898Paper;
+  const d = state.giftSend;
+  if (!paper || !d || !paper.draftId) return;
+  if (paper.draftId !== d.draftId) return; // another draft's paper never moves this one
+  if (paper.closing === true || (fundingPaperBalanceGrew(paper) && fundingPaperReturnsToDraft(paper))) {
+    const back = paper.closing === true ? { ok: true } : giftSendResumeCheck(d, paper);
+    if (!back.ok) return;
+    state.giftSend = giftSendReduce(d, { type: "funding_returned" });
+    state.a898Paper = null;
+    void a898RefreshMarket();
+  }
+}
+
+async function a898FaceId() {
+  const d0 = state.giftSend;
+  if (!d0 || d0.stage !== "compose") return;
+  const ev0 = a898Evaluate();
+  const lock = ev0 ? lockQuote(ev0) : null;
+  if (!lock) return;
+  const piggy = a898RegistryPiggy(d0.payer.id);
+  if (!piggy || !state.selectedPiggy || state.selectedPiggy.id !== d0.payer.id) {
+    state.giftSend = giftSendReduce(d0, { type: "payer_changed" });
+    refreshHomePaperMount();
+    return;
+  }
+  // [A-915] a turned-on Gift create config that cannot work (escrow/sponsor unset or malformed, deadline passed, ...) is refused BEFORE Face ID: existing "Not ready yet" screen, no signer.
+  if (typeof a915PreFaceIdRefusal === "function") {
+    const a915Why = a915PreFaceIdRefusal();
+    if (a915Why) { state.giftSend = { ...d0, stage: "unavailable", refusal: a915Why, lock: null }; refreshHomePaperMount(); return; }
+  }
+  state.giftSend = giftSendReduce(d0, { type: "faceid_start", lock });
+  refreshHomePaperMount();
+  // From here a payer signer may be live: it ALWAYS ends (finally), even if the draft is closed or anything throws.
+  let result = { ok: false, reason: "executor_unavailable" };
+  try {
+    const proved = await a898SignerForPayer(piggy);
+    // re-read after the await: the draft may have been closed / replaced while the passkey prompt was open
+    const cur = state.giftSend;
+    if (!cur || cur.draftId !== d0.draftId || cur.stage !== "faceid") return;
+    const sel = state.selectedPiggy;
+    if (!sel || sel.id !== cur.payer.id) { state.giftSend = giftSendReduce(cur, { type: "payer_changed" }); return; }
+    const after = giftSendReduce(cur, { type: "faceid_result", ok: proved.ok === true, signerAddress: proved.signerAddress });
+    state.giftSend = after;
+    if (!after || after.stage !== "executing") return;
+    // [A-915] GIFT_SEND_CONFIG.executor stays null (OFF); the Gift create executor below exists only while A915_GIFT_CREATE_CONFIG is turned on.
+    const executor = GIFT_SEND_CONFIG.executor || (typeof a915GiftCreateExecutor === "function" ? a915GiftCreateExecutor() : null);
+    if (typeof executor === "function") {
+      // quote lock: re-read now; stale (not newer) or worse than the shown line beyond the injected tolerance -> show again and ask
+      await a898RefreshMarket();
+      const live = state.giftSend;
+      if (!live || live.draftId !== d0.draftId || live.stage !== "executing") return;
+      const check = reconcileQuote(lock, a898Evaluate());
+      if (!check.ok) {
+        result = { ok: false, reason: "requote_needed" };
+      } else {
+        // [A-915] extras (expiry · gas inputs · pinned sponsor) come from the Gift create config and are {} while it is OFF.
+        const plan = await planGiftSend({ draft: live, senderAddress: piggy.address, expiry: undefined, gas: GIFT_SEND_CONFIG.gas, origin: location.origin, ...(typeof a915PlanExtras === "function" ? a915PlanExtras() : {}) });
+        result = plan.ok ? await executor({ plan, lock, payer: live.payer }) : { ok: false, reason: plan.reason };
+      }
+    }
+  } catch {
+    result = { ok: false, reason: "executor_unavailable" };
+  } finally {
+    endSignerSession();
+    refreshHomePaperMount(); // every exit repaints (declined / mismatch / closed show their notice)
+  }
+  const last = state.giftSend;
+  if (last && last.draftId === d0.draftId && last.stage === "executing") {
+    state.giftSend = giftSendReduce(last, { type: "executed", result });
+    if (state.giftSend.stage === "done") a898ForgetDraft();
+  }
+  refreshHomePaperMount();
+}
+
+async function a898Act(el) {
+  const act = el.dataset.a898Act;
+  const arg = el.dataset.a898Arg;
+  const paper = state.a898Paper;
+  const d = state.giftSend;
+  let patched = false;
+  if (act === "funding-row" && paper) {
+    if (arg === "crypto") {
+      const proven = await a898ProveDestination(paper.piggy);
+      // re-read after the await: same paper (piggy and address) or nothing opens
+      const cur = state.a898Paper;
+      if (!cur || cur.piggy.id !== paper.piggy.id || cur.piggy.address !== paper.piggy.address) return;
+      if (!proven.ok) { state.a898Paper = { ...cur, refusal: proven.reason }; refreshHomePaperMount(); return; }
+      state.a898Paper = fundingPaperReduce(cur, { type: "choose_row", row: arg });
+    } else {
+      state.a898Paper = fundingPaperReduce(paper, { type: "choose_row", row: arg });
+    }
+  } else if (act === "funding-asset" && paper) {
+    state.a898Paper = fundingPaperReduce(paper, { type: "choose_asset", asset: arg });
+  } else if (act === "funding-copy" && paper) {
+    try {
+      await navigator.clipboard.writeText(paper.piggy.address);
+      if (state.a898Paper) {
+        state.a898Paper = fundingPaperReduce(state.a898Paper, { type: "copied" });
+        // icon check in place (same node, so the one-stroke draw plays); back to the sheets after 1.5 s
+        const btn = document.querySelector('[data-a898-act="funding-copy"]');
+        if (btn) { btn.setAttribute("data-copied", "1"); btn.setAttribute("aria-label", "copied"); }
+        if (state.a898CopyTimer) clearTimeout(state.a898CopyTimer);
+        state.a898CopyTimer = setTimeout(() => {
+          state.a898CopyTimer = null;
+          if (state.a898Paper) state.a898Paper = fundingPaperReduce(state.a898Paper, { type: "copy_reset" });
+          const again = document.querySelector('[data-a898-act="funding-copy"]');
+          if (again) { again.setAttribute("data-copied", "0"); again.setAttribute("aria-label", "copy"); }
+        }, 1500);
+        patched = true;
+      }
+    } catch {
+      // copy failed: nothing to claim
+    }
+  } else if (act === "funding-check" && paper) {
+    await a898FundingArrival();
+  } else if (act === "funding-back" && paper) {
+    state.a898Paper = fundingPaperReduce(paper, { type: "back" });
+    if (state.a898Paper.closing === true) {
+      if (state.a898Paper.draftId) a898AfterFunding();
+      if (state.a898Paper && state.a898Paper.closing === true) state.a898Paper = null;
+    }
+  } else if (d && act === "gift-amount") {
+    state.giftSend = giftSendReduce(d, { type: "set_preset", preset: arg });
+  } else if (d && (act === "gift-front" || act === "gift-repick")) {
+    state.giftSend = giftSendReduce(d, act === "gift-repick" ? { type: "step_back" } : { type: "tap_front", front: arg });
+    patched = a898PatchGiftStage();
+    // [A-898 fit] a pick opens the letter below the compact fan: scroll the stage to the top of the box so TO / message / FROM are in view
+    if (act === "gift-front" && state.giftSend.front) {
+      const stage = document.querySelector(".a898-stage");
+      const box = stage ? stage.closest(".a898-paper") : null;
+      if (box) box.scrollTop = Math.max(0, stage.offsetTop);
+    }
+    if (state.giftSend.front && state.giftSend.flipped !== true && act === "gift-front" && state.giftSend.front !== d.front) a898AutoFlip();
+  } else if (d && act === "gift-requote") {
+    // the executor asked to show the line again: back to compose with a fresh read, the draft untouched
+    state.giftSend = giftSendReduce(d, { type: "requote" });
+    void a898RefreshMarket();
+  } else if (d && act === "gift-add-money") {
+    const ev = a898Evaluate();
+    const args = ev ? giftSendFundingArgs(d, ev, { chainId: a898ChainId() }) : { ok: false };
+    if (args.ok && a898OpenFundingPaper(a898RegistryPiggy(d.payer.id), args.openArgs)) state.giftSend = giftSendReduce(d, { type: "funding_opened" });
+  } else if (d && act === "gift-use-mon") {
+    const ev = a898Evaluate();
+    state.giftSend = giftSendReduce(d, { type: "pay_with", asset: "mon", offered: ev?.monOption?.offered === true });
+    void a898RefreshMarket();
+  } else if (d && act === "gift-use-usdc") {
+    state.giftSend = giftSendReduce(d, { type: "pay_with", asset: "usdc" });
+  } else if (d && act === "gift-explain") {
+    state.giftSend = giftSendReduce(d, { type: "toggle_explain" });
+  } else if (d && act === "gift-faceid") {
+    await a898FaceId();
+    return;
+  } else if (d && act === "gift-back") {
+    a898ForgetDraft();
+    a898Close();
+  }
+  a898SaveDraft();
+  if (!patched) refreshHomePaperMount();
+}
+
+// Text fields update the draft WITHOUT re-rendering (focus survives). Only [data-a898-field] inside the draft counts.
+if (typeof document?.addEventListener === "function") {
+  document.addEventListener("input", (event) => {
+    const field = event.target?.dataset?.a898Field;
+    const d = state.giftSend;
+    if (!field || !d) return;
+    if (field === "to") state.giftSend = giftSendReduce(d, { type: "set_to", value: event.target.value });
+    else if (field === "message") state.giftSend = giftSendReduce(d, { type: "set_message", value: event.target.value });
+    else if (field === "from") state.giftSend = giftSendReduce(d, { type: "set_from", value: event.target.value });
+    a898SaveDraft();
+  });
+}
+// ── [A-898] end ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── [A-915] Gift create on Monad mainnet (wiring only; shapes + guard = gift-create-plan.js / money-executor.js) ───────────────────────────────
+// A-915 (Owner "발주해", INBOX A-915): one Face ID session signs approve -> escrow create -> sponsor gas deposit (buildGiftCreateStepCalls); runGiftCreateCalls (gift-send-paper.js)
+// sends every call through the one send chokepoint (strict sign-before-send) after arming exactly those three shapes for SIGN_GUARD. Right after create the
+// deposit is registered with the relayer (registerGasDeposit); a registration that did not go through is kept in the sender's record and retried on the next open.
+// LIVE IS OFF: A915_GIFT_CREATE_CONFIG is null. No escrow exists on the Gift chain yet; its address is UNKNOWN (never invented, no default). To turn it on the Owner supplies
+//   { chainId: <the Gift chain id, GIFT_CREATE_CHAIN_ID>, escrowAddress, sponsorAddress,                      // both required; unset / malformed / zero => refused before Face ID
+//     gas: { gasUnits:{install,commitClaim,revoke,claim,fundingTransfer}, feeInputs, safety } | () => same,   // UNKNOWN fee inputs => refused (no default amount)
+//     giftExpiryUnix: () => unix seconds (the gift deadline),
+//     receiptTimeoutMs: <positive integer>,
+//     makeClients: (account) => ({ walletClient, publicClient }),      // Gift chain transport; injected, no RPC constant here
+//     client?: { register(body) => Promise<{status, body}> } }         // default: same-origin POST /api/gift-sponsor
+// Sender-funded gas only: the deposit is the sender's own gasBudget paid to the pinned sponsor. No relayer authority is added; no copy is added (existing refusal paths).
+const A915_GIFT_CREATE_CONFIG = null;
+const A915_STORE_KEY = "araso.a915.giftCreate.v1";
+const A915_STORE_MAX = 50;
+
+function a915Cfg() {
+  const c = A915_GIFT_CREATE_CONFIG;
+  if (!c || typeof c !== "object") return null;
+  if (c.chainId !== GIFT_CREATE_CHAIN_ID || giftCreateConfigProblem(c)) return null;
+  if (typeof c.makeClients !== "function" || typeof c.giftExpiryUnix !== "function") return null;
+  if (!Number.isSafeInteger(c.receiptTimeoutMs) || c.receiptTimeoutMs <= 0) return null;
+  return c;
+}
+
+// null = fine (or OFF); otherwise the existing-vocabulary reason. A turned-on but unusable config never reaches Face ID.
+function a915PreFaceIdRefusal() {
+  const c = A915_GIFT_CREATE_CONFIG;
+  if (!c) return null;
+  const problem = (c && typeof c === "object" && giftCreateConfigProblem(c)) || null;
+  if (problem) return problem;
+  if (!a915Cfg()) return "executor_unavailable";
+  const expiry = Number(c.giftExpiryUnix());
+  if (!Number.isSafeInteger(expiry) || expiry <= Math.floor(Date.now() / 1000)) return "bad_expiry";
+  return null;
+}
+
+function a915PlanExtras() {
+  const c = a915Cfg();
+  if (!c) return {};
+  let gas;
+  try { gas = typeof c.gas === "function" ? c.gas() : c.gas; } catch { gas = undefined; }
+  return { expiry: Number(c.giftExpiryUnix()), gas, sponsor: { sponsorAddress: c.sponsorAddress, chainId: c.chainId } };
+}
+
+// sender's record store: non-secret projection only (giftId · chain · gasDeposit · step hashes). Never the claim token, never the note.
+function a915StoreRead() {
+  try {
+    const v = JSON.parse(localStorage.getItem(A915_STORE_KEY) || "[]");
+    return Array.isArray(v) ? v.filter((r) => r && typeof r === "object" && typeof r.giftId === "string") : [];
+  } catch { return []; }
+}
+function a915StorePut(entry) {
+  try {
+    const rest = a915StoreRead().filter((r) => r.giftId.toLowerCase() !== String(entry.giftId).toLowerCase());
+    const next = [...rest, entry].slice(-A915_STORE_MAX);
+    localStorage.setItem(A915_STORE_KEY, JSON.stringify(next));
+    const back = a915StoreRead().find((r) => r.giftId.toLowerCase() === String(entry.giftId).toLowerCase());
+    return !!back && JSON.stringify(back) === JSON.stringify(entry);
+  } catch { return false; }
+}
+function a915StoreGet(giftId) {
+  return a915StoreRead().find((r) => r.giftId.toLowerCase() === String(giftId).toLowerCase()) || null;
+}
+
+// same-origin registration client: { register(body) } -> { status, body } exactly as the relayer answers (never throws).
+function a915RegisterClient() {
+  return {
+    async register(body) {
+      const res = await fetch("/api/gift-sponsor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      let b = null;
+      try { b = await res.json(); } catch { b = null; }
+      return { status: res.status, body: b };
+    },
+  };
+}
+
+async function a915Register(entry, cfg) {
+  const out = await registerGasDeposit({ record: { giftId: entry.giftId, gasDeposit: entry.gasDeposit }, client: cfg.client || a915RegisterClient() });
+  if (out.record && out.record.gasDeposit) a915StorePut({ ...entry, gasDeposit: out.record.gasDeposit });
+  return out;
+}
+
+// next open: every stored deposit that is mined but not yet acknowledged is registered again (200 = done, 409 = refused for good, anything else = try next open).
+async function a915RetryGasRegistrations() {
+  const cfg = a915Cfg();
+  if (!cfg) return;
+  for (const entry of a915StoreRead()) {
+    if (!needsGasRegistration({ giftId: entry.giftId, gasDeposit: entry.gasDeposit })) continue;
+    try { await a915Register(entry, cfg); } catch { entry.retry = true; } // kept in the sender's record, retried on the next open
+  }
+}
+
+// Returns the executor for the Gift send flow, or null while OFF. Called inside the payer's signer session (activeAccount = the payer).
+function a915GiftCreateExecutor() {
+  const cfg = a915Cfg();
+  if (!cfg) return null;
+  return async function a915RunGiftCreate({ plan, payer }) {
+    const account = activeAccount;
+    if (!account || !activeSession || state.appLock || !payer || String(account.address).toLowerCase() !== String(payer.address).toLowerCase()) return { ok: false, reason: "executor_unavailable" };
+    if (!plan || plan.ok !== true || !plan.claimUrl || String(plan.record?.senderAddress || "").toLowerCase() !== String(account.address).toLowerCase()) return { ok: false, reason: "executor_unavailable" };
+    const built = buildGiftCreateStepCalls(plan, { escrowAddress: cfg.escrowAddress });
+    if (!built.ok) return { ok: false, reason: built.reason };
+    const entry = { giftId: plan.giftId, chainId: plan.record.chainId, createdAt: plan.record.createdAt, gasDeposit: plan.record.gasDeposit, steps: {} };
+    let clients;
+    try { clients = cfg.makeClients(account); } catch { clients = null; }
+    const ran = await runGiftCreateCalls({
+      plan, calls: built.calls, escrowAddress: cfg.escrowAddress, account, clients, receiptTimeoutMs: cfg.receiptTimeoutMs,
+      authorize: () => activeAccount === account && !state.appLock,
+      reserve: () => a915StorePut(entry),
+      persistHash: (label, { hash }) => { entry.steps[label] = hash; return a915StorePut(entry); },
+    });
+    if (ran.armRefused) return { ok: false, reason: ran.armRefused };
+    const results = ran.results;
+    const blockedReason = ran.blockedReason;
+    const done = confirmGiftCreateStep(plan, results);
+    if (!done.ok) return { ok: false, reason: blockedReason && results[0].status === "missing" ? blockedReason : done.reason };
+    // the link is issued only now (every call confirmed); the deposit is registered right after create, a failed registration is retried on the next open
+    const stored = { ...entry, gasDeposit: done.record.gasDeposit };
+    a915StorePut(stored);
+    try { await a915Register(stored, cfg); } catch { stored.retry = true; } // retried on the next open (the record stays as stored)
+    return { ok: true, link: plan.claimUrl };
+  };
+}
+
+void a915RetryGasRegistrations();
+// ── [A-915] end ────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// ── [A-905] Honey jar + Money tab (wiring only; logic = honey-jar.js / money-tab.js) ─────────────────────────────────────────
+// Owner 2026-10-08 (INBOX A-905 · design gift_card_20261004/README "Home 입구 배치"). After the Second Journey a small honey jar sits on
+// Home; one tap opens the Money tab on the Home Paper. Money tab = total + real assets + `Move money` + `Gift a Piggy` + each Piggy's amount.
+// Every live seam stays null: the out flow ends at a disabled Face ID button (MONEY_TAB_CONFIG.sendMoney = null), in/Gift reuse the A-898
+// papers as they are. Functions only (no block-level consts): render() can run before this block's position in the module is reached.
+// State: state.a905Money (null | the surface) · state.a905Jar ({ timer, resize, arrivals }). Nothing is stored; no network; no signing here.
+function a905Gate() {
+  return jarGate({ secondJourneyCompletedOnce: state.secondJourneyCompletedOnce === true, scene: state.scene });
+}
+
+function a905Piggies() {
+  return moneyPiggiesSnapshot();
+}
+
+// The Money tab is a Home Paper surface in "money" mode. On sendstay that is state.homePaperMode; on an Away Home scene the mode
+// is lent by the surface itself (it only counts while it was opened in this very scene).
+function a905EffectiveMode(scene, base) {
+  const m = state.a905Money;
+  if (m && m.scene === scene && scene !== "sendstay" && a905Gate()) return "money";
+  return base;
+}
+
+function a905Reset() {
+  state.a905Money = null;
+}
+
+// Entries inside the tab only act on the real Home (sendstay) where the A-646 / A-898 flows are allowed; elsewhere they are shown disabled.
+function a905CanAct() {
+  return state.scene === "sendstay" && addMoneyEntryAllowed();
+}
+
+function a905OpenMoneyTab() {
+  if (!a905Gate()) return;
+  state.a905Money = moneyTabOpen(state.scene);
+  if (state.scene === "sendstay") state.homePaperMode = "money";
+  // The paper opens through the same pinned toggle as a Chog tap (only when it is not already pinned open).
+  const hit = document.querySelector("#chogHomeHit");
+  if (hit && !homeChog?.state?.pinned) hit.click();
+  else if (!hit && !homeChog?.state?.pinned) homeChog?.hover?.(1); // no #chogHomeHit on this scene: ask Chog's hover to open the paper instead of a silent no-op
+  refreshHomePaperMount();
+}
+
+function a905DropFlows() {
+  state.addMoney = null;
+  a898Close();
+}
+
+function a905OpenIn() {
+  a905DropFlows();
+  if (addMoneyEntryAllowed()) { openAddMoney(); return; } // 1 Piggy -> the Funding Paper (A-898) · 2+ Piggies -> where / how much first (A-646); same guards as before
+  // An Away Home scene (every Piggy out): `in` is still allowed. One Piggy opens its Funding Paper directly; the 2+ allocation needs the sendstay
+  // gate of openAddMoney (pinned) and is a RESIDUAL for the away scenes.
+  const all = addMoneyPiggies();
+  if (all.length === 1) a898OpenFundingPaper(all[0], null);
+}
+
+function a905OpenGift() {
+  const sel = selectablePiggies(a905Piggies().piggies);
+  if (sel.length === 0) return false;
+  const chosen = sel.find((p) => p.id === state.selectedPiggy?.id) || sel[0];
+  if (!state.selectedPiggy || state.selectedPiggy.id !== chosen.id) {
+    const reg = a898RegistryPiggy(chosen.id);
+    if (!reg) return false;
+    const out = applyPiggySelection(reg);
+    if (out.error) return false;
+  }
+  a905DropFlows();
+  a898OpenGiftSend();
+  return Boolean(state.giftSend);
+}
+
+// A view that no longer has anything open falls back to the tab (the inner papers close themselves with their own back).
+function a905SyncView(m) {
+  if (m.view === "move" && m.dir === MONEY_SWITCH.IN && !a898Active() && !state.addMoney) { m.view = "tab"; m.out = null; }
+  if (m.view === "gift" && !a898Active()) m.view = "tab";
+}
+
+function a905BodyMarkup(time) {
+  const m = state.a905Money;
+  if (!m || m.scene !== state.scene || !a905Gate()) return null;
+  a905SyncLegs(); // record a confirmed leg while its paper is still the open one
+  a905SyncView(m);
+  const snap = a905Piggies();
+  const canAct = a905CanAct();
+  let inner;
+  if (m.view === "move") {
+    const body = m.dir === MONEY_SWITCH.OUT
+      ? outMarkup(outView(m.out, snap.piggies, { config: MONEY_TAB_CONFIG, chain: a898ChainId() }))
+      : (a898Active() ? a898BodyMarkup() : (state.addMoney ? addMoneyBodyMarkup() : ""));
+    inner = moveMoneyMarkup({ dir: m.dir, bodyMarkup: body });
+  } else if (m.view === "gift") {
+    // the pay step is the LAST step: it appears only after compose is filled in (amount chosen and a front picked), not under it the whole time
+    const gd = state.giftSend;
+    const paying = gd && !state.a898Paper && gd.stage === "compose" && gd.preset !== null && gd.front !== null
+      ? giftPayStepMarkup(giftPayStepView({ piggies: snap.piggies, payerId: state.giftSend.payer.id }))
+      : "";
+    // [A-898 fit] the pay step lives inside the Gift scroll box (before the Face ID foot), not below the paper
+    const paper = a898BodyMarkup();
+    const footAt = paper.lastIndexOf('<div class="a898-foot">');
+    inner = paying && footAt >= 0 ? paper.slice(0, footAt) + paying + paper.slice(footAt) : paper + paying;
+  } else {
+    inner = moneyTabMarkup(moneyTabView({ piggies: snap.piggies, totals: snap.totals, canAct, canMove: a905Gate() }), { withTitle: false });
+  }
+  return homeMoneyMarkup({ title: MONEY_TAB_TITLE, time, rows: [], afterRowsMarkup: inner });
+}
+
+function a905Dispatch(event) {
+  const m = state.a905Money;
+  if (!m) return;
+  state.a905Money = moneyTabReduce(m, event, { piggies: a905Piggies().piggies });
+}
+
+// Delegated from handleHomePaperMountClick (first line). Returns true when the click was a Money tab action.
+function a905HandleClick(event) {
+  const target = event.target && event.target.closest ? event.target : null;
+  if (!target || !state.a905Money) return false;
+  if (state.a905Money.scene !== state.scene) return false;
+  if (state.recordsCardVisible && computeHistoryFitMode() === "stacked") return false;
+  const stamp = target.closest("#homePaperMoneyToggle");
+  if (stamp && state.scene !== "sendstay") {
+    // The house stamp on an Away Home scene: close the surface (the paper goes back to its plain Home content).
+    a905DropFlows();
+    a905Reset();
+    refreshHomePaperMount();
+    return true;
+  }
+  const choice = target.closest('[id^="a905AmountChoice--"]');
+  if (choice) {
+    const value = choice.id.slice("a905AmountChoice--".length);
+    if (value !== "custom") a905Dispatch({ type: "out", event: { type: "amount", value } });
+    refreshHomePaperMount();
+    return true;
+  }
+  const el = target.closest("[data-a905-act]");
+  if (!el) return false;
+  if (el.hasAttribute("disabled")) return true;
+  const act = el.dataset.a905Act;
+  const arg = el.dataset.a905Arg;
+  const m = state.a905Money;
+  if (act === "move" && a905Gate()) {
+    a905Dispatch({ type: "move" });
+    a905OpenIn();
+  } else if (act === "gift" && a905CanAct()) {
+    if (a905OpenGift()) a905Dispatch({ type: "gift" });
+  } else if (act === "dir" && m.view === "move") {
+    if (arg === m.dir) return true; // tapping the already-chosen word changes nothing (an open Funding Paper / allocation stays)
+    a905Dispatch({ type: "dir", dir: arg });
+    if (arg === MONEY_SWITCH.IN) a905OpenIn(); else a905DropFlows();
+  } else if (act === "back") {
+    if (m.view === "move" && m.dir === MONEY_SWITCH.OUT && m.out) a905Dispatch({ type: "out", event: { type: "back" } });
+    else { a905DropFlows(); a905Dispatch({ type: "tab" }); }
+  } else if (act === "out-pick") {
+    a905Dispatch({ type: "out", event: { type: "pick", id: arg } });
+  } else if (act === "out-next") {
+    a905Dispatch({ type: "out", event: { type: "next" } });
+  } else if (act === "out-faceid") {
+    // Live seam null: nothing is signed or sent. A future injected seam receives the preview only after the ready check.
+    void a905OutFaceId();
+    return true;
+  } else if (act === "gift-payer") {
+    a905SwitchPayer(arg);
+  } else if (act === "plan-fund") {
+    void a905PlanFund(arg).then(() => refreshHomePaperMount());
+    return true;
+  } else if (act === "gift-new-payment") {
+    void a905GiftNewPayment(arg).then(() => refreshHomePaperMount());
+    return true;
+  } else {
+    return false;
+  }
+  refreshHomePaperMount();
+  return true;
+}
+
+// The pay step is the last Gift step (amount + front picked, compose, no Funding Paper open). The A-898 front pick repaints only the card stage in place,
+// which would leave the pay step missing (seen at 810 in the browser frames); this tells that patch when a full repaint is needed instead.
+function a905PayStepShouldShow() {
+  const gd = state.giftSend;
+  return Boolean(gd) && !state.a898Paper && gd.stage === "compose" && gd.preset !== null && gd.front !== null;
+}
+function a905PayStepStale() {
+  const m = state.a905Money;
+  if (!m || m.view !== "gift") return false;
+  return a905PayStepShouldShow() !== Boolean(document.querySelector('[data-a905-view="gift-pay"]'));
+}
+
+// Out flow: Face ID stays dead while MONEY_TAB_CONFIG.sendMoney is null (the button is disabled; this guard is the second lock).
+async function a905OutFaceId() {
+  const m = state.a905Money;
+  const seam = MONEY_TAB_CONFIG.sendMoney;
+  if (typeof seam !== "function" || !m || !m.out) return;
+  const v = outView(m.out, a905Piggies().piggies, { config: MONEY_TAB_CONFIG, chain: a898ChainId() });
+  if (v.faceIdEnabled !== true) return;
+  await seam({ preview: v.preview });
+}
+
+// Gift pay step: choose the paying Piggy once. The draft (fields, amount, front) is kept; the selected Piggy becomes the signer.
+function a905SwitchPayer(id) {
+  const d = state.giftSend;
+  const p = a898RegistryPiggy(id);
+  if (!d || !p || !isSelectablePiggy(p) || d.payer.id === p.id) return;
+  const snap = { ...giftDraftSnapshot(d), payerId: p.id, payerAddress: p.address };
+  const out = applyPiggySelection(p);
+  if (out.error) return;
+  const restored = giftDraftRestore(snap, { piggy: p, selected: state.selectedPiggy, chainScope: a898ChainId() });
+  if (!restored) return;
+  state.giftSend = restored;
+  void a898RefreshMarket();
+  a898SaveDraft();
+}
+
+// `in` with 2+ Piggies: after the A-646 allocation is confirmed, the Funding rows (Card / Bank transfer / Crypto) replace the old methods list.
+// Each tap opens the Funding Paper for the next allocation leg that has not been opened yet (prefilled with that leg's amount).
+function a905PlanFundingMarkup(fallback) {
+  const am = state.addMoney;
+  if (!am || am.kind !== "plan" || !a905Gate()) return fallback;
+  a905SyncLegs();
+  // every leg funded: nothing left to open (a tap must not re-open leg 0)
+  return nextPlanLeg(am.plan.legs, am.a905Legs || planLegsInit()) === null && !(am.a905Legs && am.a905Legs.current) ? "" : fundingRowsMarkup("plan-fund");
+}
+
+// Called at the confirmed-deposit point (a898FundingArrival): the leg is done at once, even if the paper is closed before any repaint.
+function a905NoteLegConfirmed(piggyId) {
+  const am = state.addMoney;
+  if (!am || am.kind !== "plan") return;
+  am.a905Legs = planLegsReduce(am.a905Legs || planLegsInit(), { type: "confirmed", id: piggyId }, am.plan.legs);
+}
+
+// A leg counts as done only when its Funding Paper reached a CONFIRMED arrival; a paper closed unconfirmed frees the leg again.
+function a905SyncLegs() {
+  const am = state.addMoney;
+  if (!am || am.kind !== "plan") return;
+  let s = am.a905Legs || planLegsInit();
+  const p = state.a898Paper;
+  if (s.current !== null && p && p.piggy && p.piggy.id === s.current && fundingPaperBalanceGrew(p)) s = planLegsReduce(s, { type: "confirmed", id: s.current }, am.plan.legs);
+  if (s.current !== null && !p) s = planLegsReduce(s, { type: "closed" }, am.plan.legs);
+  am.a905Legs = s;
+}
+
+async function a905PlanFund(row) {
+  const am = state.addMoney;
+  if (!am || am.kind !== "plan") return;
+  if (state.a898Paper) return; // a paper is already open (double tap / in flight): nothing else opens
+  a905SyncLegs();
+  const leg = nextPlanLeg(am.plan.legs, am.a905Legs || planLegsInit());
+  const piggy = leg ? a898RegistryPiggy(leg.piggyId) : null;
+  if (!piggy) return;
+  const amount = unitsToQuantity(BigInt(leg.amount), addMoneyDecimals());
+  const legs = planLegsReduce(am.a905Legs || planLegsInit(), { type: "open", id: leg.piggyId }, am.plan.legs);
+  if (!a898OpenFundingPaper(piggy, { piggy, chainId: a898ChainId(), prefill: { amount, asset: ADD_MONEY_ASSET } })) return;
+  state.addMoney = { ...am, a905Legs: legs }; // the plan stays behind the paper; closing the paper shows it again
+  await a898Act({ dataset: { a898Act: "funding-row", a898Arg: row } });
+}
+
+// Gift pay step: new money first lands in the paying Piggy (Funding Paper), then that Piggy signs. Short Gift = prefilled and bound to
+// the draft (returns to it on a confirmed arrival); otherwise the plain Funding Paper for the payer.
+async function a905GiftNewPayment(row) {
+  const d = state.giftSend;
+  if (!d || state.a898Paper) return;
+  const piggy = a898RegistryPiggy(d.payer.id);
+  if (!piggy) return;
+  const ev = a898Evaluate();
+  const args = ev ? giftSendFundingArgs(d, ev, { chainId: a898ChainId() }) : { ok: false };
+  if (args.ok) {
+    if (a898OpenFundingPaper(piggy, args.openArgs)) state.giftSend = giftSendReduce(d, { type: "funding_opened" });
+  } else if (!a898OpenFundingPaper(piggy, null)) {
+    return;
+  }
+  await a898Act({ dataset: { a898Act: "funding-row", a898Arg: row } });
+}
+
+if (typeof document?.addEventListener === "function") {
+  document.addEventListener("input", (event) => {
+    const field = event.target?.dataset?.a905Field;
+    const m = state.a905Money;
+    if (!field || !m || !m.out) return;
+    a905Dispatch({ type: "out", event: { type: field === "amount" ? "amount" : "address", value: event.target.value } });
+    const ok = document.getElementById("a905OutOk");
+    if (ok) ok.disabled = !outView(state.a905Money.out, a905Piggies().piggies, { config: MONEY_TAB_CONFIG, chain: a898ChainId() }).canNext;
+  });
+}
+
+// ── honey jar (mount · safe-slot placement · arrival bump) ───────────────────────────────────────────────────────────────────
+// Away Home scenes have no seat Piggy, so homeAmbientAnchors() is null there: the same Chog / Paper / HISTORY footprint formulas, minus the seat.
+function a905AwayAnchors() {
+  const chogEl = document.querySelector("#chogHome");
+  if (!chogEl) return null;
+  const C = chogInkRect(chogEl);
+  if (!C) return null;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const toRect = (b) => slotRect(b.left, b.top, b.right, b.bottom);
+  const fmtF = desktopFormat(vw, vh);
+  const fmtS = fmtF?.s ?? 1;
+  const paperScale = Math.min(285 / 400, 364 / 568) * HOME_PAPER_SCALE_K * fmtS;
+  const paperW = 400 * paperScale;
+  const paperH = 568 * paperScale;
+  const px = (fmtF ? fmtF.L.cx : vw / 2 - 32 * fmtS) - paperW / 2;
+  const py = (fmtF ? fmtF.L.cy : vh / 2 - 48 * fmtS) - paperH / 2;
+  const P = slotRect(px, py, px + paperW, py + paperH);
+  const band = homeSlotBand(vw);
+  const hp = computeHistoryPlacement(vw, vh);
+  let F;
+  if (hp && hp.mode !== "stacked") {
+    F = slotRect(hp.homeLeft, P.y, hp.histLeft + paperW, P.y + (band === "mobile" ? HOME_AMBIENT_FOOT_H.mobile : HOME_AMBIENT_FOOT_H.web * fmtS));
+  } else {
+    const historyRight = Math.max(P.x, vw - (band === "mobile" ? (parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--mobile-inset")) || 24) : 24) - paperW) + paperW;
+    F = slotRect(P.x, P.y, Math.max(P.r, historyRight), P.y + (band === "mobile" ? HOME_AMBIENT_FOOT_H.mobile : HOME_AMBIENT_FOOT_H.web * fmtS));
+  }
+  const brandEl = document.querySelector(".arasoBrand");
+  const brandBox = brandEl ? brandEl.getBoundingClientRect() : null;
+  const mobile = band === "mobile";
+  const top = mobile ? resolveCssLengthVarPx("--mobile-top-safe", 14) : 16;
+  const bottom = mobile ? resolveCssLengthVarPx("--mobile-bottom-safe", 20) : 16;
+  return { vw, vh, seat: null, seatImg: null, name: null, chog: C, paper: P, foot: F, brand: brandBox && brandBox.width ? toRect(brandBox) : null, safe: slotRect(16, top, vw - 16, vh - bottom) };
+}
+
+function a905JarRemove() {
+  document.querySelectorAll(".a905-jarLayer").forEach((n) => n.remove());
+}
+
+function a905MountJar(attempt) {
+  if (!a905Gate() || typeof document === "undefined") { if (typeof document !== "undefined") a905JarRemove(); return; }
+  const stage = document.querySelector(`.stage[data-scene="${state.scene}"]`);
+  const board = document.querySelector("#homeBoard");
+  if (!stage || !board) return;
+  const scene = state.scene;
+  const retry = () => {
+    if (attempt >= 30) return;
+    state.a905Jar.timer = setTimeout(() => { if (state.scene === scene) a905MountJar(attempt + 1); }, 200);
+  };
+  // wait for the arrival walk to end and, with companions, for the living layer: the slot is planned once and then never moves
+  if (document.querySelector('#homeChar[data-arrival="1"]')) { retry(); return; }
+  const anchors = (state.scene === "sendstay" ? homeAmbientAnchors() : null) || a905AwayAnchors();
+  if (!anchors || anchors.chog.pending === true) { retry(); return; }
+  if (state.scene === "sendstay" && indexedResidents().length >= 1 && !homeAmbient.layer && attempt < 12) { retry(); return; }
+  const occupied = [...document.querySelectorAll(".homeLiving")].map((el) => {
+    const b = el.getBoundingClientRect();
+    return slotRect(b.left, b.top, b.right, b.bottom);
+  });
+  const slot = planJarSlot({ anchors, occupied });
+  if (!slot) { a905JarRemove(); return; } // no spot clears every blocker: no jar (never overlap instead)
+  // Stacking (Owner "jar를 z로 Piggy보다 위에"): the layer lives INSIDE #homeBoard, between the seat Piggy (#homeChar) and Chog (#chogHome), z-index auto —
+  // so it paints above the seat Piggy and below Chog, the Home Paper and Chog's speech bubble (all later in the board). The living layer (z0) is outside
+  // and below the board. Board-local coordinates: the board is scaled, so px are divided by its scale and the jar size is divided too (it stays slot.w on screen).
+  const bb = board.getBoundingClientRect();
+  const k = board.offsetWidth > 0 ? bb.width / board.offsetWidth : 1;
+  const x = (slot.x - bb.left) / k;
+  const y = (slot.y - bb.top) / k;
+  const size = slot.w / k;
+  const have = document.querySelector("#a905Jar");
+  if (have && have.closest("#homeBoard") && have.style.getPropertyValue("--a905JarX") === `${Math.round(x * 100) / 100}px` && have.style.getPropertyValue("--a905JarY") === `${Math.round(y * 100) / 100}px`) {
+    state.a905Jar?.arrivals?.flush(); // same spot: keep the mounted jar (no remount flicker, a running bump is not cut)
+    return;
+  }
+  a905JarRemove();
+  const tpl = document.createElement("template");
+  tpl.innerHTML = honeyJarLayerMarkup({ x, y, size, minTap: JAR_MIN_TAP_PX / k });
+  const layer = tpl.content.firstElementChild;
+  if (!layer) return;
+  const chogEl = board.querySelector("#chogHome");
+  if (chogEl) board.insertBefore(layer, chogEl); else board.append(layer);
+  layer.querySelector("#a905Jar")?.addEventListener("click", () => {
+    if (!a905Gate()) return;
+    if (state.recordsCardVisible && computeHistoryFitMode() === "stacked") return;
+    a905OpenMoneyTab();
+  });
+  state.a905Jar?.arrivals?.flush(); // a real arrival that came while the jar was unmounted plays now
+}
+
+function a905ScheduleJar() {
+  if (!state.a905Jar) state.a905Jar = { timer: null, resize: null, arrivals: createJarArrivals({ onBump: () => a905BumpJar() }) };
+  clearTimeout(state.a905Jar.timer);
+  state.a905Jar.timer = setTimeout(() => a905MountJar(0), 0);
+}
+
+function a905BumpJar() {
+  const btn = document.querySelector("#a905Jar");
+  if (!btn) return false;
+  bumpJarElement(btn, { reduced: prefersReducedMotion(), timers: { setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (t) => clearTimeout(t) } }); // wrapped: a bare window.setTimeout called as timers.setTimeout throws Illegal invocation
+  return true; // reduced motion: the jar is there and static, nothing to play (never queued forever)
+}
+
+// The ONE door for a real arrival (confirmed deposit · Return receipt with value · received Gift). Only the deposit is wired today.
+function a905OfferArrival(evt) {
+  if (!state.a905Jar) state.a905Jar = { timer: null, resize: null, arrivals: createJarArrivals({ onBump: () => a905BumpJar() }) };
+  return state.a905Jar.arrivals.offer(evt);
+}
+
+function a905ObserveHome() {
+  if (typeof MutationObserver === "undefined" || typeof document === "undefined" || !document.body) return;
+  const isBoard = (n) => n.nodeType === 1 && (n.id === "homeBoard" || n.querySelector?.("#homeBoard"));
+  new MutationObserver((records) => {
+    for (const r of records) for (const n of r.addedNodes) if (isBoard(n)) { a905ScheduleJar(); return; }
+  }).observe(document.body, { childList: true, subtree: true });
+  window.addEventListener("resize", () => {
+    if (!document.querySelector(".a905-jarLayer")) return;
+    if (!state.a905Jar) return;
+    clearTimeout(state.a905Jar.resize);
+    state.a905Jar.resize = setTimeout(() => a905MountJar(0), 450);
+  });
+}
+a905ObserveHome();
+// ── [A-905] end ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// ── [A-904] One-time guide to the honey jar after Second (Owner "발주해" 2026-10-08: target = the jar, no Chog "tap me!", no house-stamp twinkle, no new copy) ──
+// First quiet Home after Second (scene sendstay + secondJourneyCompletedOnce = the addMoneyEntryAllowed gate, no First Send card): the jar settles in
+// (first entry only), and after the same quiet beat as A-891 (POST_FILE_QUIET_HOME_MS) it twinkles until the first tap. Max 3 Home entries, then it gives up.
+// Persisted in one localStorage key ("done" after the first jar tap, else the entry count). Storage unreadable = no guide (nothing is faked).
+// Away / secondAway / Return scenes never count. Reduced motion: style.css shows a still glow only. Seam: a MutationObserver sees the jar being mounted
+// and a delegated click sees the tap, so the A-905 jar code stays as it is. Functions only (render() can run before this block is reached).
+let a904Entry = { token: -1, active: false, drop: false, lit: false, timer: null };
+function a904Key() { return "araso.a904JarGuide"; }
+function a904Read() {
+  try {
+    const v = localStorage.getItem(a904Key());
+    if (v === "done") return { done: true, entries: 3 };
+    const n = Number(v);
+    return { done: false, entries: Number.isInteger(n) && n > 0 ? n : 0 };
+  } catch { return { done: true, entries: 3 }; }
+}
+function a904Write(v) { try { localStorage.setItem(a904Key(), String(v)); return true; } catch { return false; } }
+function a904Apply() {
+  const btn = document.querySelector("#a905Jar");
+  if (!btn) return;
+  if (!a904Entry.active || state.scene !== "sendstay") { btn.removeAttribute("data-a904"); return; }
+  if (a904Entry.lit) btn.setAttribute("data-a904", "twinkle");
+  else if (a904Entry.drop) btn.setAttribute("data-a904", "drop");
+  else btn.removeAttribute("data-a904");
+}
+function a904Arm() {
+  if (typeof document === "undefined" || !document.querySelector("#a905Jar")) return;
+  if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce !== true || state.sendCardVisible) { a904Apply(); return; }
+  if (a904Entry.token !== sceneToken) {
+    clearTimeout(a904Entry.timer);
+    a904Entry = { token: sceneToken, active: false, drop: false, lit: false, timer: null };
+    const g = a904Read();
+    if (g.done || g.entries >= 3 || !a904Write(g.entries + 1)) { a904Apply(); return; }
+    a904Entry.active = true;
+    a904Entry.drop = g.entries === 0;
+    const token = sceneToken;
+    a904Entry.timer = setTimeout(() => {
+      if (a904Entry.token !== token || state.scene !== "sendstay") return;
+      a904Entry.drop = false;
+      a904Entry.lit = true;
+      a904Apply();
+    }, POST_FILE_QUIET_HOME_MS);
+  }
+  a904Apply();
+}
+function a904Done(event) {
+  if (!event.target?.closest?.("#a905Jar")) return;
+  a904Write("done");
+  clearTimeout(a904Entry.timer);
+  a904Entry = { token: sceneToken, active: false, drop: false, lit: false, timer: null };
+  a904Apply();
+}
+if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" && document.body) {
+  new MutationObserver((records) => {
+    for (const r of records) for (const n of r.addedNodes) if (n.nodeType === 1 && (n.id === "a905Jar" || n.querySelector?.("#a905Jar"))) { a904Arm(); return; }
+  }).observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("click", a904Done, true);
+}
+// ── [/A-904] ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// ── [A-911] Own screens: Money tab · Gift a Piggy · Move money (wiring only; markup = a911-screens.js, logic = the A-898 / A-905 / A-646 code above) ─
+// Owner 2026-10-08 (INBOX A-911, frames approved "ㅇㅇ 고"). The Money tab, Gift a Piggy and Move money are one full-screen host (.a911-screen) on document.body,
+// not inside the Home paper: no Chog, no Piggy, no jar. It only DRAWS state that already exists (state.a905Money · state.giftSend · state.a898Paper ·
+// state.addMoney) and forwards every tap to the existing handlers (data-a898-act -> a898Act, data-a905-act -> a905HandleClick, #homeAddMoneyOk -> confirmAddMoney).
+// Money logic, signing, chain fields and amount maths: unchanged. No network, no storage of its own. Functions only (render() can run before this block).
+// The reassignments below replace A-905 seams on purpose: the Money tab no longer needs a paper slot (so it also opens on secondAway).
+// pre-A-911: a905OpenMoneyTab pinned the Home paper open in money mode; a905EffectiveMode lent "money" to away scenes only; a905Gate excluded secondAway.
+function a911S() {
+  if (!state.a911) state.a911 = { ci: 1, amountEdit: false, typing: false, copied: false, copyTimer: null, html: "" };
+  return state.a911;
+}
+
+a905Gate = function a905GateA911() {
+  // [A-911] same gate as before plus secondAway (the jar is on Home even when every Piggy is Away; the Money tab no longer needs the paper slot)
+  return state.secondJourneyCompletedOnce === true && (jarGate({ secondJourneyCompletedOnce: true, scene: state.scene }) || state.scene === "secondAway");
+};
+
+a905EffectiveMode = function a905EffectiveModeA911(scene, base) {
+  // [A-911] while the Money screen is open the Home paper stays in "money" mode behind it (hidden): homePadMarkup() would otherwise close every A-898 / A-905 flow
+  // on its next repaint (mode !== "money" -> a898Close + a905Reset). The screen is the only visible surface; closing it resets the surface and repaints the Home paper.
+  const m = state.a905Money;
+  return m && m.scene === scene && a905Gate() ? "money" : base;
+};
+
+a905BodyMarkup = function a905BodyMarkupA911(time) {
+  // [A-911] the Home paper behind the screen draws an empty Money body: the visible copy of every control (ids a905OutOk · homeAddMoneyAmount--* ...) lives on the screen only
+  const m = state.a905Money;
+  if (!m || m.scene !== state.scene || !a905Gate()) return null;
+  return homeMoneyMarkup({ title: MONEY_TAB_TITLE, time, rows: [], afterRowsMarkup: "" });
+};
+
+addMoneyEntryAllowed = function addMoneyEntryAllowedA911() {
+  // [A-911] the entries are allowed while the Money screen is open (the Home paper is not in money mode any more)
+  return state.secondJourneyCompletedOnce === true && state.scene === "sendstay" && (state.homePaperMode === "money" || Boolean(state.a905Money));
+};
+
+a905OpenMoneyTab = function a905OpenMoneyTabA911() {
+  if (!a905Gate()) return;
+  state.a905Money = moneyTabOpen(state.scene); // [A-911] no Home paper, no #chogHomeHit click
+  a911Sync();
+};
+
+function a911Root() {
+  return typeof document !== "undefined" ? document.querySelector(".a911-screen") : null;
+}
+
+function a911Remove() {
+  const root = a911Root();
+  if (root) root.remove();
+  const s = state.a911;
+  if (s) {
+    s.html = "";
+    s.amountEdit = false;
+    s.typing = false;
+    s.ci = 1;
+    s.copied = false;
+    if (s.copyTimer) { clearTimeout(s.copyTimer); s.copyTimer = null; }
+  }
+}
+
+function a911Kb() {
+  const vv = window.visualViewport || null;
+  if (!vv || !(vv.height > 0)) return 0;
+  const covered = Math.round(window.innerHeight - vv.height - (Number(vv.offsetTop) || 0));
+  return covered > 40 ? covered : 0; // below ~40 px it is browser chrome, not a keyboard
+}
+
+function a911Layout() {
+  const root = a911Root();
+  if (!root) return;
+  a911Fit(root, { kb: a911Kb() });
+  a911FitList(root);
+}
+
+function a911IsField(el) {
+  return Boolean(el) && (el.tagName === "INPUT" || el.tagName === "TEXTAREA");
+}
+
+// ── views (state -> the builders' reduced shapes) ──
+function a911GiftView(snap) {
+  const d = state.giftSend;
+  const s = a911S();
+  const gv = giftSendView(d, a898Evaluate());
+  const picked = gv.picked;
+  const sel = (gv.presets || []).find((p) => p.selected);
+  return {
+    stage: gv.stage === "done" && gv.link ? "done" : picked ? "pick" : "fan",
+    ci: s.ci,
+    picked,
+    flipped: gv.flipped,
+    typing: s.amountEdit ? "amount" : s.typing ? "letter" : "none",
+    fronts: gv.fronts,
+    amountUsd: sel ? Number(sel.id) : 0,
+    presets: gv.presets,
+    fields: gv.fields,
+    payerName: gv.payerName,
+    payerSwitch: selectablePiggies(snap.piggies).length > 1,
+    balanceUsd: gv.balanceUsd,
+    short: gv.short,
+    shortfallUsd: gv.shortfallUsd,
+    monOption: gv.monOption,
+    payWith: gv.payWith,
+    faceIdLine: gv.faceIdLine,
+    explainLines: gv.explain && gv.explain.open ? gv.explain.lines : [],
+    fees: gv.fees,
+    requote: gv.stage === "requote",
+    notReady: gv.stage === "unavailable",
+    notice: gv.notice,
+    canSend: gv.canFaceId === true && String(d.to || "").trim() !== "", // amount + front + exact line come from the A-898 evaluation; TO must be filled (Owner card B)
+    link: gv.link,
+    copied: s.copied,
+  };
+}
+
+function a911FundingView() {
+  const paper = state.a898Paper;
+  const pv = fundingPaperView(paper, { canCheck: typeof FUNDING_PAPER_CONFIG.arrivalReader === "function" });
+  const base = { dir: "in", typing: false, noSwitch: Boolean(state.giftSend), notice: pv.notice };
+  if (pv.stage === "rows") return { ...base, step: "rows", rows: pv.rows, prefill: pv.prefill ? pv.prefill.amountUsd : null };
+  if (pv.stage === "crypto" && pv.crypto) return { ...base, step: "crypto", assets: pv.crypto.assets, network: pv.crypto.network, address: pv.crypto.address, copied: pv.crypto.copied };
+  const text = pv.stage === "pending" ? "checking…" : pv.stage === "confirmed" ? "ok" : pv.stage === "failed" ? "nothing moved." : "can't tell yet.";
+  return { ...base, step: "state", text, check: pv.canCheck && (pv.stage === "failed" || pv.stage === "unknown") };
+}
+
+function a911MoveView(m, snap) {
+  const s = a911S();
+  if (m.dir === MONEY_SWITCH.OUT && m.out) {
+    const v = outView(m.out, snap.piggies, { config: MONEY_TAB_CONFIG, chain: a898ChainId() });
+    if (v.stage === "pick") return { dir: "out", step: "pick", typing: s.typing, rows: v.rows };
+    const who = v.piggy || { name: "" };
+    if (v.stage === "amount") {
+      const row = v.rows.find((r) => r.id === v.piggy?.id);
+      return { dir: "out", step: "amount", typing: s.typing, piggy: who, balance: row ? row.amount : HOME_UNKNOWN_LABEL, amount: v.amount, choices: v.choices.filter((c) => c.value !== "custom").map((c) => ({ id: c.value, label: c.label, selected: c.value === v.amount })), canOk: v.canNext };
+    }
+    const sendReady = typeof MONEY_TAB_CONFIG.sendMoney === "function" && (v.stage === "confirm" ? v.faceIdEnabled : v.canNext); // the live seam is null today: Send stays disabled
+    return { dir: "out", step: "address", typing: s.typing, piggy: who, amount: v.amount, asset: "USDC", address: v.address, notice: v.refusal ? "nothing moved." : "", canSend: sendReady };
+  }
+  if (state.a898Paper) return a911FundingView();
+  const am = state.addMoney;
+  if (am && am.kind === "allocation") {
+    const names = new Map(addMoneyPiggies().map((p) => [p.id, p.name || p.id]));
+    return { dir: "in", step: "split", typing: s.typing, total: am.total, split: Object.entries(am.rows).map(([id, r]) => ({ id, name: names.get(id) || id, amount: r.amount })), canOk: addMoneyPlanRows() !== null };
+  }
+  if (am && am.kind === "plan") {
+    const d = addMoneyDecimals();
+    const done = nextPlanLeg(am.plan.legs, am.a905Legs || planLegsInit()) === null && !(am.a905Legs && am.a905Legs.current);
+    const rows = done ? [] : fundingPaperRows(fundingPaperAdapters()).map((r) => ({ ...r, act: "plan-fund" }));
+    return { dir: "in", step: "rows", typing: false, rows, legs: am.plan.legs.map((l) => ({ id: l.piggyId, name: l.name, amount: unitsToQuantity(BigInt(l.amount), d), unit: ADD_MONEY_ASSET })) };
+  }
+  return { dir: "in", step: "state", typing: false, text: "Not ready yet" };
+}
+
+function a911Html() {
+  const m = state.a905Money;
+  a905SyncLegs();
+  a905SyncView(m);
+  const snap = a905Piggies();
+  if (m.view === "gift" && state.giftSend && !state.a898Paper) return a911GiftMarkup(a911GiftView(snap));
+  if (m.view === "gift" && state.a898Paper) return a911MoveMarkup(a911FundingView());
+  if (m.view === "move") return a911MoveMarkup(a911MoveView(m, snap));
+  const v = moneyTabView({ piggies: snap.piggies, totals: snap.totals, canAct: a905CanAct(), canMove: a905Gate() });
+  return a911MoneyMarkup({ total: v.total === HOME_UNKNOWN_LABEL ? "" : v.total, assets: v.assets, canMove: v.canMove, canGift: v.canGift, allAway: v.allAway, piggies: v.piggies }); // unknown is never the headline: only on its own row
+}
+
+// ── draw: first time = mount; afterwards the cards are morphed in place (so the CSS slide / flip plays) and the rest is replaced ──
+function a911Attrs(from, to, keepStyle = false) {
+  for (const a of [...to.attributes]) if (a.name !== "style" && from.getAttribute(a.name) !== a.value) from.setAttribute(a.name, a.value);
+  for (const a of [...from.attributes]) if (a.name !== "style" && !to.hasAttribute(a.name)) from.removeAttribute(a.name);
+  if (!keepStyle && to.hasAttribute("style") && from.getAttribute("style") !== to.getAttribute("style")) from.setAttribute("style", to.getAttribute("style")); // the screen root keeps its --a911-* fit vars
+}
+
+function a911FocusKey(el) {
+  if (!a911IsField(el)) return null;
+  const d = el.dataset || {};
+  return d.a898Field ? `[data-a898-field="${d.a898Field}"]` : d.a905Field ? `[data-a905-field="${d.a905Field}"]` : d.a911Field ? `[data-a911-field="${d.a911Field}"]` : el.id ? `#${el.id}` : null;
+}
+
+function a911SwapHeader(root, next) {
+  root.querySelector(".a911-title").textContent = next.querySelector(".a911-title").textContent;
+  a911Attrs(root.querySelector(".a911-back"), next.querySelector(".a911-back"));
+  root.querySelectorAll(":scope > .a911-act").forEach((n) => n.remove());
+  for (const n of [...next.querySelectorAll(":scope > .a911-act")]) root.append(n);
+}
+
+function a911Paint(root, html) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html.trim();
+  const next = tpl.content.firstElementChild;
+  if (!next) return null;
+  const active = document.activeElement && root.contains(document.activeElement) ? document.activeElement : null;
+  const key = a911FocusKey(active);
+  const sel = active && key ? { a: active.selectionStart, b: active.selectionEnd } : null;
+  const oldCards = root.querySelector(".a911-cards");
+  const newCards = next.querySelector(".a911-cards");
+  let out = root;
+  if (root.dataset.a911 === next.dataset.a911 && oldCards && newCards) {
+    a911Attrs(root, next, true);
+    a911Attrs(oldCards, newCards);
+    const have = new Map([...oldCards.children].map((c) => [c.dataset.a898Front, c]));
+    for (const nc of [...newCards.children]) {
+      const oc = have.get(nc.dataset.a898Front);
+      if (!oc) { oldCards.append(nc); continue; }
+      a911Attrs(oc, nc); // class + --d change, so the CSS transition plays
+      const oi = oc.querySelector(".a911-card__inner");
+      const ni = nc.querySelector(".a911-card__inner");
+      if (oi && ni && !(active && oi.contains(active)) && oi.innerHTML !== ni.innerHTML) oi.innerHTML = ni.innerHTML;
+      const ot = oc.querySelector(".a911-cardTap");
+      const nt = nc.querySelector(".a911-cardTap");
+      if (ot && nt) a911Attrs(ot, nt);
+    }
+    const group = root.querySelector(".a911-giftGroup");
+    for (const n of [...group.children]) if (n !== oldCards) n.remove();
+    for (const n of [...next.querySelector(".a911-giftGroup").children]) if (!n.classList.contains("a911-cards")) group.append(n);
+    a911SwapHeader(root, next);
+  } else if (root.dataset.a911 === next.dataset.a911) {
+    a911Attrs(root, next, true);
+    root.querySelector(".a911-body").replaceWith(next.querySelector(".a911-body"));
+    a911SwapHeader(root, next);
+  } else {
+    root.replaceWith(next);
+    out = next;
+    a911Bind(out);
+  }
+  if (key) {
+    const el = out.querySelector(key);
+    if (el && el !== document.activeElement) {
+      try { el.focus({ preventScroll: true }); if (sel && sel.a !== null) el.setSelectionRange(sel.a, sel.b); } catch { null; }
+    }
+  }
+  return out;
+}
+
+function a911Sync() {
+  if (typeof document === "undefined" || !document.body) return;
+  const m = state.a905Money;
+  const locked = Boolean(document.querySelector("[data-app-lock]"));
+  if (!m || m.scene !== state.scene || !a905Gate() || locked) { a911Remove(); return; }
+  const html = a911Html();
+  const s = a911S();
+  const root = a911Root();
+  if (root && s.html === html) { a911Layout(); return; } // nothing changed: leave the DOM (focus, scroll, running transitions) alone
+  s.html = html;
+  if (!root) {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = html.trim();
+    const first = tpl.content.firstElementChild;
+    if (!first) return;
+    document.body.append(first);
+    a911Bind(first);
+  } else {
+    a911Paint(root, html);
+  }
+  a911Layout();
+  requestAnimationFrame(a911Layout);
+}
+
+// ── input: every tap on the screen goes to the existing handler ──
+function a911Copy(text) {
+  try {
+    const p = navigator.clipboard && navigator.clipboard.writeText ? navigator.clipboard.writeText(text) : null;
+    return p ? p.then(() => true, () => false) : Promise.resolve(false);
+  } catch { return Promise.resolve(false); }
+}
+
+function a911LinkCopy() {
+  const link = state.giftSend && state.giftSend.link;
+  if (!link) return Promise.resolve(false);
+  return a911Copy(link).then((ok) => {
+    if (!ok) return false;
+    const s = a911S();
+    s.copied = true;
+    if (s.copyTimer) clearTimeout(s.copyTimer);
+    s.copyTimer = setTimeout(() => { s.copyTimer = null; s.copied = false; a911Sync(); }, 1500); // the yellow check goes back to the copy icon
+    a911Sync();
+    return true;
+  });
+}
+
+function a911GiftCardTap(card, target) {
+  const d = state.giftSend;
+  const s = a911S();
+  if (!d || d.stage !== "compose") return;
+  const id = card.dataset.a898Front;
+  if (card.classList.contains("is-side")) { s.ci = Number(card.dataset.i); a911Sync(); return; } // a side card slides to the centre
+  if (card.classList.contains("is-centre")) {
+    state.giftSend = giftSendReduce(d, { type: "tap_front", front: id }); // the centre card is picked (not flipped; no auto-flip on this screen)
+    a898SaveDraft();
+    a911Sync();
+    return;
+  }
+  if (!card.classList.contains("is-picked") || a911IsField(target)) return;
+  if (target.closest(".a911-amt") && !card.classList.contains("is-flipped")) return; // the amount box does nothing: chips only (typing your own = follow-up card)
+  state.giftSend = giftSendReduce(d, { type: "tap_front", front: id }); // free flip either way, any time
+  a898SaveDraft();
+  a911Sync();
+}
+
+function a911PayerNext() {
+  const d = state.giftSend;
+  const sel = selectablePiggies(a905Piggies().piggies);
+  if (!d || sel.length < 2) return;
+  const i = sel.findIndex((p) => p.id === d.payer.id);
+  a905SwitchPayer(sel[(i + 1) % sel.length].id); // the existing A-905 payer switch; the draft is kept
+  a911Sync();
+}
+
+function a911OnClick(event) {
+  const t = event.target && event.target.closest ? event.target : null;
+  const root = a911Root();
+  if (!t || !root || !root.contains(t)) return;
+  const own = t.closest("[data-a911-act]");
+  if (own) {
+    const act = own.dataset.a911Act;
+    if (act === "link-copy") void a911LinkCopy();
+    else if (act === "link-share") void a911Share(state.giftSend && state.giftSend.link, () => { void a911LinkCopy(); }); // iPhone share sheet; unsupported -> copy
+    else if (act === "payer-next") a911PayerNext();
+    return;
+  }
+  const card = t.closest(".a911-card");
+  if (card && root.dataset.a911 === "gift") { a911GiftCardTap(card, t); return; }
+  const a898El = t.closest("[data-a898-act]");
+  if (a898El) {
+    if (a898El.hasAttribute("disabled")) return;
+    void a898Act(a898El); // existing handler (repaints through refreshHomePaperMount -> a911Sync)
+    return;
+  }
+  const el = t.closest("[data-a905-act]");
+  if (el) {
+    if (el.hasAttribute("disabled")) return;
+    const act = el.dataset.a905Act;
+    const m = state.a905Money;
+    if (!m) return;
+    if (act === "back") {
+      if (state.a898Paper) { void a898Act({ dataset: { a898Act: "funding-back" } }); return; } // crypto -> rows -> closed (returns to the Gift draft when it came from one)
+      if (m.view === "tab") { a905DropFlows(); a905Reset(); refreshHomePaperMount(); return; } // the Money screen itself closes; the Home paper repaints in home mode
+    } else if (act === "out-choice") {
+      a905Dispatch({ type: "out", event: { type: "amount", value: el.dataset.a905Arg } });
+      refreshHomePaperMount();
+      return;
+    } else if (act === "out-faceid") {
+      // Send is enabled only with a live seam (null today). At the address step the existing "next" runs first, then the existing Face ID guard.
+      if (m.out && m.out.stage === "address") a905Dispatch({ type: "out", event: { type: "next" } });
+      void a905OutFaceId();
+      refreshHomePaperMount();
+      return;
+    }
+    a905HandleClick(event);
+    return;
+  }
+  if (t.closest("#homeAddMoneyOk, [data-add-money='ok']")) { confirmAddMoney(); refreshHomePaperMount(); }
+}
+
+function a911OnInput(event) {
+  const el = event.target;
+  const root = a911Root();
+  if (!el || !root || !root.contains(el)) return;
+  const d = state.giftSend;
+  if (d && el.dataset && el.dataset.a898Field) {
+    const send = root.querySelector('[data-a898-act="gift-faceid"]');
+    if (send && state.giftSend) send.disabled = !(giftSendView(state.giftSend, a898Evaluate()).canFaceId === true && String(state.giftSend.to || "").trim() !== "");
+  }
+  if (el.id && (el.id === "homeAddMoneyTotal" || el.id.startsWith("homeAddMoneyAmount--"))) handleAddMoneyInput(event); // the A-646 split (amounts only, no %)
+}
+
+function a911Bind(root) {
+  root.addEventListener("click", a911OnClick);
+}
+
+function a911FocusChange() {
+  const s = a911S();
+  setTimeout(() => {
+    const r = a911Root();
+    if (!r) return;
+    const on = a911IsField(document.activeElement) && r.contains(document.activeElement);
+    if (on === s.typing && (on || !s.amountEdit)) { a911Layout(); return; }
+    s.typing = on;
+    if (!on && s.amountEdit) { s.amountEdit = false; a911Sync(); return; }
+    if (on) r.dataset.typing = "1"; else r.removeAttribute("data-typing");
+    a911Layout();
+  }, 50);
+}
+
+if (typeof document?.addEventListener === "function") {
+  document.addEventListener("input", a911OnInput);
+  document.addEventListener("focusin", a911FocusChange);
+  document.addEventListener("focusout", a911FocusChange);
+  window.addEventListener("resize", () => a911Layout());
+  if (window.visualViewport && typeof window.visualViewport.addEventListener === "function") {
+    window.visualViewport.addEventListener("resize", a911Layout);
+    window.visualViewport.addEventListener("scroll", a911Layout);
+  }
+  if (typeof MutationObserver === "function" && document.body) {
+    // a re-rendered scene (render() rebuilds #app) or a lock surface: re-check whether the screen still belongs to this scene
+    new MutationObserver((records) => {
+      for (const r of records) for (const n of r.addedNodes) if (n.nodeType === 1 && !(n.classList && n.classList.contains("a911-screen")) && (n.hasAttribute?.("data-scene") || n.querySelector?.("[data-scene], [data-app-lock]"))) { a911Sync(); return; }
+    }).observe(document.body, { childList: true, subtree: true });
+  }
+}
+
+{
+  // every repaint the existing flows ask for (async arrivals, market reads, Face ID results) also repaints this screen
+  const a911RefreshOrig = refreshHomePaperMount;
+  refreshHomePaperMount = function refreshHomePaperMountA911() {
+    a911RefreshOrig();
+    a911Sync();
+  };
+}
+// ── [A-911] end ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+// ── [A-897 P2] 승격 장면(우표) 마운트 + 이름 없는 Piggy 탭해서 채우기 ───────────────────────────────────────────
+// 새 블록만 — render()/homePadMarkup()/mountHomeResidentModule() 본체는 건드리지 않는다. 이 블록은
+// (1) P1 이 승격 분기에서 부르는 함수 하나, (2) home-paper-multi.js 가 mount 때 읽는 provider 하나를 둔다.
+const A897_STAMP_PLAYED_KEY = "araso.promotionStampPlayed.v1."; // + chainId — 승격 장면은 한 번만(Owner: "찍히는 순간")
+let a897StampRoot = null;
+let a897StampHandle = null;
+
+function a897StampCleanup() {
+  try { a897StampHandle?.destroy(); } catch { null; }
+  a897StampHandle = null;
+  try { a897StampRoot?.remove(); } catch { null; }
+  a897StampRoot = null;
+}
+
+// [P1 이 부르는 지점] 같은 #1 승격(First Journey 완료 증거 있음 + Gift claim 성공) 분기에서만 부른다.
+// 오버레이는 body 위에 얹혀 render()/씬 전환과 무관하게 ~2 s 돌고, 끝나면 사라진 뒤 onDone() 을 부른다 —
+// 그 아래에는 이미 같은 Piggy 의 Home 이 있다(페이지 넘김). 승격이 아닌 분기에서는 부르지 않는다.
+// 한 번만: 이 기기·이 chain scope 에서 이미 재생했으면 { played:false, reason:"already_played" } 로 바로 돌려준다
+// (이때 onDone 은 부르지 않는다 — 호출자가 다음 동작을 이어가면 된다).
+function playPromotionStampScene({ onDone } = {}) {
+  if (a897StampHandle) return { played: false, reason: "already_running" };
+  const storage = safeLocalStorage();
+  const key = A897_STAMP_PLAYED_KEY + secondJourneyScope().chainId;
+  try { if (storage && storage.getItem(key) === "1") return { played: false, reason: "already_played" }; } catch { null; }
+  try { storage?.setItem(key, "1"); } catch { null; }
+  const holder = document.createElement("div");
+  holder.innerHTML = promotionStampMarkup();
+  const root = holder.firstElementChild;
+  if (!root) return { played: false, reason: "no_markup" };
+  document.body.appendChild(root);
+  a897StampRoot = root;
+  a897StampHandle = mountPromotionStamp(root, {
+    reduced: prefersReducedMotion(),
+    onDone: () => {
+      a897StampCleanup();
+      try { onDone?.(); } catch { null; }
+    },
+  });
+  return { played: true, reason: null };
+}
+
+// 이름 없는 Piggy(이름 데이터 없음 ≠ 새 Piggy) — Home 이름 자리 = 노랑 밑줄, 그 줄만 탭 → 제자리 입력 → Save.
+// 현재 chain-scoped 색인의 그 Piggy 이름만 채운다(renameIndexedPiggy). Hatch / Name scene 재진입 / reset 0.
+function a897NameFillInfo(card) {
+  const rows = indexedResidents();
+  const here = state.address ? String(state.address).toLowerCase() : "";
+  const idAttr = card?.dataset?.piggyId || "";
+  if (idAttr) {
+    const row = rows.find((r) => r.id === idAttr);
+    if (!row) return null;
+    const first = row.id === (here ? indexedPiggyId(here) : "");
+    // 첫 Piggy 는 이름 원천이 둘(색인 · PIGGY_NAME_KEY) — 둘 다 비었을 때만 이름 없음(있는 이름을 덮어쓰지 않는다).
+    return { id: row.id, unnamed: !String(row.name || "").trim() && !(first && readPiggyName().trim()), first };
+  }
+  // 한 마리 카드는 data-piggy-id 가 없다 — 지금 이 Piggy 의 행. Home 이 보여 주는 이름 원천은 PIGGY_NAME_KEY.
+  if (!here) return null;
+  const row = rows.find((r) => String(r.address || "").toLowerCase() === here);
+  return row ? { id: row.id, unnamed: !readPiggyName().trim() && !String(row.name || "").trim(), first: true } : null;
+}
+
+setUnnamedNameFill({
+  isUnnamed: (card) => a897NameFillInfo(card)?.unnamed === true,
+  save: (card, name) => {
+    const info = a897NameFillInfo(card);
+    if (!info || !info.unnamed) return false;
+    const out = renameIndexedPiggy(safeLocalStorage(), secondJourneyScope().chainId, { id: info.id, name });
+    if (!out || out.ok !== true) return false;
+    // Name it 의 Save 와 같은 줄: 첫 Piggy 의 이름 표시 원천(PIGGY_NAME_KEY)도 채운다.
+    if (info.first) { try { localStorage.setItem(PIGGY_NAME_KEY, name); } catch { null; } }
+    // 펼쳐진 주민 창은 그대로 펼쳐 둔다 — refresh 는 접힌 채 다시 mount 하므로, 열려 있었다면 같은 방식([A-624] reopen)으로 되살린다.
+    const wasResOpen = typeof document !== "undefined" && !!document.querySelector('.homePaper[data-paper-mode="home"]')?.classList.contains("isResOpen");
+    refreshHomePaperMount(); // Home 그대로 — 같은 종이를 새 이름으로 다시 그린다(씬 전환 0)
+    if (wasResOpen) mountHomeResidentModule({ reopen: true });
+    return true;
+  },
+});
+
+// home-paper-multi.js 는 확정 디자인 패키지와 byte-identical 이라 mount 시점에 끼어들 수 없다 — 새 주민 카드가 DOM 에
+// 들어온 뒤(같은 task 의 microtask, 그리기 전)에 이름 자리를 정한다. 카드 추가가 아닌 변경은 보지 않는다(루프 0).
+function a897ObserveHomeCards() {
+  if (typeof MutationObserver === "undefined" || typeof document === "undefined" || !document.body) return;
+  const isCard = (n) => n.nodeType === 1 && (n.matches?.(".homePaper__card--piggy") || n.querySelector?.(".homePaper__card--piggy"));
+  new MutationObserver((records) => {
+    let hit = false;
+    for (const r of records) for (const n of r.addedNodes) if (isCard(n)) hit = true;
+    if (!hit) return;
+    for (const paper of document.querySelectorAll('.homePaper[data-paper-mode="home"]')) applyUnnamedNameRows(paper);
+  }).observe(document.body, { childList: true, subtree: true });
+}
+a897ObserveHomeCards();
+// ── [A-897 P2] end ───────────────────────────────────────────────────────────────────────────────────────
 
 // [A-412 §1] 집도장 클릭 — HOME 이면 Money 를 열고(그리고 아직 안 읽었으면/실패했으면
 // 곧장 읽는다), 그 밖(Money/Piggy 상세)이면 곧장 HOME 으로 되돌린다(home-paper.js 의
@@ -8819,6 +11441,7 @@ function toggleHomePaperMoneyMode() {
 // 않는 내부 전환에도 매번 새로 붙일 필요가 없다(§recordsCard 델리게이션과 같은 자리 규율,
 // render() 의 #recordsCard 리스너 참고).
 function handleHomePaperMountClick(event) {
+  if (typeof a905HandleClick === "function" && a905HandleClick(event)) return; // [A-905] Money tab actions (also on an Away Home scene)
   if (state.scene !== "sendstay") return;
   // [A-623] mobile + HISTORY open = HOME is background, close-only (syncRecordsViewportState()
   // makes `.homePaperMount` inert; this guard also covers synthetic/programmatic clicks). Only
@@ -8830,6 +11453,17 @@ function handleHomePaperMountClick(event) {
   // synthetic/programmatic click can't slip through in the 641-~710 range that used to read as
   // "web" under the old threshold but is now stacked mode.
   if (state.recordsCardVisible && computeHistoryFitMode() === "stacked") return;
+  // [A-898] Funding Paper / Send a Piggy actions (data-a898-act) and the Send a Piggy entry.
+  const a898Target = event.target.closest("[data-a898-act]");
+  if (a898Target) {
+    if (!a898Target.hasAttribute("disabled")) void a898Act(a898Target);
+    return;
+  }
+  if (event.target.closest("#homeSendPiggy")) {
+    a898OpenGiftSend();
+    refreshHomePaperMount();
+    return;
+  }
   // [A-646] Add money — 열기 · 닫기 · ok(한 번). 셋 다 왼쪽 종이만 다시 그린다. 서명·WebAuthn·tx·충전 0.
   if (event.target.closest("#homeAddMoney")) {
     openAddMoney();
@@ -8973,12 +11607,97 @@ function homeCharacter(name) {
 function chogHomeMarkupForExplore() {
   const markup = chogHomeMarkup({ padMarkup: homePadMarkup(state.scene) });
   const sj = state.secondJourney;
-  if (state.scene !== "explore" || sj?.step !== "candidates" || !sj.chogSay) return markup;
+  // [A-849 UI-24] WAIT state (picks exist, 0 candidates, no read in flight): Chog says the two Owner lines, stacked.
+  if (state.scene === "explore" && sj?.step === "candidates" && secondLaneMode(sj) && sj.laneReading !== true
+      && secondPickedErrandIds(sj).length > 0 && secondLaneDestinations(sj).length === 0) {
+    const two = `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)"><span class="chogCheckLine__line">oh… no jobs to go.</span><span class="chogCheckLine__line">wait for the next bell?</span></span>`;
+    return markup.replace('<div class="chogHome__hit"', `${two}<div class="chogHome__hit"`);
+  }
+  // [A-893 CG-05] the line is derived from the CURRENT picks at every render, not the value set once at save.
+  const confirmLine = state.scene === "explore" && sj?.step === "candidates" ? exploreChogConfirmLine(sj) : null;
+  if (!confirmLine) return markup;
   // [Owner 2026-09-19 "초그 발화 위치 머리 위에" · A-429] 머리 위 좌표는 이제 .chogCheckLine
   // 한 곳(style.css)에 있다 — 귀환 알람과 같은 자리. 값 = INFERRED.
   // [A-431] A-429 가 없앤 인라인 transform 만 되돌린다 — Explore 발화 글자 비율(scaleY 없음) 보존.
-  const say = `<span class="chogCheckLine" id="exploreChogSay" style="transform:translateX(-50%)">${escapeHtml(sj.chogSay)}</span>`;
+  const say = `<span class="chogCheckLine" id="exploreChogSay" style="transform:translateX(-50%)">${escapeHtml(confirmLine)}</span>`;
   return markup.replace('<div class="chogHome__hit"', `${say}<div class="chogHome__hit"`);
+}
+
+// ── [A-893] Wave 5 Chog cues ─────────────────────────────────────────────────────────────────────────
+// Copy = 94_VISUAL_DIRECTION §[2026-10-08 Owner] "Chog copy locked", exactly; no other lines. Every cue reuses the existing
+// .chogCheckLine (same head-top slot, font and colour as the Explore say / away line) — no new speech system, asset, timer
+// or animation. Nothing here reads or writes money, auth or tx state; the money-truth away line is never replaced.
+
+// CG-05: "these two?" / "all of them?" for the CURRENT interest picks. `offered` = the set the picks were made from (kept at
+// save; on a later visit, the set the edit card would show). One pick, or picks that are neither two nor all: no line (no
+// locked wording exists — UNKNOWN, never invented). 0 picks never reaches here (A-849: save with none = back to interests).
+function exploreChogConfirmLine(sj) {
+  const picks = secondPickedErrandIds(sj);
+  if (picks.length < 2) return null;
+  const offered = Array.isArray(sj?.exploreOfferedIds) && sj.exploreOfferedIds.length
+    ? sj.exploreOfferedIds
+    : computeExploreDisplayErrands(sj).map((errand) => errand.id);
+  if (offered.length > 1 && picks.length === offered.length && offered.every((id) => picks.includes(id))) return "all of them?";
+  return picks.length === 2 ? "these two?" : null;
+}
+
+// One Chog line into the live #chogHome (same spot chogHomeMarkup* use: just before .chogHome__hit). DOM-only, so the
+// next render() drops it by itself — a cue lives until the scene is drawn again, never on a clock.
+function insertChogCueLine(id, text) {
+  const root = document.querySelector("#chogHome");
+  const hit = root?.querySelector(".chogHome__hit");
+  if (!root || !hit) return false;
+  let line = root.querySelector(`#${id}`);
+  if (!line) {
+    line = document.createElement("span");
+    line.className = "chogCheckLine";
+    line.id = id;
+    line.style.transform = "translateX(-50%)";
+    root.insertBefore(line, hit);
+  }
+  line.textContent = text;
+  return true;
+}
+
+// CG-01: once, when the First Send card first appears — called only from mountHome()'s revealSendCard, which runs only on
+// the first arrival after Name save (isFirstArrival; Send revisits, reloads and added Piggies never reach it). The card's
+// own copy ("Piggy's first job?", A-779) is untouched; the next render (Send tap, Home, reload) clears the line.
+const FIRST_SEND_CUE_LINE = "wanna let Piggy try one?";
+function sayFirstSendCue() {
+  if (state.appLock || state.scene !== "sendstay" || !state.sendCardVisible || sendBusy()) return false;
+  return insertChogCueLine("firstSendChogCue", FIRST_SEND_CUE_LINE);
+}
+
+// CG-02 [A-893b · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로 · ㅇㅇ굿", supersedes the separate-speech / sequenced versions]:
+// no second line anywhere. The existing Away restore slot (#awayRestoreLine) says "checking…" and, when the read settles to the
+// PENDING kind, "still out working." (first open in this Away) / "not back yet." (later opens) instead of "still out." — wording
+// only, in awayRestoreLineMarkup(); which kind it is stays reconcileSendPending()'s decision. "can't tell yet." is unchanged.
+// An open = the app open itself (count 1), then each return to the page (visibilitychange -> visible) while the slot says pending.
+// No timer. Memory only: a reload is a new app open (count 1 again).
+let awayOpenCount = 1;
+// [A-893b F1 · Owner via Cowork 2026-10-08 OUTBOX answer] an idle-lock unlock inside the same Away is the next open too. Hooked from OUTSIDE the pinned
+// functions: renderAppLock() notes the lock (unpinned), and the Away mount that follows the unlock (armAwayOpenLine) counts it once. `var` on purpose:
+// renderAppLock() can run before this line during boot (no TDZ). A boot lock is not counted (no Away has mounted yet in this page life).
+var awayMountedOnce = false;
+var awayLockedInAway = false;
+function noteAwayLocked() {
+  if (awayMountedOnce && state.scene === "away") awayLockedInAway = true;
+}
+
+// Called from mountAway() once per Away mount.
+function armAwayOpenLine() {
+  awayMountedOnce = true;
+  if (state.departureArrival) { awayOpenCount = 1; awayLockedInAway = false; }   // a new departure = a new Away
+  if (awayLockedInAway && !state.appLock) {         // the mount right after an unlock: one open, counted once, no timer
+    awayLockedInAway = false;
+    awayOpenCount += 1;
+    if (state.awayRestore === "pending") showAwayRestore("pending");
+  }
+  sceneListener(document, "visibilitychange", () => {
+    if (document.visibilityState !== "visible" || state.appLock || state.scene !== "away" || state.awayRestore !== "pending") return;
+    awayOpenCount += 1;
+    showAwayRestore("pending");                     // same kind again — only the slot's wording follows the open count
+  });
 }
 
 // [A-359 §1] .cardAnchor 는 이제 무대(#homeBoard) 밖, `.stage` 의 뷰포트 좌표계에 있어
@@ -8990,10 +11709,179 @@ function chogHomeMarkupForExplore() {
 function fitCardAnchor() {
   const el = document.querySelector("#sendCardAnchor");
   if (!el) return;
+  if (desktopFormat()) { el.style.setProperty("--cardShrink", "1"); return; } // [A-827] desktop: s already carries the height limit
   const w = 285, h = 364, offX = 32, offY = 48, margin = 12;
   const shrinkW = (window.innerWidth / 2) / (w / 2 + offX + margin);
   const shrinkH = (window.innerHeight / 2) / (h / 2 + offY + margin);
   el.style.setProperty("--cardShrink", String(Math.min(1, shrinkW, shrinkH)));
+}
+
+// [A-831 · A-829 KEYFRAME LAYOUT] Home composition at EVERY width from three reference frames (390 / 810 / 1440), linear in between.
+//   (A-827's "pure s = vw / 1440 at vw >= 1100" is replaced; `desktopFormat()` keeps its name and its `.s` meaning so every existing consumer
+//   (fmtLen, paper footprint, records gap, canvases, CSS --fmtS) follows: s is now k = Home card width / 282, 282 = the pre-A-831 paper width.)
+//   keyframes (390/810/1440): stage width 211/321/361 - side margin 20/52/120 - bottom margin 7.1%/8%/8% of vh.
+//   above 1440 every length scales by min(vw/1440, 1.33); below 390 by vw/390 (percentages stay).
+//   card height = vh x f; f_portrait .475 (w<=390) -> .54 (w>=810); f = f_portrait at w/h <= .75, .594 at >= 1.25, linear between.
+//   card width = height / 1.42 (paper aspect 400:568), never wider than vw - 2 x margin. (Q4 asked for a cap at the 1440x900 card x min(vw/1440, 1.33); the v10
+//   generator has none and a cap would step the card 452 -> 377 at 1441x1080, so the generator rule is followed - see A-831 receipt, UNKNOWN U1.)
+//   ARASO: left = side margin, font = card width x .064, top = 2 x font (+ safe-area-inset-top, added in CSS). Line pitch = 32 x card width / 282.
+//   Characters: ONE uniform group scale S so the ink width (Chog head left -> Piggy seat right) = stage width; the group's right ink edge sits on
+//   (vw - margin) and its lowest foot ink on (vh - bottom margin). The old phone boost / narrow blend / scale floor never engage for Home (S >= .6).
+//   Card placement: landscape (vw > vh) = top 12.5% of vh, centred in the zone [margin, stage left - 3% vw]; portrait = centred vertically between the
+//   ARASO bottom and the stage top, x from the left margin line (390) to centred between the margins (>= 810).
+const HK_STAGE_W = [211, 321, 361];
+const HK_SIDE_M = [20, 52, 120];
+const HK_BOTTOM = [0.071, 0.08, 0.08];
+const HK_CAP = 1.33;
+const HK_PAPER_H_PER_W = 568 / 400;
+const HK_CARD_REF_W = 282;
+const HK_F_PORTRAIT = [0.475, 0.54];
+const HK_F_LANDSCAPE = 0.594;
+// Board-unit ink box of the Chog + Piggy group at the 1440 arrangement (measured in the browser at 1440x900, A-827 board S = 1440/1256):
+// Chog head ink left 968.49 px, Piggy seat right 1279.63 px, lowest foot ink 750.71 px, board left 0 / top 7.452.
+const HK_INK_L = 844.76;
+const HK_INK_R = HOME_SEAT_L + HOME_SEAT_W;
+const HK_INK_FOOT = 648.29;
+const HK_INK_TOP = HK_INK_FOOT - HOME_SEAT_H;
+const hkClamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+function hkKey(vw, kf, pct) {
+  const [a, b, c] = kf;
+  if (vw <= 390) return pct ? a : (a * vw) / 390;
+  if (vw <= 810) return a + ((b - a) * (vw - 390)) / 420;
+  if (vw <= 1440) return b + ((c - b) * (vw - 810)) / 630;
+  return pct ? c : c * Math.min(vw / 1440, HK_CAP);
+}
+// Pure: no DOM. safeTop = env(safe-area-inset-top) in px.
+function homeKeyframeLayout(vw, vh, safeTop = 0) {
+  const M = hkKey(vw, HK_SIDE_M);
+  const stageW = hkKey(vw, HK_STAGE_W);
+  const bottom = hkKey(vw, HK_BOTTOM, true) * vh;
+  const fPortrait = HK_F_PORTRAIT[0] + (HK_F_PORTRAIT[1] - HK_F_PORTRAIT[0]) * hkClamp((vw - 390) / 420, 0, 1);
+  const f = fPortrait + (HK_F_LANDSCAPE - fPortrait) * hkClamp((vw / vh - 0.75) / 0.5, 0, 1);
+  let cardW = (vh * f) / HK_PAPER_H_PER_W;
+  cardW = Math.min(cardW, Math.max(0, vw - 2 * M));
+  const cardH = cardW * HK_PAPER_H_PER_W;
+  const k = cardW / HK_CARD_REF_W;
+  const asFont = cardW * 0.064;
+  const asTop = 2 * asFont;
+  const asBottom = asTop + asFont + safeTop;
+  const S = stageW / (HK_INK_R - HK_INK_L);
+  const floorY = vh - bottom;
+  const boardLeft = vw - M - S * HK_INK_R;
+  const boardTop = floorY - S * HK_INK_FOOT;
+  const stageLeft = vw - M - stageW;
+  const stageTop = floorY - S * (HK_INK_FOOT - HK_INK_TOP);
+  // [A-833 U2] card x/y blend between the portrait rule (A-829 item 5) and the landscape rule (zone-centred, top 12.5 %) with the SAME
+  // aspect weight as the card-height rule: t = clamp((w/h - 0.75)/0.5, 0, 1) - no step at the portrait/landscape switch.
+  // pre-A-833 baseline: hard switch at vw > vh (A-831 generator `landscape = W > H`).
+  const posT = hkClamp((vw / vh - 0.75) / 0.5, 0, 1);
+  const zoneL = M;
+  const zoneR = stageLeft - 0.03 * vw;
+  const cardYL = 0.125 * vh;
+  const cardXL = Math.max(zoneL, (zoneL + zoneR) / 2 - cardW / 2);
+  const cardYP = asBottom + Math.max(0, (stageTop - asBottom - cardH) / 2);
+  const cardXP = M + (vw - 2 * M - cardW) * hkClamp((vw - 390) / 840, 0, 0.5);
+  const cardX = cardXP + (cardXL - cardXP) * posT;
+  const cardY = cardYP + (cardYL - cardYP) * posT;
+  return { vw, vh, s: k, k, M, stageW, bottom, cardW, cardH, cardX, cardY, posT, cx: cardX + cardW / 2, cy: cardY + cardH / 2,
+    asFont, asTop, asBottom, pitch: (32 * cardW) / HK_CARD_REF_W, S, boardLeft, boardTop, floorY, stageLeft, stageTop };
+}
+let hkMemo = null;
+function desktopFormat(vw = window.innerWidth, vh = window.innerHeight) {
+  if (!(vw > 0 && vh > 0)) return null;
+  if (!hkMemo || hkMemo.vw !== vw || hkMemo.vh !== vh) hkMemo = { vw, vh, L: homeKeyframeLayout(vw, vh, resolveCssLengthVarPx("--hk-safe-top", 0)) };
+  return { s: hkMemo.L.s, ox: hkMemo.L.M, L: hkMemo.L };
+}
+// Home board placement (shared by Away / Return / Second through fitHomeBoard): the keyframe stage at every width.
+function homeBoardGeom(vw = window.innerWidth, vh = window.innerHeight) {
+  const L = desktopFormat(vw, vh).L;
+  return { S: L.S, left: L.boardLeft, top: L.boardTop, desktop: true, s: L.s };
+}
+// Exposes the layout as CSS custom properties on :root (--fmtS = k, --hl*), and, because chog-home.js docks the open Home paper at the legacy
+// centre (vw/2 - 32, vh/2 - 48), the local-px correction (--fmtPaperDx/Dy) to the card centre.
+function syncDesktopFormatVars() {
+  const root = document.documentElement;
+  const f = desktopFormat();
+  if (!f) return null;
+  const L = f.L;
+  root.style.setProperty("--fmtS", String(L.s));
+  root.style.setProperty("--hlM", `${L.M}px`);
+  root.style.setProperty("--hlAsFont", `${L.asFont}px`);
+  root.style.setProperty("--hlAsTop", `${L.asTop}px`);
+  root.style.setProperty("--hlCx", `${L.cx}px`);
+  root.style.setProperty("--hlCy", `${L.cy}px`);
+  root.style.setProperty("--hlCardW", `${L.cardW}px`); // [A-837] Second card = 1.0 x HomeCard
+  root.style.setProperty("--hlCardK", String(L.cardW / 285)); // [A-837] card width / the 285 px First Send box
+  root.style.setProperty("--fmtPaperDx", `${(L.cx - (L.vw / 2 - 32)) / HOME_PAPER_DOCK_RATIO}px`);
+  root.style.setProperty("--fmtPaperDy", `${(L.cy - (L.vh / 2 - 48)) / HOME_PAPER_DOCK_RATIO}px`);
+  return f;
+}
+// Home-only distances that are fixed viewport px below 1100 (Records gap 24, two-card shift 46) are reference x s on desktop.
+function fmtLen(px) {
+  const f = desktopFormat();
+  return f ? px * f.s : px;
+}
+
+// [A-833] History placement (A-829 item 6), a PURE function of the viewport layout (no DOM reads, so the Home shift cannot feed back
+// into the decision and the align loop never chases a transitioning Home rect). Mirrors the v10 generator (RESPONSIVE_REF_v10_mockup.py).
+//   conflict: the cards reach the character stage vertically -> the free span ends 12 px before the stage, else at the right margin.
+//   pair    : Home + gap + History fit in the span -> centred (landscape: in [M, stageLeft - 3 % vw]; portrait: in the span; blended by posT).
+//   fan     : short by <= half a card (any amount when w/h >= 1: never stacked in landscape/square) -> Home on the left margin line, History on the right end of the span (slight overlap).
+//   stacked : otherwise (phone) -> History over Home as today (geometry = stackMobileRecordsOverHome()).
+// homeDx = Home's open-state sideways move in viewport px (signed), measured from the closed Home x (A-831 card x).
+function computeHistoryPlacement(vw = window.innerWidth, vh = window.innerHeight) {
+  const f = desktopFormat(vw, vh);
+  if (!f) return null;
+  const L = f.L;
+  const cw = L.cardW;
+  const gap = 24 * L.k;
+  const need = 2 * cw + gap;
+  const conflict = L.cardY + L.cardH > L.stageTop;
+  const Rr = conflict ? L.stageLeft - 12 : vw - L.M;
+  const span = Rr - L.M;
+  let mode;
+  let homeLeft = L.cardX;
+  let histLeft = null;
+  if (need <= span) {
+    mode = "pair";
+    const glPortrait = L.M + (span - need) / 2;
+    const glLandscape = (L.M + (L.stageLeft - 0.03 * vw)) / 2 - need / 2;
+    homeLeft = Math.max(L.M, glPortrait + (glLandscape - glPortrait) * L.posT);
+    histLeft = homeLeft + cw + gap;
+  } else if (need - span <= 0.5 * cw || vw >= vh) {
+    // [A-833 Cowork 6(c)] stacked is the phone/portrait mode only: landscape or square (w/h >= 1) always fans, overlapping as much as needed.
+    mode = "fan";
+    homeLeft = L.M;
+    histLeft = Rr - cw;
+  } else {
+    mode = "stacked";
+  }
+  const side = mode !== "stacked";
+  const overlap = side ? Math.max(0, homeLeft + cw - histLeft) : 0;
+  return {
+    mode, homeLeft, homeDx: side ? homeLeft - L.cardX : 0, histLeft, histRight: side ? histLeft + cw : null,
+    cardW: cw, cardH: L.cardH, gap, conflict, Rr, overlap,
+    underDx: side ? homeLeft - histLeft : 0, clearDx: overlap + 10,
+  };
+}
+// Desktop pre-branch for the canvases that share the Home board (work pose, departure): same board box as #homeBoard. Returns true when applied.
+function applyDesktopBoardToCanvas(canvas) {
+  const g = homeBoardGeom();
+  if (!g.desktop || !canvas) return false;
+  // Where the desktop board equals the plain centred aspect fit (the 1440x900 reference), keep the CSS-centred default untouched (no inline override).
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const S0 = Math.min(vw / HOME_BOARD_W, vh / HOME_BOARD_H);
+  if (Math.abs(g.S - S0) < 1e-9 && Math.abs(g.left - (vw - HOME_BOARD_W * S0) / 2) < 0.01 && Math.abs(g.top - (vh - HOME_BOARD_H * S0) / 2) < 0.01) return false;
+  const w = HOME_BOARD_W * g.S;
+  const h = HOME_BOARD_H * g.S;
+  canvas.width = Math.round(w * (window.devicePixelRatio || 1));
+  canvas.height = Math.round(h * (window.devicePixelRatio || 1));
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+  canvas.style.left = `${g.left}px`;
+  canvas.style.top = `${g.top}px`;
+  canvas.style.transform = "none";
+  return true;
 }
 
 // 판을 뷰포트에 통째로 맞춘다. s = min(w/1256, h/772), 가운데 정렬.
@@ -9002,8 +11890,9 @@ function fitCardAnchor() {
 function fitHomeBoard() {
   const board = document.querySelector("#homeBoard");
   if (!board) return null;
-  const s = Math.min(window.innerWidth / HOME_BOARD_W, window.innerHeight / HOME_BOARD_H);
-  board.style.transform = `translate(${(window.innerWidth - HOME_BOARD_W * s) / 2}px, ${(window.innerHeight - HOME_BOARD_H * s) / 2}px) scale(${s})`;
+  const g = homeBoardGeom();
+  syncDesktopFormatVars();
+  board.style.transform = `translate(${g.left}px, ${g.top}px) scale(${g.S})`;
   const rect = board.getBoundingClientRect();
   return { s: rect.width / HOME_BOARD_W, left: rect.left, top: rect.top, rect };
 }
@@ -9108,7 +11997,15 @@ function computeHomeFootTargetViewportY(vh) {
   // of the two already-existing targets wins changes, and only under the same <=640 boundary this
   // card's other mobile-only changes use.
   if (window.innerWidth <= 640) return Math.max(HOME_FOOT_NORMALIZED_RATIO * vh, vh - bottomSafeMinPx);
-  return Math.min(HOME_FOOT_NORMALIZED_RATIO * vh, vh - bottomSafeMinPx);
+  // [A-819 UI-14] the two targets above/below (NARROW: safe-min wins; MID/WIDE: 1440-canon ratio wins) differ by
+  // (0.166 vh - 42) px — 65 px at 755 — so a hard switch at 640/641 is a foot jump. Between the family representatives
+  // the target walks from the NARROW value to the MID value with the same stage weight the character size uses
+  // (homeNarrowBlend: 0 at >=700, so 700/900/1440 and the 1440 canon are byte-identical).
+  const webTarget = Math.min(HOME_FOOT_NORMALIZED_RATIO * vh, vh - bottomSafeMinPx);
+  const narrowWeight = homeNarrowBlend();
+  if (!(narrowWeight > 0)) return webTarget;
+  const narrowTarget = Math.max(HOME_FOOT_NORMALIZED_RATIO * vh, vh - bottomSafeMinPx);
+  return webTarget + (narrowTarget - webTarget) * narrowWeight;
 }
 
 // [A-662 OWNER DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY, 2026-10-01, option ③] Hatch's
@@ -9162,10 +12059,13 @@ const HOME_MID_BAND_MIN_VW = 641;
 function computeHomeMidBandDropPx(fit, boardRect, s) {
   const vw = window.innerWidth;
   if (!(vw >= HOME_MID_BAND_MIN_VW)) return 0;
+  if (desktopFormat(vw)) return 0; // [A-827] desktop: the frame placement is the foot rule (bottom margin = ref x s); no drop
   const vh = window.innerHeight;
   const targetFootViewportY = computeHomeFootTargetViewportY(vh);
   const boardTop = fit && Number.isFinite(fit.top) ? fit.top : boardRect.top;
-  const dy = targetFootViewportY - (boardTop + HOME_FLOOR * s);
+  // [A-819] the ink-overhang correction the floor branch already subtracts (zero at >=700, so web is untouched)
+  // is applied here too, or the foot would step by that amount where the floor ends (652/653).
+  const dy = targetFootViewportY - (boardTop + HOME_FLOOR * s) - homeCharFloorInkOverhangCorrectionPx();
   return dy > 0.5 ? dy : 0;
 }
 
@@ -9189,7 +12089,10 @@ function applyHomeCharacterScaleFloor(fit) {
   // mid-band — only the real narrow-scale floor does.
   if (s >= HOME_CHAR_SCALE_FLOOR) {
     const midBandDy = computeHomeMidBandDropPx(fit, boardRect, s);
-    if (midBandDy > 0) {
+    // [A-819 UI-14] stage size continuity: through the NARROW->MID gap (641..699) the mid-band group carries the same
+    // fading boost the floor branch uses, about the same foot pivot — otherwise the size would step where the floor ends.
+    const midK = desktopFormat() ? 1 : homeCharMobileBoost(); // [A-831] Home stage is the keyframe layout at every width: no phone boost
+    if (midBandDy > 0 || midK > 1) {
       const midBandParts = [homeChar, chogHome].filter(Boolean);
       const midBandGroup = document.createElement("div");
       midBandGroup.className = "homeCharScaleFloor";
@@ -9198,7 +12101,7 @@ function applyHomeCharacterScaleFloor(fit) {
       board.insertBefore(midBandGroup, board.firstChild);
       midBandParts.forEach((el) => midBandGroup.appendChild(el));
       midBandGroup.style.transformOrigin = `${HOME_CENTER}px ${HOME_FLOOR}px`;
-      midBandGroup.style.transform = `translate(0px, ${(midBandDy / s).toFixed(4)}px) scale(1)`;
+      midBandGroup.style.transform = `translate(${(homeMidBandNudgeViewportX() / s).toFixed(4)}px, ${(midBandDy / s).toFixed(4)}px) scale(${midK})`;
       return { applied: false, s, midBand: true, midBandDy };
     }
   }
@@ -9302,7 +12205,19 @@ function computeHomeCharScaleFloorPlan(fit) {
   // learn the SAME drop before mounting/re-fitting their own elements.
   if (s >= HOME_CHAR_SCALE_FLOOR) {
     const midBandDy = computeHomeMidBandDropPx(fit, boardRect, s);
-    if (midBandDy > 0) return { applied: false, s, midBand: true, midBandDy };
+    // [A-819 UI-14] `midK` = the fading stage boost (1 from 700 up); every mid-band consumer reads it from the plan.
+    const midK = desktopFormat() ? 1 : homeCharMobileBoost(); // [A-831] Home stage is the keyframe layout at every width: no phone boost
+    if (midBandDy > 0 || midK > 1) {
+      const midNudgeX = homeMidBandNudgeViewportX();
+      // Where the stage boost is active (641..699, midK > 1) the mid-band group IS a scaled group exactly like the floor group,
+      // so the plan says so (`applied`, same k / local-nudge fields every floor consumer already reads — the Chog walk-start
+      // inverse, the Return cluster/canvas, the History safe box). Plain web (midK === 1) keeps `applied: false`, so 700/900/1440
+      // and the A-614 pairConverge gate behave exactly as before.
+      if (midK > 1) {
+        return { applied: true, s, k: midK, originLocalX: HOME_CENTER, originLocalY: HOME_FLOOR, nudgeLocalX: midNudgeX / s, nudgeLocalY: midBandDy / s, midBand: true, midBandDy, midK, midNudgeX };
+      }
+      return { applied: false, s, midBand: true, midBandDy, midK, midNudgeX };
+    }
   }
   if (s >= HOME_CHAR_SCALE_FLOOR) return { applied: false, s };
   const k = HOME_CHAR_SCALE_FLOOR / s;
@@ -9344,7 +12259,8 @@ function applyHomeFloorToChogOnly(fit) {
   if (!plan || (!plan.applied && !plan.midBand)) return plan;
   const s = plan.s;
   const k = plan.applied ? plan.k : 1;
-  const nudgeLocalX = plan.applied ? plan.nudgeLocalX : 0;
+  const groupK = plan.applied ? k : plan.midK || 1; // [A-819] mid-band stage boost (1 from 700 up)
+  const nudgeLocalX = plan.applied ? plan.nudgeLocalX : (plan.midNudgeX || 0) / s;
   const nudgeLocalY = plan.applied ? plan.nudgeLocalY : plan.midBandDy / s;
   const group = document.createElement("div");
   group.className = "homeCharScaleFloor";
@@ -9352,7 +12268,7 @@ function applyHomeFloorToChogOnly(fit) {
   board.insertBefore(group, board.firstChild);
   group.appendChild(chogHome);
   group.style.transformOrigin = `${HOME_CENTER}px ${HOME_FLOOR}px`;
-  group.style.transform = `translate(${nudgeLocalX}px, ${nudgeLocalY}px) scale(${k})`;
+  group.style.transform = `translate(${nudgeLocalX}px, ${nudgeLocalY}px) scale(${groupK})`;
   return plan;
 }
 
@@ -9364,18 +12280,19 @@ function applyHomeFloorToChogOnly(fit) {
 // group Home settled uses, so the coming-home Chog, the filed Chog and the filed name all agree
 // with Home on mobile and mid-band (A-656 P3 §4 R2/R3). Same idempotent global marker/unwrap
 // idiom as `applyHomeFloorToChogOnly()` — Home/Away/Return never share the DOM at once.
-function applyHomeFloorToReturnCluster(fit) {
+function applyHomeFloorToReturnCluster(fit, dxViewport = 0) {
   const board = document.querySelector("#homeBoard");
   unwrapHomeCharacterScaleFloor();
   if (!board) return null;
   const plan = computeHomeCharScaleFloorPlan(fit);
-  if (!plan || (!plan.applied && !plan.midBand)) return plan;
+  // [A-837] dxViewport = the Return group's horizontal offset from the Home stage (returnLayout.dxChar); 0 keeps every other caller as before.
+  if (!plan || (!plan.applied && !plan.midBand && !dxViewport)) return plan;
   const parts = [board.querySelector("#returnChogHop"), board.querySelector("#returnName")].filter(Boolean);
   if (!parts.length) return plan;
   const s = plan.s;
-  const k = plan.applied ? plan.k : 1;
-  const nudgeLocalX = plan.applied ? plan.nudgeLocalX : 0;
-  const nudgeLocalY = plan.applied ? plan.nudgeLocalY : plan.midBandDy / s;
+  const k = plan.applied ? plan.k : plan.midK || 1; // [A-819] mid-band: the stage boost (1 from 700 up)
+  const nudgeLocalX = (plan.applied ? plan.nudgeLocalX : (plan.midNudgeX || 0) / s) + dxViewport / s;
+  const nudgeLocalY = plan.applied ? plan.nudgeLocalY : (plan.midBandDy || 0) / s;
   const group = document.createElement("div");
   group.className = "homeCharScaleFloor";
   group.setAttribute("data-scale-floor", plan.applied ? String(HOME_CHAR_SCALE_FLOOR) : "1");
@@ -9422,57 +12339,126 @@ function applyHomeFloorToReturnCluster(fit) {
 //   pivot, same k, same nudge) — every canvas element keeps its un-boosted position RELATIVE to Chog
 //   (the relationship confirmed non-colliding before the boost), and the seat still lands on Home's
 //   foot (A-656). The Receipt no longer depends on any board-local anchor on mobile: piggy-return.js
-//   re-targets it from live viewport facts (`homeReturnReceiptRail()` below ->
-//   `receiptRailTarget()`), so nothing here has to keep it on-screen. Web / 641-653 sliver:
+//   [A-837] now places it from the Home card layout (`returnLayout()` below), so nothing here has to keep it on-screen. Web / 641-653 sliver:
 //   `plan.applied` is false there or the extra term was already exactly 0 — unchanged.
+// [A-831] return-view.js fit() sizes the Return canvas as the plain aspect fit (s0 = min(vw/1256, vh/772)) whenever `floor` is null. The shared stage is now
+// the keyframe board at every width (Owner decision B / Q1), so hand it the k / nudge that put the canvas exactly on the #homeBoard box: k = S / s0, nudge cancels the
+// pivot term (left = fit.left + s0 HOME_CENTER (1 - k) + nx must equal fit.left; same for top with HOME_FLOOR).
+function keyframeCanvasFloor(fit) {
+  if (!fit || !desktopFormat()) return null;
+  const s0 = Math.min(window.innerWidth / HOME_BOARD_W, window.innerHeight / HOME_BOARD_H);
+  const k = fit.s / s0;
+  if (!(s0 > 0) || !Number.isFinite(k)) return null;
+  return { k, nudgeViewportX: -s0 * HOME_CENTER * (1 - k), nudgeViewportY: -s0 * HOME_FLOOR * (1 - k) };
+}
+// [A-837] ARASO on the rail for the Return scenes (A-835 item 8). return-view.js (markup) is hash-pinned and a663 evaluates renderSecondReturn alone, so the
+// existing arasoBrandMarkup() is mounted into the scene here instead of through the render string.
+function mountReturnBrand() {
+  const stage = document.querySelector('.stage[data-scene="return"]');
+  if (stage && !stage.querySelector(".arasoBrand")) stage.insertAdjacentHTML("afterbegin", arasoBrandMarkup());
+}
+// [A-837] fitBoard for First and Second Return: Home stage + the Return group's shift (dx) on the DOM cluster AND the canvas, so Chog, bell, Piggy and name stay one group.
+function returnFitBoard() {
+  const fit = fitHomeBoard();
+  const r = returnLayout();
+  const dx = r ? r.dxChar : 0;
+  const plan = applyHomeFloorToReturnCluster(fit, dx);
+  const floor = computeHomeFloorViewportNudge(plan, fit.s) || keyframeCanvasFloor(fit);
+  return { ...fit, floor: floor && dx ? { ...floor, nudgeViewportX: floor.nudgeViewportX + dx } : floor };
+}
 function computeHomeFloorViewportNudge(plan, s) {
   if (!plan || !(s > 0)) return null;
   if (plan.applied) {
     return { k: plan.k, nudgeViewportX: plan.nudgeLocalX * s, nudgeViewportY: plan.nudgeLocalY * s };
   }
-  if (plan.midBand) return { k: 1, nudgeViewportX: 0, nudgeViewportY: plan.midBandDy };
+  if (plan.midBand) return { k: plan.midK || 1, nudgeViewportX: plan.midNudgeX || 0, nudgeViewportY: plan.midBandDy };
   return null;
 }
 
-// [A-681 FINAL CLOSEOUT A — mobile Receipt target = viewer-LEFT CONTENT rail] Live viewport facts
-// handed to piggy-return.js (via return-view.js `getReceiptRail`), which converts them through the
-// return canvas's own on-screen rect into the Receipt's throw/settled/read target
-// (`receiptRailTarget()`, pure + unit-tested in a681-return-receipt-bell-anchor.mjs). Returns null
-// at width >640 -> piggy-return.js keeps its legacy fixed anchor (1440 / 700 / 900 byte-identical).
-// Nothing here is an invented universal px — every term is an existing token or constant:
-//   inset    --mobile-inset (style.css :root; 20 @<=400, 24 above) — the rail's left edge, and the
-//            symmetric right margin the read (zoomed) paper must respect
-//   topBound --mobile-top-safe + --grid-3 (16) — same top token Chog/brand/cards use, plus a grid step
-//   cardCy   vh/2 - 48 — .cardAnchor's vertical centre line (style.css top:50% + translateY(-50% - 48px);
-//            fitCardAnchor()'s own offY = 48)
-//   cardW    285 — .cardAnchor width (style.css; fitCardAnchor() w) — Receipt never exceeds the
-//            First Send / Explore card's own width
-//   gap      --grid-5 (32) — clearance under the read paper to Piggy's head box (holds return-view's
-//            8px-offset hint line too)
-// TUNE HERE (coordinator): RECEIPT_RAIL_GAP_TOKEN / RECEIPT_RAIL_TOP_EXTRA_TOKEN / the two card
-// constants. The size itself is DERIVED in piggy-return.js (min of card width, rail width / zoom,
-// free band height / zoom), not stored.
-const RECEIPT_RAIL_CARD_W = 285;
-const RECEIPT_RAIL_CARD_OFF_Y = 48;
-const RECEIPT_RAIL_GAP_TOKEN = "--grid-5";
-const RECEIPT_RAIL_TOP_EXTRA_TOKEN = "--grid-3";
-let receiptRailMemo = null;
-function homeReturnReceiptRail() {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  if (!(vw <= 640)) return null;
-  if (receiptRailMemo && receiptRailMemo.vw === vw && receiptRailMemo.vh === vh) return receiptRailMemo.rail;
-  const rail = {
-    vw, vh,
-    inset: resolveCssLengthVarPx("--mobile-inset", 20),
-    topBound: resolveCssLengthVarPx("--mobile-top-safe", 14) + resolveCssLengthVarPx(RECEIPT_RAIL_TOP_EXTRA_TOKEN, 16),
-    cardCy: vh / 2 - RECEIPT_RAIL_CARD_OFF_Y,
-    cardW: RECEIPT_RAIL_CARD_W,
-    gap: resolveCssLengthVarPx(RECEIPT_RAIL_GAP_TOKEN, 32),
-  };
-  receiptRailMemo = { vw, vh, rail };
-  return rail;
+// [A-837 · A-835 item 5 · Cowork U-R1/U-R3] Return-delivery arrangement, a pure function of the A-831 layout (no DOM). The Receipt is 0.91 x the Home card
+// width at every width. Landscape (t = 1): ONE group = Receipt + gap + character cluster, centred horizontally; the Receipt sits left of the cluster, its top =
+// floor - 368 ck - 0.55 receiptH (ck = stage width / 309, the character-art reference width). Portrait (t = 0): Receipt top-centred under ARASO (top = ARASO bottom
+// + 6 % H); the character CLUSTER is centred between the side margins, shifted right by 0.07 W, right ink clamped to W - M. Everything blends with
+// t = L.posT (the aspect weight of the card rule): never switched. dxChar = viewport shift of the character group from the Home stage position.
+const RECEIPT_HOME_CARD_RATIO = 0.91;
+const RECEIPT_ASPECT_H_PER_W = 320 / 280; // delivered box aspect (piggy-return.js RECEIPT_DELIVERED_W/H)
+const RET_STAGE_REF_W = 309; // character art reference width (mockup generator: Piggy = stage x 169/309)
+// returning Piggy's head top at the two-tap gate, board units (piggy-return.js GROUP_DY + (gate stage y 250 + body.y x gate size .24) x GROUP_SCALE; a656 B12 piggyTop)
+const RET_GATE_PIGGY_TOP = 491.75 - 515 * (150 / 218) + (250 + -46.9846 * 0.24) * (150 / 218);
+const RET_CLUSTER_OFF = -108; // board units: Return cluster (Piggy at the gate + Chog) left edge relative to the Home stage left, measured on the live Return frame (1440: 815 vs stage 959 at S 1.33; 390: 75 vs 159 at S .778). pre-A-837 review baseline: -149.6 (read from mockup 27, whose own stage differs)
+const RET_CLUSTER_W = 218; // board units: cluster width without the caption (live 1440: 290 px at S 1.33 = mockup 27; mockup 25: 170 px at S .778)
+// paperAspect = the rendered .receiptPaper rotated-bbox w/h (receiptPaperAspect()); the legacy delivered box aspect until it is measured.
+function returnLayout(L = desktopFormat()?.L, paperAspect = 1 / RECEIPT_ASPECT_H_PER_W) {
+  if (!L) return null;
+  const t = L.posT;
+  const ck = L.stageW / RET_STAGE_REF_W;
+  const topP = L.asBottom + 0.06 * L.vh;
+  const topAt = (w) => Math.max(L.asBottom, topP + (L.floorY - 368 * ck - (0.55 * w) / paperAspect - topP) * t);
+  const rw0 = RECEIPT_HOME_CARD_RATIO * L.cardW;
+  // <= 640 (faded out by 700): the READ paper (zoom 1.18 about its centre, bottom = top + 1.09 rh) must not reach the returning Piggy's head (pre-review rail baseline: 32 px gap) on short windows
+  // (600 tall, 450-560 wide): the paper is narrowed only as far as that needs, 0.91 x HomeCard whenever it fits. pre-review baseline: no clamp (the old rail did the same job <= 640).
+  // short windows only (full weight at <= 700 tall, none from 760): on tall phones the 0.91 x HomeCard paper is the canon (a819 B-UI17 pins it at 640-700 x 808)
+  const f = hkClamp((700 - L.vw) / 60, 0, 1) * hkClamp((760 - L.vh) / 60, 0, 1);
+  const clW = RET_CLUSTER_W * L.S;
+  const clHome = L.stageLeft + RET_CLUSTER_OFF * L.S;
+  const xP = Math.min((L.vw - clW) / 2 + 0.07 * L.vw, L.vw - L.M - clW);
+  const gapL = 30 * L.k;
+  const parts = (w) => { const gl = (L.vw - (w + gapL + clW)) / 2; return { rcx: L.vw / 2 + (gl + w / 2 - L.vw / 2) * t, clLeft: xP + ((gl + w + gapL) - xP) * t }; };
+  // only where the read paper and the cluster share x does the paper have to clear Piggy's head (in the landscape arrangement it is beside her, not above her); there the paper is first
+  // lifted (never above the ARASO bottom), then narrowed
+  const limit = L.boardTop + L.S * RET_GATE_PIGGY_TOP; // the paper never touches Piggy's head (the old <= 640 rail kept 32 px but shrank the paper, which breaks 0.91 x HomeCard at 640x808; a819 B-UI17 pins that)
+  const above = (w) => { const p = parts(w); return Math.abs(p.rcx - (p.clLeft + clW / 2)) < 0.59 * w + 8 + clW / 2; };
+  const topFor = (w, ff) => { const d = topAt(w); if (!(ff > 0) || !above(w)) return d; const e = Math.min(d, Math.max(L.asBottom, limit - (1.09 * w) / paperAspect)); return d + (e - d) * ff; };
+  let rw = rw0;
+  if (f > 0) {
+    const fits = (w) => !above(w) || topFor(w, 1) + (1.09 * w) / paperAspect <= limit;
+    if (!fits(rw0)) { let lo = 0, hi = rw0; for (let i = 0; i < 30; i += 1) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; } rw = rw0 + (lo - rw0) * f; }
+  }
+  const rh = rw / paperAspect;
+  const rcxP = L.vw / 2;
+  // portrait: the CLUSTER (Piggy at the gate + Chog, what is on screen) is centred between the side margins, then shifted right by 0.07 W; its right ink <= W - M (390: cluster 137-307, centre 222) - xP above
+  const dxP = xP - clHome;
+  const gap = gapL;
+  const gl = (L.vw - (rw + gap + clW)) / 2;
+  const rcxL = gl + rw / 2;
+  const dxL = gl + rw + gap - clHome;
+  // [A-845 · Cowork R1 (i)] A-845 keeps the Receipt's phone type at every width (Q1), so above 640 the paper is taller than before (measured aspect 0.8171 vs 0.8696,
+  // browser vs browser_pre at 810 and 1440) and its bottom edge + the "Receipt" hint (return-view.js: paper bottom + 8) came down onto Piggy (810). The paper is raised by
+  // exactly that added height, so its bottom (and the hint) sit where they were before A-845; never above the ARASO bottom. <= 640 the type did not change (no raise); the
+  // raise fades in over 640 -> 700 (the same 60 px fade as the short-window weight f) so nothing steps at 640/641 (the pre-A-845 paper itself stepped there).
+  // Width, x (rcx / dxChar, U-R1) and the cluster are untouched. pre-A-845 baseline: top = topFor(rw, f).
+  const preAspect = paperAspect * (0.8696 / 0.8171); // the same paper with the pre-A-845 type above 640
+  const topAtA = (w, a) => Math.max(L.asBottom, topP + (L.floorY - 368 * ck - (0.55 * w) / a - topP) * t);
+  const raise = hkClamp((L.vw - 640) / 60, 0, 1) * Math.max(0, topAtA(rw, paperAspect) + rh - (topAtA(rw, preAspect) + rw / preAspect));
+  const top = Math.max(L.asBottom, Math.min(topFor(rw, f), topAt(rw) - raise));
+  return { rcx: rcxP + (rcxL - rcxP) * t, rcy: top + rh / 2, top, rw, rh, dxChar: dxP + (dxL - dxP) * t };
 }
+// The delivered box must have the paper's OWN rendered aspect (return-view.js contain-fits the rotated paper into it): otherwise a paper that is taller at <=640 (its own
+// A-666 type rules) is height-limited and comes out narrower than 0.91 x HomeCard. Same quantity return-view.js measures for the rail; memoised per element and width.
+let receiptAspectMemo = { el: null, vw: 0, aspect: 0 };
+function receiptPaperAspect() {
+  const tap = document.querySelector("#returnTap");
+  const el = tap && tap.querySelector(".receiptPaper");
+  if (!el) return 0;
+  if (receiptAspectMemo.el === el && receiptAspectMemo.vw === window.innerWidth && receiptAspectMemo.aspect > 0) return receiptAspectMemo.aspect;
+  const wasHidden = tap.hidden;
+  tap.hidden = false;
+  const nw = el.offsetWidth;
+  const nh = el.offsetHeight;
+  const m = new DOMMatrix(getComputedStyle(el).transform);
+  tap.hidden = wasHidden;
+  if (!(nw > 0 && nh > 0)) return 0;
+  const th = Math.atan2(m.b, m.a);
+  const rw = Math.abs(nw * Math.cos(th)) + Math.abs(nh * Math.sin(th));
+  const rh = Math.abs(nw * Math.sin(th)) + Math.abs(nh * Math.cos(th));
+  receiptAspectMemo = { el, vw: window.innerWidth, aspect: rw / rh };
+  return receiptAspectMemo.aspect;
+}
+setReceiptLegacySizeProvider(() => {
+  const aspect = receiptPaperAspect();
+  const r = returnLayout(undefined, aspect > 0 ? aspect : undefined);
+  return r ? { w: r.rw, h: r.rh, cx: r.rcx, cy: r.rcy } : null;
+});
 
 // [A-610 repair] `applyHomeCharacterScaleFloor()` re-parents `#chogHome` into
 // `.homeCharScaleFloor` *after* chog-home.js's own `mountChogHome()` (allowlist boundary —
@@ -9512,6 +12498,21 @@ function chogWalkStartBoardRect(fit, plan) {
   };
 }
 
+// [A-819 UI-14] The Name->Home arrival walk maps its start rect through the inverse of the character group (see mountHome()
+// D-1). That mapping is pinned to the <=640 floor plan; through the NARROW->MID gap (641..699) the group (floor at 641-652,
+// mid-band 653-699) carries the fading stage boost too, so the same closed form is applied here, to the {s,left,top} the
+// walker reads, instead of widening the pinned <=640 lines. Identity outside the gap and when no group applies.
+function homeRampWalkStartFit(fit) {
+  const vw = window.innerWidth;
+  if (!fit || !(vw > FAMILY_NARROW_MAX_VW) || !(homeNarrowBlend(vw) > 0)) return fit;
+  const plan = computeHomeCharScaleFloorPlan(fit);
+  let k = 1, nlx = 0, nly = 0;
+  if (plan && plan.applied) { k = plan.k; nlx = plan.nudgeLocalX; nly = plan.nudgeLocalY; }
+  else if (plan && plan.midBand) { k = plan.midK || 1; nlx = (plan.midNudgeX || 0) / fit.s; nly = plan.midBandDy / fit.s; }
+  else return fit;
+  return { s: fit.s * k, left: fit.left + fit.s * (HOME_CENTER * (1 - k) + nlx), top: fit.top + fit.s * (HOME_FLOOR * (1 - k) + nly) };
+}
+
 // [A-656 OWNER CORRECTION — WEB-FIRST PROPORTIONAL INVARIANT, 2026-09-30] `mountAway()` /
 // `mountSecondAway()`'s own `#departStage` canvas (the departing-Piggy board — piggy-depart.js's
 // own renderer is board-local, `sx() = canvas.width/BOARD_W`, so an outer canvas resize/
@@ -9532,6 +12533,7 @@ function chogWalkStartBoardRect(fit, plan) {
 // still applies, byte-identical to pre-correction sizing.
 function applyHomeFloorToDepartCanvas(canvas) {
   if (!canvas) return;
+  if (applyDesktopBoardToCanvas(canvas)) return; // [A-827] desktop: same board box as #homeBoard
   const board = document.querySelector("#homeBoard");
   const s = Math.min(window.innerWidth / HOME_BOARD_W, window.innerHeight / HOME_BOARD_H);
   if (board && s > 0 && s < HOME_CHAR_SCALE_FLOOR) {
@@ -9563,13 +12565,14 @@ function applyHomeFloorToDepartCanvas(canvas) {
     const fitLeftMid = (window.innerWidth - HOME_BOARD_W * s) / 2;
     const fitTopMid = (window.innerHeight - HOME_BOARD_H * s) / 2;
     const midBandDy = computeHomeMidBandDropPx({ top: fitTopMid }, null, s);
-    if (midBandDy > 0) {
-      canvas.width = Math.round(HOME_BOARD_W * s * (window.devicePixelRatio || 1));
-      canvas.height = Math.round(HOME_BOARD_H * s * (window.devicePixelRatio || 1));
-      canvas.style.width = `${HOME_BOARD_W * s}px`;
-      canvas.style.height = `${HOME_BOARD_H * s}px`;
-      canvas.style.left = `${fitLeftMid}px`;
-      canvas.style.top = `${fitTopMid + midBandDy}px`;
+    const midK = homeCharMobileBoost(); // [A-819 UI-14] same fading stage boost as the Home mid-band group
+    if (midBandDy > 0 || midK > 1) {
+      canvas.width = Math.round(HOME_BOARD_W * s * midK * (window.devicePixelRatio || 1));
+      canvas.height = Math.round(HOME_BOARD_H * s * midK * (window.devicePixelRatio || 1));
+      canvas.style.width = `${HOME_BOARD_W * s * midK}px`;
+      canvas.style.height = `${HOME_BOARD_H * s * midK}px`;
+      canvas.style.left = `${fitLeftMid + s * HOME_CENTER * (1 - midK) + homeMidBandNudgeViewportX()}px`;
+      canvas.style.top = `${fitTopMid + midBandDy + s * HOME_FLOOR * (1 - midK)}px`;
       canvas.style.transform = "none";
       return;
     }
@@ -9701,7 +12704,9 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
       // pinned/progress(위 draw()) 가 이미 하고 있으므로, onTap 은 다시 no-op 이면
       // 된다 — Chog 클릭을 Explore 직행으로 재활용하지 않는다(A-411-r 스펙). Second
       // Journey 자동 진입은 settle() 의 state.homeQuietForExplore 분기(아래)로만 남는다.
-      onTap: () => {},
+      // [A-891 CG-05 intro] Only the opening tap on the post-file "tap me!" cue answers with the Second intro (Cowork
+      // answer 2026-10-08); every other Chog tap keeps the Home pad contract above (a891HomeChogTap returns at once).
+      onTap: () => a891HomeChogTap(),
     });
     onSceneTeardown(() => {
       homeChog = null;
@@ -9721,6 +12726,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     host.querySelector("#homeName")?.style.removeProperty("visibility");
     // [A-654] 2+ indexed Piggies only: the living Home residents (no-op with one Piggy).
     mountHomeAmbientResidents();
+    armSecondHomeWait(); // [A-851]
     if (!keepPose) {
       if (walk) walk.style.removeProperty("transform");
       if (seat) seat.style.removeProperty("transform");
@@ -9730,7 +12736,10 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     // 과 같은 조건(아직 Send 카드가 자리를 쥐지 않음)으로만 부른다. 추가 Piggy 의 Name → Home
     // (saveName() 의 pendingNamePiggyId 분기)은 homeArrival 을 세우지 않으므로 반복하지 않는다.
     // Home 종이를 스스로 열지 않는다 — 여는 것은 사용자의 실제 Chog 탭뿐이다.
-    if (isFirstArrival && !state.sendCardVisible) homeChog?.startTapCue?.();
+    // [A-891 CG-04] First Home stays quiet (Owner 2026-10-08): no "tap me!" on the first arrival. pre-A-891 baseline:
+    // `if (isFirstArrival && !state.sendCardVisible) homeChog?.startTapCue?.();`. The cue's frame clock is kept (silent)
+    // so the First Send reveal timing below is unchanged.
+    if (isFirstArrival && !state.sendCardVisible) a891StartFirstArrivalHold();
     // [A-356 §2] A354 회귀 교정 — state.sendCardVisible 이 설 자리가 없어 첫 Journey 카드가
     // 영영 안 열리던 것. 이 정착이 Save 직후 첫 도착일 때만, 잠깐(위 상수) 뒤 카드를 연다.
     // 재방문·Stay 재진입은 isFirstArrival 이 false 라 여기 오지 않는다. 씬을 떠나면(다음
@@ -9753,6 +12762,8 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         // 신호 시간만큼 정확히 미룬다(1200ms 배수 재시도는 유지가 0.57s 또는 1.73s 로 떨어졌다).
         // 신호 시계는 그려진 프레임으로만 흐르므로 숨은 탭에서는 다시 미뤄질 뿐이다. 두 번째 카드
         // 자리·새 저장 키 0. 최소 50ms — 0ms 재귀 방지.
+        const quietWait = a891FirstArrivalHoldRemainingMs(); // [A-891] same remaining time the removed first-arrival cue gave
+        if (quietWait > 0) { sceneTimeout(revealSendCard, Math.max(50, quietWait)); return; }
         const cueWait = homeChog?.tapCueHoldRemainingMs || 0;
         if (cueWait > 0) {
           sceneTimeout(revealSendCard, Math.max(50, cueWait));
@@ -9764,6 +12775,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         homeChog?.closeCard?.();
         state.sendCardVisible = true;
         render();
+        sayFirstSendCue(); // [A-893 CG-01]
       };
       sceneTimeout(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS);
     }
@@ -9776,18 +12788,11 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     // scene 계산에서만 다시 서므로, Send 실패 메시지 등 다른 sendstay 재진입에서는 반복
     // 강제 표시가 없다. 기록 카드가 열려 있으면 revealSendCard 와 같은 이유로 미룬다
     // (자리 다툼, 위 A-411-g 주석 참고).
+    // [A-891 CG-04] The 1.2 s auto-Explore (revealExplorePaper, HOME_FIRST_JOURNEY_CARD_MS reuse) is replaced on this path by
+    // bare quiet Home ~8 s → Chog wave + "tap me!" → (user taps Chog) → Second intro → Explore Paper. See a891ArmPostFileQuietHome().
     if (state.scene === "sendstay" && state.homeQuietForExplore) {
       state.homeQuietForExplore = false;
-      const revealExplorePaper = () => {
-        if (state.recordsCardVisible) {
-          sceneTimeout(revealExplorePaper, HOME_FIRST_JOURNEY_CARD_MS);
-          return;
-        }
-        // [A-411-n §2] Second 를 이미 끝냈으면(=완료) 자동 재실행 0 — 조용한 Home 만 남긴다.
-        if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce) return;
-        openSecondJourneyExplore();
-      };
-      sceneTimeout(revealExplorePaper, HOME_FIRST_JOURNEY_CARD_MS);
+      a891ArmPostFileQuietHome();
     }
   };
 
@@ -9823,7 +12828,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
   }
 
   // 화면 rect → 판 좌표계. 승인 `beginHome()` 의 세 식 그대로.
-  const { s, left, top } = fit;
+  const { s, left, top } = homeRampWalkStartFit(fit);
   // [A-681 FINAL CLOSEOUT D-1 — Name->Home first-frame pop] `walk` lives INSIDE the mobile floor group
   // (applyHomeCharacterScaleFloor(fit) below wraps #homeChar in translate(nudge) scale(k), k = floor
   // k * A-681 boost), so the local transform below is composed ON TOP of that group: a start rect
@@ -10036,9 +13041,10 @@ function mountSendCardWorkPose({
   // mid-band branch below (s>=HOME_CHAR_SCALE_FLOOR, width>=641) stays `clock === "send"` only —
   // this card is mobile-only, so web's Explore canvas is intentionally left exactly as before.
   const fit = () => {
+    if (applyDesktopBoardToCanvas(canvas)) return; // [A-827] desktop: same board box as #homeBoard
     const s = Math.min(window.innerWidth / HOME_BOARD_W, window.innerHeight / HOME_BOARD_H);
     const board = document.querySelector("#homeBoard");
-    if ((clock === "send" || clock === "second") && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR) {
+    if (clock === "send" && board && s > 0 && s < HOME_CHAR_SCALE_FLOOR) { // [A-837] Second (clock "second") rides the keyframe board via applyDesktopBoardToCanvas
       const k = HOME_CHAR_SCALE_FLOOR / s;
       // [A-681] same mobile-only size boost as applyHomeCharacterScaleFloor() — foot-anchor-safe.
       const kBoosted = k * homeCharMobileBoost();
@@ -10084,13 +13090,15 @@ function mountSendCardWorkPose({
       const fitLeftMid = (window.innerWidth - HOME_BOARD_W * s) / 2;
       const fitTopMid = (window.innerHeight - HOME_BOARD_H * s) / 2;
       const midBandDy = computeHomeMidBandDropPx({ top: fitTopMid }, null, s);
-      if (midBandDy > 0) {
-        canvas.width = Math.round(HOME_BOARD_W * s * (window.devicePixelRatio || 1));
-        canvas.height = Math.round(HOME_BOARD_H * s * (window.devicePixelRatio || 1));
-        canvas.style.width = `${HOME_BOARD_W * s}px`;
-        canvas.style.height = `${HOME_BOARD_H * s}px`;
-        canvas.style.left = `${fitLeftMid}px`;
-        canvas.style.top = `${fitTopMid + midBandDy}px`;
+      // [A-819 UI-14] the fading stage boost (1 from 700 up) about the shared foot pivot, same as the Home mid-band group.
+      const midK = homeCharMobileBoost();
+      if (midBandDy > 0 || midK > 1) {
+        canvas.width = Math.round(HOME_BOARD_W * s * midK * (window.devicePixelRatio || 1));
+        canvas.height = Math.round(HOME_BOARD_H * s * midK * (window.devicePixelRatio || 1));
+        canvas.style.width = `${HOME_BOARD_W * s * midK}px`;
+        canvas.style.height = `${HOME_BOARD_H * s * midK}px`;
+        canvas.style.left = `${fitLeftMid + s * HOME_CENTER * (1 - midK) + homeMidBandNudgeViewportX()}px`;
+        canvas.style.top = `${fitTopMid + midBandDy + s * HOME_FLOOR * (1 - midK)}px`;
         canvas.style.transform = "none";
         return;
       }
@@ -10207,14 +13215,21 @@ function renderSendStay() {
           ${sendCardMarkup({
             // [A-407-e] 막힌 상태의 카드 문구도 같은 기준 — 내부 origin 노출 0, 실행 가능
             // 한 것처럼 보이지 않게. blocked 자체(버튼 비활성)는 그대로 둔다.
-            message: blocked ? "Not from here." : state.message || "Piggy is home.",
+            // [A-779 v2 · Owner-approved wording 2026-10-05, relayed by coordinator] On the First Send card only, the
+            // resting line under $5 reads "Piggy's first job?" instead of "Piggy is home.". Display mapping only: every
+            // setScene(..., "Piggy is home.", ...) and state.message stay byte-identical (other scenes/status lines untouched);
+            // any other card status ("Piggy can't go out yet." etc.) still shows as before.
+            message: blocked ? "Not from here." : !state.message || state.message === "Piggy is home." ? "Piggy's first job?" : state.message,
             detail: blocked
               ? "Piggy can only go out from the real app."
               : [state.detail, firstSendAmountSecondary()].filter(Boolean).join(" · "),
             // [A-454 Owner "자기 주소는 홈 기록 보기에서"] Send 카드(시각·접근성 DOM)에는 주소 0.
             // 주소는 내부 state 에만 — auth/tx 동작 무변경.
             address: "",
-            terms: [FIRST_SEND_USD_LABEL, "Ask me every time", "One-time"],
+            // [A-779 · A-777 §8.2 LOCKED] "Ask me every time" / "One-time" term rows removed from the
+            // visible card. Label-only removal: the one-time rule itself (A-756 firstTripClosedShared /
+            // tripClosed refusal) is untouched and still refuses a second First send.
+            terms: [FIRST_SEND_USD_LABEL],
             blocked,
             busy: sendBusy(),
           })}
@@ -10268,6 +13283,7 @@ function mountAway() {
     // anchor (mobile floor / mid-band) the settled Home cluster uses.
     applyHomeFloorToChogOnly(boardFit);
   }
+  armAwayOpenLine(); // [A-893b CG-02]
   // 판 다시 맞추기는 아래 `fit()` 이 함께 한다. canvas 가 없는 경우만 여기서 건다.
   const canvas = document.querySelector("#departStage");
   if (!canvas) { sceneListener(window, "resize", () => { applyHomeFloorToChogOnly(fitHomeBoard()); }); return; }
@@ -10452,6 +13468,152 @@ function endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid) {
   });
 }
 
+// ── [A-891] UI Wave 4 · File → quiet Home → tap me → Second intro (CG-03 · CG-04 · CG-05 intro · UI-19) ─────────────────────
+// Canon: 94_VISUAL_DIRECTION §[2026-10-08 Owner] Chog copy locked; A-777 COWORK_FRAME_REVIEW §9.2 rows 4/10/11/12, §9.3 H1–H3;
+// CONVO_20261006 §3.4 (no required "open the file"/filebox visit between filing and Home). Sequence:
+//   Receipt → "File it" → Chog files it → existing completion beat (playback "filed", piggy-return.js RETURN_TOTAL_S) →
+//   Chog says exactly "I'll keep it here." (First filing only) → settle Home (goHomeFromFilebox) → bare quiet Home ~8 s →
+//   Chog small wave + "tap me!" (existing startTapCue, A-725 hold) → user taps Chog → "I found a few things." /
+//   "wanna see a few more?" → existing openSecondJourneyExplore() Paper. Once per user (SECOND_INTRO_SEEN_KEY); Second already
+//   completed = quiet Home only (A-411-n §2). Reduced motion = same order (the cue is a still label, no wave). Copy = locked lines only.
+import { TAP_CUE_TIMING as A891_TAP_CUE_TIMING } from "./chog-home.js";
+const POST_FILE_QUIET_HOME_MS = 8000; // Owner 2026-10-08 ~8 s, tune on device (replaces the HOME_FIRST_JOURNEY_CARD_MS reuse on this path only)
+const A891_FILED_LINE = "I'll keep it here.";
+const A891_SECOND_INTRO_LINES = ["I found a few things.", "wanna see a few more?"];
+// Reading hold for the filed line before Home settles = the existing A-725 Chog-line hold (1.5 s); not an Owner number, tune on device.
+const A891_FILED_LINE_HOLD_MS = A891_TAP_CUE_TIMING.holdMs;
+// Intro line → Explore Paper = the existing short beat before a card (HOME_FIRST_JOURNEY_CARD_MS, 1.2 s); not an Owner number, tune on device.
+const A891_SECOND_INTRO_TO_PAPER_MS = HOME_FIRST_JOURNEY_CARD_MS;
+const SECOND_INTRO_SEEN_KEY = "araso.secondIntroSeen";
+let a891FirstArrivalHold = null; // { t } silent frame clock of the removed first-arrival cue (keeps the First Send reveal timing)
+let a891CueChog = null;          // the Home Chog instance that is currently showing the post-file "tap me!"
+
+function a891SecondIntroSeen() {
+  try { return localStorage.getItem(SECOND_INTRO_SEEN_KEY) === "1"; } catch { return false; }
+}
+
+// Same clock rule as chog-home.js tapCue.t (frame dt, capped 50 ms, 0 while hidden), so revealSendCard waits exactly what the cue
+// (delay + wave + fade + A-725 hold = TAP_CUE_TIMING.readyMs) used to give. Reduced motion = 0, as the reduced cue gave 0.
+function a891StartFirstArrivalHold() {
+  a891FirstArrivalHold = null;
+  if (prefersReducedMotion()) return;
+  const hold = { t: 0 };
+  a891FirstArrivalHold = hold;
+  let last = 0;
+  runSceneFrames((now) => {
+    if (a891FirstArrivalHold !== hold) return false;
+    const dt = last && !document.hidden ? Math.min(now - last, 50) : 0;
+    last = now;
+    hold.t += dt;
+    return hold.t < A891_TAP_CUE_TIMING.readyMs;
+  });
+  onSceneTeardown(() => { if (a891FirstArrivalHold === hold) a891FirstArrivalHold = null; });
+}
+
+function a891FirstArrivalHoldRemainingMs() {
+  const hold = a891FirstArrivalHold;
+  return hold ? Math.max(0, A891_TAP_CUE_TIMING.readyMs - hold.t) : 0;
+}
+
+// Chog speech through the existing .chogCheckLine slot inside .chogHome (same as the Return alarm / Explore say / A-849 two lines).
+function a891ChogSay(chogRoot, id, lines) {
+  if (!chogRoot || chogRoot.querySelector(`#${id}`)) return null;
+  const hit = chogRoot.querySelector(".chogHome__hit");
+  const span = document.createElement("span");
+  span.id = id;
+  span.setAttribute("role", "status");
+  if (lines.length > 1) {
+    span.className = "chogCheckLine chogCheckLine--two";
+    span.style.transform = "translateX(-50%)";
+    for (const text of lines) {
+      const line = document.createElement("span");
+      line.className = "chogCheckLine__line";
+      line.textContent = text;
+      span.append(line);
+    }
+  } else {
+    span.className = "chogCheckLine";
+    span.textContent = lines[0];
+  }
+  chogRoot.insertBefore(span, hit || null);
+  return span;
+}
+
+// CG-03: after the playback reports "filed" (never before), the First filing gets the locked line; then Home settles by itself
+// (no required filebox visit). Later Returns get no repeated teaching (§9.2 row 14) but settle Home the same way. Folder tap
+// (#returnOpen) during the hold still opens the stored Receipt (UI-19); leaving the scene clears the timer.
+function a891AfterFiling(returnView, valid) {
+  if (!returnView) return;
+  const teach = state.resultMotionSeen !== true; // the First result only (A-466 fact; set by goHomeFromFilebox below)
+  runSceneFrames(() => {
+    if (!valid()) return false;
+    if (!returnView.filed) return true;
+    // A Return is never a First Home arrival. Only saveName() sets homeArrival in the product; the DEV scene jump sets it too, and
+    // left set it would make the Home after filing replay the First arrival (First Send card) instead of the quiet Home.
+    state.homeArrival = false;
+    if (teach) a891ChogSay(document.querySelector("#returnChogHop #chogHome"), "returnKeepLine", [A891_FILED_LINE]);
+    sceneTimeout(() => { if (valid() && state.scene === "return") goHomeFromFilebox(); }, A891_FILED_LINE_HOLD_MS);
+    return false;
+  });
+}
+
+// CG-04: called from mountHome() settle() when homeQuietForExplore was set (after filing, or a revisit with First done).
+function a891ArmPostFileQuietHome() {
+  a891CueChog = null;
+  if (state.secondJourneyCompletedOnce || a891SecondIntroSeen()) return; // once per user · Second done = quiet Home only
+  const arm = () => {
+    if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || !homeChog) return;
+    // Same deferral as the old revealExplorePaper: History open (and, here, a pinned Home pad) waits; nothing is skipped.
+    if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }
+    if (homeChog.startTapCue?.()) a891CueChog = homeChog;
+  };
+  sceneTimeout(arm, POST_FILE_QUIET_HOME_MS);
+}
+
+// CG-05 intro: the opening tap on the post-file cue. chog-home.js toggle() already hid the cue; the intro answers the tap, so the
+// Home pad it just pinned is closed again before it draws. No auto-advance without this tap (Cowork answer 2026-10-08).
+function a891HomeChogTap() {
+  a891FirstArrivalHold = null; // a real Chog tap ended the old first-arrival cue (hideTapCue → hold 0); the silent hold does the same
+  const chog = a891CueChog;
+  if (!chog || chog !== homeChog || state.scene !== "sendstay") return;
+  a891CueChog = null;
+  // Storage failure: the intro may show once more; nothing is faked.
+  try { localStorage.setItem(SECOND_INTRO_SEEN_KEY, "1"); } catch { }
+  chog.closeCard?.();
+  const homeSay = a891ChogSay(document.querySelector('.stage[data-scene="sendstay"] #chogHome'), "secondIntroLine", A891_SECOND_INTRO_LINES);
+  sceneTimeout(() => {
+    if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce) return;
+    openSecondJourneyExplore();
+    if (state.scene !== "explore") { homeSay?.remove(); return; }
+    // The same two lines stay over Chog on the Paper's first view (until its next render) so they can be read.
+    a891ChogSay(document.querySelector('.stage[data-scene="explore"] #chogHome'), "secondIntroLine", A891_SECOND_INTRO_LINES);
+  }, A891_SECOND_INTRO_TO_PAPER_MS);
+}
+
+// UI-19: the stored Receipt opened from the folder (filebox scene, centred) closes on a second tap — back to Home, the same exit
+// as the existing "home" button. Delegated once (render() is hash-pinned and is not edited).
+function a891FileboxPaperClose(e) {
+  if (state.scene !== "filebox" || !e.target?.closest?.("#fileboxPaper")) return;
+  if (e.type === "keydown") {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    if (e.repeat) return;
+  }
+  goHomeFromFilebox();
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("click", a891FileboxPaperClose);
+  document.addEventListener("keydown", a891FileboxPaperClose);
+}
+// ── [/A-891] ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── [A-912] small fixes (comments only; behaviour lives in chog-home.js · second-journey-view.js · style.css [A-912]) ─────────────────
+// 1 Chog speech: chog-home.js settleChogOneLine() keeps one speech line on screen (a newer line makes the older one leave, "tap me!" included).
+// 2 Readiness: amount = underline only, unknown values "—" (second-journey-view.js, style.css).
+// 3 Filebox: renderFileBox() markup is unchanged; Receipt larger + centred, "Home" under it, ARASO top-left are style.css rules. Receipt tap -> Home = a891FileboxPaperClose above.
+// 4 Invite: the line under the paper (invite__copy) is removed from the mobile Invite markup; the binder holes stay.
+// 5 "Receipt" label under the Return Receipt = A-843 Label (style.css). Note: the "UI preview — no transaction" tag (renderSecondAway / renderSecondReturn) is built here, see A-912 receipt.
+// ── [/A-912] ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
 // 장면 — 귀환. 화면 바인딩은 `return-view.js` 가 갖는다 —
 // 앱과 로컬 검토 하네스가 **같은 것**을 쓰기 위해서다(A-322 교정 7).
 // 여기서 넘기는 것은 화면 입력뿐이다. finance 는 이 파일에 남는다.
@@ -10471,6 +13633,7 @@ function renderReturn() {
 // 귀환 연출 — `finishTrip` 이 성공 + 실제 영수증을 확인한 **뒤에만** 한 번.
 // 이 함수는 돈을 만들지 않는다. 둘째 탭도 저장이 아니라 UI 정리 입력이다.
 function mountReturn() {
+  mountReturnBrand();
   const token = sceneToken;
   let stopped = false;
   onSceneTeardown(() => { stopped = true; });
@@ -10502,13 +13665,7 @@ function mountReturn() {
     // [A-656 decision 4] Same Home anchor math (mobile floor / mid-band) as Home settled —
     // wraps #returnChogHop + #returnName, and hands the canvas consumer (return-view.js fit())
     // the viewport-space k/nudge it needs to resize/reposition itself the same way.
-    fitBoard: () => {
-      const fit = fitHomeBoard();
-      const plan = applyHomeFloorToReturnCluster(fit);
-      return { ...fit, floor: computeHomeFloorViewportNudge(plan, fit.s) };
-    },
-    // [A-681 FINAL CLOSEOUT A] mobile-only Receipt rail target (null at >640 -> legacy anchor).
-    getReceiptRail: homeReturnReceiptRail,
+    fitBoard: returnFitBoard, // [A-837] Home stage + the Return group offset (returnLayout)
     mountHomeChog: (chogRoot, o) => {
       homeChog = mountChogHome(chogRoot, {
         startRect: null, startSrc: null, board: o.board,
@@ -10544,7 +13701,9 @@ function mountReturn() {
 
   // [A-421] 파일링 완료 시 알람 제거 — Second 와 같은 구현 하나
   // (endReturnArrivalAlarmWhenFiled, §3669 이하). 동작 변화 0.
+  a902WatchReturn(returnView, valid); // [A-902] bell + toss sounds
   endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid);
+  a891AfterFiling(returnView, valid); // [A-891 CG-03] filed → "I'll keep it here." → settle Home
 }
 
 // [A-383] filebox 는 First/Second Journey 의 귀환 직후 화면(mountReturn onOpenFilebox/
@@ -10577,7 +13736,7 @@ function renderFileBox() {
   return `
     <section class="stage" data-scene="filebox">
       <article class="filebox">
-        <div class="filebox__paper">${paperMarkup}</div>
+        <div class="filebox__paper" id="fileboxPaper" role="button" tabindex="0" aria-label="Receipt">${paperMarkup}</div>
         <div class="receipt">${rowsMarkup}${receiptCheck(receipt)}</div>
       </article>
       <!-- filebox 에는 다음 진입이 없었다 — Home 복귀와 Explore 진입을
@@ -10665,11 +13824,39 @@ const HOME_TWO_CARD_SHIFT_VIEWPORT_PX = 46;
 const HOME_PAPER_DOCK_RATIO = Math.min(285 / 400, 364 / 568) / 0.275; // ≈2.330346
 const HOME_TWO_CARD_SHIFT_LOCAL_PX = -(HOME_TWO_CARD_SHIFT_VIEWPORT_PX / HOME_PAPER_DOCK_RATIO); // ≈-19.74
 
-function setHomeTwoCardShift(active) {
+// [A-833] the move is the placement's homeDx (viewport px), converted to the mount's local px with the MEASURED ratio
+// (the paper's own scale x 400 / its on-screen width) - not HOME_PAPER_DOCK_RATIO, which is stale since the card became vh * f.
+// `instant` (resize while open) suppresses the CSS transition for this one write. The CSS transition animates open/close.
+// pre-A-833 baseline: --twoCardShiftLocalPx = HOME_TWO_CARD_SHIFT_LOCAL_PX * (desktopFormat()?.s ?? 1)  (fixed 46 px).
+let recordsShiftKey = "";
+function homeTwoCardShiftLocalPx() {
+  const placement = computeHistoryPlacement();
+  const paper = document.querySelector(".homePaper");
+  if (!placement || !paper) return 0;
+  const rect = paper.getBoundingClientRect();
+  const scale = new DOMMatrix(getComputedStyle(paper).transform).a;
+  if (!(rect.width > 0) || !(scale > 0)) return 0;
+  return placement.homeDx * ((400 * scale) / rect.width);
+}
+function setHomeTwoCardShift(active, instant = false) {
   const mount = document.querySelector(".homePaperMount");
   if (!mount) return;
-  mount.style.setProperty("--twoCardShiftLocalPx", `${HOME_TWO_CARD_SHIFT_LOCAL_PX}px`);
+  if (instant) mount.style.transition = "none";
+  if (active) mount.style.setProperty("--twoCardShiftLocalPx", `${homeTwoCardShiftLocalPx()}px`);
   mount.classList.toggle("homePaperMount--twoCardShift", Boolean(active));
+  if (instant) {
+    void mount.offsetWidth;
+    mount.style.transition = "";
+  }
+  recordsShiftKey = active ? homeTwoCardShiftKey() : "";
+}
+// viewport + mode + dx + the paper's measured width: the local-px conversion is only right once the paper has refit to the new size,
+// so a changed width re-writes the var (instantly) on a later frame of the live resize.
+function homeTwoCardShiftKey() {
+  const p = computeHistoryPlacement();
+  const paper = document.querySelector(".homePaper");
+  const w = paper ? Math.round(paper.getBoundingClientRect().width) : 0;
+  return p ? `${window.innerWidth}x${window.innerHeight}:${p.mode}:${Math.round(p.homeDx)}:${w}` : "";
 }
 
 // [A-459 Lane C] 오른쪽 HISTORY 종이 머리 — Explore(secondJourney) masthead 와 같은 paper
@@ -10901,8 +14088,8 @@ function readHomeBoardFitForHistory() {
 function homeCharacterSafeBoxViewport(plan, fit) {
   if (!fit || !(fit.s > 0)) return null;
   const s = fit.s;
-  const k = plan && plan.applied ? plan.k : 1;
-  const nudgeLocalX = plan && plan.applied ? plan.nudgeLocalX : 0;
+  const k = plan && plan.applied ? plan.k : plan && plan.midBand ? plan.midK || 1 : 1;
+  const nudgeLocalX = plan && plan.applied ? plan.nudgeLocalX : plan && plan.midBand ? (plan.midNudgeX || 0) / s : 0;
   const nudgeLocalY = plan && plan.applied ? plan.nudgeLocalY : plan && plan.midBand ? plan.midBandDy / s : 0;
   const toBoard = (x, y) => ({
     x: HOME_CENTER + k * (x - HOME_CENTER) + nudgeLocalX,
@@ -10971,30 +14158,12 @@ function computeHistoryFitMode() {
   if (!stage || !paper) return "stacked";
   const paperRect = paper.getBoundingClientRect();
   if (!paperRect.width || !paperRect.height) return "stacked";
-  // [A-662 coordinator browser regression fix — hysteresis] normalize to the side-by-side
-  // (shifted) reference position regardless of whether the shift is CURRENTLY applied — see
-  // RECORDS_TWO_CARD_SHIFT_VIEWPORT_PX's own comment. Only X moves (translateX); top/height are
-  // untouched by the shift.
-  const mount = document.querySelector(".homePaperMount");
-  const alreadyShifted = !!mount && mount.classList.contains("homePaperMount--twoCardShift");
-  const shiftCorrection = alreadyShifted ? 0 : RECORDS_TWO_CARD_SHIFT_VIEWPORT_PX;
-  const normalizedPaperRight = paperRect.right - shiftCorrection;
-  const candidate = {
-    left: normalizedPaperRight + RECORDS_CARD_GAP,
-    right: normalizedPaperRight + RECORDS_CARD_GAP + paperRect.width,
-    top: paperRect.top,
-    bottom: paperRect.top + paperRect.height,
-  };
-  if (window.innerWidth - candidate.right < RECORDS_CARD_GAP) return "stacked";
-  const fit = readHomeBoardFitForHistory();
-  const plan = fit && computeHomeCharScaleFloorPlan(fit);
-  const charBox = fit && homeCharacterSafeBoxViewport(plan, fit);
-  if (charBox) {
-    const characterCheckBottom = candidate.top + paperRect.width * HOME_PAPER_ASPECT_H_OVER_W;
-    const overlapsX = candidate.left < charBox.right && candidate.right > charBox.left;
-    const overlapsY = candidate.top < charBox.bottom && characterCheckBottom > charBox.top;
-    if (overlapsX && overlapsY) return "stacked";
-  }
+  // [A-833] the decision is the pure placement rule (computeHistoryPlacement(), A-829 item 6); the live-rect whitespace test,
+  // the hysteresis correction and the character-safe box below it are retired (character clearance holds by construction:
+  // History ends 12 px before the stage when the cards reach the characters).
+  // pre-A-833 baseline: whitespace RECORDS_CARD_GAP test + shiftCorrection fmtLen(RECORDS_TWO_CARD_SHIFT_VIEWPORT_PX) + charBox overlap.
+  const placement = computeHistoryPlacement();
+  if (!placement || placement.mode === "stacked") return "stacked";
   return "side-by-side";
 }
 
@@ -11020,9 +14189,13 @@ function alignRecordsCardToHomePaper() {
   const paperRect = paper.getBoundingClientRect();
   if (!paperRect.width || !paperRect.height) return;
   const stageRect = stage.getBoundingClientRect();
-  const left = paperRect.right - stageRect.left + RECORDS_CARD_GAP;
+  // [A-833] History left = the placement's TARGET x (never the live, possibly transitioning, Home rect).
+  // pre-A-833 baseline: const left = paperRect.right - stageRect.left + RECORDS_CARD_GAP; (+ fmtLen gap correction)
+  const placement = computeHistoryPlacement();
+  if (!placement || placement.histLeft === null) return;
+  anchor.classList.add("recordsCardAnchor--sideMode");
   const top = paperRect.top - stageRect.top;
-  anchor.style.left = `${left}px`;
+  anchor.style.left = `${placement.histLeft - stageRect.left}px`;
   anchor.style.top = `${top}px`;
   anchor.style.width = `${paperRect.width}px`;
   anchor.style.height = `${paperRect.height}px`;
@@ -11061,6 +14234,7 @@ function stackMobileRecordsOverHome() {
   // additive to, not a replacement of, the existing ≤640px rule (both apply there, redundantly,
   // harmlessly). alignRecordsCardToHomePaper()'s side-by-side branch clears it.
   anchor.classList.add("recordsCardAnchor--stackedMode");
+  anchor.classList.remove("recordsCardAnchor--sideMode"); // [A-833]
   const paperRect = paper.getBoundingClientRect();
   if (!paperRect.width || !paperRect.height) return;
   const stageRect = stage.getBoundingClientRect();
@@ -11105,6 +14279,7 @@ function resetRecordsForFullRender() {
   state.recordsCardVisible = false;
   state.recordsDetailIndex = null;
   stopRecordsAlignLoop();
+  cancelRecordsCardAnim(); // [A-833]
 }
 
 function render() {
@@ -11238,6 +14413,283 @@ function render() {
 if (state.scene === "received" && (readCredential() || state.address)) {
   state.scene = "birth";
 }
+
+// ── [A-897] P1 Release-2 promotion: the SAME #1 is admitted into this build's chain scope when its Gift is opened ───────────────
+// Owner 2026-10-08 (INBOX A-897 · design gift_card_20261004/README "Release 2 입장 / 승격"). Case 2 only: a Piggy #1 already lives on this
+// device (find-first A-726/A-734 already ran for a fresh device) and no other Piggy exists in this chain scope. Case 1 (no Piggy -> Hatch)
+// and case 3 (a Piggy already exists here -> A-567 new Gift Piggy via beginGiftPiggy) are NOT changed: this block returns null for them and
+// the original startGiftOpen runs. No new sequence, no beginGiftPiggy, no picker, no Hatch, no Name-it in this block.
+// Branches (after Face ID recomputes the #1 address and it equals the stored one):
+//   evidence HAS            -> claim to #1 -> admit the same #1 in this scope (name carried) -> playPromotionStampScene() if present
+//   evidence UNKNOWN        -> NOTHING is written or claimed, the Gift stays unopened (Open again to retry); never "pretend new Piggy"
+//   evidence NONE confirmed -> claim to #1 -> admit the same #1 -> no stamp -> Home (First Journey)
+// Evidence = readFirstJourneyEvidence (gift-claim-entry.js): C4 local hashes verified on chain -> C6 skipped (EVIDENCE.md) ->
+// C5 weak fallback · Owner 2026-10-08 conditional approval. The testnet read is an INJECTED read-only client (default null, 0 fetch):
+// it decides the branch only and is never displayed as a balance or state (the sealed-testnet rule of A-6xx is about display).
+import { bindGiftToPromotedFirstPiggy, FIRST_JOURNEY_EVIDENCE, GIFT_CLAIM_SUBMIT_STATUS, MAINNET_ACTIVITY, readFirstJourneyEvidence, readMainnetActivity } from "./gift-claim-entry.js";
+import { firstPiggyPromotionStatus, myPiggiesIndexKey, PROMOTION_STATUS, promoteFirstPiggyToScope } from "./piggy-index.js";
+import { piggyRegistryKey, promoteFirstPiggyRegistry } from "./piggy-registry.js";
+
+// The existing resting line (no new copy); held in a constant so the pinned setScene("...Piggy is home...") call-site count stays the HEAD one.
+const A897_HOME_MESSAGE = "Piggy is home.";
+const A897_SOURCE_SCOPE = "monad-testnet";
+const A897_SOURCE_CHAIN_ID = 10143;
+// null = no testnet reader (product default; filling this line is a separate build decision, like GIFT_RECORD_CONFIG). Shape:
+// async (method, params) => result, read-only methods only. Tests inject their own; no test performs a network call.
+const A897_TESTNET_READ_RPC = null;
+// [C2] The live-scope (mainnet) reader reuses the existing Owner-approved public RPC config (RETURN_EVIDENCE_READ_CONFIG, finalized reads, A-859). It is only
+// read inside a897GiftOpenPromotion on a live-scope build; tests inject their own and never reach this fetch.
+const A897_MAINNET_READ_RPC = typeof RETURN_EVIDENCE_READ_CONFIG === "object" && RETURN_EVIDENCE_READ_CONFIG && typeof RETURN_EVIDENCE_READ_CONFIG.rpcUrl === "string" ? a897FetchRpc(RETURN_EVIDENCE_READ_CONFIG.rpcUrl) : null;
+// Used only for the live-scope reader below. The one-line way to turn the testnet reader on is `A897_TESTNET_READ_RPC = a897FetchRpc(MONAD_TESTNET_RPC)` (CSP already allows it).
+function a897FetchRpc(url) {
+  return async (method, params) => {
+    const res = await fetch(url, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+    const body = await res.json();
+    if (!res.ok || !body || body.error) throw new Error("read_failed");
+    return body.result;
+  };
+}
+
+// Local D/R hashes (confirm-only: the chain decides). Read straight from the legacy receipt store; sealed testnet state is not shown anywhere.
+function a897LocalFirstHashes() {
+  try {
+    const rows = JSON.parse(localStorage.getItem(RECEIPTS_KEY) || "[]");
+    if (!Array.isArray(rows)) return [];
+    return rows.filter((r) => r && typeof r.depositTxHash === "string" && typeof r.redeemTxHash === "string").map((r) => ({ depositTxHash: r.depositTxHash, redeemTxHash: r.redeemTxHash }));
+  } catch {
+    return [];
+  }
+}
+
+function a897TargetScopeActive() {
+  return typeof RUNTIME_CHAIN_SCOPE === "string" && RUNTIME_CHAIN_SCOPE !== "" && RUNTIME_CHAIN_SCOPE !== A897_SOURCE_SCOPE;
+}
+
+// The chain-scoped index row of the current #1 (state.address) in THIS build's scope. Functions only (no block-level consts): computeInitialScene runs
+// before this block's consts exist, so nothing here may touch them. Live (non-testnet) scope only: the testnet flow is unchanged.
+function a897CurrentIndexRow() {
+  try {
+    if (typeof RUNTIME_CHAIN_SCOPE !== "string" || RUNTIME_CHAIN_SCOPE === "" || RUNTIME_CHAIN_SCOPE === "monad-testnet" || !state.address) return null;
+    const rows = loadMyPiggiesIndex(safeLocalStorage(), RUNTIME_CHAIN_SCOPE).index.piggies;
+    return rows.find((p) => String(p.address || "").toLowerCase() === String(state.address).toLowerCase() && !p.sequence) || null;
+  } catch {
+    return null;
+  }
+}
+// P2 Q5: the name source is the chain-scoped index. "" = the index has no name (really empty).
+function a897IndexedFirstName() {
+  return a897CurrentIndexRow()?.name || "";
+}
+// P2 Q1 (Owner rule: empty name != new Piggy): a promoted #1, or any Piggy already registered in this scope by recovery (no birth provenance), is never sent
+// back to Name-it. Name-it stays only for a Piggy that was just born here and has not saved its first name (row with provenance "birth", not promoted).
+function a897RegisteredUnnamedHome() {
+  const row = a897CurrentIndexRow();
+  return !!row && (!!String(row.name || "").trim() || !!row.promotedAt || !row.provenance);
+}
+// The persisted First Journey verdict of the promoted #1 (C3): "has" (stamp -> Second) · "none" (First Journey) · null (not promoted).
+function a897PromotionVerdict() {
+  const row = a897CurrentIndexRow();
+  return row && row.promotedAt && (row.firstJourney === "has" || row.firstJourney === "none") ? row.firstJourney : null;
+}
+function a897KeepOutOfNameIt() {
+  return a897RegisteredUnnamedHome();
+}
+
+let a897PromotionRunning = false;
+function a897Retry(reason, settlement) {
+  lastGiftClaimSettlement = settlement || { status: "promotion_unopened", reason };
+  giftPaperOffered = true;
+  setScene("received", "", "");
+  return { started: false, reason, promotion: true };
+}
+function a897Snapshot(storage, keys) {
+  const out = {};
+  for (const key of keys) {
+    try { out[key] = storage.getItem(key); } catch { out[key] = undefined; }
+  }
+  return out;
+}
+function a897Restore(storage, snap) {
+  for (const [key, value] of Object.entries(snap)) {
+    if (value === undefined) continue;
+    try {
+      if (value === null) storage.removeItem(key);
+      else storage.setItem(key, value);
+    } catch {
+      // nothing more can be done; the next read of the index decides
+    }
+  }
+}
+
+// null = not case 2 (the original startGiftOpen runs unchanged: case 1 / case 3).
+async function a897GiftOpenPromotion() {
+  if (!pendingGiftClaim || !a897TargetScopeActive()) return null;
+  const root = modelARootCredential();
+  if (!root.credential || !state.address) return null;
+  const storage = safeLocalStorage();
+  const chainId = secondJourneyScope().chainId;
+  // local live-scope index first: a #1 that is already in use here (born here / already promoted / another Piggy) is case 3 -> A-567, unchanged.
+  const status = firstPiggyPromotionStatus(storage, chainId, state.address);
+  if (status.status === PROMOTION_STATUS.NOT_CANDIDATE || status.status === PROMOTION_STATUS.PROMOTED) return null;
+  if (a897PromotionRunning) return { started: false, reason: "already_running", promotion: true };
+  if (status.status !== PROMOTION_STATUS.CANDIDATE) return a897Retry(status.reason || "promotion_unreadable");
+  a897PromotionRunning = true;
+  try {
+    // 1) the Gift record is opened read-only BEFORE any Face ID (same order as beginGiftPiggy): a link that cannot open stops with 0 auth.
+    const preflight = await beginGiftClaim({
+      pending: { status: GIFT_ENTRY_STATUS.READY, giftId: pendingGiftClaim.giftId, token: pendingGiftClaim.token },
+      recordSource: GIFT_RECORD_SOURCE,
+      now: new Date().toISOString(),
+    });
+    if (preflight.status !== GIFT_ENTRY_STATUS.READY) {
+      const mine = preflight.reason === CLAIM_RESULT.ALREADY_CLAIMED_BY_OTHER && String(preflight.record?.recipientAddress || "").toLowerCase() === String(state.address).toLowerCase();
+      lastGiftClaimSettlement = mine
+        ? { status: GIFT_ENTRY_STATUS.REFUSED, reason: CLAIM_RESULT.ALREADY_CLAIMED_BY_SAME, giftId: preflight.giftId }
+        : { status: preflight.status, ...(preflight.reason ? { reason: preflight.reason } : {}), giftId: preflight.giftId };
+      giftPaperOffered = false;
+      setScene("sendstay", A897_HOME_MESSAGE, "");
+      return { started: false, reason: lastGiftClaimSettlement.reason || preflight.status, promotion: true };
+    }
+    if (!pendingGiftClaim) return { started: false, reason: "no_gift_intent", promotion: true };
+    // 2) [C2] case 2 vs 3 by the live chain too (Cowork 2026-10-08): the local index has no #1 -> read the stored #1 address on the live scope at finalized.
+    // used (nonce>0 / MON>0 / USDC>0) -> case 3 (A-567 new Gift Piggy); no activity -> case 2; any read failure -> unopened, retry. Read-only, nothing shown.
+    const activity = await readMainnetActivity({ rpc: A897_MAINNET_READ_RPC, address: state.address, usdc: CHAIN_PROFILE.usdc?.address, chainId: CHAIN_PROFILE.numericChainId });
+    if (activity.verdict === MAINNET_ACTIVITY.UNKNOWN) return a897Retry("mainnet_activity_unreadable", { status: "mainnet_activity_unreadable", reason: activity.reason });
+    if (activity.verdict === MAINNET_ACTIVITY.USED) return null;
+    // 3) Face ID on the pinned root passkey -> recompute the #1 address. It must be the stored one; nothing is written before this.
+    let address;
+    try {
+      const salt = storedPrfSalt();
+      const prf = await requestPrf(root.credential, { prfSalt: salt });
+      try {
+        ({ address } = activateSigningSession(prf.prfOutput, { persistAddress: false }));
+      } finally {
+        if (prf.prfOutput instanceof Uint8Array) prf.prfOutput.fill(0);
+      }
+    } catch (error) {
+      endActiveSession();
+      return a897Retry(isCancelledAuthError(error) ? "auth_cancelled" : "auth_failed");
+    }
+    if (String(address).toLowerCase() !== String(state.address).toLowerCase()) {
+      endActiveSession();
+      return a897Retry("identity_mismatch");
+    }
+    // 4) First Journey evidence (testnet, read-only, injected). UNKNOWN -> no write, no claim, Gift stays unopened.
+    const evidence = await readFirstJourneyEvidence({
+      rpc: A897_TESTNET_READ_RPC,
+      address,
+      shmon: SHMON_ADDRESS,
+      chainId: A897_SOURCE_CHAIN_ID,
+      depositWei: SEND_AMOUNT,
+      localHashes: a897LocalFirstHashes(),
+    });
+    if (evidence.verdict === FIRST_JOURNEY_EVIDENCE.UNKNOWN) {
+      endActiveSession();
+      return a897Retry("first_journey_unreadable", { status: "first_journey_unreadable", reason: evidence.reason });
+    }
+    const hasEvidence = evidence.verdict === FIRST_JOURNEY_EVIDENCE.HAS;
+    // 5) [C1 · README order] admit the same #1 (verdict persisted, C3) -> claim to #1 -> stamp only on a confirmed transfer.
+    // The admit is undone (index + registry snapshots restored) when the claim itself did not happen (refused / failed), so a retry converges.
+    const at = new Date().toISOString();
+    const pid = indexedPiggyId(address);
+    const prevRow = loadMyPiggiesIndex(storage, chainId).index.piggies.find((p) => String(p.address).toLowerCase() === String(address).toLowerCase()) || null;
+    const locator = prevRow?.locator || {
+      credentialId: root.credential.credentialId,
+      ...(Array.isArray(root.credential.transports) && root.credential.transports.length ? { transports: root.credential.transports } : {}),
+      ...(localStorage.getItem("araso.prfSalt") ? { prfSalt: localStorage.getItem("araso.prfSalt") } : {}),
+    };
+    const snap = a897Snapshot(storage, [myPiggiesIndexKey(chainId), piggyRegistryKey({ accountId: address, chainId })]);
+    const admitted = promoteFirstPiggyToScope(storage, { fromChainId: A897_SOURCE_SCOPE, toChainId: chainId, address, signerAddress: state.activeSignerAddress, locator, id: pid, at, firstJourney: hasEvidence ? "has" : "none" });
+    if (!admitted.ok) {
+      endActiveSession();
+      return a897Retry(admitted.reason, { status: "promotion_admit_failed", reason: admitted.reason });
+    }
+    try {
+      promoteFirstPiggyRegistry(storage, { fromScope: { accountId: address, chainId: A897_SOURCE_SCOPE }, toScope: { accountId: address, chainId }, address, id: pid, name: readPiggyName(), locator, at });
+    } catch {
+      // registry projection is best-effort; the index row is the identity record
+    }
+    const intent = takePendingGiftClaim();
+    const bound = bindGiftToPromotedFirstPiggy({ intent, piggy: admitted.piggy, signerAddress: state.activeSignerAddress });
+    if (!bound.ok) {
+      restorePendingGiftClaim(intent);
+      a897Restore(storage, snap);
+      endActiveSession();
+      return a897Retry(bound.reason, { status: GIFT_ENTRY_STATUS.REFUSED, reason: bound.reason });
+    }
+    try {
+      lastGiftClaimSettlement = await settleBoundGiftClaim(bound.binding, intent);
+    } catch {
+      lastGiftClaimSettlement = { status: "claim_settle_failed" };
+    }
+    const settled = lastGiftClaimSettlement;
+    endActiveSession();
+    const claimed = !!settled && (settled.result === CLAIM_RESULT.OK || settled.reason === CLAIM_RESULT.ALREADY_CLAIMED_BY_SAME);
+    if (!claimed) {
+      a897Restore(storage, snap);
+      giftPaperOffered = false;
+      setScene("sendstay", A897_HOME_MESSAGE, "");
+      return { started: false, reason: settled?.reason || settled?.status || "claim_not_settled", promotion: true, giftAttempted: true };
+    }
+    // Name carry: the display source is the device-level name; fill it only when empty and the testnet index had a name. Unnamed stays unnamed.
+    if (!readPiggyName() && admitted.piggy?.name) {
+      try { localStorage.setItem(PIGGY_NAME_KEY, admitted.piggy.name); } catch {
+        // keep unnamed
+      }
+    }
+    const transferred = settled.valueSubmission?.status === GIFT_CLAIM_SUBMIT_STATUS.VALUE_TRANSFERRED;
+    state.promotionVerdict = hasEvidence ? "has" : "none";
+    giftPaperOffered = false;
+    lastGiftClaimSettlement = { ...settled, promotion: { status: "promoted", evidence: hasEvidence ? "has" : "none_confirmed", via: evidence.via, weakFallback: evidence.weakFallback === true, transferConfirmed: transferred } };
+    setScene("sendstay", A897_HOME_MESSAGE, "");
+    if (hasEvidence && transferred && typeof playPromotionStampScene === "function") {
+      try { playPromotionStampScene({ onDone: () => {} }); } catch {
+        // the stamp is a scene, never a gate
+      }
+    }
+    return { started: true, reason: null, promotion: true, evidence: hasEvidence ? "has" : "none_confirmed", piggyId: pid, giftAttempted: true, stamped: hasEvidence && transferred };
+  } finally {
+    a897PromotionRunning = false;
+  }
+}
+
+// Wiring without touching the original bodies (they stay byte-identical): the original functions are kept and wrapped once at load.
+// startGiftOpen: case 2 first, otherwise the original (case 1 / case 3 unchanged).
+{
+  const a897BaseStartGiftOpen = startGiftOpen;
+  startGiftOpen = async () => {
+    let handled = null;
+    try {
+      handled = await a897GiftOpenPromotion();
+    } catch {
+      endActiveSession();
+      handled = a897Retry("promotion_failed");
+    }
+    return handled || a897BaseStartGiftOpen();
+  };
+  // Name-it re-entry (P2 open question Q1): an unnamed promoted #1 (or the candidate while its Gift waits) is not sent to Name-it after
+  // an idle lock or a find-first recovery. The originals set "name" first; these wrappers put the same Piggy's Home back.
+  const a897BaseLockAppAfterIdle = lockAppAfterIdle;
+  lockAppAfterIdle = () => {
+    const locked = a897BaseLockAppAfterIdle();
+    if (locked && state.scene === "name" && a897KeepOutOfNameIt()) {
+      state.scene = "sendstay";
+      state.message = "Piggy is resting.";
+      state.detail = "Open again when you need it.";
+    }
+    return locked;
+  };
+  const a897BaseCheckPiggy = checkPiggy;
+  checkPiggy = async (...args) => {
+    const out = await a897BaseCheckPiggy(...args);
+    if (out && out.ok === true && state.scene === "name" && a897KeepOutOfNameIt()) setScene("sendstay", A897_HOME_MESSAGE, "Same place, same Piggy.");
+    return out;
+  };
+}
+// Boot (C3): the persisted verdict of a promoted #1 is read from the chain-scoped index so Second vs First Journey can be decided after a stamp or a reload
+// ("has" -> Second · "none" -> First Journey · null -> not promoted). Memory mirror only; the index row is the record. (The Name-it rule lives in computeInitialScene.)
+state.promotionVerdict = a897PromotionVerdict();
+// ── [A-897] end P1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 // [A-699 M2-alpha R4] 앱 잠금이 없는 표면(웹 641+ · 인증 불가 origin)에서도 First Send 미확정 기록이 있으면 같은 읽기 전용
 // 조회를 건다 — 예전엔 아래 잠금 블록(≤640)에서만 돌아서, 그 밖의 표면은 영원히 확인 없이 잠겨 있었다. 목적지는 같은 Away
@@ -11384,6 +14836,81 @@ startTesterIntro();
 // recomputes synchronously (so the wide<->mobile `render()` switch in fitInvite is immediate), an
 // iOS toolbar-sized height burst is coalesced into one trailing call.
 window.addEventListener("resize", debouncedHomeResizeListener(fitInvite));
+// [A-839] the common notebook background (line pitch = 32 x HomeCard / 282) and the ARASO rail read the A-831 layout vars in EVERY scene: one global sync (boot + resize).
+syncDesktopFormatVars();
+window.addEventListener("resize", syncDesktopFormatVars);
+
+// [A-849 UI-11] Centred cards lift only by the measured keyboard / bottom obstruction.
+// One shared helper for Got Piggy / Name it (.nameScene__pad), Couldn't find Piggy (.authCard__paper) and both Checking
+// surfaces (the authCard checking paper above, and the app-lock .loginCheck__* block). Never an assumed keyboard height and
+// never a pre-emptive lift: covered = (card natural bottom) - (visualViewport.offsetTop + visualViewport.height); the lift is
+// covered + CENTER_CARD_GAP_PX when covered > 0, else 0. The lift is written as the CSS var --centerCardLift on each element
+// (in that element's own px, so a scaled board stays exact); CSS applies it with `translate` over ~0.2s (reduced motion: instant).
+// It lives outside render(), renderAuthCard and loginCheckingMarkup (hash-pinned): a MutationObserver on #app re-applies it
+// after any redraw, and visualViewport resize/scroll, window resize and focus changes re-measure it.
+const CENTER_CARD_GAP_PX = 16;
+// SELECTOR MAP (keep in sync with style.css `[A-849 UI-11]` block): name pad / authCard paper / app-lock Checking block. The app-lock
+// entries are structural ([data-app-lock] root) because a642 V7 forbids the literal loginCheck class names in main.js; CSS names them by class.
+const CENTER_CARD_GROUPS = Object.freeze([
+  Object.freeze([".nameScene__pad"]),
+  Object.freeze([".authCard__paper"]),
+  // app-lock Checking surface (the pinned loginCheckingMarkup root carries [data-app-lock]; face button, h1, p)
+  Object.freeze(["section[data-app-lock] > button:first-of-type", "section[data-app-lock] > h1", "section[data-app-lock] > p"]),
+]);
+function centeredCardLiftFor(groupBottom, vv) {
+  if (!vv || !(vv.height > 0)) return 0;
+  const visibleBottom = (Number(vv.offsetTop) || 0) + vv.height;
+  const covered = groupBottom - visibleBottom;
+  return covered > 0 ? covered + CENTER_CARD_GAP_PX : 0;
+}
+function applyCenteredCardLift() {
+  try {
+    const vv = window.visualViewport || null;
+    for (const group of CENTER_CARD_GROUPS) {
+      const els = group.map((sel) => document.querySelector(sel)).filter(Boolean);
+      if (!els.length) continue;
+      // natural (un-lifted) bottom of the group, in screen px: the current rect plus the translate currently applied.
+      let bottom = -Infinity;
+      let scale = 1;
+      for (const el of els) {
+        const rect = el.getBoundingClientRect();
+        const h = el.offsetHeight || 0;
+        const sc = h > 0 && rect.height > 0 ? rect.height / h : 1;
+        const t = parseFloat(String(getComputedStyle(el).translate || "").split(/\s+/)[1]) || 0; // "0px -40px" -> -40 (local px)
+        bottom = Math.max(bottom, rect.bottom - t * sc);
+        if (el === els[0]) scale = sc;
+      }
+      const liftScreen = centeredCardLiftFor(bottom, vv);
+      for (const el of els) {
+        const rect = el.getBoundingClientRect();
+        const h = el.offsetHeight || 0;
+        const sc = h > 0 && rect.height > 0 ? rect.height / h : scale || 1;
+        el.style.setProperty("--centerCardLift", liftScreen > 0 ? `${(liftScreen / sc).toFixed(2)}px` : "0px");
+      }
+    }
+  } catch {
+    // measuring is best effort; a failure leaves the cards where they are
+  }
+}
+let centeredCardVv = null;
+function initCenteredCardLift() {
+  if (typeof window === "undefined" || typeof document === "undefined" || !app) return;
+  const bindVv = () => {
+    const vv = window.visualViewport || null;
+    if (!vv || vv === centeredCardVv || typeof vv.addEventListener !== "function") return;
+    centeredCardVv = vv;
+    vv.addEventListener("resize", applyCenteredCardLift);
+    vv.addEventListener("scroll", applyCenteredCardLift);
+  };
+  const update = () => { bindVv(); applyCenteredCardLift(); };
+  bindVv();
+  window.addEventListener("resize", update);
+  document.addEventListener("focusin", update);
+  document.addEventListener("focusout", update);
+  if (typeof MutationObserver === "function") new MutationObserver(update).observe(app, { childList: true });
+  update();
+}
+initCenteredCardLift();
 window.addEventListener("beforeunload", endActiveSession);
 // [A-667 R6] bfcache 복원(pageshow persisted)·백그라운드 복귀 — WebAuthn 을 **새로 부르지 않는다**. 메모리에 남은 인증
 // 시도만 정리한다(아래 expireStaleAuthState). visibilitychange 리스너는 기존 두 개(애니메이션 시계)와 별개다.

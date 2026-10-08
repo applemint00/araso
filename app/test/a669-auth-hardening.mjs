@@ -74,6 +74,9 @@ const PRE = {
   // (deposit-block-pinned shMON/nonce/gas reads + bounded retry); an unresolved reader lag now keeps the existing Away "still out."
   // instead of the failure scene. The A-698/A-707 shape pinned below (attempt slot, recovery, appLock, lock re-asserts) is unchanged.
   sendPiggyOnceA768: "01ee727da9fc2def" + "3d057d939c42b9cf" + "69a95ace97f4c9af" + "81500bd3fef9646b",
+  // [A-896 re-pin, named reason: 99e M-L-2 Owner 60 s signer margin] ONE entry check (wall-clock signerSince) before the existing recover branch; recover path itself unchanged.
+  // pre-A-896 baseline: sendPiggyOnce 01ee727da9fc2def3d057d939c42b9cf69a95ace97f4c9af81500bd3fef9646b [A-896 R1 re-pin: + monotonic performance.now stamp/check; prior A-896 value was the old pin]
+  sendPiggyOnceA896: "0120bd9896880837" + "c5fbb0e10a47b73e" + "fedeff3b9077f987" + "7cbaae82b4e7955e",
   render: "866133cf60711093" + "9b5ce2b05ad9ff25" + "3ee7ab77f8448b39" + "77faa974a9d3e27c",
 };
 
@@ -605,7 +608,8 @@ await check("SEQ-5=A fail-closed (A-695): a device with no valid local index can
 // ═══ SEND lane — OWNER_INPUT_REQUIRED, left pre-A-669 ══════════════════════════════════════════
 await check("SEND-0 [re-pinned by A-707 M2-beta: reservation + confirm + sign-before-send on top of the A-698 shape] sendPiggyOnce keeps the A-698 shape: shared attempt slot, bounded recovery, appLock guard before requestGrant", () => {
   const once = fnBody("sendPiggyOnce");
-  assert.equal(sha(once), PRE.sendPiggyOnceA768, "sendPiggyOnce == A-768 pin (A-756 + 99e M-L-1 post-deposit reads only; any further edit must re-pin with a named reason)");
+  assert.equal(sha(once), PRE.sendPiggyOnceA896, "sendPiggyOnce == A-896 pin (A-768 + 99e M-L-2 60 s signer-margin entry check only; any further edit must re-pin with a named reason)");
+  assert.notEqual(PRE.sendPiggyOnceA896, PRE.sendPiggyOnceA768, "the A-768 pin was superseded, not silently reused");
   assert.notEqual(PRE.sendPiggyOnceA768, PRE.sendPiggyOnceA756, "the A-756 pin was superseded, not silently reused");
   assert.notEqual(PRE.sendPiggyOnceA756, PRE.sendPiggyOnceA707r2, "the A-707 r2 pin was superseded, not silently reused");
   assert.notEqual(PRE.sendPiggyOnceA707, PRE.sendPiggyOnceA698, "the A-698 pin was superseded, not silently reused");

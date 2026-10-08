@@ -317,3 +317,46 @@ export function createPiggy({ piggies = [], newPiggy = null, at = null } = {}) {
 export function moneyActionKey({ action, targetPiggyId, amount, asset, at }) {
   return [action, targetPiggyId || "", amount || "", asset || "", at || ""].join("|");
 }
+
+// ── [A-897] same-#1 mainnet admit (registry projection) + name carry ─────────────────────────────────────────────
+// Release 2 promotion: the SAME #1 (same address, same accountId) gets a row in the target chain scope's registry. Not a new Piggy:
+// no createPiggy(), no birth receipt, no $0 valuation claim (the target money is UNKNOWN, valuation stays null). Name: carried from
+// the source scope's registry row (same address) or the caller's `name`, only when the target row has none; never overwritten.
+// Refuses (nothing written) when the target registry already holds a different Piggy (that is case 3, not a promotion).
+export function promoteFirstPiggyRegistry(storage, { fromScope, toScope, address, id = null, name = "", locator = null, at = null } = {}) {
+  const to = cleanScope(toScope);
+  const from = cleanScope(fromScope);
+  const addr = typeof address === "string" ? address.trim() : "";
+  if (!storage) return { ok: false, reason: "no_storage", piggy: null };
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return { ok: false, reason: "invalid_address", piggy: null };
+  if (!to.chainId || !to.accountId || !from.chainId || from.chainId === to.chainId) return { ok: false, reason: "invalid_scope", piggy: null };
+  const loaded = loadRegistry(storage, to);
+  if (loaded.error && loaded.error !== "absent") return { ok: false, reason: "registry_unreadable", piggy: null };
+  const lowerA = addr.toLowerCase();
+  const rows = loaded.registry.piggies;
+  if (rows.some((p) => String(p.address || "").toLowerCase() !== lowerA)) return { ok: false, reason: "target_has_other_piggy", piggy: null };
+  let carried = typeof name === "string" && name.trim() !== "" ? name.trim() : null;
+  if (!carried) {
+    const src = loadRegistry(storage, from);
+    if (!src.error) carried = src.registry.piggies.find((p) => String(p.address || "").toLowerCase() === lowerA)?.name || null;
+  }
+  const existing = rows.find((p) => String(p.address || "").toLowerCase() === lowerA) || null;
+  if (existing) {
+    if (existing.name || !carried) return { ok: true, reason: null, piggy: existing, alreadyPresent: true };
+    const filled = rows.map((p) => (p === existing ? { ...p, name: carried } : p));
+    const saved = saveRegistry(storage, to, { piggies: filled });
+    return saved.saved ? { ok: true, reason: null, piggy: filled[rows.indexOf(existing)], alreadyPresent: true } : { ok: false, reason: saved.error, piggy: null };
+  }
+  const { piggy, error } = normalizePiggy({
+    id: typeof id === "string" && id.trim() ? id.trim() : `legacy-${lowerA}`,
+    name: carried,
+    address: addr,
+    location: PIGGY_LOCATION.UNKNOWN,
+    assets: [],
+    locator,
+    createdAt: typeof at === "string" && at.trim() ? at.trim() : null,
+  });
+  if (error || !piggy) return { ok: false, reason: error || "invalid_piggy", piggy: null };
+  const saved = saveRegistry(storage, to, { piggies: [piggy] });
+  return saved.saved ? { ok: true, reason: null, piggy, alreadyPresent: false } : { ok: false, reason: saved.error, piggy: null };
+}

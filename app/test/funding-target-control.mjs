@@ -93,7 +93,10 @@ assert.match(PROVE_SRC, /if \(!bound\.ok\) return \{ proof: null, error: bound\.
 // bindSigner runs strictly before the challenge is built/signed (textual order inside the try).
 assert.ok(PROVE_SRC.indexOf("const bound = bindSigner") < PROVE_SRC.indexOf("fundingTargetChallenge("), "bindSigner 검사가 challenge/서명보다 먼저와야 한다");
 // [A-558 item 7] still 0 product callers.
-assert.equal((MAIN.match(/proveFundingTargetControl\(/g) || []).length, 1, "proveFundingTargetControl 은 자기 정의 하나뿐이어야 한다(제품 호출자 0, funding UI 는 여전히 WAIT_DESIGN_MERGE)");
+// pre-A-898 baseline: exactly 1 (its own definition, 0 product callers). A-898 adds the Funding Paper crypto row, which proves the destination before the
+// Piggy address is shown: the ONE product caller is a898ProveDestination (definition + that one call = 2).
+assert.equal((MAIN.match(/proveFundingTargetControl\(/g) || []).length, 2, "proveFundingTargetControl: 자기 정의 + a898ProveDestination 의 호출 하나");
+assert.match(MAIN.slice(MAIN.indexOf("async function a898ProveDestination"), MAIN.indexOf("async function a898SignerForPayer")), /proveFundingTargetControl\(piggy\)/, "the one caller is a898ProveDestination");
 
 // ── deterministic fake clock (no real timer ever fires — only records the requested delay) ──────
 function fakeTimers() {

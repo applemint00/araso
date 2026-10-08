@@ -217,6 +217,131 @@ export async function openBackup(envelope, prfOutput, { subtle = globalThis.cryp
   return { payload, error: null };
 }
 
+// ---- [A-857] 신선도 앵커 — 공급자 중립 경계(인터페이스만) -------------------------------------------------
+// anchor = { get(scope) -> {recordVersion, envelopeDigest} | null (못 닿으면 throw),
+//            advance(scope, prevVersion, nextVersion, envelopeDigest, proof) -> record (CAS on prevVersion; 같은 (next,digest) 재호출 = 멱등) }
+// 앵커는 **신선도 힌트**일 뿐이다. 안전(후보 통제 증명 · AEAD · 체인/기준선 검사)은 앵커에 의존하지 않는다 —
+// 앵커는 오직 (a) 더 옛 봉투를 거부하거나 (b) completeness 를 unverified_fresh → local_proof_only / anchored_fresh(A-876: 출시 등급 훅만) 로 올릴 수 있다. "complete" 는 없다.
+// 앵커 응답은 **신뢰하지 않는 입력**: 엄격한 모양 검사에 실패하면 "못 닿음"으로 취급한다(증거로 쓰지 않는다).
+export const ANCHOR_MAX_VERSION = 2 ** 31;   // DEFAULT TAKEN / Owner to confirm — 악의적 앵커의 터무니없는 버전 주장 상한
+const HEX64_RE = /^[0-9a-f]{64}$/;
+const ANCHOR_WRITE_INFO = new TextEncoder().encode("araso.gateb.v1.anchor.write");
+
+export function hasGateBAnchor(anchor) {
+  return !!anchor && typeof anchor.get === "function" && typeof anchor.advance === "function";
+}
+
+/** 앵커 레코드 검사: 정확히 {recordVersion, envelopeDigest}. 실패 시 null(= 증거 아님). */
+export function normalizeAnchorRecord(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const keys = Object.keys(raw);
+  if (keys.length !== 2 || !keys.includes("recordVersion") || !keys.includes("envelopeDigest")) return null;
+  if (!Number.isSafeInteger(raw.recordVersion) || raw.recordVersion < 1 || raw.recordVersion > ANCHOR_MAX_VERSION) return null;
+  if (typeof raw.envelopeDigest !== "string" || !HEX64_RE.test(raw.envelopeDigest)) return null;
+  return { recordVersion: raw.recordVersion, envelopeDigest: raw.envelopeDigest };
+}
+
+/** 봉투 → SHA-256 hex over "version|nonce|ciphertext". DEFAULT TAKEN / Owner to confirm. 모양이 틀리면 null. */
+export async function computeEnvelopeDigest(envelope, { subtle = globalThis.crypto?.subtle } = {}) {
+  const { envelope: env, error } = parseEnvelope(envelope);
+  if (error || !subtle || typeof subtle.digest !== "function") return null;
+  const bytes = new TextEncoder().encode(`${env.version}|${env.nonce}|${env.ciphertext}`);
+  return [...new Uint8Array(await subtle.digest("SHA-256", bytes))].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * 앵커 쓰기 증명(기본 구현, 인터페이스 경계): 이미 얻은 색인 PRF 출력에서 HKDF("araso.gateb.v1.anchor.write") 로 MAC 키를
+ * 만들고 HMAC-SHA256("scope|prev|next|digest"). 추가 의식 0 · credentialId/주소 미전송. DEFAULT TAKEN / Owner to confirm.
+ */
+export async function makeAnchorWriteProof({ prfOutput, scope, prevVersion, nextVersion, envelopeDigest }, { subtle = globalThis.crypto?.subtle } = {}) {
+  if (!(prfOutput instanceof Uint8Array) || prfOutput.length !== 32) throw new Error("invalid_prf_output");
+  if (!subtle || typeof subtle.importKey !== "function") throw new Error("crypto_unavailable");
+  const ikm = await subtle.importKey("raw", prfOutput, "HKDF", false, ["deriveKey"]);
+  const key = await subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt: new Uint8Array(0), info: ANCHOR_WRITE_INFO }, ikm, { name: "HMAC", hash: "SHA-256", length: 256 }, false, ["sign"]);
+  const sig = await subtle.sign("HMAC", key, new TextEncoder().encode(`${scope}|${prevVersion}|${nextVersion}|${envelopeDigest}`));
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// ---- [A-876] 출시 등급 증명 경계 — releaseProof 어댑터 훅(공급자 중립, 선택, 기본 없음) ---------------------------
+// A-857 HMAC 앵커는 대칭(SAME_SECRET): 검증자가 쓰기 증명을 위조할 수 있다 → 일치해도 **local_proof_only** 일 뿐이다.
+// `anchored_fresh` 는 A-871 출시 등급 능력(ASYMMETRIC_VERIFIER / INDEPENDENT_ANCHOR)이 훅으로 주입됐을 때만 붙는다.
+// 이 파일은 A-871 모듈을 import 하지 않는다(그 모듈은 격리 유지) — 호출자가 A-871 의 판정을 훅으로 넘긴다:
+//   releaseProof = {
+//     trust({ anchorOutcome: "match"|"no_match" }) -> { label, capability, releaseGrade, globallyLatest:false }
+//                                             (= A-871 trustLabel({ authority: verdict, anchorOutcome }) 그대로)
+//     makeProof?({ scope, prevVersion, nextVersion, envelopeDigest }) -> { challenge, signature, publicKey }
+//                                             (출시 등급 발행 전용 · PRF 출력은 넘기지 않는다)
+//     verifyProof?(tuple, proof) -> boolean    (업로드 전 로컬 자기 검사, 선택)
+//   }
+// 훅의 답은 **신뢰하지 않는 입력**: 모양이 틀리거나, throw 하거나, 능력·라벨·releaseGrade 가 서로 어긋나면 출시 등급이 아니다
+// (fail closed → 일치해도 local_proof_only). 훅이 없으면 앵커 일치는 local_proof_only. 앵커 자체가 없으면 기존 경로 그대로.
+export const RELEASE_TRUST = Object.freeze({ ANCHORED: "anchored_fresh", LOCAL_ONLY: "local_proof_only", UNVERIFIED: "unverified_fresh" });
+const RELEASE_CAPABILITIES = Object.freeze(["asymmetric_verifier", "independent_anchor"]);
+const KNOWN_CAPABILITIES = Object.freeze([...RELEASE_CAPABILITIES, "same_secret", "unknown"]);
+const RELEASE_PROOF_FIELDS = Object.freeze(["challenge", "signature", "publicKey"]);
+const HEX128_RE = /^[0-9a-f]{128}$/;
+
+/**
+ * [A-876 F2/F3] 훅을 **한 번** 읽어 스냅숏을 만든다. 모든 속성 접근(getter 포함)·호출이 try 안에 있다 — 절대 throw 하지 않는다.
+ * @returns {{ wellFormed: boolean, answer: {label, capability, releaseGrade, globallyLatest}|null, makeProof: fn|null, verifyProof: fn|null }}
+ * wellFormed = 답이 정확한 모양(label 3종 · capability 4종 · releaseGrade/globallyLatest boolean)일 때만. 그 밖(throw·모양 불량) = false.
+ */
+async function readReleaseHook(releaseProof) {
+  const broken = { wellFormed: false, answer: null, makeProof: null, verifyProof: null };
+  try {
+    const trustFn = releaseProof.trust;
+    const makeProof = releaseProof.makeProof;
+    const verifyProof = releaseProof.verifyProof;
+    if (typeof trustFn !== "function") return broken;
+    const t = await trustFn.call(releaseProof, { anchorOutcome: "match" });
+    if (!t || typeof t !== "object" || Array.isArray(t)) return broken;
+    const answer = { label: t.label, capability: t.capability, releaseGrade: t.releaseGrade, globallyLatest: t.globallyLatest };   // 필드 1회 스냅숏
+    const wellFormed = Object.values(RELEASE_TRUST).includes(answer.label)
+      && KNOWN_CAPABILITIES.includes(answer.capability)
+      && typeof answer.releaseGrade === "boolean"
+      && typeof answer.globallyLatest === "boolean";
+    return {
+      wellFormed,
+      answer: wellFormed ? answer : null,
+      makeProof: typeof makeProof === "function" ? makeProof : null,
+      verifyProof: typeof verifyProof === "function" ? verifyProof : null,
+    };
+  } catch {
+    return broken;
+  }
+}
+
+function isReleaseAnswer(a) {
+  return !!a && a.label === RELEASE_TRUST.ANCHORED && a.releaseGrade === true && a.globallyLatest === false && RELEASE_CAPABILITIES.includes(a.capability);
+}
+/** 명시적 SAME_SECRET/UNKNOWN 답(= A-871 trustLabel 의 비출시 답) — 발행에서 레거시 HMAC 경로를 유지해도 되는 유일한 경우. */
+function isExplicitNonReleaseAnswer(a) {
+  return !!a && (a.capability === "same_secret" || a.capability === "unknown") && a.releaseGrade === false && a.globallyLatest === false && a.label !== RELEASE_TRUST.ANCHORED;
+}
+
+/** 훅 판정 → 이 경계가 인정하는 신뢰 상태. matched=false 면 항상 unverified. 출시 등급은 모든 조건이 서로 맞을 때만. 절대 throw 하지 않는다. */
+export async function resolveReleaseTrust(releaseProof, { matched } = {}) {
+  if (!matched) return { label: RELEASE_TRUST.UNVERIFIED, capability: "unknown", releaseGrade: false, globallyLatest: false };
+  const local = (capability) => ({ label: RELEASE_TRUST.LOCAL_ONLY, capability: KNOWN_CAPABILITIES.includes(capability) ? capability : "unknown", releaseGrade: false, globallyLatest: false });
+  if (!releaseProof) return local("same_secret");   // 훅 없음 = A-857 HMAC 기본 = SAME_SECRET
+  const hook = await readReleaseHook(releaseProof);
+  if (!hook.wellFormed) return local("unknown");
+  const a = hook.answer;
+  return isReleaseAnswer(a) ? { label: RELEASE_TRUST.ANCHORED, capability: a.capability, releaseGrade: true, globallyLatest: false } : local(a.capability);
+}
+
+/** 출시 등급 증명 업로드 모양: 정확히 {challenge(64hex), signature(128hex), publicKey(64hex)}. 그 밖의 키(credentialId·주소·PRF·키) 0. */
+function normalizeReleaseProof(proof) {
+  if (!proof || typeof proof !== "object" || Array.isArray(proof)) return null;
+  const keys = Object.keys(proof);
+  if (keys.length !== RELEASE_PROOF_FIELDS.length || keys.some((k) => !RELEASE_PROOF_FIELDS.includes(k))) return null;
+  const { challenge, signature, publicKey } = proof;
+  if (typeof challenge !== "string" || !HEX64_RE.test(challenge)) return null;
+  if (typeof signature !== "string" || !HEX128_RE.test(signature)) return null;
+  if (typeof publicKey !== "string" || !HEX64_RE.test(publicKey)) return null;
+  return Object.freeze({ challenge, signature, publicKey });   // 원시값 복사본 — getter/후속 변경이 업로드에 닿지 않는다
+}
+
 // ---- 후보 순번 ------------------------------------------------------------------------------
 
 /**
@@ -272,6 +397,9 @@ export async function restoreFromBackup({
   now = () => new Date().toISOString(),
   subtle = globalThis.crypto?.subtle,
   discoveryRecord = null,
+  anchor = null,
+  anchorScope = null,
+  releaseProof = null,
 } = {}) {
   if (!adapter || typeof adapter.get !== "function") return { restored: [], source: "local_only" };
   // [A-579 Lane B] discovery 가 "이 루트는 발행 기록이 있다(recordVersion ≥ 1)" 고 말했는데 봉투가 없거나 못 닿으면
@@ -304,7 +432,9 @@ export async function restoreFromBackup({
   }
   if (!indexPrf || indexPrf.credentialId !== rootId) return refuse("remote", "root_credential_mismatch");
 
-  const { payload, error: openError } = await openBackup(raw, indexPrf.prfOutput, { subtle });
+  // [A-857 R1] 봉투는 한 번만 파싱한다 — 복호화와 앵커 digest 가 **같은 객체**를 쓴다.
+  const parsedRaw = parseEnvelope(raw).envelope ?? raw;
+  const { payload, error: openError } = await openBackup(parsedRaw, indexPrf.prfOutput, { subtle });
   if (openError) return refuse("remote", openError);
 
   // [A-554 Lane B 결함 1] blob 이 다른 체인 것이면 후보 계산/인증 시도 전에 즉시 거부한다 —
@@ -318,6 +448,37 @@ export async function restoreFromBackup({
   //  둘 다 통과해도 **새 기기**에서는 "지금 최신" 을 증명하지 못한다 — completeness 가 그 사실을 그대로 말한다.
   const sealedVersion = payload.recordVersion ?? 0;
   if (discoveryVersion !== null && sealedVersion !== discoveryVersion) return refuse("remote", "record_version_mismatch");
+  // [A-857] 신선도 앵커 — 후보 인증 **전**. 앵커가 없으면(제품 기본) 아무 일도 하지 않고 freshnessAnchor = null.
+  //  sealed < anchor → anchor_rollback · 같은 버전 다른 digest → anchor_digest_mismatch(둘 다 거부) ·
+  //  같은 버전 같은 digest → anchored_fresh(A-871 출시 등급 훅) / local_proof_only(그 밖, A-876) · sealed > anchor / 앵커 없음(null) → ahead_of_anchor · 못 닿음/모양 불량 → unreachable.
+  //  어느 경우에도 안전은 앵커에 의존하지 않는다: 앵커는 거부하거나 completeness 를 올리기만 한다.
+  let freshnessAnchor = null;
+  if (anchor) {
+    let rec = null;
+    let reachable = false;
+    if (hasGateBAnchor(anchor) && typeof anchorScope === "string" && HEX64_RE.test(anchorScope)) {
+      try {
+        const rawA = await anchor.get(anchorScope);
+        if (rawA === null || rawA === undefined) reachable = true;
+        else { rec = normalizeAnchorRecord(rawA); reachable = rec !== null; }
+      } catch { reachable = false; }
+    }
+    if (!reachable) {
+      freshnessAnchor = { state: "unreachable", anchorVersion: null, sealedVersion };
+    } else if (!rec) {
+      freshnessAnchor = { state: "ahead_of_anchor", anchorVersion: 0, sealedVersion };
+    } else if (sealedVersion < rec.recordVersion) {
+      return { ...refuse("remote", "anchor_rollback"), freshnessAnchor: { state: "anchor_rollback", anchorVersion: rec.recordVersion, sealedVersion } };
+    } else if (sealedVersion === rec.recordVersion) {
+      const digest = await computeEnvelopeDigest(parsedRaw, { subtle });
+      if (digest !== rec.envelopeDigest) return { ...refuse("remote", "anchor_digest_mismatch"), freshnessAnchor: { state: "anchor_digest_mismatch", anchorVersion: rec.recordVersion, sealedVersion } };
+      // [A-876] 일치 ≠ 출시 등급. anchored_fresh 는 A-871 출시 등급 훅이 있을 때만, 아니면 local_proof_only(SAME_SECRET/UNKNOWN).
+      const trust = await resolveReleaseTrust(releaseProof, { matched: true });
+      freshnessAnchor = { state: trust.label, anchorVersion: rec.recordVersion, sealedVersion, trust };
+    } else {
+      freshnessAnchor = { state: "ahead_of_anchor", anchorVersion: rec.recordVersion, sealedVersion };
+    }
+  }
   // 후보 계산 자체도 admitModelAPiggy 처럼 **잠금 안에서** 최신 상태로 한다(있으면) — 그래야
   // "무엇이 이미 로컬에 있는가"를 읽는 시점과 실제로 쓰는 시점 사이에 다른 탭의 +Piggy/복원이
   // 끼어들 수 없다. registerControlledPiggy 자체도 매 호출마다 색인을 다시 읽어 재검증하므로
@@ -355,9 +516,12 @@ export async function restoreFromBackup({
     //  · incomplete        : 봉투가 주장한 범위(issuedThrough) 중 증명 못 한 순번이 있다(건너뜀/결번).
     //  · unverified_fresh  : 이 기기에 기준선이 없었다 — 신선도 앵커 없음(원격 게이트 GATE_B_FRESHNESS_ANCHOR).
     //  · not_older_than_local_baseline : 기준선보다 옛것은 아니다 — 그래도 다른 기기의 더 새 발행 여부는 모른다.
+    //  · anchored_fresh    : [A-857·A-876] 봉투가 앵커의 (recordVersion, digest)와 일치 **그리고** A-871 출시 등급 능력 — 증명 못 한 순번이 없을 때만.
+    //  · local_proof_only  : [A-876] 일치했지만 앵커가 SAME_SECRET/UNKNOWN(예: A-857 HMAC) — 저장소 보유자가 위조 가능, 출시 등급 아님.
+    const anchorState = freshnessAnchor?.state;
     const completeness = restoredThrough < payload.issuedThrough || skipped.length > 0
       ? "incomplete"
-      : (baseline ? "not_older_than_local_baseline" : "unverified_fresh");
+      : (anchorState === "anchored_fresh" || anchorState === "local_proof_only" ? anchorState : (baseline ? "not_older_than_local_baseline" : "unverified_fresh"));
     return {
       restored,
       source: "remote",
@@ -366,7 +530,7 @@ export async function restoreFromBackup({
       recordVersion: sealedVersion,
       claimedThrough: payload.issuedThrough,
       restoredThrough,
-      freshnessAnchor: null,
+      freshnessAnchor,
     };
   };
 
@@ -396,6 +560,10 @@ export async function publishIndexBackup({
   rootCredential,
   requestPrf,
   subtle = globalThis.crypto?.subtle,
+  anchor = null,
+  anchorScope = null,
+  makeProof = null,
+  releaseProof = null,
 } = {}) {
   if (!adapter || typeof adapter.put !== "function") return { published: false, reason: "no_adapter" };
   const rootId = typeof rootCredential?.credentialId === "string" ? rootCredential.credentialId : "";
@@ -442,6 +610,22 @@ export async function publishIndexBackup({
     priorIssued = Math.max(priorIssued, baseline.issuedThrough);
   }
   if ((index.issuedThrough || 0) < priorIssued) return { published: false, reason: "would_regress" };
+  // [A-857] 앵커 읽기(최선 노력) — 기준선이 지워진 기기가 앵커보다 낮은 버전을 발행해 스스로 잠기는 것을 막는다.
+  let anchorRec = null;
+  let anchorReadable = false;
+  if (anchor) {
+    if (hasGateBAnchor(anchor) && typeof anchorScope === "string" && HEX64_RE.test(anchorScope)) {
+      try {
+        const rawA = await anchor.get(anchorScope);
+        if (rawA === null || rawA === undefined) anchorReadable = true;
+        else { anchorRec = normalizeAnchorRecord(rawA); anchorReadable = anchorRec !== null; }
+      } catch { anchorReadable = false; }
+    }
+    // [A-857 F1] 앵커가 **이 기기가 본 적 없는** 버전을 알고 있으면(열린 blob · 로컬 기준선 어느 쪽보다도 높음) 발행하지 않는다 —
+    // 서버가 blob 을 숨긴 사이 작은 색인으로 발행하면 앵커가 퇴행한 blob 을 보증(anchored_fresh)하게 된다. put 이전에 거부.
+    if (anchorRec && anchorRec.recordVersion > prior) return { published: false, reason: "anchor_unseen_state" };
+    if (anchorRec) prior = Math.max(prior, anchorRec.recordVersion);
+  }
   const recordVersion = prior + 1;
   const payload = buildBackupPayload(index, { recordVersion });
 
@@ -452,5 +636,57 @@ export async function publishIndexBackup({
     return { published: false, reason: "adapter_put_failed" };
   }
   raiseBackupBaseline(storage, chainId, { recordVersion, issuedThrough: payload.issuedThrough });
-  return { published: true, reason: null, key, recordVersion };
+  if (!anchor) return { published: true, reason: null, key, recordVersion };
+
+  // [A-857] 순서: blob put → 로컬 기준선 → anchor.advance. blob 이 먼저라서 advance 가 실패해도 앵커가 blob 을 앞서지 않는다
+  // (= publish 잠금 없음). 실패해도 published 는 true(blob 은 이미 공개) — 다음 발행이 멱등하게 다시 시도한다.
+  const anchorOut = { advanced: false, reason: null };
+  // [A-876] releaseProof 훅이 있을 때만 능력을 보고한다(없으면 A-857 결과 모양 그대로).
+  // [A-876 F2] 훅이 있으면: 출시 등급 답 → 비대칭 증명 경로 · 명시적 SAME_SECRET/UNKNOWN 답 → 레거시 HMAC 경로 ·
+  //  그 밖(throw·모양 불량·모순된 답) → release_proof_unavailable, advance 0 (HMAC 로 조용히 내려가지 않는다, prfOutput 를 넘기지 않는다).
+  // [A-876 F3] readReleaseHook 은 throw 하지 않는다 — blob put·기준선 상승 뒤라도 published:true 계약이 깨지지 않는다.
+  const hook = releaseProof ? await readReleaseHook(releaseProof) : null;
+  const release = hook
+    ? (hook.wellFormed && isReleaseAnswer(hook.answer)
+      ? { mode: "release", capability: hook.answer.capability }
+      : hook.wellFormed && isExplicitNonReleaseAnswer(hook.answer)
+        ? { mode: "legacy", capability: hook.answer.capability }
+        : { mode: "unavailable", capability: hook.wellFormed ? hook.answer.capability : "unknown" })
+    : null;
+  if (release) anchorOut.capability = release.capability;
+  if (!anchorReadable) {
+    anchorOut.reason = "anchor_unreachable";
+  } else if (release?.mode === "unavailable") {
+    anchorOut.reason = "release_proof_unavailable";
+  } else {
+    try {
+      const envelopeDigest = await computeEnvelopeDigest(envelope, { subtle });
+      const prevVersion = anchorRec ? anchorRec.recordVersion : 0;
+      let proof;
+      if (release?.mode === "release") {
+        // [A-876] 출시 등급 경로: 대칭(HMAC) 기본 증명으로 **절대** 내려가지 않는다. 훅의 비대칭 증명만, 업로드 모양 검사 뒤에만.
+        // 훅에는 PRF 출력을 넘기지 않는다 — 튜플(scope·버전·digest)만.
+        if (!hook.makeProof) throw new Error("release_proof_unavailable");
+        const tuple = Object.freeze({ scope: anchorScope, prevVersion, nextVersion: recordVersion, envelopeDigest });
+        let rawProof;
+        try { rawProof = await hook.makeProof.call(releaseProof, tuple); } catch { throw new Error("release_proof_unavailable"); }
+        proof = normalizeReleaseProof(rawProof);
+        if (!proof) throw new Error("release_proof_mismatch");
+        if (hook.verifyProof) {
+          let selfOk = false;
+          try { selfOk = (await hook.verifyProof.call(releaseProof, tuple, proof)) === true; } catch { selfOk = false; }
+          if (!selfOk) throw new Error("release_proof_mismatch");
+        }
+      } else {
+        const proofArgs = { prfOutput: result.prfOutput, scope: anchorScope, prevVersion, nextVersion: recordVersion, envelopeDigest };
+        proof = typeof makeProof === "function" ? await makeProof(proofArgs) : await makeAnchorWriteProof(proofArgs, { subtle });
+      }
+      await anchor.advance(anchorScope, prevVersion, recordVersion, envelopeDigest, proof);
+      anchorOut.advanced = true;
+    } catch (e) {
+      const m = typeof e?.message === "string" ? e.message : "";
+      anchorOut.reason = ["anchor_cas_conflict", "anchor_write_unauthorized", "anchor_downgrade", "release_proof_unavailable", "release_proof_mismatch"].includes(m) ? m : "anchor_unreachable";
+    }
+  }
+  return { published: true, reason: null, key, recordVersion, anchor: anchorOut };
 }

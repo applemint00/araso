@@ -164,6 +164,7 @@ export const GIFT_GAS_POLICY = Object.freeze({
   deliveryPath: "A_mon_after_recipient_address",
 });
 
+export const GIFT_SPONSOR_GAS_STEPS = Object.freeze(["install", "commitClaim", "revoke", "claim"]);
 export const GIFT_GAS_BUDGET_STATUS = Object.freeze({
   ESTIMATE: "ESTIMATE",
   UNKNOWN: "UNKNOWN",
@@ -179,7 +180,9 @@ const BPS_DENOMINATOR = 10000n;
 // REQUIRED (A-574 Path A: the sender pays the delivery transfer too — a budget without it
 // under-counts what the sender actually spends). No optional steps remain.
 const GAS_STEPS_REQUIRED = Object.freeze(["commitClaim", "claim", "fundingTransfer"]);
-const GAS_STEPS_OPTIONAL = Object.freeze([]);
+// [A-913 A] The sponsor path additionally pays install + revoke from the sponsor wallet. They are OPTIONAL here (legacy budgets are unchanged) and
+// REQUIRED by gift-create-plan.js planGiftGasDeposit (GIFT_SPONSOR_GAS_STEPS): a deposit whose budget lacks any of the four is refused (UNKNOWN, no default).
+const GAS_STEPS_OPTIONAL = Object.freeze(["install", "revoke"]);
 const GAS_STEPS = Object.freeze([...GAS_STEPS_REQUIRED, ...GAS_STEPS_OPTIONAL]);
 
 // Keys that would give the gas layer entitlement/claim authority. Refused by name anywhere in

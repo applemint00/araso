@@ -38,16 +38,16 @@ check("computeHomeFloorViewportNudge(): no anchor/bell compensation read remains
   /anchorComp|extraNudge|homeFloorPointCompensation|homeCharMobileBoost/.test(nudgeSrc), false);
 check("main.js: RETURN_RECEIPT_ANCHOR_/BELL_CENTER mirrors deleted",
   /RETURN_RECEIPT_(ANCHOR|BELL)_/.test(MAIN_SRC.replace(/\/\/.*$/gm, "")), false);
-check("main.js: both mountReturnView() calls (First + Second Return) pass getReceiptRail: homeReturnReceiptRail",
-  (MAIN_SRC.match(/getReceiptRail: homeReturnReceiptRail,/g) || []).length, 2);
-const railFn = cut(MAIN_SRC, "function homeReturnReceiptRail() {", "\n}\n");
-check("homeReturnReceiptRail(): returns null above 640 (1440/700/900 take the legacy anchor)",
-  has(railFn, /if \(!\(vw <= 640\)\) return null;/), true);
-check("homeReturnReceiptRail(): every term is an existing token/constant (inset, top-safe+grid-3, vh/2-48, 285, grid-5)",
-  has(railFn, /--mobile-inset/) && has(railFn, /--mobile-top-safe/) && has(MAIN_SRC, /const RECEIPT_RAIL_TOP_EXTRA_TOKEN = "--grid-3";/)
-    && has(railFn, /cardCy: vh \/ 2 - RECEIPT_RAIL_CARD_OFF_Y/) && has(MAIN_SRC, /const RECEIPT_RAIL_CARD_W = 285;/)
-    && has(MAIN_SRC, /const RECEIPT_RAIL_CARD_OFF_Y = 48;/) && has(MAIN_SRC, /const RECEIPT_RAIL_GAP_TOKEN = "--grid-5";/), true);
-check("main.js RECEIPT_RAIL_CARD_W/OFF_Y mirror style.css .cardAnchor (285 wide, translateY(-50% - 48px))",
+// pre-A-837 baseline: both mountReturnView() calls passed `getReceiptRail: homeReturnReceiptRail,` (count 2); homeReturnReceiptRail() returned null above 640 and read only existing
+// tokens (--mobile-inset, --mobile-top-safe + --grid-3, vh/2 - 48, 285, --grid-5). A-837: main.js no longer passes a rail (the Receipt is placed by returnLayout() through the size provider
+// at every width); the pure receiptRailTarget() API stays because the hash-pinned return-view.js still forwards getReceiptRail.
+check("main.js: neither mountReturnView() call passes getReceiptRail any more (A-837: returnLayout() places the Receipt at every width)",
+  (MAIN_SRC.match(/getReceiptRail:/g) || []).length, 0);
+check("main.js: homeReturnReceiptRail / RECEIPT_RAIL_* are gone", /homeReturnReceiptRail|RECEIPT_RAIL_/.test(MAIN_SRC.replace(/\/\/.*$/gm, "")), false);
+check("main.js: both fitBoard hooks share returnFitBoard (Home stage + the Return group shift)",
+  (MAIN_SRC.match(/fitBoard: returnFitBoard,/g) || []).length, 2);
+// pre-A-837 baseline: "main.js RECEIPT_RAIL_CARD_W/OFF_Y mirror style.css .cardAnchor" - the constants are gone; the CSS base rule is kept as is.
+check("style.css base .cardAnchor stays 285 wide, translateY(-50% - 48px)",
   has(CSS_SRC, /\.cardAnchor \{[^}]*width: 285px;[^}]*calc\(-50% - 48px\)/s), true);
 check("style.css --grid-3 = 16px and --grid-5 = 32px (the gap/top tokens the rail reads)",
   has(CSS_SRC, /--grid-3: 16px;/) && has(CSS_SRC, /--grid-5: 32px;/), true);
@@ -160,20 +160,14 @@ for (const [vw, vh] of [[390, 844], [430, 900]]) {
 }
 
 // ── 5. Name: card + motion Piggy scale as ONE composition ──────────────────────────────────
-check("NAME_COMP_LEFT = 380 mirrors name-piggy .pgwrap inline left (Piggy wrapper) ",
-  has(MAIN_SRC, /const NAME_COMP_LEFT = 380;/) && has(CSS_SRC, /\.nameScene__piggy \{[^}]*\}/s), true);
-check("NAME_COMP_RIGHT = 612 + 460 mirrors .nameScene__pad left 612 + .nameCard width 460",
-  has(MAIN_SRC, /const NAME_COMP_RIGHT = 612 \+ 460;/) && has(CSS_SRC, /\.nameScene__pad \{[^}]*left: 612px;[^}]*width: 460px;/s)
+// pre-A-837 baseline: NAME_COMP_LEFT/RIGHT, NAME_CARD_BOTTOM, NAME_PIGGY_WRAP_TOP consts and nameCompositionFit() (mobile-only composition fit) + the `composed` line in fitNameScene().
+// A-837: replaced by nameSceneLayout() (v10: card = min(1.55 HomeCard, 0.9 inner), centred); the authored board coordinates below are still the contract.
+check("NAME_COMP_* / nameCompositionFit / `composed` are gone (A-837)", !/NAME_COMP_LEFT|NAME_COMP_RIGHT|NAME_CARD_BOTTOM|NAME_PIGGY_WRAP_TOP|nameCompositionFit|const composed/.test(MAIN_SRC.replace(/\/\/.*$/gm, "")), true);
+check("name-piggy .pgwrap inline left 380 / .nameScene__pad left 612 width 460 / .nameCard 460x300 are unchanged (board coordinates nameSceneLayout relies on)",
+  has(CSS_SRC, /\.nameScene__piggy \{[^}]*\}/s) && has(CSS_SRC, /\.nameScene__pad \{[^}]*left: 612px;[^}]*width: 460px;/s)
     && has(CSS_SRC, /\.nameCard \{[^}]*width: 460px;[^}]*height: 300px;/s), true);
-check("NAME_CARD_BOTTOM = 292 + 300; NAME_PIGGY_WRAP_TOP = 252", has(MAIN_SRC, /const NAME_CARD_BOTTOM = 292 \+ 300;/)
-  && has(MAIN_SRC, /const NAME_PIGGY_WRAP_TOP = 252;/), true);
-const nameFn = cut(MAIN_SRC, "function nameCompositionFit(base) {", "\nfunction fitNameScene()");
-check("nameCompositionFit(): mobile-only (>640 -> null) and only when it beats the floor scale",
-  has(nameFn, /if \(!\(vw <= 640\)\) return null;/) && has(nameFn, /if \(!\(comp > base\)\) return null;/), true);
-check("nameCompositionFit(): uniform scale + translate only (no per-part size, no .nameCard width edit)",
-  has(nameFn, /scale: comp, tx: inset - NAME_COMP_LEFT \* comp/) && !/nameCard|namePiggy|pgwrap/.test(nameFn), true);
-check("fitNameScene(): floor line untouched; composition override is the only addition",
-  has(MAIN_SRC, /const scale = Math\.max\(natural, NAME_SCENE_SCALE_FLOOR\);/) && has(MAIN_SRC, /const composed = nameCompositionFit\(scale\);/), true);
+check("fitNameScene(): floor line untouched; the v10 layout is the only addition",
+  has(MAIN_SRC, /const scale = Math\.max\(natural, NAME_SCENE_SCALE_FLOOR\);/) && has(MAIN_SRC, /const n = nameSceneLayout\(f\.L\);/), true);
 for (const [vw, vh] of [[390, 844], [430, 900]]) {
   const inset = vw <= 400 ? 20 : 24;
   const comp = Math.min((vw - 2 * inset) / (1072 - 380), vh / 800);

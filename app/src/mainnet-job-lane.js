@@ -32,6 +32,7 @@ import { DECISION_RECEIPT_SCHEMA, validateDecisionReceipt } from "./second-journ
 import { authorize, consume, onUnknownOutcome, permissionNonce } from "./permission-envelope.js";
 import { bindRecordToProfile, checkRecordBinding } from "./chain-profile.js";
 import { executeMoneyStep, TRANSPORT_KIND } from "./money-executor.js";
+import { mapSecondStateObservation } from "./receipt-evidence-second.js";
 // Protocol-neutral helpers (move-only) and the Aave Job's own facts (move-only). Every public Aave
 // name stays exported from this module, so existing imports of mainnet-job-lane.js keep working.
 import {
@@ -49,6 +50,33 @@ export {
 
 // Product config for this lane: no reader, no writer. Both stay off until a separate Owner step.
 export const MAINNET_LANE_CONFIG = Object.freeze({ reader: null, liveExecution: false });
+
+// Receipt evidence sidecar for DECISIONS (observation only). A decision receipt is a state observation, never a tx:
+// it is mapped with mapSecondStateObservation and handed ONLY to an injected onReport callback. It is never
+// appended to an evidence store (this module holds no store), never returned, and never changes the decision.
+// Injected: `evidence = { onReport, now }` (default none => nothing runs). Any failure is swallowed here.
+function reportDecisionObservation(evidenceSink, receipt) {
+  if (evidenceSink === null || evidenceSink === undefined || !receipt) return;
+  try {
+    if (typeof evidenceSink !== "object") return;
+    const onReport = evidenceSink.onReport;
+    if (typeof onReport !== "function") return;
+    const now = evidenceSink.now;
+    let mapped;
+    try { mapped = mapSecondStateObservation(receipt, { now }); } catch { mapped = { ok: false, reason: "evidence_mapping_threw" }; }
+    const report = Object.freeze({
+      journey: "second",
+      authority: "observation_only",
+      source: "second.decision_receipt",
+      staged: Object.freeze([]),
+      stored: Object.freeze([]),
+      stateObservations: Object.freeze(mapped?.ok === true ? [mapped.observation] : []),
+      evidenceErrors: Object.freeze(mapped?.ok === true ? [] : [Object.freeze({ reason: typeof mapped?.reason === "string" ? mapped.reason : "evidence_mapping_failed" })]),
+    });
+    const p = onReport(report);
+    if (p && typeof p.then === "function") p.then(undefined, () => {});
+  } catch { /* evidence layer only */ }
+}
 
 const isLaneProfile = isAaveLaneProfile;
 
@@ -191,7 +219,7 @@ const fold = foldDecisions;
  */
 export function decideLane({
   profile, piggy = {}, amountRaw, returnAnswer, read = null, readStatus = "not_read",
-  capRaw = LANE_AMOUNT_CAP_RAW, eventId, selectionSource, nowMs, nowIso,
+  capRaw = LANE_AMOUNT_CAP_RAW, eventId, selectionSource, nowMs, nowIso, evidence: evidenceSink = null,
 } = {}) {
   if (!isLaneProfile(profile)) {
     return { decision: "unknown", result: RESULT.UNKNOWN, action: ACTION.NONE, reason: "profile_not_mainnet_lane", executionPermission: false, decisions: [], receipt: null };
@@ -291,6 +319,7 @@ export function decideLane({
   const verdict = validateDecisionReceipt(receipt, { accountId: piggy.address, chainId: profile.scope });
   out.receipt = verdict.error ? null : verdict.receipt;
   out.receiptError = verdict.error || null;
+  reportDecisionObservation(evidenceSink, out.receipt); // after the decision is final; observation only
   return out;
 }
 
@@ -782,7 +811,7 @@ const CURRENT_DECISION_WORD = Object.freeze({ [RESULT.NAH]: "nah", [RESULT.ASK]:
  * One candidate, one event. Never throws, never executes, never issues permission, never marks READY.
  * @returns {{kind, candidateId, eventId, decision, result, action, reason, executionPermission:false, decisions, receipt, receiptError}}
  */
-export function decideCurrentCandidate({ row, agreedRule = null, scope = {}, eventId, selectionSource, nowMs, nowIso } = {}) {
+export function decideCurrentCandidate({ row, agreedRule = null, scope = {}, eventId, selectionSource, nowMs, nowIso, evidence: evidenceSink = null } = {}) {
   const candidateId = typeof row?.id === "string" ? row.id : "UNKNOWN_CANDIDATE";
   const event = typeof eventId === "string" && eventId ? eventId.slice(0, 120) : "UNKNOWN_EVENT";
   const accepted = acceptAgreedRule(agreedRule, { candidateId, eventId: event });
@@ -871,6 +900,7 @@ export function decideCurrentCandidate({ row, agreedRule = null, scope = {}, eve
   const verdict = validateDecisionReceipt(receipt, { accountId: scope.accountId, chainId: scope.chainId });
   out.receipt = verdict.error ? null : verdict.receipt;
   out.receiptError = verdict.error || null;
+  reportDecisionObservation(evidenceSink, out.receipt); // after the decision is final; observation only
   return out;
 }
 
@@ -878,13 +908,13 @@ export function decideCurrentCandidate({ row, agreedRule = null, scope = {}, eve
  * Every candidate the reader reported gets a decision (the reader's universe is preserved; a display cap is a
  * view concern elsewhere). `agreedRules` maps candidateId → the rule agreed for this event (absent = unknown).
  */
-export function decideCurrentCandidates({ currentRead, agreedRules = {}, scope = {}, eventId, selectionSource, nowMs, nowIso } = {}) {
+export function decideCurrentCandidates({ currentRead, agreedRules = {}, scope = {}, eventId, selectionSource, nowMs, nowIso, evidence = null } = {}) {
   const rows = Array.isArray(currentRead?.candidates) ? currentRead.candidates : [];
   const rules = agreedRules && typeof agreedRules === "object" ? agreedRules : {};
   return rows.map((row) => decideCurrentCandidate({
     row,
     agreedRule: typeof row?.id === "string" && Object.prototype.hasOwnProperty.call(rules, row.id) ? rules[row.id] : null,
-    scope, eventId, selectionSource, nowMs, nowIso,
+    scope, eventId, selectionSource, nowMs, nowIso, evidence,
   }));
 }
 

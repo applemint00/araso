@@ -22,6 +22,9 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
+import { layoutOracle } from "./helpers/a831-sweep.mjs";
 
 import { admitSequencedPiggy, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
@@ -29,6 +32,16 @@ import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const APP_DIR = path.join(REPO_ROOT, "app");
+// [A-833] test-side placement oracle (computeHistoryPlacement() in a vm on the pure keyframe layout): the v10 rule decides the mode,
+// not the old live whitespace rect-math (641..~570 px at 900 tall are "fan" now, stacked only below ~574).
+const A833_MAIN = readFileSync(path.join(REPO_ROOT, "app/src/main.js"), "utf8");
+const A833_LAYOUT = layoutOracle(A833_MAIN);
+const A833_PLACE = (() => {
+  const layout = A833_LAYOUT; const ctx = { Math, __layout: layout }; vm.createContext(ctx);
+  const i = A833_MAIN.indexOf("function computeHistoryPlacement("); const j = A833_MAIN.indexOf("\n}\n", i);
+  vm.runInContext(["function desktopFormat(vw, vh) { const L = __layout(vw, vh, 0); return { s: L.s, L }; }", A833_MAIN.slice(i, j + 3), "globalThis.__P = computeHistoryPlacement;"].join("\n"), ctx);
+  return ctx.__P;
+})();
 const VITE_PORT = 5662;
 const CDP_PORT = 9662;
 const APP_URL = `http://127.0.0.1:${VITE_PORT}/`;
@@ -289,7 +302,8 @@ async function live() {
       // side-by-side: HISTORY sits to HOME's right; confirm real whitespace past its own right
       // edge is still ≥ RECORDS_CARD_GAP(24) — i.e. this width genuinely landed in side-by-side,
       // not a mode the implementation picked for the wrong reason.
-      check(`${label}: real whitespace past HISTORY's right edge ≥ 24px (genuinely side-by-side)`, g1.vw - g1.anchorRight >= 24 - 0.6, true);
+      // pre-A-833 baseline: g1.vw - g1.anchorRight >= 24 - 0.6 (History right edge >= 24 px from the viewport). A-833: right end of the free span (pair/fan).
+      check(`${label}: History right edge on the placement rule and inside the right margin line (anchorRight <= vw - M + 0.6)`, near(g1.anchorRight, A833_PLACE(W, H).histLeft + A833_PLACE(W, H).cardW, 1.5) && g1.anchorRight <= g1.vw - A833_LAYOUT(W, H, 0).M + 0.6, true);
     } else {
       // stacked: HISTORY takes HOME's exact size/top (already asserted above) and its right edge
       // sits on/near the viewport's own right safe rail, not out past it.
@@ -308,7 +322,9 @@ async function live() {
   // elementFromPoint — 641/700 must land inside #recordsCardAnchor (fixed); 800/1440 are
   // side-by-side controls where HOME/HISTORY never overlap, confirming this probe itself isn't
   // just trivially true everywhere.
-  for (const [label, W, expectStacked] of [["641 stacked", 641, true], ["700 stacked", 700, true], ["800 side-by-side", 800, false], ["1440 side-by-side", 1440, false]]) {
+  // A-833: expected modes are HARD-CODED from the v10 pictures at 900 tall (not from the implementation): 641 / 700 / 800 = fan (picture 04 shows 640x900 fan), 1440 = pair; stacked only below ~574. expectStacked=false for all four.
+  // pre-A-833 baseline: [["641 stacked", 641, true], ["700 stacked", 700, true], ["800 side-by-side", 800, false], ["1440 side-by-side", 1440, false]] (v10: 641 / 700 x 900 = fan)
+  for (const [label, W, expectStacked] of [["641 fan", 641, false], ["700 fan", 700, false], ["800 fan", 800, false], ["1440 pair", 1440, false]]) {
     // [coordinator feedback 2026-10-01] a stale `recordsCardAnchor--stackedMode` surfaced
     // specifically on the width right after a stacked one, in a loop that repeatedly
     // `Page.navigate`s to the exact SAME URL — main.js's own class-sync is unconditional on
@@ -367,7 +383,8 @@ async function live() {
   // only ever crosses the old 640 boundary and so never caught this. Single page load, no
   // re-navigation anywhere in this block, matching the coordinator's own repro exactly.
   {
-    await c.viewport(700, 900);
+    // pre-A-833 baseline: opened at 700 (stacked) -> 800 -> 700. v10: 700x900 is fan; stacked at 900 tall only below 574 -> 560 -> 800 -> 560.
+    await c.viewport(560, 900);
     await c.navigate("about:blank");
     await c.navigate(APP_URL);
     await ev(`(() => { localStorage.clear(); const kv = ${JSON.stringify(fx)}; for (const [k, v] of Object.entries(kv)) localStorage.setItem(k, v); return true; })()`);
@@ -385,17 +402,17 @@ async function live() {
     const classExpr2 = `document.querySelector("#recordsCardAnchor")?.classList.contains("recordsCardAnchor--stackedMode") ?? false`;
     const mountInertExpr = `document.querySelector(".homePaperMount")?.inert ?? null`;
     await waitFor(classExpr2, 4000);
-    check("same-page resize: opened at 700 → stacked, HOME inert", [await ev(classExpr2), await ev(mountInertExpr)], [true, true]);
+    check("same-page resize: opened at 560 → stacked, HOME inert (pre-A-833: 700)", [await ev(classExpr2), await ev(mountInertExpr)], [true, true]);
 
     // Live resize to 800, NO re-navigation — this is the exact scenario that froze.
     await c.viewport(800, 900);
     await waitFor(`!(${classExpr2})`, 4000);
-    check("same-page resize: 700→800 (no reload) → side-by-side, HOME live", [await ev(classExpr2), await ev(mountInertExpr)], [false, false]);
+    check("same-page resize: 560→800 (no reload) → side-by-side, HOME live (pre-A-833: 700→800)", [await ev(classExpr2), await ev(mountInertExpr)], [false, false]);
 
     // Back down to 700, still no re-navigation.
-    await c.viewport(700, 900);
+    await c.viewport(560, 900);
     await waitFor(classExpr2, 4000);
-    check("same-page resize: 800→700 (no reload) → stacked again, HOME inert again", [await ev(classExpr2), await ev(mountInertExpr)], [true, true]);
+    check("same-page resize: 800→560 (no reload) → stacked again, HOME inert again (pre-A-833: 800→700)", [await ev(classExpr2), await ev(mountInertExpr)], [true, true]);
 
     await tap("#recordsCardClose");
     await wait(300);

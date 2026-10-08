@@ -160,9 +160,12 @@ await check("N3 max-3 is presentation only: 4 eligible families → 3 shown; pic
 await check("N4 view: candidates card reuses the existing pick rows + checking… heading; the action card for a lane candidate has no amount field, a disabled Send and the Paper status only", () => {
   const rows = exploreCandidateRows({ decisions: [], families: listVisibleJobFamilies() }).rows;
   const destinations = exploreCandidateDestinations(rows, { selectedErrandIds: ["asset-piece", "grow"] });
-  const cand = secondJourneyCardMarkup({ step: "candidates", destinations, pickedCandidateId: null });
+  const cand = secondJourneyCardMarkup({ step: "candidates", destinations, pickedCandidateId: null, reading: true });
   assert.equal((cand.match(/class="job secondJourney__pick/g) || []).length, 3);
+  // pre-A-849 baseline: assert.match(cand, /checking…/) on markup built with no read state (the heading always said "checking…")
+  // [A-849 re-pin] "checking…" only while a read is in flight (reading: true); idle markup does not say it.
   assert.match(cand, /checking…/);
+  assert.equal(/checking…/.test(secondJourneyCardMarkup({ step: "candidates", destinations, pickedCandidateId: null })), false, "[A-849] no read in flight -> no checking…");
   // [A-723] family titles, not the shared "grow" errand title; Explore interest wording stays on the interests step
   assert.deepEqual([...cand.matchAll(/class="job secondJourney__pick[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]), ["a quick trip", "try the stock market", "stay out a little longer"]); // [A-727 re-pin: pass order]
   assert.equal(/put some money to work|pick up a piece of an asset/.test(cand), false);
@@ -185,12 +188,15 @@ await check("N4 view: candidates card reuses the existing pick rows + checking�
 });
 
 // ── the ACTUAL main.js lane functions, cut out and run against the real modules ──────────────────────────
-const LANE_FUNCTIONS = ["secondLaneMode", "secondLaneRows", "secondLaneDestinations", "keepSecondLaneDraftIfValid", "refreshSecondLaneCandidates", "recordSecondLaneDecision"];
+// [A-791 harness wiring] refreshSecondLaneCandidates now also routes the same read through the A-762 surface as evidence
+// (secondLaneRouteEvidence); the real function and its real imports are added to this cut.
+const LANE_FUNCTIONS = ["secondLaneMode", "secondLaneRows", "secondLaneDestinations", "keepSecondLaneDraftIfValid", "secondLaneRouteEvidence", "refreshSecondLaneCandidates", "recordSecondLaneDecision"];
 async function loadLane() {
   const url = (f) => pathToFileURL(path.join(SRC_DIR, f)).href;
   const body = LANE_FUNCTIONS.map(fnBody).join("\n\n").replaceAll("import.meta.env.DEV", "__env.DEV");
   const code = `
-import { readSecondCurrent } from ${JSON.stringify(url("second-current-reader.js"))};
+import { readSecondCurrent, routeSecondCurrentRead } from ${JSON.stringify(url("second-current-reader.js"))};
+import { routeSecondMainnetExecution, SECOND_MAINNET_DESCRIPTORS } from ${JSON.stringify(url("second-execution-adapter.js"))};
 import { decideCurrentCandidate, decideCurrentCandidates, exploreCandidateRows } from ${JSON.stringify(url("mainnet-job-lane.js"))};
 import { listVisibleJobFamilies } from ${JSON.stringify(url("second-job-readiness.js"))};
 import { exploreCandidateDestinations } from ${JSON.stringify(url("second-journey-view.js"))};
@@ -205,6 +211,7 @@ function secondJourneyScope() { return { accountId: state.address || "", chainId
 function safeLocalStorage() { return __io.store; }
 function render() { __io.renders += 1; }
 ${constDecl("SECOND_LANE_SELECTION_SOURCE")}
+${constDecl("SECOND_ROUTE_LOCKS")}
 ${body}
 export { ${LANE_FUNCTIONS.join(", ")} };
 `;
@@ -417,6 +424,17 @@ async function browserRun(browser, BASE, shots) {
   }, [sel, idx]);
   const realClick = async (sel, idx = 0) => { const r = await pointAt(sel, idx); if (!r) return "unreachable"; await p.mouse.click(r.x, r.y); return "pointer"; };
   const mustTap = async (sel, label, idx = 0) => { for (let i = 0; i < 6; i += 1) { if ((await realClick(sel, idx)) === "pointer") return; await sleep(600); } throw new Error(`${label}: ${sel} not pointer-reachable`); };
+  // [A-891 CG-04/05] pre-A-891 baseline: after a reload with First done / Second not done, Explore opened by itself (~1.2 s, waitScene(["explore"])).
+  // Now (Owner 2026-10-08): quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore. forgetIntro() drops the once-per-user intro fact
+  // before a reload so a later reopen takes the same product path (Cowork 2026-10-08: before the intro the cue returns on every reload).
+  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const exploreViaTapMe = async (ms = 16000) => {
+    const t0 = Date.now();
+    while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
+    if (!(await p.locator(".chogHome__tapCue").count())) return `NOCUE:${await scene()}`;
+    await mustTap("#chogHomeHit", "Chog (tap me!)");
+    return waitScene(["explore"], 5000);
+  };
   const unlockIfLocked = async () => { for (let i = 0; i < 4; i += 1) { if (!(await p.locator("#loginChogButton").count())) return; await p.locator("#loginChogButton").click(); await sleep(2500); } };
   const step = () => p.evaluate(() => document.querySelector("#exploreForm") ? "interests" : document.querySelector(".secondJourney__jitBtn") ? "jit" : document.querySelector("#secondSendButton") ? "readiness" : document.querySelector("#secondOkButton") ? "candidates" : document.querySelector("#secondJourneyCard") ? "note" : null);
   const decisionRows = () => p.evaluate(() => {
@@ -442,9 +460,10 @@ async function browserRun(browser, BASE, shots) {
   };
   const reopenAt = async (w, h, wantStep) => {
     await p.setViewportSize({ width: w, height: h });
+    await forgetIntro(); // [A-891]
     await p.reload({ waitUntil: "networkidle" }); await sleep(600);
     await unlockIfLocked();
-    const sc = await waitScene(["explore"], 15000);
+    const sc = await exploreViaTapMe(); // [A-891] pre-A-891 baseline: await waitScene(["explore"], 15000)
     assert.equal(sc, "explore", `${w}: Explore reopens (First done, Second not done)`);
     for (let t0 = Date.now(); Date.now() - t0 < 6000;) { if ((await step()) === wantStep) break; await sleep(200); }
     assert.equal(await step(), wantStep, `${w}: reopens at ${wantStep}`);
@@ -485,7 +504,7 @@ async function browserRun(browser, BASE, shots) {
     await unlockIfLocked();
 
     await check("B1 product Explore opens by itself after First (no DEV preview): interests Paper, 3 errands, no rule-check step", async () => {
-      assert.equal(await waitScene(["explore"], 12000), "explore");
+      assert.equal(await exploreViaTapMe(), "explore"); // [A-891] pre-A-891 baseline: await waitScene(["explore"], 12000) (opened by itself)
       assert.equal(await step(), "interests");
       const ids = await p.evaluate(() => [...document.querySelectorAll("#exploreForm input[data-errand-id]")].map((e) => e.dataset.errandId));
       assert.ok(ids.length > 0 && ids.length <= 3, `errands ${ids}`);
@@ -506,7 +525,9 @@ async function browserRun(browser, BASE, shots) {
       }
       await mustTap("#exploreSaveButton", "save"); await sleep(300);
       assert.equal(await step(), "candidates");
-      assert.match(await p.evaluate(() => document.querySelector("#secondJourneyCard h2").innerText), /checking…/);
+      // pre-A-849 baseline: assert.match(h2.innerText, /checking…/) — the heading faked "checking…" for CANDIDATES_REVEAL_MS with no read in flight
+      // [A-849 re-pin] the product read settles at once, so after the save no read is in flight: no "checking…", rows already visible.
+      assert.equal(/checking…/.test(await p.evaluate(() => document.querySelector("#secondJourneyCard h2").innerText)), false, "[A-849] no fake checking…");
       await sleep(2200);
       const rows = await picks();
       assert.deepEqual(rows.map((r) => r.id), ["aave-usdc", "abil-spot", "kintsu-smon"]); // [A-727 re-pin: pass order]
@@ -605,8 +626,9 @@ async function browserRun(browser, BASE, shots) {
       // start the DEV preview from a clean Explore (the DEV hook only flips devPreview on the current in-memory card):
       // drop the lane draft, reopen, leave, then switch the preview on — same order as A-654/A-644 Part B.
       await p.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith("araso.secondJourneyDraft.")) localStorage.removeItem(k); });
+      await forgetIntro(); // [A-891]
       await p.reload({ waitUntil: "networkidle" }); await sleep(600); await unlockIfLocked();
-      assert.equal(await waitScene(["explore"], 12000), "explore");
+      assert.equal(await exploreViaTapMe(), "explore"); // [A-891] pre-A-891 baseline: await waitScene(["explore"], 12000)
       await mustTap("#stayButton", "leave interests"); await waitScene(["sendstay"], 4000); await sleep(2500);
       await p.evaluate(() => window.__arasoScene("explore", { secondJourneyPreview: true })); await sleep(1900);
       let st = await step();

@@ -112,26 +112,23 @@ body {
      bg_notebook_dark.png 는 더 이상 쓰지 않는다(구멍·테이프가 구워져 있음). background-size 는 타일을
      32px 로 고정해 body 높이와 무관하게 줄 위상이 어긋나지 않게 한다(그라디언트 정지점은 Invite 와 동일). */
   background-color: var(--paper);
+  /* [A-839 · A-835 item 7] ONE notebook for every scene: line pitch = 32 x HomeCard / 282 = 32 k (--fmtS = k, main.js syncDesktopFormatVars at boot + resize).
+     pre-A-839 baseline: 31px / 32px stops and `background-size: 100% 32px` (k = 1 only). */
   background-image: repeating-linear-gradient(
     to bottom,
     transparent 0px,
-    transparent 31px,
-    rgba(255, 255, 255, 0.04) 31px,
-    rgba(255, 255, 255, 0.04) 32px
+    transparent calc(31px * var(--fmtS, 1)),
+    rgba(255, 255, 255, 0.04) calc(31px * var(--fmtS, 1)),
+    rgba(255, 255, 255, 0.04) calc(32px * var(--fmtS, 1))
   );
   background-repeat: repeat;
   background-position: 0 0;
-  background-size: 100% 32px;
+  background-size: 100% calc(32px * var(--fmtS, 1));
   background-attachment: scroll;
 }
 
-/* Invite 는 앞에 제 노트(.invite__paper)를 들고 있다. body 의 노트 이미지까지 깔리면 뒤로
-   또 한 장이 겹쳐 보인다(Owner 2026-09-18 «불투명하게 만들지말고 겹치는걸 고쳐서 없애야지»).
-   덮개를 씌우지 않고 뒤 이미지 생성 자체를 멈춘다 — 앞 노트·줄·구멍·테이프·봉투·초그는 그대로.
-   기본색 var(--paper) 유지(A-371). */
-body:has(.stage--invite) {
-  background-image: none;
-}
+/* [A-839] pre-A-839 baseline: `body:has(.stage--invite) { background-image: none; }` - Invite hid the body lines because `.invite__paper` drew its own notebook inside a dark box.
+   The whole viewport is the notebook now (A-835 item 6): the body lines show under Invite like every other scene. */
 
 /* Home 은 승인 배경이 해치 뒤의 단색이다(A-308 §13). 옛 노트지·테이프는 이 씬에서만
    덮어 가린다 — `body` 규칙은 그대로 두므로 Invite 의 ground 와 다른 씬은 영향이 없다. */
@@ -492,19 +489,9 @@ h1 {
    168.19px) — exactly the master-size break the consolidated canon names. A-607 moved it OUT
    of the scaled board — a `.stage`-level sibling anchor using the byte-identical
    chogInviteMarkup()/anchor pattern `.hatchChog` already ships.
-   [A-608 OWNER CORRECTION — FREEZE ALL WEB, 2026-09-27] "Name Chog stage-level move" is one
-   of this correction's own named candidates for revert — the master-size problem this
-   solved was overwhelmingly a NARROW-viewport problem (154.3px@1440 was already only ~8%
-   off the 168.19 master; 57.6px@430/390 was the real ~66% break) — so this class now stays
-   **hidden at web** (`display:none` in the base rule below) and the LEGACY web element
-   (`.nameScene__chogWeb`, the original flat `<img>` inside `#nameScene`, reinstated below
-   with its own original coordinates/asset, unchanged from before A-607) is what actually
-   renders at web again — pixel-identical to the pre-A-607 reference (same asset, same local
-   coordinates inside the same scaled board). Both elements stay in the DOM at every
-   viewport (harmless — one is always `display:none`); `main.js`'s Save-time walk-start rect
-   capture now checks BOTH (`document.querySelector` on each, picks whichever has a real
-   non-zero rect) so canon H's own continuity capture still works correctly at both web (the
-   legacy element) and narrow (this one). */
+   [A-837] pre-A-837 history (A-608 web freeze): this class was `display:none` at web and an in-board legacy `<img class="nameScene__chogWeb">` (left196/top556/width104) rendered
+   there. Both are gone: `.nameScene__chog` is the only Name Chog at every width (shown by `.stage--name .nameScene__chog` in the A-837 block; main.js fitNameScene places it on the
+   margin line / floor line at the Home Chog scale), and the Save-time walk-start capture reads this one element. */
 .nameScene__chog {
   display: none;
   position: absolute;
@@ -542,24 +529,6 @@ h1 {
        Keep byte-identical to .hatchChog below (canon: "keep Hatch and Name identical") — JS
        applies the identical value to both. */
     transform: none;
-  }
-}
-
-/* [A-608 OWNER CORRECTION — FREEZE ALL WEB] legacy web Chog — byte-identical to the rule this
-   exact class carried before A-607 touched it (same asset, `chog_idle_fill.png`, same local
-   board coordinates left196/top556/width104 inside the scaled `#nameScene`). Visible at web
-   only; hidden at narrow so `.nameScene__chog` above (the new, master-size-corrected element)
-   is the only one showing there. */
-.nameScene__chogWeb {
-  position: absolute;
-  left: 196px;
-  top: 556px;
-  width: 104px;
-}
-
-@media (max-width: 640px) {
-  .nameScene__chogWeb {
-    display: none;
   }
 }
 
@@ -1055,22 +1024,8 @@ h1 {
     letter-spacing: 0.07em;
   }
 
-  /* [A-619] Invite-only mobile exception: the common mobile `.arasoBrand` rule above
-     (`left: var(--mobile-inset)`, x≈20/24) reads as a stray edge label outside Invite's
-     notebook/hole-rail composition on this scene only. Owner-selected fix moves just this
-     scene's Araso to x=60 (right of the hole rail, left of the centered tape), inside the
-     notebook content area — every other mobile scene (Auth/Hatch/Name/Home) keeps the
-     common rule above untouched. Higher selector specificity (.stage--invite .arasoBrand)
-     wins over the plain `.arasoBrand` rule regardless of source order; only `left` changes.
-     [A-625] x=60 left Araso sitting in the dark band above the notebook paper (measured
-     paper top ≈ y52/390, y42.5/430 — both driven by `fitInvite()`'s aspect-fit scale, see
-     VERIFY.md geometry section). Owner evidence (reentry HANDOFF §4-a): notebook top≈y52,
-     accepted notebook-inside glyph band≈y62–69 — move ONLY this rule's `top` to 62px so the
-     glyph reads inside the paper instead of the band above it. `left` unchanged. */
-  .stage--invite .arasoBrand {
-    left: 60px;
-    top: 62px;
-  }
+  /* [A-839] pre-A-839 baseline (A-619 / A-625): `.stage--invite .arasoBrand { left: 60px; top: 62px; }` - Invite's ARASO sat right of the hole rail inside the old paper.
+     The notebook is full-bleed now and ARASO is on the left margin line in every scene (rule below, with the other A-839 rules). */
 }
 
 /* 제목 — Delicious Handrawn 30px/1.15 (A-411-c 명시값). right:40 으로 긴 문구도
@@ -1794,6 +1749,12 @@ h1 {
   transform-origin: 0 0;
 }
 
+/* [A-841 UI-27] solo awake breath wrapper: fills the stage; transform-origin (ink foot) is set inline. */
+.homeLiving__breath {
+  position: absolute;
+  inset: 0;
+}
+
 /* Same label as #homeName (.homeChar__name), scaled by the same factor as the seat. */
 .homeLiving__name {
   position: absolute;
@@ -2169,6 +2130,48 @@ h1 {
   pointer-events: none;
 }
 
+/* [A-903] House stamp = die-cut sticker + button feel (open Home Paper only). Existing PNG family, no new copy.
+   em units (button font-size) so sticker/thickness/press scale with the paper transform. Resting thickness
+   per the save-button grammar (0 3px 0 style); :active moves down by that thickness and the shadow collapses.
+   100 ms, no bounce; reduced motion = no motion. Tap area (padding/margin above) unchanged. */
+.homePaper__markButton {
+  font-size: 16px;
+  transition: transform 100ms ease-out;
+}
+
+.homePaper__markButton .homePaper__stamp {
+  filter:
+    drop-shadow(0.14em 0 0 #fbf6ea) drop-shadow(-0.14em 0 0 #fbf6ea)
+    drop-shadow(0 0.14em 0 #fbf6ea) drop-shadow(0 -0.14em 0 #fbf6ea)
+    drop-shadow(0 0 0.03em rgba(60, 45, 30, 0.55))
+    drop-shadow(0 0.19em 0 rgba(0, 0, 0, 0.32))
+    drop-shadow(0 0.4em 0.3em rgba(0, 0, 0, 0.22));
+  transition: filter 100ms ease-out;
+}
+
+.homePaper__markButton:active {
+  transform: translateY(0.19em);
+}
+
+.homePaper__markButton:active .homePaper__stamp {
+  filter:
+    drop-shadow(0.14em 0 0 #fbf6ea) drop-shadow(-0.14em 0 0 #fbf6ea)
+    drop-shadow(0 0.14em 0 #fbf6ea) drop-shadow(0 -0.14em 0 #fbf6ea)
+    drop-shadow(0 0 0.03em rgba(60, 45, 30, 0.55))
+    drop-shadow(0 0 0 rgba(0, 0, 0, 0.32))
+    drop-shadow(0 0.06em 0.1em rgba(0, 0, 0, 0.22));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .homePaper__markButton,
+  .homePaper__markButton .homePaper__stamp {
+    transition: none;
+  }
+  .homePaper__markButton:active {
+    transform: none;
+  }
+}
+
 .homePaper__logo {
   width: 184px;
   display: block;
@@ -2357,6 +2360,8 @@ h1 {
    커지고 작아진다. 자리는 INK box(chog-home.js 351..548,276..527) 오른쪽 바깥이라
    얼굴·몸·(카드는 별도 좌표계인 returnTap 이 손끝 자리에 뜨는 동안만 보인다) 어느 쪽도
    겹치지 않는다. */
+.chogCheckLine.chogCheckLine--two { margin-top: -1.2em; } /* [A-849] two stacked lines grow upward so the first line keeps the head-top anchor */
+.chogCheckLine--two .chogCheckLine__line { display: block; }
 .chogCheckLine {
   position: absolute;
   /* [A-429 Owner "Chog 발화는 전부 머리 위"] 560/320(Chog 옆) → Explore 발화와 같은 머리 위
@@ -3079,8 +3084,10 @@ h1 {
   position: relative;
   width: 420px;
   height: 840px;
-  overflow: hidden;
-  background: #050505;
+  /* [A-839] pre-A-839 baseline: `overflow: hidden; background: #050505;` - the dark outer box. The board is only the transformed content group now; the notebook is the body +
+     the full-viewport hole column / tape below, and `.stage--invite { overflow: hidden }` clips at the viewport. */
+  overflow: visible;
+  background: transparent;
   color: #ede8dc;
   transform-origin: center center;
 }
@@ -3091,17 +3098,9 @@ h1 {
   top: 22px;
   width: 392px;
   height: 796px;
-  overflow: hidden;
-  border-radius: 14px;
-  background: #161616;
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent 0px,
-    transparent 31px,
-    rgba(255, 255, 255, 0.04) 31px,
-    rgba(255, 255, 255, 0.04) 32px
-  );
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55);
+  /* [A-839] pre-A-839 baseline: overflow hidden, radius 14, #161616 + its own 31/32px lines, box-shadow 0 8px 32px. The paper is a plain (transparent) coordinate box now:
+     every child keeps its position, the notebook behind it is the body. */
+  overflow: visible;
 }
 
 .invite__tape {
@@ -3428,6 +3427,7 @@ h1 {
 }
 
 .invite__corner {
+  display: none; /* [A-839 · Owner 2026-10-06] the yellow folded corner is removed from view (markup untouched: a734 byte pin) */
   position: absolute;
   right: 0;
   bottom: 0;
@@ -3439,6 +3439,7 @@ h1 {
 }
 
 .invite__cornerBack {
+  display: none; /* [A-839] see .invite__corner */
   position: absolute;
   right: 0;
   bottom: 0;
@@ -3557,13 +3558,7 @@ h1 {
   top: 17px;
   width: 1180px;
   height: 691px;
-  background-image: repeating-linear-gradient(
-    to bottom,
-    transparent 0px,
-    transparent 39px,
-    rgba(255, 255, 255, 0.04) 39px,
-    rgba(255, 255, 255, 0.04) 40px
-  );
+  /* [A-839] pre-A-839 baseline: its own 39/40px notebook lines (one common pitch now: body, 32 k). */
 }
 
 .invite--wide .invite__holes {
@@ -3768,6 +3763,16 @@ h1 {
   transform: translateX(-50%);
   z-index: 4;
 }
+/* [A-891 UI-19] First filing: no visible "open the file" text — #returnOpen is an invisible hit box over the drawn folder
+   (return-view.js placeFolderHit() writes left/top/width/height in viewport px). The folder art itself is the affordance. */
+.returnOpen.returnOpen--folder {
+  position: fixed;
+  bottom: auto;
+  transform: none;
+  padding: 0;
+  font-size: 0;
+}
+.returnOpen.returnOpen--folder:focus-visible { outline: 2px solid #ffd43b; outline-offset: 3px; }
 .returnName {
   position: absolute;
   width: 120px;
@@ -3894,6 +3899,34 @@ h1 {
   top: 6px;
   transform: translateX(-50%) scale(0.82);
   transform-origin: top center;
+}
+/* [A-891 UI-19 · A-777 §9.3 H2/H3] The stored Receipt opened from the folder sits at the viewport centre (before: top 6px of the
+   480x380 .filebox box, i.e. above centre). The .filebox box shrinks to the paper and is centred on the viewport; the scale(0.82)
+   now pivots on the paper's centre, so the visible paper centre = viewport centre. The evidence rows (Sent / Cost / Left / Tx /
+   Block, H6) stay, directly under the paper. Tapping the open paper closes it (main.js a891FileboxPaperClose). Size unchanged. */
+.stage[data-scene="filebox"] .filebox {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: auto;
+  height: auto;
+  transform: translate(-50%, -50%);
+}
+.stage[data-scene="filebox"] .filebox__paper {
+  position: relative;
+  left: auto;
+  top: auto;
+  transform: scale(0.82);
+  transform-origin: center center;
+  cursor: pointer;
+}
+.stage[data-scene="filebox"] .filebox__paper:focus-visible { outline: 2px solid #ffd43b; outline-offset: 3px; }
+.stage[data-scene="filebox"] .filebox .receipt {
+  top: 100%;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100vw - 32px);
+  transform: translateX(-50%);
 }
 
 /* 귀환 알람 hop 전용 겹 — Chog 모듈 자신의 corner transform 을 덮지 않기 위해 한 겹 더 둔다. */
@@ -4078,8 +4111,33 @@ h1 {
 .secondJourneyCard .secondJourney__footer { position: relative; z-index: 3; }
 
 .secondJourneyCard .secondJourney__body { top:96px; height:440px; } /* [A-421] +12 = 버튼 음영(0 2px 0 + 0 5px 7px) 자리. overflow:auto 가 잘라 버튼이 납작했음 */
-.secondJourneyCard .secondJourney__body:has(> .job) { display:flex; flex-direction:column; padding-left:8px; padding-bottom:12px; width:312px; }
-.secondJourneyCard:has(.job) { width:380px; margin-left:-190px; }
+.secondJourneyCard .secondJourney__body:has(> .job),
+.secondJourneyCard--candidates .secondJourney__body { display:flex; flex-direction:column; padding-left:8px; padding-bottom:12px; width:312px; }
+.secondJourneyCard:has(.job),
+.secondJourneyCard--candidates { width:380px; margin-left:-190px; } /* [A-849 UI-24] keyed on the candidates step, not on a candidate existing: 0 / 1 / 3 rows keep one size + the bottom footer */
+/* [A-849 UI-20] scrolling stays (long content still scrolls) but the scrollbar is never drawn */
+.secondJourney__body { scrollbar-width: none; -ms-overflow-style: none; }
+.secondJourney__body::-webkit-scrollbar { display: none; width: 0; height: 0; }
+/* [A-849 UI-20] cause of the 1 px overflow (441 vs 440): the A-735 tap-target ::after of the "back to Home" button reaches 22px
+   below the button, and the footer sits 12px above the body bottom with the button 10px inside it -> 441. Trim that one inset by
+   1px (the hit box stays 45 of 46 px; nothing visible moves) so the first card body never overflows. */
+/* A-891: tap-area follows the label scale (A-845 Framer type) */
+/* A-845 regression caught late (a849 B1, 443 vs 440): the Label size (--tsLabel = 13 / --tsK = 20.1896 css px in the Second card) made the
+   "back to Home" box taller and this invisible tap target reached 3 css px past the first card body. The insets are now em of the label,
+   so they follow the label the way the text does: at the phone reference they are top 24.00 / right 5.00 / bottom 18.00 / left 10.00 css px
+   (bottom 3 px shorter than A-849's 21 -> body 440), and since in-card text has one local size at every width (--tsK is a constant; the card
+   scale rides the transform) the same em keep body <= 440 at every width with no per-width numbers. Hit box = 1.4 em line (28.27) + 42.00 =
+   70.26 css px tall, label width + 15 wide (>= 44 css px everywhere). pre-A-891 baseline: inset: -24px -5px -21px -10px. */
+.secondJourneyCard .secondJourney__footer .sendCard__stay::after { inset: -1.1887em -0.2477em -0.8915em -0.4953em; }
+/* [A-849 UI-24] picked-interest line: one line right under the title, existing labels joined by " · " */
+.secondJourneyCard .secondJourney__picked { flex: 0 0 auto; margin: 4px 0 12px; font: 400 20px/24px var(--font-cj); color: #141210; opacity: .7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* A-891: picked line follows the Body scale (A-845 Framer type). A-845 set this line to Body (--tsBody = 14 / .6439 = 21.7426 css px)
+   but kept its 4px / 24px / 12px box, so the 40.38 css "places to explore?" ink reached 8.28 local css px into it (a845_evaluate overlaps:
+   5.33 / 7.74 / 7.10 screen px at 390 / 810 / 1440). In em of the line: margin-top 14.00, line 24.00, margin-bottom 2.00 css px. The
+   line's ink moves 10 local px down (1.72 local px clear of the title ink at every width and height: in-card text has one local size,
+   the card scale rides the transform). The 40 px total is unchanged, so the rows below and the body height (a849) do not move.
+   pre-A-891 baseline: margin: 4px 0 12px; line-height 24px (font shorthand). */
+html .secondJourneyCard .secondJourney__picked { margin: 0.6439em 0 0.0920em; line-height: 1.1038em; }
 /* [A-421] 두 번째 카드: 고른 행동들 = .job 형식 그대로, 버튼 껍데기만 벗긴다. 줄 간격 20 = INFERRED(시안에 여러 줄 예 없음) */
 .secondJourneyCard .secondJourney__pick { border:0; text-align:left; cursor:pointer; }
 .secondJourneyCard .secondJourney__pick:not(.is-picked) { background:none; } /* 노란 밑강조 = 고른 것 하나만 */
@@ -4713,6 +4771,26 @@ h1 {
   .homePaper__amount { font-size: 17px; }
 }
 
+/* [A-849 UI-11] Centred cards (Got Piggy / Name it, Couldn't find Piggy, both Checking surfaces) stay at the centre and
+   lift ONLY by the measured covered amount + 16px gap (main.js initCenteredCardLift sets --centerCardLift per element, in
+   that element's own px; 0 by default so nothing moves without a real obstruction). `translate` (not transform) because the
+   boards already use transform. ~0.2s; reduced motion = instant. */
+.nameScene__pad,
+.authCard__paper,
+.stage--loginCheck .loginCheck__face,
+.stage--loginCheck .loginCheck__title,
+.stage--loginCheck .loginCheck__body {
+  translate: 0 calc(var(--centerCardLift, 0px) * -1);
+  transition: translate .2s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .nameScene__pad,
+  .authCard__paper,
+  .stage--loginCheck .loginCheck__face,
+  .stage--loginCheck .loginCheck__title,
+  .stage--loginCheck .loginCheck__body { transition: none; }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    [A-735] A-732 design-safe repairs — NO new design decision. Three groups, all additive and
    placed last so they win by order; nothing above was edited.
@@ -4731,14 +4809,20 @@ h1 {
 .sendCard__stay::after {
   content: "";
   position: absolute;
-  inset: -24px -5px -22px -10px; /* ×.65 card scale → ≈ +30 CSS px tall; right side stays inside the 12px gap to Send */
+  /* A-891: tap-area follows the label scale (A-845 Framer type). Same px at the Send-card phone reference (label 13 / .6507 = 19.9771 css px):
+     24.00 / 5.00 / 22.00 / 10.00. pre-A-891 baseline: inset: -24px -5px -22px -10px (×.65 card scale → ≈ +30 CSS px tall; right side stays inside
+     the 12px gap to Send). */
+  inset: -1.2014em -0.2503em -1.1013em -0.5006em;
 }
 
 .secondJourneyCard .back { position: relative; }
+/* A-891: tap-area follows the label scale (A-845 Framer type) */
 .secondJourneyCard .back::after {
   content: "";
   position: absolute;
-  inset: -14px -8px -12px -14px; /* right: inside the 20px gap to ok · bottom: inside the 12px card margin */
+  /* em of the Label (--tsLabel = 13 / .6439 = 20.1896 css px, one local size at every width): 13.999 / 7.999 / 11.999 / 13.999 css px.
+     pre-A-891 baseline: inset: -14px -8px -12px -14px (right: inside the 20px gap to ok · bottom: inside the 12px card margin). */
+  inset: -0.6934em -0.3962em -0.5943em -0.6934em;
 }
 
 #skipHatchButton::after {
@@ -4747,10 +4831,13 @@ h1 {
   inset: -14px -16px; /* the skip text floats alone on the hatch stage — nothing to steal from */
 }
 
+/* A-891: tap-area follows the label scale (A-845 Framer type) */
 .secondJourneyCard .secondJourney__list--interests .secondJourney__item::after {
   content: "";
   position: absolute;
-  inset: -5px -14px -5px -14px; /* rows are 12px apart: 5+5 leaves a 2px gap, so no row loses a pixel */
+  /* em of the Body item (--tsBody = 14 / .6439 = 21.7426 css px): 4.999 / 13.998 / 4.999 / 13.998 css px (rounded inward, never past the old px).
+     pre-A-891 baseline: inset: -5px -14px -5px -14px (rows are 12px apart: 5+5 leaves a 2px gap, so no row loses a pixel). */
+  inset: -0.2299em -0.6438em -0.2299em -0.6438em;
 }
 
 @media (min-width: 641px) {
@@ -4804,7 +4891,9 @@ h1 {
 .secondJourneyCard .secondJourney__pick::after {
   content: "";
   position: absolute;
-  inset: -9px 0; /* vertical only: rows are 20px apart (margin-top) — 9+9 leaves 2px, so neighbours keep every pixel. No horizontal reach: a right-side overflow would inflate scrollWidth (the a719/a727 `fits` probe) and the shell is already wider than the old text box */
+  /* A-891: tap-area follows the label scale (A-845 Framer type) — em of the Choice row (--tsChoice = 18 / .6439 = 27.9548 css px): 8.999 css px.
+     pre-A-891 baseline: inset: -9px 0. */
+  inset: -0.3219em 0; /* vertical only: rows are 20px apart (margin-top) — 9+9 leaves 2px, so neighbours keep every pixel. No horizontal reach: a right-side overflow would inflate scrollWidth (the a719/a727 `fits` probe) and the shell is already wider than the old text box */
 }
 
 /* (2) reduced motion — A-732 uncovered paths. Not `animation: none`: the Invite timeline sets
@@ -4812,6 +4901,43 @@ h1 {
    rest). A ~0ms single-iteration run lands on that end state at once — the state still changes,
    nothing moves. The infinite ones (check-pulse, env-float, egg-idle2) end on their rest value.
    `!important` is required to beat the inline `style.animation` main.js setInvitePhase() sets. */
+/* [A-833 HISTORY PLACEMENT + SHARED OPEN/CLOSE MOTION, A-829 item 7 preset C]
+   Home's sideways move (class toggled by main.js setHomeTwoCardShift, value = the placement's measured homeDx) animates both ways:
+   open 320 ms cubic-bezier(.2,.9,.3,1) (destination state = the class), close 240 ms cubic-bezier(.5,0,.75,.2) (destination = base).
+   pre-A-833 baseline: no transition (instant 46 px shift). Reduced motion = instant. */
+.homePaperMount {
+  transition: transform 240ms cubic-bezier(0.5, 0, 0.75, 0.2);
+}
+.homePaperMount.homePaperMount--twoCardShift {
+  transition: transform 320ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+/* Side modes (pair / fan): History is animated by main.js animateRecordsCard() (Web Animations, preset C frames) - the CSS
+   --opening/--closing transitions are not used here. Rest z = above Home (fan overlaps). */
+.recordsCardAnchor.recordsCardAnchor--sideMode {
+  z-index: 2;
+  transition: none;
+}
+.recordsCardAnchor--sideMode.recordsCardAnchor--sideClosing .recordsCard {
+  pointer-events: none;
+}
+/* Stacked (phone): enters from the right on top, 320 ms open / 240 ms close (the 12 px / opacity grammar above is unchanged).
+   pre-A-833 baseline: 160 ms ease both ways. New higher-specificity rules instead of editing the pinned base rule. */
+.recordsCardAnchor--stackedMode:not(.recordsCardAnchor--opening):not(.recordsCardAnchor--closing) {
+  transition: opacity 320ms cubic-bezier(0.2, 0.9, 0.3, 1), transform 320ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.recordsCardAnchor--stackedMode.recordsCardAnchor--closing {
+  transition: opacity 240ms cubic-bezier(0.5, 0, 0.75, 0.2), transform 240ms cubic-bezier(0.5, 0, 0.75, 0.2);
+}
+@media (prefers-reduced-motion: reduce) {
+  .homePaperMount,
+  .homePaperMount.homePaperMount--twoCardShift,
+  .recordsCardAnchor--stackedMode,
+  .recordsCardAnchor--stackedMode:not(.recordsCardAnchor--opening):not(.recordsCardAnchor--closing),
+  .recordsCardAnchor--stackedMode.recordsCardAnchor--closing {
+    transition: none !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .invite[data-phase="checking"] .invite__face,
   .invite__envImg--tear,
@@ -4831,6 +4957,1713 @@ h1 {
   #homeRecordsButton::after { inset: -44px -12px -8px -12px; }
   .homePaper__records[data-piggy-id]::after { inset: -44px -12px -8px -12px; }
 }
+/* [A-839 · Cowork add-on to a735 B3] The hit extensions are part of the card: they live inside the paper, so they scale with it (k = HomeCard / 282) like every other
+   card length. At the v10 card sizes the -8px bottom reach scaled to 2.9-3.2 css px and ran 3 px into the Home flap's hit box (records hit bottom 383 vs flap1 hit top 380 at
+   700x900). The records hit now stops at the visible bottom (bottom inset 0, in card px, so it scales with k): records and flap1 never overlap at any width. Top/left/right
+   and the >=44px height are unchanged. */
+@media (min-width: 641px) {
+  #homeRecordsButton::after { inset: -44px -12px 0 -12px; }
+  .homePaper__records[data-piggy-id]::after { inset: -44px -12px 0 -12px; }
+}
+
+/* [A-845 · A-843 TEXT STYLES (Framer-style) — newest-wins over the A-666 / A-744 / A-779 / A-786 in-card sizes]
+   Six named text styles, defined ONCE below as ON-SCREEN px at the phone reference (390x844: Home card 282.32 px wide,
+   A-829 item 3): Title 26 · Choice 18 · Button 16 · Body 14 · Label 13 · Detail 12; weekday sub-line = 70 % of Detail.
+   In-card text: each card converts a style to its own local CSS px with that card's phone scale (--tsK = on-screen px per
+   card-local px at 390x844, derived from the transforms that actually scale the card), so local px are constants and the
+   text scales with its card at every width (on screen = style x card width / phone card width). No @media in this block:
+   the older <=640 / >=641 font-size steps for these roles stay in source (a666 / a744 / a779 / a786 pin their text) but
+   no longer win — every rule here is `html`-prefixed, one type selector more specific than the rule it replaces.
+     Send (#sendCard):   scale .65 x k, k = card / 282      -> --tsK = .65 x 282.32 / 282 = .6507
+     Second:             scale .65 x card / 285 (hlCardK)   -> --tsK = .65 x 282.32 / 285 = .6439
+     Name:               sc = min(1.55 x card, .9 x (vw - 2M)) / 460 -> 315 / 460 = .6848 (width-limited at 390)
+     Chog text (out of card, A-843 item 6): .chogHome local px x S x HOME_SCALE; S = stage width / ink width (A-829
+       keyframe 211 / 271.375 at 390)  -> --tsChogK = .7775 x .47124 = .3664; Chog lines use the Choice style.
+   Receipt (A-843 item 5, Cowork Q1 2026-10-07): keeps its CURRENT phone sizes (the <=640 local px 14 / 17 / 15 / 15) at every
+   width, scaled with the paper only — the 640 step is gone. Not in this block: the large readiness numerals (.field input /
+   .receive / .claim-value, role UNKNOWN, Owner-visual — Cowork Q2 (a)). Copy, families, weights, layout and motion unchanged;
+   the only box changes are the A-843 item 7 fits listed at the end of this block. */
+:root {
+  --ts-title: 26px;
+  --ts-choice: 18px;
+  --ts-button: 16px;
+  --ts-body: 14px;
+  --ts-label: 13px;
+  --ts-detail: 12px;
+  --ts-weekday: calc(var(--ts-detail) * 0.7);
+  --tsPhoneCard: 282.3239; /* A-829 Home card width at 390x844 = 844 x .475 x 400 / 568 */
+  --tsChogK: calc(211 / 271.375 * 0.4712400398); /* phone stage scale S x chog-home.js HOME_SCALE */
+  --tsChog: calc(var(--ts-choice) / var(--tsChogK));
+}
+html .sendCard { --tsK: calc(0.65 * var(--tsPhoneCard) / 282); }
+html .sendCard.secondJourneyCard { --tsK: calc(0.65 * var(--tsPhoneCard) / 285); }
+html .nameCard { --tsK: calc(315 / 460); }
+html .sendCard,
+html .nameCard {
+  --tsTitle: calc(var(--ts-title) / var(--tsK));
+  --tsChoice: calc(var(--ts-choice) / var(--tsK));
+  --tsButton: calc(var(--ts-button) / var(--tsK));
+  --tsBody: calc(var(--ts-body) / var(--tsK));
+  --tsLabel: calc(var(--ts-label) / var(--tsK));
+  --tsDetail: calc(var(--ts-detail) / var(--tsK));
+  --tsWeekday: calc(var(--ts-weekday) / var(--tsK));
+}
+/* Send ("send?" Title · $5 + the line under it Body · 0.001 MON test Detail · date Detail · send Button) */
+html .sendCard__titleText { font-size: var(--tsTitle); }
+html .sendCard__message,
+html #sendCard .sendCard__termLabel { font-size: var(--tsBody); }
+html .sendCard__detail,
+html .sendCard__address,
+html .sendCard__day,
+html .sendCard__dom { font-size: var(--tsDetail); }
+html .sendCard__weekday { font-size: var(--tsWeekday); }
+html .sendCard__stay { font-size: var(--tsLabel); }
+html .sendCard .pkbtn__word,
+html .nameCard .pkbtn__word { font-size: var(--tsButton); }
+/* Second ("places to explore?" / step headings Title · interest items Body · candidate picks Choice · back to Home / Home / back
+   Label · checking… and the other reading lines Body · date Detail). Writer mapping for lines A-843 item 4 does not name: hint /
+   paper note / picked-interest line / condition / failure = Body; amount + receive labels = Label; balance / to bring home /
+   journey number = Detail; readiness job title = Choice (its current phone size). */
+html .secondJourneyCard .secondJourney__heading,
+html .secondJourneyCard .secondJourney__exploreText { font-size: var(--tsTitle); }
+html .secondJourneyCard .secondJourney__list--interests .secondJourney__item,
+html .secondJourneyCard .secondJourney__item,
+html .secondJourneyCard .secondJourney__hint,
+html .secondJourneyCard .secondJourney__reason,
+html #secondSendReason,
+html .secondJourneyCard .secondJourney__picked,
+html .secondJourneyCard .secondJourney__amountRow,
+html .secondJourneyCard .secondJourney__amountRow input,
+html .secondJourneyCard .secondJourney__jitBtn,
+html .secondJourneyCard .condition,
+html .secondJourneyCard .failure { font-size: var(--tsBody); }
+html .secondJourneyCard .secondJourney__pick,
+html .secondJourneyCard .job,
+html .secondJourneyCard .secondJourney__candidateTitle { font-size: var(--tsChoice); }
+html .secondJourneyCard .secondJourney__primary,
+html .secondJourneyCard .secondJourney__checkBtn,
+html .secondJourneyCard .pkbtn__word { font-size: var(--tsButton); }
+html #secondJourneyCard #stayButton,
+html .secondJourneyCard .sendCard__stay,
+html .secondJourneyCard .back,
+html .secondJourneyCard .amount label,
+html .secondJourneyCard .receive label { font-size: var(--tsLabel); }
+html .secondJourneyCard .secondJourney__masthead,
+html .secondJourneyCard .secondJourney__date,
+html .secondJourneyCard .secondJourney__candidateStatus,
+html .secondJourneyCard .secondJourney__mockTag,
+html .secondJourneyCard .balance,
+html .secondJourneyCard .claim-bring { font-size: var(--tsDetail); }
+html .secondJourneyCard .secondJourney__date small { font-size: var(--tsWeekday); }
+/* Name ("name it?" / "you've got the one piggy !" Title · name input Choice · save / ok Button · date Detail) */
+html .nameCard__titleText,
+html .nameCard__gotLine { font-size: var(--tsTitle); }
+html .nameCard__field input { font-size: var(--tsChoice); }
+html .nameCard__day { font-size: var(--tsDetail); }
+html .nameCard__weekday { font-size: var(--tsWeekday); }
+/* Chog out-of-card text (speech, "tap me!", "… is coming home", away line) = Choice, scaled with the character stage: one local
+   px at every width (replaces the 24 / 28 / 33 / 49 / 141 px per-breakpoint values and the fixed-screen-px tap cue). The line's
+   bottom edge stays on the base anchor (top 236 + 1.2 x 24 = 264.8 local px) so bigger text grows upward; the <=640 away line
+   keeps its own bottom anchor (top:auto, id rule). max-width: none = the box grows to fit (centring via translateX(-50%)). */
+html .chogCheckLine,
+html #returnArrivalAlarm {
+  font-size: var(--tsChog);
+  top: calc(264.8px - 1.2 * var(--tsChog));
+  max-width: none;
+}
+html #awayRestoreLine { font-size: var(--tsChog); }
+html .chogHome__tapCue { font-size: var(--tsChog); }
+/* Receipt paper: the current phone local px at every width (pre-A-845 baseline: 12 / 15 / 13 / 13 above 640). */
+html .receiptPaper__date { font-size: 14px; }
+html .receiptPaper__name { font-size: 17px; }
+html .receiptPaper__row { font-size: 15px; }
+html .receiptPaper__status { font-size: 15px; }
+/* A-843 item 7 fits (boxes grow to their text; nothing else moves):
+   - Second footer links never wrap or shrink: the "back to Home" / "back" / "Home" box takes its text width;
+   - Second masthead journey number column grows past 14px only when its text is wider;
+   - fixed-px line boxes smaller than the new size become the same ratio of the font they were drawn for. */
+html .secondJourneyCard .sendCard__stay,
+html .secondJourneyCard .back { white-space: nowrap; flex: 0 0 auto; }
+html .secondJourneyCard .secondJourney__masthead { grid-template-columns: 60px 1fr minmax(14px, max-content); }
+html .secondJourneyCard .amount label,
+html .secondJourneyCard .receive label,
+html .secondJourneyCard .back,
+html .secondJourneyCard .condition { line-height: calc(20 / 13); }
+html .secondJourneyCard .failure { line-height: calc(19 / 13); }
+html .secondJourneyCard .balance,
+html .secondJourneyCard .claim-bring { line-height: 1.5; }
+/* Name arrival "you've got" / "the one piggy !": drawn 34px on a 34px line (ratio 1, A-407-d); at the Title size the 34px line made the two
+   lines' ink overlap (A-845 measure: 6.56 / 6.01 px at 810 / 1440, pre 0.40 / 0.36). 1em left 0.53 / 1.07 / 0.98 (390 / 810 / 1440); 1.03em
+   (bounded by 1.05em) brings every width to <= 0.5. Block bottom ≈ 84 + 2 x 39.1 + 8 ≈ 170 local vs the ok button top ≈ 221 (A-407-d).
+   pre-A-845 baseline: line-height 34px. */
+html .nameCard__gotLine { line-height: 1.03em; }
+
+/* [A-779 SMALL-TEXT UNIFY · A-777 COWORK_FRAME_REVIEW §8.2/§8.3 LOCKED] Text size + two removals only.
+   Geometry frozen: no card/paper/anchor box, no position/margin/padding/height, no character size or placement.
+   3 tiers: (1) titles/key numbers ("send?", "places to explore?", "$5") keep their size; (2) ONE supporting size
+   --type-support for the First Send explanation line, the Explore items and the Second candidate lines; (3) the
+   technical line (.sendCard__detail "0.001 MON test", 14px) stays smaller. Supersedes the 15px/28px/24px values the
+   <=640 and >=641 blocks above give these three roles (same specificity, later wins, both widths). */
+:root { --type-support: 18px; --type-label: 16px; }
+.sendCard__message,
+.secondJourneyCard .secondJourney__list--interests .secondJourney__item,
+.secondJourneyCard .secondJourney__pick,
+#sendCard .sendCard__termLabel { font-size: var(--type-support); }
+/* [A-779 v2 · Owner 2026-10-05 updates] First Send `$5` = the message line size (--type-support, listed above; 15 -> 18).
+   Label tier --type-label 16px = the Second card's Home link (`back to Home` / `Home`, 15 -> 16). Size only, every viewport.
+   The action-word tier (send / ok) is NOT set here — see A-779 WRITER_NOTES "v2 PREMISE_CONFLICT". */
+#secondJourneyCard #stayButton { font-size: var(--type-label); }
+/* [A-779 v2 · Owner 2026-10-05 "text below checking… does not get bigger"] the Second action card's status line
+   (#secondSendReason: "checking…" / reason) is a reading line, not technical detail -> supporting tier (13 -> 18).
+   Size only. The Explore paper note (same .secondJourney__reason class, "okay. one more.") is not touched. */
+#secondSendReason { font-size: var(--type-support); }
+
+/* First Send: the "stay home" control is no longer visible (§8.2 "Remove from First Send screen"). Hidden, not
+   deleted: send-card.js (markup owner, outside this card) still emits #stayButton and stayHome() stays wired, and
+   visibility keeps its footer slot so Send does not move. Not focusable, not hit-testable, not in the a11y tree.
+   Scoped to #sendCard — the Explore/Second "back to Home"/"Home" (#stayButton there too) are untouched. */
+#sendCard .sendCard__stay { visibility: hidden; }
+
+/* Second candidates = selectable text lines, not paper buttons (§8.2): drop the A-735 .pkbtn surface (paper
+   texture, radius, drop shadow). Box (40px, padding), order, tap area (::after) and the picked mark (yellow
+   72%-94% underline on the content box) are unchanged. */
+.secondJourneyCard .secondJourney__pick { border-radius: 0; box-shadow: none; }
+.secondJourneyCard .secondJourney__pick:not(.is-picked) { background-color: transparent; background-image: none; }
+.secondJourneyCard .secondJourney__pick.is-picked {
+  background-color: transparent;
+  background-image: linear-gradient(transparent 72%, #E0B10055 72%, #E0B10055 94%, transparent 94%);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-origin: content-box;
+  background-clip: content-box;
+}
+
+/* Chog "… is coming home" (#returnArrivalAlarm) legibility bump: 10.3 -> 18 rendered px at 390/430, 13 -> 17.8 at
+   1440 (same 18 screen px as "tap me!", chog-home.js TAP_CUE_SCREEN_PX). Local .chogHome units: rendered/scale
+   (0.3675 phone, 0.5404 web). `top` moves up by exactly the line-height gained (1.2 x delta) so the line's bottom
+   edge — and its clearance above Chog's head — stays where it was; left/centering/colour/scaleY unchanged.
+   max-width: none — the base 260px cap is narrower than the larger line, which would break the translateX(-50%)
+   centring over Chog (same fix the A-633 away line uses). The shared .chogCheckLine base (Explore say, away line)
+   is not touched. */
+#returnArrivalAlarm { font-size: 33px; top: 225.2px; max-width: none; }
+@media (max-width: 640px) {
+  #returnArrivalAlarm { font-size: 49px; top: 210.8px; }
+}
+/* [A-831 · A-829 KEYFRAME LAYOUT] Home at EVERY width (no media query): main.js homeKeyframeLayout() interpolates the three reference frames
+   (390 / 810 / 1440) and exposes the result on :root: --fmtS = k (Home card width / 282; everything docked in the card slot scales by it),
+   --hlM side margin, --hlAsFont / --hlAsTop ARASO font and top (card width x .064, 2 x font), --hlCx / --hlCy card centre.
+   Fallbacks = the pre-A-831 reference values (used only before the first fit). Scope: `.stage[data-scene="sendstay"]` (Home) only; Name /
+   Return / Second / Invite / Hatch layouts are untouched. Supersedes the A-827 (min-width: 1100px) pure-s block. */
+:root { --hk-safe-top: env(safe-area-inset-top, 0px); }
+/* ARASO wordmark: on the left side-margin line; top = 2 x font (+ device safe-area top). */
+.stage[data-scene="sendstay"] .arasoBrand {
+  left: var(--hlM, 140px);
+  top: calc(var(--hlAsTop, 32px) + var(--hk-safe-top, 0px));
+  font-size: var(--hlAsFont, 12px);
+}
+/* First Send card: the 285x364 box and the .sendCard inside it scale as one unit (text/buttons ride the single scale()); centred on the
+   Home card centre. */
+.stage[data-scene="sendstay"] .cardAnchor {
+  left: var(--hlCx, 50%);
+  top: var(--hlCy, 50%);
+  width: calc(285px * var(--fmtS, 1));
+  height: calc(364px * var(--fmtS, 1));
+  transform: translate(-50%, -50%);
+}
+.stage[data-scene="sendstay"] .cardAnchor .sendCard {
+  transform: scale(calc(0.65 * var(--cardShrink, 1) * var(--fmtS, 1)));
+}
+/* Records / History card: its box already follows the live Home paper rect (which scales with k); its content is laid out at reference
+   size and scaled by k so text/padding stay in proportion. (History placement/motion = A-833, not changed here.) */
+.stage[data-scene="sendstay"] .recordsCard {
+  inset: 0 auto auto 0;
+  width: calc(100% / var(--fmtS, 1));
+  height: calc(100% / var(--fmtS, 1));
+  transform: scale(calc(var(--recordsShrink, 1) * var(--fmtS, 1)));
+}
+/* Home paper (open, docked at the card slot): chog-home.js docks it at (vw/2 - 32, vh/2 - 48); the correction moves the dock to the card
+   centre. --homePaperK (A-786, x1.10) is multiplied by k so the 1.1 relation to the card is kept. */
+.stage[data-scene="sendstay"] .homePaper {
+  transform:
+    translate(var(--fmtPaperDx, 0px), var(--fmtPaperDy, 0px))
+    translate(calc(55px - 200px * 0.275 * var(--homePaperK) * var(--fmtS, 1)), calc(78.1px - 284px * 0.275 * var(--homePaperK) * var(--fmtS, 1)))
+    scale(calc(0.275 * var(--homePaperK) * var(--fmtS, 1)));
+}
+/* Background line pitch 32 x card width / 282 = 32 k. [A-839] now also the body rule for every scene (above); this Home-scoped copy stays because a827 pins its text. */
+body:has(.stage[data-scene="sendstay"]) {
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent calc(31px * var(--fmtS, 1)),
+    rgba(255, 255, 255, 0.04) calc(31px * var(--fmtS, 1)),
+    rgba(255, 255, 255, 0.04) calc(32px * var(--fmtS, 1))
+  );
+  background-size: 100% calc(32px * var(--fmtS, 1));
+}
+
+/* [A-837 · A-835 items 1-5, 8] Second / Name / Return on the same v10 vars the Home block above reads (main.js syncDesktopFormatVars). Scene-scoped; the base
+   .cardAnchor / .nameScene__chog rules above stay as they were. */
+/* ARASO on the left margin line, font = card width x .064, top = 2 x font (+ safe-area): Second, Name, Return. */
+.stage[data-scene="explore"] .arasoBrand,
+.stage--name .arasoBrand,
+.stage[data-scene="return"] .arasoBrand {
+  left: var(--hlM, 140px);
+  top: calc(var(--hlAsTop, 32px) + var(--hk-safe-top, 0px));
+  font-size: var(--hlAsFont, 12px);
+}
+/* Second: card width = 1.0 x Home card (aspect 285:364), centred on the Home card centre. */
+.stage[data-scene="explore"] .cardAnchor {
+  left: var(--hlCx, 50%);
+  top: var(--hlCy, 50%);
+  width: var(--hlCardW, 285px);
+  height: calc(var(--hlCardW, 285px) * 364 / 285);
+  transform: translate(-50%, -50%);
+}
+.stage[data-scene="explore"] .cardAnchor .sendCard {
+  transform: scale(calc(0.65 * var(--cardShrink, 1) * var(--hlCardK, 1)));
+}
+/* Name: the stage-level Chog sibling is the only Name Chog at every width (main.js fitNameScene places it on the margin line / floor at the Home Chog scale). */
+.stage--name .nameScene__chog {
+  display: block;
+}
+
+/* [A-786 HOME SCALE + SECOND CHOICE HIERARCHY · Owner direction after A-779] Size only, existing design, no copy.
+   (1) Home paper: ONE restrained step, x1.10 (--homePaperK), the whole 400x568 paper (cards, labels, MY MONEY / HISTORY /
+   + Piggy flaps, stamp, logo) scaling together because they are all children of `.homePaper`. The base rule above scales
+   it .275 about its top-left; here the same scale is multiplied by k and shifted by (-200, -284) x .275 x (k-1) local px so the
+   paper's CENTRE is exactly where the dock put it (the dock math in chog-home.js is untouched; the 110x156 mount box is
+   unchanged). Chog / Piggy art, positions and scale are not touched. Applies at every width (the dock ratio is viewport-free). */
+:root { --homePaperK: 1.1; }
+.homePaper {
+  transform:
+    translate(calc(55px - 200px * 0.275 * var(--homePaperK)), calc(78.1px - 284px * 0.275 * var(--homePaperK)))
+    scale(calc(0.275 * var(--homePaperK)));
+}
+/* (2) Second candidate choices: undo the A-779 hierarchy shrink (28px/24px -> 18px). Choice role = the pre-A-779 sizes
+   (28px <=640, 24px >=641; on screen 18.2px / 15.6px, clearly above the 18px css (11.7px on screen) support text).
+   Still plain text lines: the A-779 no-shadow / no-radius / no-paper / picked-underline rules above are untouched. */
+:root { --type-choice: 28px; }
+@media (min-width: 641px) {
+  :root { --type-choice: 24px; }
+}
+.secondJourneyCard .secondJourney__pick { font-size: var(--type-choice); }
+/* [A-839 · A-835 items 6-8] Invite: full-bleed notebook + top-centre tape sticker + ARASO on the rail. CSS only: a734 byte-pins the Invite markup, so the existing elements are
+   repositioned. main.js fitInvite writes --invS (the content-group scale: HomeCard-driven), --invVw / --invVh (viewport px) on the board; the board is centred on the viewport
+   (grid centre + transform about its centre), so viewport x/y map to board units as  b = boardSize/2 + (v - viewportSize/2) / --invS.
+   - lines: the body notebook (pitch 32 k) shows through the transparent board/paper (above);
+   - hole column: `.invite__holes` is the full-height column at 0.8 x the side margin; the 13 / 12 `.invite__hole` children are hidden and the column is drawn with a repeating
+     radial-gradient (hole size and pitch are board units, so they scale with the content group);
+   - tape: the existing <img>, centred, top edge on the viewport top;
+   - ARASO: the shared rail rule (left margin line, font = card x .064, top = 2 x font + safe area). */
+.invite__hole { display: none; }
+.invite__holes {
+  display: block;
+  width: 13px;
+  height: calc(var(--invVh, 840px) / var(--invS, 1));
+  left: calc(210px - var(--invVw, 420px) / (2 * var(--invS, 1)) + 0.8 * var(--hlM, 20px) / var(--invS, 1) - 14px - 6.5px);
+  top: calc((840px - var(--invVh, 840px) / var(--invS, 1)) / 2 - 22px);
+  background: radial-gradient(circle at 50% 50%, #0d0d0d 0, #0d0d0d 5.5px, #1a1a1a 6px, transparent 6.5px) 0 var(--invHoleOff, 0px) / 13px 47px repeat-y;
+}
+.invite--wide .invite__holes {
+  width: 16px;
+  height: calc(var(--invVh, 800px) / var(--invS, 1));
+  left: calc(640px - var(--invVw, 1280px) / (2 * var(--invS, 1)) + 0.8 * var(--hlM, 120px) / var(--invS, 1) - 48px - 8px);
+  top: calc((800px - var(--invVh, 800px) / var(--invS, 1)) / 2 - 17px);
+  background: radial-gradient(circle at 50% 50%, #0d0d0d 0, #0d0d0d 7px, #1a1a1a 7.5px, transparent 8px) 0 var(--invHoleOff, 0px) / 16px 60px repeat-y;
+}
+.invite__tape {
+  /* the opaque tape starts 30.5 board px below the <img> top (contain-fit letterbox + the art's own margin; measured from tape@2x.png) */
+  top: calc((840px - var(--invVh, 840px) / var(--invS, 1)) / 2 - 22px - 30.5px);
+  transform-origin: 50% 0;
+}
+.invite--wide .invite__tape {
+  left: 336px; /* pre-A-839 baseline: 414px (80 px right of the centre); the sticker is centred on the viewport */
+  top: calc((800px - var(--invVh, 800px) / var(--invS, 1)) / 2 - 17px - 23.8px); /* opaque tape margin of tape@2x (wide) */
+}
+.stage--invite .arasoBrand {
+  left: var(--hlM, 140px);
+  top: calc(var(--hlAsTop, 32px) + var(--hk-safe-top, 0px));
+  font-size: var(--hlAsFont, 12px);
+}
+
+/* [A-851] Home bell — existing crayon bell asset, no text. In-app only; rings only when motion is allowed (reduced motion = still bell). */
+.secondHomeBell {
+  position: absolute;
+  top: 5%;
+  right: 6%;
+  z-index: 6;
+  width: 64px;
+  height: 64px;
+  padding: 8px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transform-origin: 50% 12%;
+}
+.secondHomeBell img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+@keyframes secondHomeBellRing {
+  0%, 100% { transform: rotate(0); }
+  20% { transform: rotate(14deg); }
+  40% { transform: rotate(-12deg); }
+  60% { transform: rotate(8deg); }
+  80% { transform: rotate(-5deg); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .secondHomeBell { animation: secondHomeBellRing 1.1s ease-in-out 2; }
+}
+/* ── [A-897 P2] 이름 없는 Piggy(Home 이름 자리) + 승격 장면(우표) ─────────────────────────────────────────── */
+/* 이름 없는 Piggy — 이름 있는 카드와 **같은 레이아웃**(별도 상태 아님). 이름 자리 = 빈 칸(노랑 밑줄 `_____`) + 옆에 작은 손그림 crayon 펜(card/name-pen.svg) 하나.
+   **펜만 탭 가능 → Name-it**(빈 줄 전체 탭은 폐기, 이름 있는 줄과 같은 non-interactive div). 펜의 보이는 크기는 1.1em, 숨은 hit(::after)는 em 로 3.1em 정사각(펜 왼쪽 끝에서 위·아래·오른쪽으로만, 가로 1.1em + 2em):
+   web 21px x .957(1440) = 62 · phone 24px x .6408 = 47.7 on-screen, 모두 >= 44. 펜은 줄의 **오른쪽 빈 쪽**(줄 8em 끝 + .3em)에 있어 records 의 hit(왼쪽 글자 폭 + 12px)와 가로로 겹치지 않는다.
+   pre-A-897-pen baseline: 줄 전체가 button(::after 위 .35em · 좌우 .2em)이었고 records ::after 를 top -25.5(web)/-27(phone multi)로 줄였다(B1/B1') — 모두 되돌림: records 는 원래 영역·크기 그대로. */
+.homePaper__name--unnamed {
+  position: relative;
+  display: block;
+  width: 8em;
+  height: 1.2em;
+  margin: 0;
+  padding: 0;
+}
+.homePaper__namePen {
+  position: absolute;
+  left: calc(100% - 1em); /* pre-A-897-pen-fix2: calc(100% + .3em). The hit is left:0 + right:-2em = 3.1em wide, so the pen sits 1em inside the row's right end (the underline runs under it) to stay inside the info column's clip (~10.4em from the row's left) */
+  top: 50%;
+  width: 1.1em;
+  height: 1.1em;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  transform: translateY(-50%);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+}
+.homePaper__namePen::after {
+  content: "";
+  position: absolute;
+  /* 3.1em square hit that grows AWAY from the row (up / down / right, never left): the pen's left edge = the hit's left edge, so no tap on the row can reach it. longhands only. pre-A-897-pen-fix: inset -1em (reached 0.7em back over the row's right end). */
+  top: -1em;
+  bottom: -1em;
+  left: 0;
+  right: -2em; /* pre-A-897-pen-fix2: -1em (hit was 2.1em wide = 32 / 42 on-screen, < 44) */
+}
+/* [A-897 pen fix4] phone MULTI only (single phone + every web width pass and are untouched). Measured (run10): the .homeResidents window clips at the card top ~25 local px above the row top, so a hit that grows UP 1.95em got cut to
+   33 on-screen px; the band clip-top -> records-top (26.8) is only ~51.5 local = 33 on-screen, so the hit CANNOT stay inside it. Back to the symmetric -1em vertical growth (top edge -22.8 stays inside the clip; the lower part runs
+   beside records, not over it: the pen hit starts at the pen's left edge, records' hit ends ~148 local px, ~20 px to the left). The pen moves 0.4em right (left: 100% - .6em) so its hit starts clear of records' right edge,
+   and the hit is 1.1em + 1.8em = 2.9em wide = 2.9 x 24 x .6408 = 44.6 on-screen (ends 10.3em, inside the ~10.4em column clip). Height 3.1em = 47.7 on-screen.
+   pre-A-897-pen-fix4: top -1.95em / bottom +.05em (fix3), left calc(100% - 1em) / right -2em (fix2). */
+@media (max-width: 640px) {
+  .homePaper__card--piggy[data-piggy-id] .homePaper__namePen { left: calc(100% - 0.6em); }
+  .homePaper__card--piggy[data-piggy-id] .homePaper__namePen::after {
+    top: -1em;
+    bottom: -1em;
+    right: -1.8em;
+  }
+}
+.homePaper__namePen img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.homePaper__name--unnamed,
+.homePaper__nameFill { z-index: 1; }
+.homePaper__nameUnderline {
+  position: absolute;
+  left: 0;
+  bottom: 0.1em;
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  pointer-events: none;
+}
+.homePaper__namePen:focus-visible { outline: 2px solid #e0b100; outline-offset: 2px; }
+
+/* 탭 → 그 자리에서 Name it 과 같은 문법(손으로 쓰는 입력 + 밑줄 + save). 폼은 `.homePaper__name` 도 같이 달아 글꼴·크기(21px / ≤640 24px)를
+   그 칸에서 그대로 물려받는다 — 같은 값을 여기서 다시 쓰지 않는다(M5). 높이는 이름 줄(1.2em)과 같아 카드가 자라지 않는다(M7). */
+.homePaper__nameFill {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  height: 1.2em;
+  margin: 0;
+  pointer-events: auto;
+}
+.homePaper__nameInput {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 1.2em;
+  margin: 0;
+  padding: 0 0.15em;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #141210;
+  font: 600 1em/1.2 system-ui, sans-serif; /* Name it 입력과 같은 글꼴 — 16px 미만 아님(iOS 확대 방지) */
+}
+.homePaper__nameFill .homePaper__nameUnderline {
+  right: auto;
+  width: calc(100% - 3.2em);
+  bottom: -0.05em;
+}
+/* save: Name it 의 ink 버튼(pkbtn 3조각, 122x40)은 이 한 줄(1.2em)에 들어가지 않고 카드를 키운다 — 재사용하지 않고 같은 낱말·같은
+   손글씨 글꼴(--font-cj)·잉크색만 쓴다(RECEIPT.md M6). */
+.homePaper__nameSave {
+  flex: 0 0 auto;
+  padding: 0.2em 0.3em;
+  border: 0;
+  background: none;
+  color: #141210;
+  font-family: var(--font-cj);
+  font-style: normal;
+  font-weight: 400;
+  font-size: 0.85em;
+  line-height: 1;
+  cursor: pointer;
+}
+.homePaper__nameSave:disabled { opacity: 0.35; cursor: default; }
+.homePaper__nameSave:focus-visible { outline: 2px solid #e0b100; outline-offset: 2px; }
+
+/* 승격 장면 — body 위 오버레이(render() 와 독립). root 는 투명, `__page` 가 공통 바탕을 들고 페이지처럼 넘어간다. */
+.promotionStamp {
+  position: fixed;
+  inset: 0;
+  z-index: 9100;
+  overflow: hidden;
+  background: transparent;
+  pointer-events: auto;
+}
+.promotionStamp__page {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  transform-origin: left center;
+  backface-visibility: hidden;
+  background-color: #161616; /* 공통 어두운 바탕(A-736 .testerIntro 와 같은 줄무늬) */
+  background-image: repeating-linear-gradient(
+    to bottom,
+    transparent 0px,
+    transparent calc(31px * var(--fmtS, 1)),
+    rgba(255, 255, 255, 0.04) calc(31px * var(--fmtS, 1)),
+    rgba(255, 255, 255, 0.04) calc(32px * var(--fmtS, 1))
+  );
+  background-size: 100% calc(32px * var(--fmtS, 1));
+}
+.promotionStamp__group {
+  /* 우표 폭 = 폰 기준 203px(390 의 52vw) x Home 카드 배율 --fmtS(A-829/A-835 한 배율) — 화면 안에 들어가도록 52vw / 44vh 로만 막는다 */
+  --st: min(calc(203px * var(--fmtS, 1)), 52vw, 44vh);
+  display: flex;
+  align-items: center;
+  gap: calc(var(--st) * 0.08);
+  /* 우표 + "alpha!" 한 덩어리가 화면 가운데에 놓인다(시안 B 와 같다 — 우표 혼자가 아니다). */
+}
+.promotionStamp__stamp {
+  position: relative;
+  width: var(--st);
+  aspect-ratio: 126 / 134;
+  flex: 0 0 auto;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+.promotionStamp__frame {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+}
+/* 초그 — 우표 안쪽 틀(가운데 ≈ 49.5% / 47.5%) 안에, 옛 정지 그림보다 크게. 상자는 chog-invite 파츠 전체(padding 포함)다. */
+.promotionStamp__chog {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.promotionStamp__chog .chogInvite {
+  left: calc(49.5% - var(--st) * 0.34);
+  top: calc(47.5% - var(--st) * 0.39);
+  width: calc(var(--st) * 0.68);
+  height: calc(var(--st) * 0.78);
+}
+/* "alpha!" — 우표 밖 오른쪽 옆, 노랑(#E0B100 = 액센트) 손글씨. 테이프·반짝이·우표 안/위 ❌. */
+.promotionStamp__alpha {
+  flex: 0 0 auto;
+  font-family: var(--font-cj);
+  font-weight: 400;
+  font-size: calc(var(--st) * 0.18); /* 시안 B: 단어 폭 ≈ 우표 폭의 0.34 = 1.9em */
+  line-height: 1;
+  color: #e0b100;
+  white-space: nowrap;
+  opacity: 0;
+  transform: rotate(-2deg) translateY(calc(var(--st) * -0.06)); /* 초그 입 높이쯤 — 말하는 것처럼 */
+  clip-path: inset(0 100% 0 0);
+}
+/* ── [A-897 P2] end ─────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── [A-898] Funding Paper + Send a Piggy (design writer) ───────────────────────────────────────────────────
+   Both papers draw INSIDE the Home paper (.homePaper local 400x568), same as the A-646 Add money pad, so text uses the A-845 styles
+   converted with the Home-paper scale: --tsK = 0.640845 (finalPaperScale / PAPER_BASE_SCALE at the phone, see the .homePaperMount note
+   above) => on screen = style x paper scale ratio, no font-size media query. Title 26 (the $ amount) · Choice 18 (rows, presets, inputs)
+   · Body 14 · Label 13 (links, buttons) · Detail 12 (token, network, address, fees). Tap areas are in em of the element's own style:
+   Choice 2.6em = 46.8 px, Label 3.5em = 45.5 px, Body 3.2em = 44.8 px on screen at the phone (>= 44), larger at tablet / desktop.
+   The Home pad chain is pointer-events:none, so every control sets pointer-events:auto. No provider name, no new colour except the
+   canon red for the optional explain cue. */
+html .a898-paper {
+  --tsK: 0.640845;
+  --a898Title: calc(var(--ts-title) / var(--tsK));
+  --a898Choice: calc(var(--ts-choice) / var(--tsK));
+  --a898Body: calc(var(--ts-body) / var(--tsK));
+  --a898Label: calc(var(--ts-label) / var(--tsK));
+  --a898Detail: calc(var(--ts-detail) / var(--tsK));
+  --a898Button: calc(var(--ts-button) / var(--tsK));
+  display: grid;
+  gap: 0.7em;
+  font: italic 400 var(--a898Body)/1.25 Georgia, "Times New Roman", serif;
+  color: #141210;
+  box-sizing: border-box;
+  pointer-events: auto;
+}
+html .a898-paper button,
+html .a898-paper input { pointer-events: auto; font: inherit; color: inherit; }
+html .a898-link,
+html .a898-explain,
+html .a898-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  min-height: 3.5em;
+  padding: 0 0.6em 0 0;
+  border: 0;
+  background: none;
+  font-size: var(--a898Label);
+  line-height: 1.2;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  color: rgba(20, 18, 16, 0.7);
+  cursor: pointer;
+}
+html .a898-link:hover { color: #141210; }
+html .a898-link--quiet { color: rgba(20, 18, 16, 0.55); }
+/* error / caution text = the `.secondJourney__reason` style (italic Georgia, vermilion #8C3A2E, Detail size); also the red optional cue */
+html .a898-reason,
+html .a898-explain { font-style: italic; font-family: Georgia, "Times New Roman", serif; color: #8C3A2E; }
+html .a898-reason { font-size: var(--a898Detail); line-height: 1.3; }
+html .a898-explain { padding-left: 0.8em; }
+html .a898-try { justify-self: end; min-height: 3.2em; }
+html .a898-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.8em; }
+html .a898-who { font-size: var(--a898Body); color: rgba(20, 18, 16, 0.7); }
+html .a898-amount { font: 700 var(--a898Title)/1.1 Georgia, "Times New Roman", serif; font-style: normal; color: #141210; }
+html .a898-balance { display: flex; align-items: baseline; gap: 0.8em; flex-wrap: wrap; }
+html .a898-held { display: grid; }
+html .a898-held__usd { font-size: var(--a898Body); font-weight: 700; font-style: normal; }
+html .a898-held__token,
+html .a898-detail,
+html .a898-addr,
+html .a898-row__note { font-size: var(--a898Detail); line-height: 1.25; color: rgba(20, 18, 16, 0.6); }
+/* the three funding rows: plain paper lines, label left, honest note right when unavailable */
+html .a898-rows { display: grid; gap: 2px; }
+html .a898-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8em;
+  width: 100%;
+  min-height: 2.6em;
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid rgba(20, 18, 16, 0.18);
+  background: none;
+  text-align: left;
+  font-size: var(--a898Choice);
+  cursor: pointer;
+}
+html .a898-row__label { flex: 1; min-width: 0; }
+html .a898-row.is-selected .a898-row__label { text-decoration: underline; text-underline-offset: 3px; }
+html .a898-row:not(:disabled):hover .a898-row__label { color: var(--gold); }
+html .a898-row--off { cursor: default; }
+html .a898-row--off .a898-row__label { opacity: 0.45; }
+html .a898-row--off .a898-row__note { white-space: nowrap; }
+html .a898-crypto { display: grid; gap: 0.4em; }
+html .a898-chips { display: flex; gap: 0.6em; }
+html .a898-chip { padding: 0 0.9em 0 0; min-width: 3.4em; } /* P4: 3.4em x Label 13 = 44.2 px on screen ("MON" alone is ~43 px) */
+html .a898-chip.is-selected { color: #141210; font-weight: 700; }
+html .a898-addr { font-family: ui-monospace, Menlo, monospace; font-style: normal; word-break: break-all; user-select: all; }
+/* Send a Piggy: presets 20 / 50 / 100 (explicit, no default), TO + one line on paper rules */
+html .a898-presets { display: flex; gap: 0.6em; }
+html .a898-preset {
+  flex: 1;
+  min-height: 2.6em;
+  border: 1px solid rgba(20, 18, 16, 0.35);
+  border-radius: 2px;
+  background: none;
+  font-size: var(--a898Choice);
+  font-style: normal;
+  cursor: pointer;
+}
+html .a898-preset.is-selected { border-color: #141210; border-width: 2px; font-weight: 700; }
+html .a898-field { display: flex; align-items: baseline; gap: 0.6em; }
+html .a898-field__label { font-size: var(--a898Label); color: rgba(20, 18, 16, 0.6); }
+html .a898-input {
+  flex: 1;
+  min-width: 0;
+  min-height: 2.6em;
+  padding: 0 2px;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  border-radius: 0;
+  background: transparent;
+  font-size: var(--a898Choice);
+  font-style: normal;
+}
+html .a898-short { display: grid; justify-items: start; gap: 0; }
+
+html .a898-faceLine { display: flex; flex-wrap: wrap; align-items: center; gap: 0 0.4em; }
+html .a898-faceLine__text { font-size: var(--a898Body); font-style: normal; font-weight: 700; }
+html .a898-fees { display: grid; gap: 2px; margin: 0; font-size: var(--a898Detail); color: rgba(20, 18, 16, 0.6); }
+html .a898-fees > div { display: flex; justify-content: space-between; gap: 0.8em; }
+html .a898-fees dt,
+html .a898-fees dd { margin: 0; }
+html .a898-go { justify-self: end; min-height: 3.2em; }
+html .a898-link-out { word-break: break-all; user-select: all; }
+/* [A-898 C1] fit inside the Home paper: the card slot starts at local top 214 of a 568 paper, so the Gift/Funding body gets a scroll region of its own
+   (local px, so it scales with the paper at 390 / 810 / 1440). The Face ID line + button are the last child (.a898-foot) and stay pinned at the
+   bottom of the region; everything above scrolls. Side padding/negative margin keep the fanned cards from being clipped at the edges. */
+html .a898-paper {
+  max-height: 306px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  align-content: start;
+  padding: 0 10px;
+  margin: 0 -10px;
+  box-sizing: content-box;
+  scrollbar-width: none;
+  scroll-padding-bottom: 62px; /* = the sticky .a898-foot height: a control scrolled into view lands above the foot, not under it */
+}
+html .a898-paper::-webkit-scrollbar { display: none; }
+html .a898-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 8;
+  display: grid;
+  justify-items: end;
+  gap: 0.3em;
+  padding: 0.4em 0 0;
+  background: #f6f0e4;
+}
+html .a898-foot .a898-faceLine { justify-self: stretch; }
+html .a898-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+html .a898-state { min-height: 1.25em; }
+/* entry buttons beside Add money: one line, each hit area in em (Label 3.4em = 44.2 px on screen), 1.6em gap so they never overlap */
+html #homeAddMoney,
+html #homeSendPiggy {
+  position: relative;
+  display: inline-block;
+  margin-right: 1.6em;
+  font-size: var(--tsLabelHome, calc(var(--ts-label) / 0.640845));
+}
+html #homeAddMoney::after,
+html #homeSendPiggy::after { content: ""; position: absolute; inset: -1.1em -0.8em; }
+/* Face ID button = the Invite board's button (yellow face icon + Delicious Handrawn `Face ID`), in flow instead of absolute. Em from Button style. */
+html .a898-faceBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-self: end;
+  gap: 0.6em;
+  min-height: 3.2em;
+  padding: 0 1.6em;
+  border: 2px solid rgba(237, 232, 220, 0.8);
+  border-radius: 999px;
+  background: #1e1e1e;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.5);
+  color: #ede8dc;
+  font-size: var(--a898Button, calc(var(--ts-button) / 0.640845));
+  font-style: normal;
+  cursor: pointer;
+}
+html .a898-faceBtn .invite__faceIcon { width: 1.4em; height: 1.4em; }
+html .a898-faceBtn:disabled { cursor: default; opacity: 0.45; }
+/* Card F: fan -> lift -> flip. Card art box 216x342 (design folder), drawn at 0.8 inside the paper: 173 x 274 local px. */
+html .a898-stage { position: relative; height: 290px; margin: 0 auto; width: 100%; perspective: 900px; }
+html .a898-card {
+  position: absolute;
+  left: 50%;
+  top: 8px;
+  width: 173px;
+  height: 274px;
+  margin-left: -86px;
+  transform-origin: 50% 100%;
+}
+html .a898-card[data-i="0"] { transform: translateX(-62px) rotate(-9deg); }
+html .a898-card[data-i="1"] { transform: translateY(-6px); z-index: 2; }
+html .a898-card[data-i="2"] { transform: translateX(62px) rotate(9deg); }
+/* pick = lift: the tapped card rises to the centre (a side card also straightens and slides in) */
+html .a898-card.is-picked { z-index: 5; transform: translateY(-10px) scale(1.04) rotate(0); }
+/* the others slide OUT TO THE SIDE from their fan place (never down). The middle card leaves to the side away from the picked card:
+   picked left (0) -> middle goes right; picked right (2) -> middle goes left. Same nodes change class (a898PatchGiftStage), so the
+   fan is the "from" state. */
+html .a898-card.is-away { opacity: 0; pointer-events: none; }
+html .a898-card.is-away[data-i="0"] { transform: translateX(-190px) rotate(-14deg); }
+html .a898-card.is-away[data-i="1"] { transform: translateX(-170px) rotate(-11deg); }
+html .a898-card.is-picked[data-i="0"] ~ .a898-card.is-away[data-i="1"] { transform: translateX(170px) rotate(11deg); }
+html .a898-card.is-away[data-i="2"] { transform: translateX(190px) rotate(14deg); }
+html .a898-card__inner {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+html .a898-card.is-flipped .a898-card__inner { transform: rotateY(180deg); }
+/* motion only when the viewer has not asked for reduced motion (end states are identical without it) */
+@media (prefers-reduced-motion: no-preference) {
+  html .a898-card { transition: transform 420ms cubic-bezier(.2, .8, .2, 1), opacity 320ms ease-out; }
+  html .a898-card__inner { transition: transform 520ms cubic-bezier(.2, .8, .2, 1); }
+}
+/* reduced motion: no transition is declared outside the no-preference query above, so the computed transitionDuration is 0s and
+   a898AutoFlip() flips at once (same end states). No separate reduce query here: a735 A6 reads the LAST reduce query as its own. */
+/* re-pick (`‹`, aria-label "back"): only while a card is picked. Sits over the stage's free top-left corner (the picked card is centred,
+   the others are gone) so it adds no height to the paper. Choice style for a readable glyph; 2.6em x Choice 18 = 46.8 px square on
+   screen (>= 44). */
+html .a898-paper .a898-repick { /* .a898-paper scope: beats `html .a898-paper button { font: inherit }` */
+  position: relative;
+  z-index: 7;
+  justify-content: center;
+  min-width: 2.6em;
+  min-height: 2.6em;
+  margin-bottom: -2.6em;
+  padding: 0;
+  font-size: var(--a898Choice);
+  font-style: normal;
+  line-height: 1;
+  text-decoration: none;
+}
+html .a898-cardTap { position: absolute; inset: 0; z-index: 6; border: 0; background: none; cursor: pointer; }
+html .a898-card.is-flipped .a898-cardTap { pointer-events: none; }
+html .a898-cardFace {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  backface-visibility: hidden;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25), 0 12px 22px rgba(0, 0, 0, 0.4);
+  font-style: normal;
+}
+html .a898-cardFace--front { background: #121110; }
+html .a898-cardArt { position: absolute; inset: 0 0 auto 0; height: 235px; overflow: hidden; }
+html .a898-cardArt img { position: absolute; }
+html .a898-cardAmt {
+  position: absolute;
+  z-index: 3;
+  left: 11px;
+  right: 11px;
+  bottom: 11px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border: 1.5px solid rgba(237, 232, 220, 0.75);
+  border-radius: 8px;
+  background: #121110;
+  color: #ede8dc;
+}
+html .a898-cardAmt__n { font: 700 var(--a898Body)/1 "Playfair Display", Georgia, serif; } /* P4/C3: Body token (14 on screen), design face Playfair 700 */
+html .a898-cardFace--back {
+  transform: rotateY(180deg);
+  background: #ebe3d5; /* paper tint only: a736 pins the ivory texture reference count, so no texture url here */
+  color: #141210;
+}
+/* P4: letter text on the A-845 tokens (on screen = local x --tsK): TO / FROM marks Detail 12 · TO, message Body 14 · FROM name Label 13 */
+html .a898-letter__small { font: 700 var(--a898Detail)/1 Georgia, serif; letter-spacing: .12em; color: #6a6458; pointer-events: none; }
+html .a898-letter__to { position: absolute; left: 16px; top: 14px; right: 16px; display: grid; gap: 2px; }
+/* .a898-paper scope on the letter fields: `html .a898-paper input { font: inherit }` otherwise resets the hand font and token sizes */
+html .a898-paper .a898-letter__in {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #141210;
+  font-family: var(--font-cj);
+  font-style: normal;
+  pointer-events: auto;
+  resize: none;
+}
+/* TO input reaches up over its mark: 3.2em x Body 14 = 44.8 px tall on screen */
+html .a898-paper .a898-letter__in--to { font-size: var(--a898Body); min-height: 3.2em; padding: 1em 0 0; margin-top: -1em; }
+html .a898-paper .a898-letter__msg { position: absolute; left: 16px; right: 16px; top: 86px; height: 104px; padding: 0; font-size: var(--a898Body); line-height: 1.2; }
+html .a898-letter__peek { position: absolute; left: -24px; top: 190px; width: 94px; transform: rotate(20deg); pointer-events: none; }
+html .a898-letter__from {
+  position: absolute;
+  right: 11px;
+  bottom: 11px;
+  width: 96px;
+  height: 46px;
+  padding: 3px 8px 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  border: 1.5px solid rgba(20, 18, 16, 0.45);
+  border-radius: 8px;
+}
+/* FROM tap target = the input itself, stretched over the box + 24 px above and to the card edge (118 x 81 local = 76 x 52 px on screen);
+   transparent, so the FROM mark under it still shows; padding puts the typed name under the mark inside the box. */
+html .a898-paper .a898-letter__in--from {
+  position: absolute;
+  top: -24px;
+  right: -11px;
+  bottom: -11px;
+  left: -11px;
+  width: auto;
+  box-sizing: border-box;
+  padding: calc(28.5px + var(--a898Detail)) 20px 12px 20px;
+  font-size: var(--a898Label);
+  line-height: 1.1;
+}
+/* ── [A-898] end ─────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* [A-898] address copy icon (Owner 2026-10-08, copy_check_mock.html): two ink sheets -> gold check drawn in one stroke -> back after 1.5 s (timer in main.js). Tap area >= 44 in em. */
+html .a898-paper .a898-copy { display: inline-flex; align-items: center; justify-content: center; min-width: 2.6em; min-height: 2.6em; padding: 0; margin: 0; border: 0; background: none; font-size: var(--a898Choice); line-height: 0; cursor: pointer; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
+html .a898-paper .a898-copy__svg { width: 1.7em; height: 1.7em; display: block; transition: transform .08s; }
+html .a898-paper .a898-copy:active .a898-copy__svg { transform: translateY(1px) scale(.94); }
+html .a898-paper .a898-copy__check { display: none; }
+html .a898-paper .a898-copy__check path { stroke-dasharray: 120; stroke-dashoffset: 120; }
+html .a898-paper .a898-copy[data-copied="1"] .a898-copy__sheets { display: none; }
+html .a898-paper .a898-copy[data-copied="1"] .a898-copy__check { display: block; }
+html .a898-paper .a898-copy[data-copied="1"] .a898-copy__check path { animation: a898CopyDraw .22s ease-out forwards; }
+@keyframes a898CopyDraw { to { stroke-dashoffset: 0; } }
+html .a898-explainBody { display: grid; gap: 0.3em; font-size: var(--a898Detail); line-height: 1.35; color: rgba(20, 18, 16, 0.75); }
+html .a898-explainBody p { margin: 0; }
+
+/* ── [A-902] sound on/off — speaker icon, top right of the HOME status card (Owner 2026-10-08 "여기 하자 굿"). Crayon ink line, no text.
+   Sits on the HOME title row (card padding-top 20 + heading 25 -> icon box 4..50 local px), above the status row (time starts at ~59), right edge 6px in. */
+/* Tap box: 46 local px x --a902k (main.js [A-902] measures the open paper's scale and raises k until the on-screen box is >= 44). It grows up and to the left,
+   so its bottom edge stays at 50 (above the time row); the drawn speaker stays 28 local px. */
+.homePaper__card--status > .a902-sound { position: absolute; top: calc(50px - 46px * var(--a902k, 1)); right: 6px; width: calc(46px * var(--a902k, 1)); height: calc(46px * var(--a902k, 1)); padding: 0; margin: 0; border: 0; background: none; line-height: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 2; pointer-events: auto; -webkit-tap-highlight-color: transparent; }
+.a902-sound__svg { width: 28px; height: 28px; display: block; transition: transform .08s; }
+.a902-sound:active .a902-sound__svg { transform: translateY(1px) scale(.94); }
+.a902-sound__slash { display: none; }
+.a902-sound--off .a902-sound__slash { display: inline; }
+/* ── [A-902] end ── */
+
+/* ── [A-905] Honey jar (Home) + Money tab + in/out switch (design writer, wt a905d) ──────────────────────────
+   Jar: an <img src="/card/honey-jar.svg"> (white crayon outline, yellow inside) on a button. Tap area is em-based: the button is 1em square with
+   --a905JarSize = 48px (>= 44 px), the art is 46/48 em. Press = slight down. Honey bump = a small rise then settle (NOT a balance gauge): a
+   yellow cap clipped to the jar body, only ever animated by [data-bump="1"] set by the app on a confirmed arrival. Idle = a faint shine that
+   shows now and then. prefers-reduced-motion: no motion at all, static. Position (--a905JarX / --a905JarY, px in the layer) comes from the
+   app's safe-slot code; the layer never takes pointer events except on the jar itself. A-845 tokens only; no new colour (yellow = #e0b100). */
+html .a905-jarLayer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  /* z-index stays auto on purpose: the layer is mounted inside #homeBoard between the seat Piggy (#homeChar) and Chog (#chogHome), so DOM order puts it
+     above the Piggy and below Chog, the Home Paper and Chog's speech bubble (Owner: jar in front of the Piggy). Do not give it a z-index. */
+  z-index: auto;
+  overflow: visible;
+  pointer-events: none;
+}
+html .a905-jar {
+  --a905JarSize: 60px; /* Owner 2026-10-08 "60" (pre-A-905 jar-size baseline: 48px) */
+  position: absolute;
+  left: var(--a905JarX, 0px);
+  top: var(--a905JarY, 0px);
+  width: 1em;
+  height: 1em;
+  min-width: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: var(--a905JarSize);
+  line-height: 1;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-tap-highlight-color: transparent;
+  transition: transform 0.08s ease-out;
+}
+html .a905-jar:active { transform: translateY(2px) scale(0.96); }
+html .a905-jar:focus-visible { outline: none; }
+html .a905-jar:focus-visible .a905-jar__img { filter: drop-shadow(0 0 0.04em #e0b100); }
+html .a905-jar__fill {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  /* the SVG's own jar body (viewBox 100) */
+  clip-path: polygon(30% 30%, 16% 50%, 16% 64%, 24% 82%, 50% 90%, 76% 82%, 84% 64%, 84% 50%, 70% 30%);
+}
+html .a905-jar__honey {
+  position: absolute;
+  left: 10%;
+  right: 10%;
+  top: 50%;
+  height: 16%;
+  /* a deeper amber derived from the two existing tokens (gold + ink) so the rise reads against the yellow inside the jar */
+  background: color-mix(in srgb, #e0b100 62%, #141210);
+  border-radius: 50%;
+  opacity: 0;
+  transform: translateY(0);
+}
+html .a905-jar__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+html .a905-jar__shine {
+  position: absolute;
+  left: 36%;
+  top: 60%;
+  width: 6%;
+  height: 12%;
+  border-radius: 999px;
+  background: #fff;
+  opacity: 0;
+  pointer-events: none;
+}
+html .a905-jar__drop {
+  position: absolute;
+  left: 46%;
+  top: -14%;
+  width: 11%;
+  height: 15%;
+  border-radius: 50% 50% 50% 50% / 62% 62% 38% 38%;
+  background: #e0b100;
+  opacity: 0;
+  pointer-events: none;
+}
+html .a905-jar[data-bump="1"] .a905-jar__drop { animation: a905Drop 0.46s ease-in forwards; }
+html .a905-jar[data-bump="1"] .a905-jar__honey { animation: a905Honey 0.9s ease-out 0.4s forwards; }
+html .a905-jar[data-bump="1"] .a905-jar__img { animation: a905Settle 0.5s ease-out 0.46s; }
+/* the drop starts above the rim (top -14%) and travels ~340% of its own height (~50% of the jar) so it ends inside the jar body, fading as it enters */
+@keyframes a905Drop {
+  0% { opacity: 0; transform: translateY(0); }
+  12% { opacity: 1; transform: translateY(0); }
+  70% { opacity: 1; transform: translateY(260%); }
+  100% { opacity: 0; transform: translateY(340%); }
+}
+/* honey rise: ~ -170% of the cap's own 16% height = ~27% of the jar (about 13 px at 48 px), then back and gone (NOT a gauge: nothing persists) */
+@keyframes a905Honey {
+  0% { opacity: 0.95; transform: translateY(0); }
+  40% { opacity: 0.95; transform: translateY(-170%); }
+  100% { opacity: 0; transform: translateY(-20%); }
+}
+@keyframes a905Settle {
+  0% { transform: translateY(0); }
+  30% { transform: translateY(-4%); }
+  100% { transform: translateY(0); }
+}
+html .a905-jar:not([data-bump="1"]) .a905-jar__shine { animation: a905Shine 9s ease-in-out 3s infinite; }
+@keyframes a905Shine {
+  0%, 82%, 100% { opacity: 0; transform: translateY(0); }
+  90% { opacity: 0.6; transform: translateY(-30%); }
+}
+/* [A-905 merge] same meaning as (prefers-reduced-motion: reduce); written this way so the A-735 invite guard stays the last `reduce` block (a735 A6 locates it by lastIndexOf). */
+@media not all and (prefers-reduced-motion: no-preference) {
+  html .a905-jar,
+  html .a905-jar:active { transition-duration: 0s; }
+  html .a905-jar:active { transform: translateY(2px); }
+  html .a905-jar .a905-jar__drop,
+  html .a905-jar .a905-jar__honey,
+  html .a905-jar .a905-jar__shine,
+  html .a905-jar .a905-jar__img { animation-name: none !important; }
+  html .a905-jar .a905-jar__drop,
+  html .a905-jar .a905-jar__honey,
+  html .a905-jar .a905-jar__shine { opacity: 0; }
+}
+
+/* ── [A-904] one-time jar guide after Second (Owner "발주해" 2026-10-08: the guide target is the honey jar, not the house stamp) ──────────────
+   The app (main.js [A-904]) sets data-a904 on #a905Jar: "drop" = the first Home after Second, the jar settles in; "twinkle" = a soft burst of the existing
+   burst@2x.png around the jar until the first tap (max 3 Home entries, then quiet). Existing art only, no copy, tap box unchanged (the burst takes no pointer).
+   Motion lives only under no-preference; without it (reduced motion) the burst is a still, faint glow (no reduce block here: a735 A6 keeps the A-735 invite guard last). */
+html .a905-jar[data-a904="twinkle"]::after {
+  content: "";
+  position: absolute;
+  left: -30%;
+  top: -30%;
+  width: 160%;
+  height: 160%;
+  background: url("/invite/burst@2x.png") center / contain no-repeat;
+  opacity: 0.4;
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  html .a905-jar[data-a904="drop"] .a905-jar__img { animation: a904Drop 0.5s ease-out 1; }
+  html .a905-jar[data-a904="twinkle"]::after { animation: a904Twinkle 1.5s ease-in-out infinite; }
+  @keyframes a904Drop {
+    0% { opacity: 0; transform: translateY(-55%); }
+    70% { opacity: 1; transform: translateY(4%); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+  /* 1.5 s loop: about 60% on (rise, fall), 40% rest */
+  @keyframes a904Twinkle {
+    0% { opacity: 0; transform: scale(0.85); }
+    30% { opacity: 0.85; transform: scale(1); }
+    60%, 100% { opacity: 0; transform: scale(0.85); }
+  }
+}
+/* ── [A-904] end ── */
+
+/* Money tab (inside the Home paper, local 400x568 -> --tsK 0.640845 like .a898-paper). Title 26 = MONEY, total = Title, real-assets line = Detail,
+   rows = Choice 18, Piggy list = Body 14 name + Body 14 bold amount, Away line = Detail. Tap areas in em of the row: Choice 2.6em = 46.8 px. */
+html .a905-money {
+  --tsK: 0.640845;
+  --a905Title: calc(var(--ts-title) / var(--tsK));
+  --a905Choice: calc(var(--ts-choice) / var(--tsK));
+  --a905Body: calc(var(--ts-body) / var(--tsK));
+  --a905Detail: calc(var(--ts-detail) / var(--tsK));
+  display: grid;
+  gap: 0.5em;
+  box-sizing: border-box;
+  font: italic 400 var(--a905Body)/1.25 Georgia, "Times New Roman", serif;
+  color: #141210;
+  pointer-events: auto;
+}
+html .a905-money button { pointer-events: auto; font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; }
+html .a905-money__title {
+  margin: 0;
+  text-align: center;
+  font: 900 var(--a905Title)/1 Georgia, "Times New Roman", serif;
+  font-style: normal;
+  letter-spacing: 0.5px;
+}
+html .a905-money__total {
+  margin: 0.15em 0 0;
+  text-align: center;
+  font: 700 var(--a905Title)/1.1 Georgia, "Times New Roman", serif;
+  font-style: normal;
+}
+html .a905-money__assets {
+  margin: 0;
+  text-align: center;
+  font-size: var(--a905Detail);
+  color: rgba(20, 18, 16, 0.7);
+}
+html .a905-money__rows { display: grid; margin-top: 0.4em; }
+html .a905-money__row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 2.6em;
+  font-size: var(--a905Choice);
+  line-height: 1.2;
+  border-top: 1px solid rgba(20, 18, 16, 0.12);
+}
+html .a905-money__row:first-child { border-top: 0; }
+html .a905-money__row:hover,
+html .a905-money__row:focus-visible { color: var(--gold); outline: none; }
+html .a905-money__row:disabled { cursor: default; opacity: 0.45; color: inherit; }
+html .a905-money__piggies { display: grid; margin-top: 0.2em; }
+html .a905-money__piggy {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6em;
+  min-height: 2.4em;
+  padding: 0.5em 0;
+  border-top: 1px solid rgba(20, 18, 16, 0.12);
+  font-size: var(--a905Body);
+}
+html .a905-money__piggy:first-child { border-top: 0; }
+html .a905-money__piggyName { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+html .a905-money__piggyAmount { flex: 0 0 auto; text-align: right; font-style: normal; font-weight: 700; }
+html .a905-money__piggyNote { flex-basis: 100%; font-size: var(--a905Detail); }
+html .a905-money__piggy[data-away="1"] { color: rgba(20, 18, 16, 0.45); }
+html .a905-money__piggy[data-away="1"] .a905-money__piggyAmount { font-weight: 400; color: rgba(20, 18, 16, 0.45); }
+html .a905-money__piggy[data-away="1"] .a905-money__piggyNote { color: rgba(20, 18, 16, 0.5); }
+/* a Piggy row that is also a picker (out / Gift: which Piggy) — Away stays visible but cannot be picked */
+html .a905-money__piggy[data-pick="1"] { cursor: pointer; }
+html .a905-money__piggy[data-pick="1"]:hover .a905-money__piggyName,
+html .a905-money__piggy[data-pick="1"]:focus-visible .a905-money__piggyName { color: var(--gold); }
+html .a905-money__piggy[data-pick="0"] { cursor: default; pointer-events: none; }
+/* chosen Gift payer: bold name with the canon yellow underline accent (no new colour) */
+html .a905-money__piggy[aria-current="true"] .a905-money__piggyName {
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: #e0b100;
+  text-decoration-thickness: 0.18em;
+  text-underline-offset: 0.2em;
+}
+/* tap floor 44 px ON SCREEN: the paper is scaled by --tsK, so local px = 44 / --tsK. Pickers, ok, back, the two out inputs. */
+html .a905-money__piggy[data-pick="1"],
+html .a905-money__row,
+html .a905-money .homePaper__records,
+html .a905-money .a905-field {
+  min-height: calc(44px / var(--tsK));
+  box-sizing: border-box;
+}
+html .a905-money__piggy[data-pick="1"],
+html .a905-money .homePaper__records { display: flex; align-items: center; pointer-events: auto; }
+html .a905-money .a905-field {
+  display: block;
+  width: 100%;
+  font: 700 var(--a905Body)/1.25 Georgia, "Times New Roman", serif;
+  color: #141210;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  border-radius: 0;
+  padding: 0 2px;
+  pointer-events: auto;
+}
+html .a905-money .a905-field:focus-visible { outline: none; border-bottom-color: #e0b100; }
+
+/* in / out switch (move_money_switch.html): two words, the chosen one bold with a yellow underline (canon: yellow = tape / underline accent). */
+html .a905-switch {
+  --tsK: 0.640845;
+  display: flex;
+  justify-content: center;
+  gap: 2.4em;
+  margin: 0 0 0.6em;
+  font: italic 400 calc(var(--ts-choice) / var(--tsK))/1.2 Georgia, "Times New Roman", serif;
+  pointer-events: auto;
+}
+html .a905-switch__opt {
+  position: relative;
+  min-width: 2.6em;
+  min-height: 2.6em;
+  padding: 0 0.3em;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: #141210;
+  opacity: 0.45;
+  cursor: pointer;
+  pointer-events: auto;
+}
+html .a905-switch__opt[aria-pressed="true"],
+html .a905-switch__opt[data-on="1"] { opacity: 1; font-weight: 700; }
+html .a905-switch__opt[aria-pressed="true"]::after,
+html .a905-switch__opt[data-on="1"]::after {
+  content: "";
+  position: absolute;
+  left: -0.2em;
+  right: -0.2em;
+  bottom: 0.55em;
+  height: 0.28em;
+  background: #e0b100;
+  border-radius: 0.17em;
+  transform: rotate(-1.5deg);
+}
+html .a905-switch__opt:focus-visible { outline: none; opacity: 1; }
+/* ── [A-905] end ─────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── [A-898 · A-905 fit] Gift / Funding fit inside the Home paper at 390 / 810 / 1440 (R3 FAIL repair) ───────────────────────────────────────
+   All numbers are paper-local px (400 x 568 paper, scaled as one piece). The tap floor is 63 local = 44.4 px on screen at the smallest scale (.705).
+   1. While a Gift / Funding / in-out surface is open, the lower card moves up into the empty band under the MONEY card (top 214 -> 146) and the
+      house stamp + ARASO wordmark sit in one row under the card (y 508-560), so neither is drawn over the content.
+   2. Gift first view = back + name + $ (one row) · amounts · short line · the three fronts as a compact fan. The Face ID foot is in the flow (not sticky),
+      so nothing is hidden behind it; the scroll box shows a soft edge shadow where more content is below. Picking a front scrolls the letter into view.
+   3. Funding: the in / out switch + back/name row + three rows fit the box with no scroll; after the crypto proof the box scrolls the address and copy
+      icon into view (main.js refreshHomePaperMount). */
+html .homePaper:has(.a898-paper, .a905-switch, .a905-money) .homePaper__card--moneyRows { top: 146px; padding: 8px 20px; }
+html .homePaper:has(.a898-paper, .a905-switch, .a905-money) .homePaper__mark {
+  left: 40px;
+  right: 40px;
+  bottom: 8px;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0;
+}
+html .homePaper:has(.a898-paper, .a905-switch, .a905-money) .homePaper__logo { width: 120px; }
+html .a898-paper {
+  --a898Tap: 63px;
+  position: relative; /* offsetParent of the scroll targets (main.js reads offsetTop) */
+  gap: 6px;
+  max-height: 335px;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  column-gap: 0.8em;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 18, 16, 0.35) transparent;
+  scroll-padding-bottom: 8px;
+  background:
+    linear-gradient(#f6f0e4 30%, rgba(246, 240, 228, 0)) center top / 100% 14px no-repeat local,
+    linear-gradient(rgba(246, 240, 228, 0), #f6f0e4 70%) center bottom / 100% 14px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(20, 18, 16, 0.28), rgba(20, 18, 16, 0)) center top / 100% 10px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(20, 18, 16, 0.28), rgba(20, 18, 16, 0)) center bottom / 100% 10px no-repeat scroll;
+}
+html .a905-money > .a898-paper { max-height: 276px; }
+html .a905-money[data-a905-view="move"] { gap: 4px; }
+html .a905-money .a905-switch { margin: 0; }
+html .a905-money .a905-switch__opt { min-height: 63px; }
+html .a898-paper > * { grid-column: 1 / -1; }
+html .a898-paper > .a898-link:first-child { grid-column: 1; grid-row: 1; }
+html .a898-paper > .a898-head { grid-column: 2; grid-row: 1; justify-self: end; align-self: center; justify-content: flex-end; }
+html .a898-paper > .a898-balance { grid-column: 3; grid-row: 1; justify-self: end; align-self: center; }
+/* R4-1: the name column may shrink and ellipsize; a held MON line gives the balance its own row (row 2, right-aligned) so back / name never collide */
+html .a898-paper > .a898-head { min-width: 0; }
+html .a898-paper > .a898-head .a898-who { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html .a898-paper > .a898-balance:has(.a898-held) { grid-column: 1 / -1; grid-row: 2; }
+html .a898-paper .a898-link,
+html .a898-paper .a898-explain,
+html .a898-paper .a898-chip { min-height: var(--a898Tap); }
+html .a898-row { min-height: var(--a898Tap); }
+html .a898-preset { min-height: var(--a898Tap); }
+html .a898-paper .a898-copy { min-width: var(--a898Tap); min-height: var(--a898Tap); }
+html .a898-short { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 0.8em; }
+html .a898-foot { position: static; padding: 0; background: none; }
+/* compact fan while nothing is picked: the stage is drawn at .44 (top-centre origin) and gives its height back with a negative margin; the side
+   cards sit 64 local (45 px on screen) apart so each front keeps a tap strip >= 44. A pick sets data-a898-picked, so the stage returns to 1. */
+html .a898-stage { transform-origin: 50% 0; }
+html .a898-stage[data-a898-picked=""] { transform: scale(0.44); margin-bottom: calc(290px * -0.56); }
+html .a898-stage[data-a898-picked=""] .a898-card[data-i="0"] { transform: translateX(-145px) rotate(-9deg); }
+html .a898-stage[data-a898-picked=""] .a898-card[data-i="1"] { transform: translateY(-6px); }
+html .a898-stage[data-a898-picked=""] .a898-card[data-i="2"] { transform: translateX(145px) rotate(9deg); }
+@media (prefers-reduced-motion: no-preference) {
+  html .a898-stage { transition: transform 420ms cubic-bezier(.2, .8, .2, 1), margin-bottom 420ms cubic-bezier(.2, .8, .2, 1); }
+}
+/* A-905 R2 L1: a row with the Away note wraps the note to its own line; the name keeps its width (never one letter per line) */
+html .a905-money__piggy { flex-wrap: wrap; }
+html .a905-money__piggyName { flex: 1 1 6em; min-width: 6em; overflow-wrap: normal; word-break: normal; }
+html .a905-money__piggyNote { flex: 0 0 100%; }
+html .a905-money__row .a905-money__piggyNote { flex: none; }
+/* A-905 R2 L2: the Money tab and the out flow are a scroll box inside the paper (same edge shadows as the Gift box); the stamp / ARASO row is the :has() rule above */
+html .a905-money[data-a905-view="tab"],
+html .a905-money[data-a905-view="out"] {
+  max-height: 335px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  align-content: start;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(20, 18, 16, 0.35) transparent;
+  background:
+    linear-gradient(#f6f0e4 30%, rgba(246, 240, 228, 0)) center top / 100% 14px no-repeat local,
+    linear-gradient(rgba(246, 240, 228, 0), #f6f0e4 70%) center bottom / 100% 14px no-repeat local,
+    radial-gradient(farthest-side at 50% 0, rgba(20, 18, 16, 0.28), rgba(20, 18, 16, 0)) center top / 100% 10px no-repeat scroll,
+    radial-gradient(farthest-side at 50% 100%, rgba(20, 18, 16, 0.28), rgba(20, 18, 16, 0)) center bottom / 100% 10px no-repeat scroll;
+}
+/* A-905 R2 L3: the pay step reads as the last step (a rule above it, room below the picked letter) and the chosen payer shows a yellow bar + bold underlined name */
+html .a898-stage[data-a898-picked]:not([data-a898-picked=""]) { margin-bottom: 14px; }
+html .a898-paper > .a905-money[data-a905-view="gift-pay"] { margin-top: 8px; padding-top: 10px; border-top: 2px solid rgba(20, 18, 16, 0.4); }
+html .a905-money__piggy[aria-current="true"] { box-shadow: inset 3px 0 0 #e0b100; padding-left: 0.6em; }
+/* ── [A-898 · A-905 fit] end ───────────────────────────────────────────────────────────────────────────── */
+
+/* ── [A-912 · SMALL FIXES] (Owner 2026-10-08 "자잘한 것"; small_fixes_mock) — newest-wins, scoped, no new copy ─────────────────────────────── */
+/* 1. Chog speech: one line at a time. chog-home.js settleChogOneLine() marks every older visible speech line data-chog-left when a newer one
+   appears (Return alarm / away line / Explore say / A-891 lines / "tap me!"); the older one leaves for good. */
+.chogHome [data-chog-left] { display: none !important; }
+/* 2. Readiness: the amount is an underline only (the drawn .amount-line) - no yellow box (focus ring / border / fill removed on the field);
+   the value / cost / return lines wrap inside the paper. Pre-A-912 baseline: .field input:focus-visible { outline: 2px solid #b99c28; outline-offset: 5px; }. */
+html .secondJourneyCard .field { border: 0; background: transparent; box-shadow: none; min-width: 0; }
+html .secondJourneyCard .field input,
+html .secondJourneyCard .field input:focus,
+html .secondJourneyCard .field input:focus-visible { outline: 0; border: 0; box-shadow: none; background: transparent; }
+html .secondJourneyCard .balance,
+html .secondJourneyCard .condition,
+html .secondJourneyCard .claim-bring,
+html .secondJourneyCard .failure {
+  box-sizing: border-box;
+  max-width: calc(100% - 10px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+/* 3. Filebox (the Receipt opened from the folder): Receipt larger and centred (viewport centre, as A-891 UI-19), "Home" (Label 13, underline) right
+   under it, ARASO top-left like every scene. --a912-recH = the Receipt's natural height (about 250 px, content-driven: 16 + logo + lines + teeth).
+   Receipt tap -> Home is unchanged (main.js a891FileboxPaperClose). Pre-A-912 baseline: scale(0.82); .tiny.home at right 24 / bottom 24, text "home". */
+.stage[data-scene="filebox"] { --a912-recH: 250px; --a912-recS: 1.32; --a912-brand: "Araso"; }
+html .stage[data-scene="filebox"] .filebox__paper { transform: scale(var(--a912-recS)); }
+.stage[data-scene="filebox"]::before {
+  content: var(--a912-brand);
+  position: fixed;
+  z-index: 3;
+  left: var(--hlM, 20px);
+  top: calc(var(--hlAsTop, 32px) + var(--hk-safe-top, 0px));
+  font: 700 var(--hlAsFont, 12px)/1 Georgia, "Times New Roman", serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(237, 232, 220, 0.55);
+  pointer-events: none;
+  user-select: none;
+}
+html .stage[data-scene="filebox"] .tiny.home {
+  position: fixed;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  top: calc(50% + var(--a912-recH) * var(--a912-recS) / 2 + 22px);
+  transform: translateX(-50%);
+  padding: 4px 8px;
+  font-size: var(--ts-label);
+  line-height: 1.4;
+  text-transform: capitalize !important;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  color: rgba(237, 232, 220, 0.85);
+}
+html .stage[data-scene="filebox"] #fileboxHomeButton { display: inline-block; text-transform: capitalize !important; }
+html .stage[data-scene="filebox"] #fileboxHomeButton::first-letter { text-transform: uppercase !important; }
+html .stage[data-scene="filebox"] .filebox .receipt {
+  top: calc(100% + (var(--a912-recS) - 1) * var(--a912-recH) / 2 + 64px);
+}
+/* 5. Return Receipt label ("Receipt" under the Return Receipt, #returnHint) = A-843 Label (13 px on screen, every width).
+   Pre-A-912 baseline: 12 px (> 640: 14 px). */
+html .returnTap__hint { font-size: var(--ts-label); }
+/* ── [/A-912] ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* ── [A-911] Own screens: Gift a Piggy · Money · Move money (design writer, wt a911d) ─────────────────────────────────────────────────────
+   Source of truth: gift_card_20261004/README 2026-10-08 sections + gift_screen_mock.html + money_screens_mock.html. These screens are NOT inside
+   .a905-money / .a898-paper; they are position:fixed hosts (`.a911-screen`). All rules are `html`-prefixed and may override the A-898 / A-905
+   layout. Nothing here changes copy, money logic or the live data-* attributes.
+   Text = A-843 styles in ON-SCREEN px (these screens are not scaled cards): Title 26 · Choice 18 · Body 14 · Label 13 · Detail 12. --a911-z = the mock's
+   tablet / desktop zoom (1 / 1.15 / 1.35). Gift card art text stays the card design (216 x 342 px box, scaled with the card).
+   Safe area: the background is full-bleed (position:fixed; inset:0, viewport-fit=cover); only text / buttons / cards use the insets below.
+   --a911-inset-top / --a911-inset-bottom exist ONLY so the frame script can inject 59 / 34 px; the app never sets them (env() is used). */
+html:has(.a911-screen) { background: #161616; }
+html .a911-screen {
+  --a911-z: 1;
+  --a911-st: var(--a911-inset-top, env(safe-area-inset-top, 0px));
+  --a911-sb: var(--a911-inset-bottom, env(safe-area-inset-bottom, 0px));
+  --a911-m: var(--hlM, 20px);
+  --a911-asFont: var(--hlAsFont, 18px);
+  --a911-asTop: var(--hlAsTop, 36px);
+  --a911-backTop: calc(var(--a911-asTop) + var(--a911-st) + var(--a911-asFont) + 5px);
+  --a911-headB: calc(var(--a911-backTop) + 44px * var(--a911-z));
+  --a911-title: calc(var(--ts-title, 26px) * var(--a911-z));
+  --a911-choice: calc(var(--ts-choice, 18px) * var(--a911-z));
+  --a911-body: calc(var(--ts-body, 14px) * var(--a911-z));
+  --a911-label: calc(var(--ts-label, 13px) * var(--a911-z));
+  --a911-detail: calc(var(--ts-detail, 12px) * var(--a911-z));
+  /* [A-917] ONE button for Gift / Money / Move = the .a898-faceBtn grammar (style.css .a898-faceBtn): label Button 16, height 3.2em (51.2), side 1.6em, icon 1.4em, all x --a911-z. Cowork 2026-10-08 19:20 (replaces 46 / 18). */
+  --a911-actPx: 51.2px;
+  --a911-actFont: 16px;
+  --a911-actGap: calc(12px * var(--a911-z));
+  --a911-actH: calc(var(--a911-actPx) * var(--a911-z) + var(--a911-actGap));
+  --a911-kb: 0px;
+  --a911-fanC: 0.84;
+  --a911-fanS: 0.66;
+  --a911-dx: 158px;
+  --a911-s: 1.17;
+  --a911-gutter: max(calc(30px * var(--a911-z)), var(--a911-m));
+  --a911-ink: #141210;
+  --a911-cream: #ede8dc;
+  --a911-yel: #e0b100;
+  --a911-serif: "Playfair Display", Georgia, "Times New Roman", serif;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow: hidden;
+  box-sizing: border-box;
+  color: var(--a911-cream);
+  font-family: var(--a911-serif);
+  font-style: italic;
+  -webkit-text-size-adjust: 100%;
+  background-color: #161616;
+  background-image: repeating-linear-gradient(to bottom, transparent 0px, transparent calc(31px * var(--fmtS, 1)), rgba(255, 255, 255, 0.04) calc(31px * var(--fmtS, 1)), rgba(255, 255, 255, 0.04) calc(32px * var(--fmtS, 1)));
+  background-size: 100% calc(32px * var(--fmtS, 1));
+  background-repeat: repeat;
+}
+/* [A-917] --a911-z is NOT a media-query step any more: a911Fit() writes it from the width, linear 1 / 1.15 / 1.35 at 390 / 810 / 1440 (A-829 hkKey). 1 = before the first measure.
+   --a911-bm = the A-829 bottom margin (7.1 % / 8 % / 8 % of the viewport height), also written by a911Fit; 7.1vh = before the first measure. Pre-A-917 baseline: z stepped at 641 / 1024, Send bottom = safe-area + 22px. */
+html .a911-screen *, html .a911-screen *::before, html .a911-screen *::after { box-sizing: border-box; }
+html :where(.a911-screen) button { font: inherit; color: inherit; background: none; border: 0; padding: 0; text-align: left; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+html :where(.a911-screen) input, html :where(.a911-screen) textarea { font-family: inherit; color: inherit; background: transparent; border: 0; outline: 0; padding: 0; border-radius: 0; }
+
+/* header: ARASO at the A-829 spot (left margin line, font = card width x .064, top = 2 x font + safe-area) · back sticker · title */
+html .a911-screen .arasoBrand {
+  left: var(--a911-m);
+  top: calc(var(--a911-asTop) + var(--a911-st));
+  font-size: var(--a911-asFont);
+  transform: none;
+  z-index: 3;
+}
+/* back sticker = A-903 house-sticker grammar (crayon line, white fill + white edge, thickness shadow, pressed). Visible 30, hit 44 (em of 30). */
+html .a911-back {
+  position: absolute;
+  z-index: 8;
+  left: calc(var(--a911-m) - 12px);
+  top: var(--a911-backTop);
+  width: 1.4667em;
+  height: 1.4667em;
+  font-size: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+html .a911-back__chip { display: block; width: 1em; height: 1em; filter: drop-shadow(0 0.067em 0 rgba(0, 0, 0, 0.45)); }
+html .a911-back__img {
+  display: block; width: 100%; height: 100%; pointer-events: none; user-select: none;
+  filter: drop-shadow(0.05em 0 0 #fff) drop-shadow(-0.05em 0 0 #fff) drop-shadow(0 0.05em 0 #fff) drop-shadow(0 -0.05em 0 #fff);
+}
+html .a911-back:active .a911-back__chip { transform: translateY(0.067em); filter: drop-shadow(0 0 0 rgba(0, 0, 0, 0.45)); }
+html .a911-back:focus-visible { outline: 2px solid var(--a911-yel); outline-offset: -4px; border-radius: 12px; }
+html .a911-title {
+  position: absolute;
+  z-index: 2;
+  left: 0; right: 0;
+  top: calc(var(--a911-backTop) + 1px);
+  margin: 0;
+  padding: 0 calc(var(--a911-m) + 44px);
+  text-align: center;
+  font: 400 var(--a911-title) / 1 var(--font-cj);
+  font-style: normal;
+  color: var(--a911-cream);
+  pointer-events: none;
+}
+
+/* body: the centring box = between the header row and the Send / ok row, minus the safe areas. Keyboard: bottom = the covered height, content goes to the top. */
+html .a911-body {
+  position: absolute;
+  left: 0; right: 0;
+  top: var(--a911-headB);
+  bottom: calc(var(--a911-sb) + var(--a911-bm, 7.1vh) + var(--a911-actH));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 var(--a911-gutter);
+  min-height: 0;
+}
+html .a911-screen[data-typing="1"] .a911-body { bottom: var(--a911-kb); justify-content: flex-start; padding-top: 12px; padding-bottom: 12px; }
+
+/* ── round action: `Send` (face icon) / `ok`. Size = the Invite Face ID button size (OPEN: Button 16, see DESIGN.md U1). ── */
+html .a911-act {
+  position: absolute;
+  z-index: 8;
+  /* [A-917] ONE place at every width on every screen (Gift Send, Money / Move ok, Move out Send): right edge = the side margin line (hkKey 20 / 52 / 120),
+     bottom edge = safe-area + the A-829 bottom margin. No 1024 switch, no per-screen exception. The body (centring box) ends above this button. */
+  right: var(--a911-m);
+  bottom: calc(var(--a911-sb) + var(--a911-bm, 7.1vh));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(var(--a911-actFont) * var(--a911-z));
+  min-width: calc(6.8em + 4px); /* [A-917] = the Send (side 1.6 + icon 1.4 + gap 0.6 + label 1.6 + side 1.6 em, + border), so Send and ok are the SAME body on every screen */
+  gap: 0.6em;
+  box-sizing: border-box;
+  height: 3.2em;
+  padding: 0 1.6em;
+  background: #1e1e1e;
+  border: 2px solid rgba(237, 232, 220, 0.8);
+  border-radius: 999px;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.5);
+  color: var(--a911-cream);
+  font-family: var(--font-cj);
+  font-weight: 400;
+  line-height: 1;
+  font-style: normal;
+}
+html .a911-act__icon { width: 1.4em; height: 1.4em; flex: none; }
+html .a911-act:disabled { opacity: 0.35; cursor: default; }
+html .a911-screen[data-typing="1"] .a911-act { opacity: 0; pointer-events: none; }
+
+/* ── GIFT ── */
+html .a911-giftGroup { width: 100%; display: flex; flex-direction: column; align-items: center; gap: calc(20px * var(--a911-z)); flex: none; }
+html .a911-cards { position: relative; width: 100%; flex: none; height: calc(342px * var(--a911-fanC)); }
+html .a911-cards[data-a911-cards="pick"], html .a911-cards[data-a911-cards="done"] { height: calc(342px * var(--a911-s)); }
+html .a911-card {
+  position: absolute; left: 50%; top: 0;
+  width: 216px; height: 342px; margin-left: -108px;
+  transform-origin: 50% 0;
+  transform-style: preserve-3d;
+  cursor: pointer;
+}
+html .a911-card__inner { position: absolute; inset: 0; display: block; transform-style: preserve-3d; }
+/* swipe row (NOT a shuffled deck): sides spaced by --a911-dx, dimmed, smaller; the centre card is bigger */
+html .a911-card.is-centre { z-index: 3; transform: scale(var(--a911-fanC)); filter: none; }
+html .a911-card.is-side {
+  z-index: 1;
+  filter: brightness(0.72);
+  transform: translateX(calc(var(--d) * var(--a911-dx))) translateY(calc(171px * (var(--a911-fanC) - var(--a911-fanS)))) rotate(calc(var(--d) * 3deg)) scale(var(--a911-fanS));
+}
+html .a911-card.is-picked { z-index: 5; transform: scale(var(--a911-s)); }
+html .a911-card.is-picked.is-flipped { transform: scale(var(--a911-s)) rotateY(180deg); }
+html .a911-card.is-away {
+  opacity: 0; pointer-events: none; z-index: 1;
+  transform: translateX(calc(var(--d) * (50vw + 200px))) rotate(calc(var(--d) * 14deg)) scale(var(--a911-fanS));
+}
+html .a911-cardTap { position: absolute; inset: 0; z-index: 4; opacity: 0; width: 100%; height: 100%; }
+html .a911-card.is-flipped .a911-cardTap, html .a911-screen[data-a911-stage="done"] .a911-cardTap { pointer-events: none; }
+html .a911-screen[data-a911-stage="done"] .a911-card { cursor: default; }
+html .a911-face {
+  position: absolute; inset: 0; display: block; overflow: hidden; border-radius: 12px;
+  -webkit-backface-visibility: hidden; backface-visibility: hidden;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25), 0 16px 30px rgba(0, 0, 0, 0.45);
+  font-style: italic;
+}
+html .a911-face--front { background: #121110; color: var(--a911-cream); }
+html .a911-face--back {
+  background: #ebe3d5 var(--a911-tex) center / 290px auto;
+  color: var(--a911-ink);
+  transform: rotateY(180deg);
+}
+html .a911-pig { position: absolute; display: block; max-width: none; pointer-events: none; }
+html .a911-amt {
+  position: absolute; z-index: 3; left: 14px; right: 14px; bottom: 14px; height: 48px;
+  display: flex; align-items: center; justify-content: space-between; padding: 0 12px 0 14px;
+  background: #121110; border: 1.5px solid rgba(237, 232, 220, 0.75); border-radius: 10px; color: var(--a911-cream);
+  cursor: default; pointer-events: none;
+}
+html .a911-card.is-picked:not(.is-flipped) .a911-amt { pointer-events: auto; }
+html .a911-amt__n { font: 700 26px / 1 var(--a911-serif); font-style: normal; }
+html .a911-amt__n small { font: italic 400 11px var(--a911-serif); margin-left: 3px; opacity: 0.7; }
+html .a911-amt__n.is-empty { opacity: 0.35; }
+html .a911-amt__h { font: 400 16px / 1 var(--font-cj); font-style: normal; opacity: 0.9; }
+html .a911-amtIn { width: 84px; font: 700 26px / 1 var(--a911-serif); font-style: normal; border-bottom: 1.5px solid rgba(237, 232, 220, 0.8); padding-bottom: 2px; color: var(--a911-cream); }
+html .a911-letter__to { position: absolute; left: 20px; top: 24px; right: 20px; display: block; }
+html .a911-letter__small { display: block; font: 700 9px / 1 var(--a911-serif); font-style: normal; letter-spacing: 0.22em; color: #6a6458; }
+html .a911-letter__in { width: 100%; font-family: var(--font-cj); font-style: normal; color: var(--a911-ink); }
+html .a911-letter__in::placeholder { color: rgba(20, 18, 16, 0.3); }
+html .a911-letter__in--to { font-size: 26px; margin-top: 6px; line-height: 1.2; }
+html .a911-letter__msgBox { position: absolute; left: 20px; top: 100px; right: 20px; display: block; }
+html .a911-letter__msg { resize: none; font-size: 24px; line-height: 1.2; height: 120px; display: block; }
+html .a911-letter__peek { position: absolute; left: -30px; top: 236px; width: 118px; transform: rotate(20deg); pointer-events: none; }
+html .a911-letter__from {
+  position: absolute; right: 14px; bottom: 14px; width: 118px; height: 48px;
+  display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 0 12px;
+  border: 1.5px solid rgba(20, 18, 16, 0.45); border-radius: 10px;
+}
+html .a911-letter__from .a911-letter__small { letter-spacing: 0.18em; flex: none; }
+html .a911-letter__in--from { font-size: 20px; text-align: right; min-width: 0; }
+
+/* controls under the card: $20 · $50 · $100 text picks (chosen = bold + yellow underline, NO boxed buttons) · hint · from line · fee line */
+html .a911-ctrl { width: 100%; max-width: 420px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+html .a911-screen[data-typing="1"] .a911-ctrl { opacity: 0; pointer-events: none; }
+html .a911-chips { display: flex; justify-content: center; align-items: baseline; }
+html .a911-chip { min-height: 44px; padding: 10px 6px; font-size: var(--a911-choice); line-height: 1.2; color: rgba(237, 232, 220, 0.5); }
+html .a911-chip + .a911-chip::before { content: ""; display: inline-block; width: 4px; height: 4px; border-radius: 50%; vertical-align: middle; background: currentColor; opacity: 0.45; margin: 0 14px 0 8px; }
+html .a911-chip.is-on { color: var(--a911-cream); font-weight: 700; text-decoration: underline; text-decoration-color: var(--a911-yel); text-decoration-thickness: 3px; text-underline-offset: 5px; }
+html .a911-hint { font-size: var(--a911-body); color: rgba(237, 232, 220, 0.55); }
+html .a911-pay { font-size: var(--a911-label); line-height: 1.5; color: rgba(237, 232, 220, 0.75); }
+html .a911-pay u { text-decoration-color: var(--a911-yel); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+html .a911-fee { font-size: var(--a911-detail); line-height: 1.4; color: rgba(237, 232, 220, 0.45); }
+html .a911-short { display: flex; gap: 12px; align-items: baseline; justify-content: center; font-size: var(--a911-label); color: rgba(237, 232, 220, 0.75); }
+html .a911-textBtn { min-height: 44px; padding: 0 6px; font-size: var(--a911-label); text-decoration: underline; text-decoration-color: var(--a911-yel); text-decoration-thickness: 2px; text-underline-offset: 3px; color: var(--a911-cream); }
+html .a911-faceLine { font-size: var(--a911-detail); color: rgba(237, 232, 220, 0.6); }
+/* link step: small card + link + copy (-> yellow check) + share */
+html .a911-link {
+  display: inline-flex; align-items: center; gap: 10px; max-width: 100%;
+  border: 1.5px solid rgba(237, 232, 220, 0.55); border-radius: 10px; padding: 6px 6px 6px 14px;
+  font-size: var(--a911-body); color: var(--a911-cream); text-decoration: none; min-height: 0;
+}
+html .a911-link__url { min-width: 0; overflow-wrap: anywhere; }
+html .a911-ibtn { flex: none; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+html .a911-ico { display: block; width: 22px; height: 22px; }
+html .a911-ibtn--ink { width: 36px; height: 44px; margin-top: -10px; }
+html .a911-ibtn--ink .a911-ico { width: 20px; height: 20px; }
+
+/* >= 1024: card at the horizontal centre, controls + link to the card's right (README: 1440 = card centre, chips / lines / link right of it). The Send button is NOT part of this: it stays on the margin pin. */
+@media (min-width: 1024px) {
+  html .a911-screen[data-a911="gift"] .a911-ctrl,
+  html .a911-screen[data-a911="gift"] .a911-link {
+    position: absolute;
+    left: calc(50% + 108px * var(--a911-s) + 64px * var(--a911-z));
+    top: 50%;
+    width: min(380px, calc(50% - 108px * var(--a911-s) - 64px * var(--a911-z) - var(--a911-m))); max-width: none;
+    transform: translateY(-50%);
+    align-items: flex-start; text-align: left;
+  }
+  html .a911-screen[data-a911="gift"] .a911-chips { justify-content: flex-start; }
+  html .a911-screen[data-a911="gift"] .a911-link { width: auto; max-width: min(420px, calc(50% - 108px * var(--a911-s) - 64px * var(--a911-z) - var(--a911-m))); }
+}
+
+/* ── PAPER (Money · Move money): our paper at the screen centre. Grows only up to the safe area; beyond that ONLY the Piggy list scrolls. ── */
+html .a911-paper {
+  position: relative;
+  width: 100%;
+  max-width: calc(420px * var(--a911-z));
+  max-height: 100%;
+  min-height: 0;
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  padding: calc(22px * var(--a911-z)) calc(22px * var(--a911-z)) calc(24px * var(--a911-z));
+  background: #ebe3d5 var(--a911-tex) center / 290px auto;
+  color: var(--a911-ink);
+  font-style: italic;
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.25), 0 16px 30px rgba(0, 0, 0, 0.45);
+}
+html .a911-paper > * { flex: none; }
+html .a911-paper .a911-list, html .a911-paper .a911-move__body { flex: 1 1 auto; }
+html .a911-money__head { text-align: center; margin-bottom: 14px; }
+html .a911-money__total { margin: 0; font: 700 var(--a911-title) / 1 var(--a911-serif); font-style: normal; }
+html .a911-money__assets { margin: 6px 0 0; font-size: var(--a911-detail); color: #6a6458; }
+html .a911-money__rows { display: grid; margin-bottom: 4px; }
+html .a911-row { display: flex; align-items: center; width: 100%; min-height: 44px; font-size: var(--a911-choice); line-height: 1.2; }
+html .a911-row { flex-wrap: wrap; }
+html .a911-row__note { margin-left: 10px; font-size: var(--a911-detail); color: #6a6458; }
+html .a911-row:hover, html .a911-row:focus-visible { color: #8a6a00; outline: none; }
+html .a911-row:disabled { opacity: 0.45; cursor: default; }
+html .a911-list { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none; -ms-overflow-style: none; }
+html .a911-list::-webkit-scrollbar { display: none; width: 0; height: 0; }
+html .a911-list.is-scroll { -webkit-mask-image: linear-gradient(#000 0, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(#000 0, #000 calc(100% - 28px), transparent); }
+html .a911-list.is-scroll.is-end { -webkit-mask-image: none; mask-image: none; }
+html .a911-piggy {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; width: 100%;
+  min-height: 44px; padding: 11px 0; font-size: var(--a911-choice); line-height: 1.2;
+  border-bottom: 1px solid rgba(20, 18, 16, 0.12);
+}
+html .a911-list > .a911-piggy:last-child { border-bottom: 0; }
+html .a911-piggy__name { flex: 1 1 6em; min-width: 6em; }
+html .a911-piggy__amt { flex: none; font: 700 var(--a911-choice) / 1.2 var(--a911-serif); font-style: normal; }
+html .a911-piggy__note { flex: 0 0 100%; font-size: var(--a911-detail); color: #6a6458; }
+html .a911-piggy[data-away="1"] { color: rgba(20, 18, 16, 0.4); }
+html .a911-piggy[data-away="1"] .a911-piggy__amt { font-weight: 400; }
+html .a911-piggy[data-pick="0"] { pointer-events: none; }
+html .a911-piggy[data-pick="1"]:hover .a911-piggy__name, html .a911-piggy[data-pick="1"]:focus-visible .a911-piggy__name { color: #8a6a00; }
+html .a911-piggy[aria-current="true"] .a911-piggy__name { text-decoration: underline; text-decoration-color: var(--a911-yel); text-decoration-thickness: 3px; text-underline-offset: 4px; font-weight: 700; }
+
+/* in / out switch: ONCE, at the top of the Move money paper (no second back inside) */
+html .a911-sw { display: flex; justify-content: center; gap: 56px; margin: 2px 0 14px; font-size: var(--a911-choice); }
+html .a911-sw__opt { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; color: rgba(20, 18, 16, 0.4); }
+html .a911-sw__opt[aria-pressed="true"] { color: var(--a911-ink); font-weight: 700; text-decoration: underline; text-decoration-color: var(--a911-yel); text-decoration-thickness: 4px; text-underline-offset: 6px; }
+html .a911-move__body { min-height: 0; display: flex; flex-direction: column; overflow-y: auto; scrollbar-width: none; }
+html .a911-move__body::-webkit-scrollbar { display: none; }
+html .a911-move__body.has-list { overflow: hidden; }
+html .a911-move__body > * { flex: none; }
+html .a911-move__body > .a911-list { flex: 1 1 auto; }
+html .a911-line {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: 100%; min-height: 44px; padding: 11px 0;
+  font-size: var(--a911-choice); line-height: 1.2; border-bottom: 1px solid rgba(20, 18, 16, 0.12);
+}
+html .a911-line:last-child { border-bottom: 0; }
+html .a911-line--go { align-items: center; }
+html .a911-line--head { border-bottom: 0; padding-top: 0; }
+html .a911-line--off { color: rgba(20, 18, 16, 0.35); }
+html .a911-line__note { font-size: var(--a911-label); }
+html .a911-line__r { font: 700 var(--a911-choice) / 1.2 var(--a911-serif); font-style: normal; }
+html .a911-line__r small { font: italic 400 var(--a911-detail) var(--a911-serif); margin-left: 2px; color: #6a6458; }
+html .a911-note { font-size: var(--a911-detail); line-height: 1.4; color: #6a6458; margin-top: 10px; }
+html .a911-note--top { margin: 0 0 8px; font-size: var(--a911-label); color: #4a453d; }
+html .a911-note--top u { text-decoration-color: var(--a911-yel); text-decoration-thickness: 3px; text-underline-offset: 4px; }
+html .a911-amtField { font: 700 var(--a911-title) / 1.1 var(--a911-serif); font-style: normal; width: 100%; max-width: 160px; border-bottom: 1.5px solid var(--a911-ink); padding-bottom: 2px; }
+html .a911-amtField--sm { font-size: var(--a911-choice); width: 5.2em; max-width: none; text-align: right; }
+html div.a911-amtField[data-a905-amount-view] { border-bottom: 0; min-height: 1.1em; } /* [A-911] read-only amount (chips set it): not an input, so no input underline (Cowork A-911 Q3) */
+html .a911-amtField::placeholder, html .a911-addrField::placeholder { color: rgba(20, 18, 16, 0.3); }
+html .a911-chips--paper { justify-content: flex-start; margin-top: 8px; }
+html .a911-chips--paper .a911-chip { color: rgba(20, 18, 16, 0.45); }
+html .a911-chips--paper .a911-chip + .a911-chip::before { background: rgba(20, 18, 16, 0.3); opacity: 1; }
+html .a911-chips--paper .a911-chip.is-on { color: var(--a911-ink); }
+html .a911-assets { display: flex; gap: 18px; margin: 2px 0 6px; }
+html .a911-asset { min-height: 44px; padding: 8px 2px; font: 700 var(--a911-choice) / 1.2 var(--a911-serif); font-style: normal; color: rgba(20, 18, 16, 0.35); }
+html .a911-asset.is-on { color: var(--a911-ink); text-decoration: underline; text-decoration-color: var(--a911-yel); text-decoration-thickness: 3px; text-underline-offset: 5px; }
+html .a911-addr { display: flex; gap: 6px; align-items: flex-start; margin-top: 6px; min-width: 0; }
+html .a911-mono { flex: 1 1 auto; min-width: 0; font: 400 var(--a911-label) / 1.45 ui-monospace, Menlo, monospace; font-style: normal; overflow-wrap: anywhere; word-break: break-all; color: var(--a911-ink); }
+html .a911-addrField { width: 100%; resize: none; font: 400 16px / 1.45 ui-monospace, Menlo, monospace; font-style: normal; overflow-wrap: anywhere; word-break: break-all; border-bottom: 1.5px solid var(--a911-ink); padding-bottom: 4px; margin-top: 4px; }
+html .a911-state { font-size: var(--a911-body); padding: 8px 0; }
+
+/* [A-911 wiring] the picked card flips on a tap anywhere on it (main.js listener); its amount box takes its own tap, so the invisible card button steps aside */
+html .a911-card.is-picked .a911-cardTap { pointer-events: none; }
+html .a911-card.is-picked { cursor: pointer; }
+html .a911-payBtn { display: inline; padding: 12px 2px; margin: -12px 0; font: inherit; color: inherit; }
+html .a911-faceLine p { margin: 0; }
+html .a911-faceLine .a911-textBtn { margin-left: 6px; }
+html .a911-link__url { user-select: all; }
+/* motion only when the user has not asked for less (no reduce block here: a735 A6 keeps the A-735 invite guard as the last `reduce` block) */
+@media (prefers-reduced-motion: no-preference) {
+  html .a911-card { transition: transform 450ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 350ms, filter 350ms; }
+  html .a911-back__chip { transition: transform 100ms ease-out; }
+  html .a911-act, html .a911-ctrl { transition: opacity 300ms; }
+  html .a911-screen[data-typing="1"] .a911-body > * { animation: a911-rise 200ms ease-out; }
+  @keyframes a911-rise { from { transform: translateY(14px); } to { transform: none; } }
+}
+/* ── [A-911] end ───────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
 @media (max-width: 640px) {
   .homeLiving__name { display: none; }
 }

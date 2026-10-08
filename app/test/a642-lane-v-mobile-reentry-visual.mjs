@@ -132,7 +132,12 @@ const HOME_BOARD_W = Number(MAIN.match(/const HOME_BOARD_W = (\d+);/)[1]);
 check("V5 #awayRestoreLine is enlarged only inside @media (max-width: 640px) and renders ≈20.6px at 390 (A-666 re-pin, named reason: Owner's global mobile type-scale decision raised this ≈1.15× from the pre-card ≈18px target, same ratio TYPOGRAPHY_SCALE.md applies everywhere else)", () => {
   const at = CSS.indexOf("#awayRestoreLine {");
   assert.ok(at > 0, "rule present");
-  assert.equal(CSS.indexOf("#awayRestoreLine", at + 1), -1, "exactly one rule");
+  // [A-845 RE-PIN] the only other #awayRestoreLine rule is the A-845 stage-scaled text style (A-843 item 6), which supersedes this one's size.
+  // pre-A-845 baseline: assert.equal(CSS.indexOf("#awayRestoreLine", at + 1), -1, "exactly one rule");
+  const a845At = CSS.indexOf("html #awayRestoreLine { font-size: var(--tsChog); }");
+  assert.ok(a845At > at, "A-845 rule after this one");
+  assert.equal(CSS.indexOf("#awayRestoreLine", at + 1), a845At + 5, "exactly one rule besides the A-845 text style");
+  assert.equal(CSS.indexOf("#awayRestoreLine", a845At + 6), -1, "no third rule");
   const mq = CSS.lastIndexOf("@media", at);
   assert.equal(CSS.slice(mq, CSS.indexOf("{", mq)).trim(), "@media (max-width: 640px)");
   assert.equal(CSS.slice(mq, at).split("}").length - 1, 0, "the rule is the media block's own child");
@@ -156,7 +161,14 @@ check("V6 global Home scale + shared .chogCheckLine base + chog-home.js unchange
   assert.equal(HOME_SCALE.toFixed(10), "0.4712400398");
   assert.equal(sha16(fnBody("chogHomeMarkupForAway")), "08905344aad1c51c", "Away markup builder = A-633");
   const cssNoComments = CSS.replace(/\/\*[\s\S]*?\*\//g, "");
-  assert.equal(/#returnArrivalAlarm|#exploreChogSay/.test(cssNoComments), false, "return alarm / explore say keep the shared base rule only");
+  // [A-779 RE-PIN] A-777 §8.2 LOCKED: the "… is coming home" line (#returnArrivalAlarm) gets a size-only legibility bump
+  // (font-size, top moved up by the gained line-height so its bottom edge stays, max-width:none for centring). The shared
+  // base above stays pinned; the Explore say keeps the base rule only.
+  assert.equal(/#exploreChogSay/.test(cssNoComments), false, "explore say keeps the shared base rule only");
+  const alarmRules = [...cssNoComments.matchAll(/#returnArrivalAlarm\s*\{([^}]*)\}/g)].map((m) => m[1].trim());
+  // [A-845 RE-PIN] + the A-845 stage-scaled Choice style (A-843 item 6; bottom edge kept at 264.8 local). pre-A-845 baseline:
+  // ["font-size: 33px; top: 225.2px; max-width: none;", "font-size: 49px; top: 210.8px;"]
+  assert.deepEqual(alarmRules.map((r) => r.replace(/\s+/g, " ")), ["font-size: var(--tsChog); top: calc(264.8px - 1.2 * var(--tsChog)); max-width: none;", "font-size: 33px; top: 225.2px; max-width: none;", "font-size: 49px; top: 210.8px;"], "return alarm = A-779 size-only rules + A-845 text style");
 });
 
 check("V7 LOGIN_CHECKING selectors exist only for lock markup (web 641+ never renders .stage--loginCheck)", () => {
@@ -184,10 +196,13 @@ check("V8 A-633 auth/session/reconcile/return code byte-identical to the A-633 b
     // readSendPending (unreadable store = unconfirmed, not "none") ba4e61d4232e4f7f -> 065bbae2d4bb516e.
     // [A-667 R3 re-pin] activateSigningSession: a throw after the signer exists now ends it (no timer-less signer).
     // Previous pin 0a3345ebee6d4bd3.
-    activateSigningSession: "dbd2063392a1068b", reconcileSendPending: "1caf49b6a16b09df", classifySendPending: "2389cf76d2658fd6",
+    // [A-896 re-pin, named reason: 99e M-L-2 60 s signer margin] activateSigningSession gains one signerSince stamp line. pre-A-896 baseline: activateSigningSession dbd2063392a1068b (A-896 R1: + monotonic stamp line, 1fe6d723428bad6d -> 0bd365c9a1183cb4).
+    activateSigningSession: "0bd365c9a1183cb4", reconcileSendPending: "1caf49b6a16b09df", classifySendPending: "2389cf76d2658fd6",
     readSendTxReceipt: "482a1cdc9025ff9f", reconciledSendReceipt: "1de55c29816852f7", commitSendSuccess: "9d3ac854b6df8ff3",
     finishTrip: "60edd8708e77d531", readSendPending: "065bbae2d4bb516e", showAwayRestore: "70ee359576d43fd1",
-    awayRestoreLineMarkup: "027535c3b9c99afb", renderAuthCard: "6f1694a9613c1890", mountInviteChog: "f894db5c8e334665",
+    // [A-893b re-pin · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로", Cowork standing permission INBOX :74201] Away-slot pending wording only.
+    // pre-A-893b baseline: awayRestoreLineMarkup 027535c3b9c99afb ("still out.").
+    awayRestoreLineMarkup: "960d811270c73c0d", renderAuthCard: "6f1694a9613c1890", mountInviteChog: "f894db5c8e334665",
     arasoBrandMarkup: "2916af023287cf7f", render: "866133cf60711093",
   };
   const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha16(fnBody(n))]));
@@ -199,8 +214,10 @@ check("V8 A-633 auth/session/reconcile/return code byte-identical to the A-633 b
   // reconciled as this chain's. Previous pin: 83b318186c3ee7bc. The lock condition line is unchanged
   // (a633 A5 still asserts it).
   assert.equal(sha16(cut("// [A-633 A/C] 모바일/app 표면에서 저장된 credential", "// [A-559 PHASE S1] Gift 링크 fragment")), "23694803737b62f4", "boot lock block");
-  assert.equal(sha16(cut("// [A-633 C] First Send 미확정 기록", "async function requestGrant(")), "20b3279a70c7c1eb", "reconcile region");
-  assert.equal(sha16(cut("let activeSession = null;", "function readCredential()") + cut("function endSignerSession() {", "// --- 씬 정리 (A-292 번호 9)")), "2e91809fb4741939", "session/timer region"); // [A-667 R3 re-pin] region contains activateSigningSession (signer ended on throw). Previous 1c2a32a1eb2a752f. [A-669 re-pin] region contains lockAppAfterIdle (+ invalidateLiveAuthAttempt() call). Previous ff01455c69dbbb09.
+  // [A-893b re-pin · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로", Cowork standing permission INBOX :74201] the region holds awayRestoreLineMarkup
+  // (Away-slot pending wording) and its header comment. pre-A-893b baseline: reconcile region 20b3279a70c7c1eb.
+  assert.equal(sha16(cut("// [A-633 C] First Send 미확정 기록", "async function requestGrant(")), "123e24419f897220", "reconcile region");
+  assert.equal(sha16(cut("let activeSession = null;", "function readCredential()") + cut("function endSignerSession() {", "// --- 씬 정리 (A-292 번호 9)")), "c5ac40bfd65a9713", "session/timer region"); // pre-A-896 baseline: 2e91809fb4741939 (A-896 signerSince/signerMono lines in the session/timer region; standing permission INBOX :74201) // [A-667 R3 re-pin] region contains activateSigningSession (signer ended on throw). Previous 1c2a32a1eb2a752f. [A-669 re-pin] region contains lockAppAfterIdle (+ invalidateLiveAuthAttempt() call). Previous ff01455c69dbbb09.
 });
 
 console.log(`\n${pass}/${pass + fail} PASS`);

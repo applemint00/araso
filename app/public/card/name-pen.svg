@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+<defs><filter id="crp" x="-25%" y="-25%" width="150%" height="150%">
+ <feTurbulence type="fractalNoise" baseFrequency="0.055" numOctaves="3" seed="13" result="n"/>
+ <feDisplacementMap in="SourceGraphic" in2="n" scale="3.2" xChannelSelector="R" yChannelSelector="G"/></filter></defs>
+<g filter="url(#crp)" fill="none" stroke="#E0B100" stroke-width="9.5" stroke-linecap="round" stroke-linejoin="round"><path d="M72 14 L86 28 L36 78 L16 84 L22 64 Z"/><path d="M62 24 L76 38"/></g>
+<g filter="url(#crp)" fill="none" stroke="#E0B100" stroke-width="5.2" opacity=".45" stroke-linecap="round" stroke-linejoin="round" transform="translate(.7,.6)"><path d="M72 14 L86 28 L36 78 L16 84 L22 64 Z"/><path d="M62 24 L76 38"/></g>
+</svg>

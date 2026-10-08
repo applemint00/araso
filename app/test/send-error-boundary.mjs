@@ -70,6 +70,7 @@ function makeSend({ grantGranted = false, balances = [], simThrows = false, send
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     state: { address: LEAK.addr, txHash: "", mark: "", grantTxHash: "" },
     isAllowedPiggyRpId: () => true,
+    signerSince: Date.now(), // [A-896 harness wiring] live signer stamped now (wall clock) so sendPiggyOnce's 60 s margin check sees a fresh signer
     activeAccount: { address: LEAK.addr, signTransaction: async (prepared) => `0xa${prepared.nonce}` },
     navigator: { locks: fakeLocks() },
     keccak256,

@@ -37,7 +37,9 @@ check("no 'up to $5' copy anywhere in main.js", !/up to \$5/i.test(MAIN));
 check("away line no longer claims 'up to $5' (now 'Can go out once.')", MAIN.includes('setScene("away", "Piggy went out.", "Can go out once.");'));
 check("execution amount unchanged: SEND_AMOUNT = parseEther(\"0.001\")", constLine("SEND_AMOUNT") === 'const SEND_AMOUNT = parseEther("0.001");');
 check("FIRST_SEND_USD is the fixed literal \"$5\" (no computation)", constLine("FIRST_SEND_USD") === 'const FIRST_SEND_USD = "$5";');
-check("send card terms: first row is the $5 label", MAIN.includes('terms: [FIRST_SEND_USD_LABEL, "Ask me every time", "One-time"]'));
+// [A-779 RE-PIN] A-777 §8.2 LOCKED removes the "Ask me every time" / "One-time" rows from the visible card (label-only;
+// the one-time refusal is pinned by money-safety-first / a756 enforcement suites, untouched). The $5 row stays first (and only).
+check("send card terms: first row is the $5 label", MAIN.includes('terms: [FIRST_SEND_USD_LABEL],'));
 {
   const block = MAIN.slice(MAIN.indexOf("// [A-756] TESTNET"), MAIN.indexOf("const SHMON_ADDRESS"));
   const rows = fnSrc("sentRowValue");
@@ -62,7 +64,7 @@ check("main label is exactly '$5'", T.FIRST_SEND_USD_LABEL === "$5", T.FIRST_SEN
   check("renderSendStay composes detail = state.detail + ' · ' + secondary MON (non-blocked only)", fnSrc("renderSendStay").includes(composeSrc));
   for (const detail of ["", "Open again when you need it.", "nothing moved."]) {
     const composed = [detail, T.firstSendAmountSecondary()].filter(Boolean).join(" · ");
-    const html = sendCardMarkup({ message: "Piggy is home.", detail: composed, terms: [T.FIRST_SEND_USD_LABEL, "Ask me every time", "One-time"] });
+    const html = sendCardMarkup({ message: "Piggy is home.", detail: composed, terms: [T.FIRST_SEND_USD_LABEL] }); // [A-779] = the live terms list
     const terms = [...html.matchAll(/class="sendCard__termLabel">([^<]*)</g)].map((m) => m[1]);
     const det = (html.match(/class="sendCard__detail">([^<]*)</) || [])[1] || "";
     check(`card[detail=${JSON.stringify(detail)}]: terms row 1 shows '$5' (USD-first main amount)`, terms[0] === "$5", JSON.stringify(terms));

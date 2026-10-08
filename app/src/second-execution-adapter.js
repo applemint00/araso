@@ -48,10 +48,13 @@ import { loadSecondJourneyState, validatePersistenceScope } from "./second-journ
 // builds the lifecycle and calls the executor; this file only re-checks and seals what reaches it.
 import { authorize } from "./permission-envelope.js";
 import { EXECUTION_MODE, buildExecutionPlan } from "./second-job-readiness.js";
+import { CURRENT_READER_STATUS } from "./second-current-reader.js";
 import {
   LANE_AMOUNT_CAP_RAW, LANE_FORK_EVIDENCE, LANE_JOB_ID, LANE_RECEIPT_TOKEN, LANE_SELECTORS, LANE_STAGE, MAINNET_LANE_CONFIG,
   advanceLaneIntent, buildLaneReceipt, loadLaneIntent, reconcileLaneIntent,
 } from "./mainnet-job-lane.js";
+// [A-883] Receipt evidence sidecar: mapping only (observation, never authority). See "Receipt evidence sidecar" below.
+import { mapSecondEvidence } from "./receipt-evidence-second.js";
 
 // LEGACY single global key (A-663 original). Since A-693 it is only READ for migration/blocking; new records
 // are written to secondSendPendingKey(scope, piggyId). It is deleted only after its record was migrated to the
@@ -352,10 +355,96 @@ function finalizeSuccess({ storage, scope, key, pending, receipt }) {
   return { saved: true, cleared: true, reason: null };
 }
 
+// ── [A-883] Receipt evidence sidecar (observation only) ────────────────────────────────────────────────────────
+// Runs AFTER a call site's own tx/result boundary is settled, on hashes that call site already has. It never
+// changes the result object, its order, a retry, a lock, a pending record or a permission:
+//   · injected only: opts.evidence = { store, chainId, now, onReport } (default none). No evidence object, or one
+//     with neither a store nor onReport => nothing at all runs (no mapping, no read, no write).
+//   · store = an A-868 evidence store (append). Only staged tx seeds are appended; a FORK_SIM hash has no seed and is
+//     never written. Decision receipts (state_observation) are never handled here and never reach a store.
+//   · any failure (bad config, mapping refusal, store refusal/throw/async, onReport throw) is swallowed into the
+//     report's evidenceErrors; nothing is thrown or returned to the money path.
+function evidenceSidecarConfig(evidence) {
+  if (evidence === null || evidence === undefined) return null;
+  try {
+    if (typeof evidence !== "object") return null;
+    const store = evidence.store ?? null;
+    const onReport = typeof evidence.onReport === "function" ? evidence.onReport : null;
+    if (!store && !onReport) return null;
+    return { store, onReport, chainId: evidence.chainId, now: evidence.now };
+  } catch {
+    return null; // an unreadable evidence config is no evidence; the money path never sees it
+  }
+}
+
+function swallowAsync(value) {
+  try {
+    if (value && typeof value.then === "function") value.then(undefined, () => {});
+  } catch { /* evidence layer only */ }
+}
+
+function appendEvidenceSeed(store, item) {
+  try {
+    if (!store || typeof store.append !== "function") return { evidenceKey: item.evidenceKey, ok: false, reason: "evidence_store_unavailable" };
+    const res = store.append(item.seed);
+    if (res && typeof res.then === "function") {
+      swallowAsync(res);
+      return { evidenceKey: item.evidenceKey, ok: false, reason: "evidence_store_async_unconfirmed" };
+    }
+    if (res && res.ok === true) return { evidenceKey: item.evidenceKey, ok: true, outcome: typeof res.outcome === "string" ? res.outcome : null };
+    return { evidenceKey: item.evidenceKey, ok: false, reason: typeof res?.reason === "string" ? res.reason.slice(0, 64) : "evidence_store_refused" };
+  } catch {
+    return { evidenceKey: item.evidenceKey, ok: false, reason: "evidence_store_threw" };
+  }
+}
+
+// sources = { plumbingPending, laneIntent, laneReceipt } (tx sources only).
+function recordSecondTxEvidence(cfg, sources) {
+  if (!cfg) return;
+  const report = { journey: "second", authority: "observation_only", staged: [], stored: [], refused: [], evidenceErrors: [] };
+  try {
+    const mapped = mapSecondEvidence({ ...sources, chainId: cfg.chainId, now: cfg.now });
+    if (!mapped || mapped.ok !== true) {
+      report.evidenceErrors.push({ reason: typeof mapped?.reason === "string" ? mapped.reason : "evidence_mapping_failed" });
+    } else {
+      report.staged = [...mapped.staged];
+      report.refused = [...mapped.refused];
+      if (cfg.store) {
+        for (const item of mapped.staged) {
+          if (!item.seed) continue;
+          const r = appendEvidenceSeed(cfg.store, item);
+          report.stored.push(Object.freeze(r));
+          if (!r.ok) report.evidenceErrors.push(Object.freeze({ evidenceKey: r.evidenceKey, reason: r.reason }));
+        }
+      }
+    }
+  } catch {
+    report.evidenceErrors.push({ reason: "evidence_mapping_threw" });
+  }
+  if (!cfg.onReport) return;
+  try {
+    for (const k of ["staged", "stored", "refused", "evidenceErrors"]) Object.freeze(report[k]);
+    swallowAsync(cfg.onReport(Object.freeze(report)));
+  } catch { /* evidence layer only */ }
+}
+
 // Boot/reopen reconcile. Read-only toward the chain — never re-broadcasts, never clears a pending record that
 // is not a confirmed success whose receipt was durably saved, never touches a record outside the given scope.
 // Result kinds: none | out_of_scope | unknown | pending | failed | success | success_unsaved (saved failed, pending kept).
-export async function reconcileSecondPendingOnBoot(opts = {}) {
+// [A-883] Not async on purpose: without an evidence sidecar the caller gets the very same promise as before.
+export function reconcileSecondPendingOnBoot(opts = {}) {
+  let cfg = null;
+  try { cfg = evidenceSidecarConfig(opts?.evidence); } catch { cfg = null; }
+  if (!cfg) return reconcileSecondPendingCore(opts, null);
+  const seen = {};
+  return reconcileSecondPendingCore(opts, seen).then((out) => {
+    // After the reconcile result is final: the pending record it classified (if any) is observed, never changed.
+    if (seen.pending) recordSecondTxEvidence(cfg, { plumbingPending: seen.pending });
+    return out;
+  });
+}
+
+async function reconcileSecondPendingCore(opts, seen) {
   // A null options object (or null scope) is an invalid scope, not a TypeError.
   const { storage, scope: rawScope, piggyId, readTxReceipt } = opts || {};
   const scope = rawScope || {};
@@ -375,6 +464,7 @@ export async function reconcileSecondPendingOnBoot(opts = {}) {
   if (cur.status !== "ok") return { kind: "unknown", reason: cur.status === "corrupt" ? "pending_corrupt" : "pending_unreadable" };
   const pending = cur.pending;
   if (!secondSendPendingBelongsToScope(pending, bind)) return { kind: "out_of_scope" };
+  if (seen) seen.pending = pending; // [A-883] evidence sidecar only: an in-scope record this reconcile classifies
   const result = await classifySecondSendPending(pending, { readTxReceipt });
   if (result.kind === "success") {
     const rawBlock = result.redeemReceipt?.blockNumber;
@@ -426,6 +516,7 @@ export async function runSecondPlumbingProof(opts = {}) {
     waitForGrantBalance = null,
     isAppLocked = null,
     withMoneyLock = null,
+    evidence = null,
   } = opts || {};
   // Fail-closed permission gate — nothing below runs without an explicit, caller-confirmed
   // request. This is the plumbing lane's own analogue of "permission missing/mismatch => action0".
@@ -473,6 +564,7 @@ export async function runSecondPlumbingProof(opts = {}) {
   if (typeof withMoneyLock !== "function") return { outcome: "blocked", reason: "lock_unsupported" };
   const lockName = secondMoneyLockName(scope);
   if (!lockName) return { outcome: "blocked", reason: "invalid_scope" };
+  const evidenceSeen = {}; // [A-883] evidence sidecar only: hashes this run broadcast (assignment-only, never read by the run)
   let locked;
   try {
     // A throw from the run itself is that run's failure (pending record kept, nothing retried), not a lock problem.
@@ -488,6 +580,22 @@ export async function runSecondPlumbingProof(opts = {}) {
   }
   // The body did not run: another tab (or this one) holds the lock, or the primitive did not grant it.
   if (!locked || locked.ran !== true) return { outcome: "blocked", reason: "lock_busy" };
+  // [A-883] Evidence sidecar, after the lock is released and the run's result is final. Observes the hashes this
+  // run broadcast (captured, or carried by the result); never changes `locked.value`.
+  const evCfg = evidenceSidecarConfig(evidence);
+  if (evCfg) {
+    try {
+      const v = locked.value;
+      const depositTxHash = evidenceSeen.depositTxHash ?? v?.depositTxHash;
+      const redeemTxHash = evidenceSeen.redeemTxHash ?? v?.redeemTxHash;
+      if (depositTxHash || redeemTxHash) {
+        recordSecondTxEvidence(evCfg, { plumbingPending: {
+          stage: redeemTxHash ? "redeem-broadcast" : "deposit-broadcast",
+          chainId: scope.chainId, address: accountAddress, depositTxHash, redeemTxHash,
+        } });
+      }
+    } catch { /* evidence layer only */ }
+  }
   return locked.value;
 
   async function runUnderLock() {
@@ -550,6 +658,7 @@ export async function runSecondPlumbingProof(opts = {}) {
   const depStop = mapExecutor(dep, { sendError: "deposit_send_error", hashUnsaved: "deposit_hash_unsaved", hashField: "depositTxHash" });
   if (depStop) return depStop;
   const depositTxHash = dep.hash;
+  evidenceSeen.depositTxHash = depositTxHash;
   const depositBroadcast = { ...base, stage: "deposit-broadcast", depositTxHash };
 
   const depositReceipt = await waitForTxSuccess(publicClient, depositTxHash);
@@ -578,6 +687,7 @@ export async function runSecondPlumbingProof(opts = {}) {
   const redStop = mapExecutor(red, { sendError: "redeem_send_error", hashUnsaved: "redeem_hash_unsaved", hashField: "redeemTxHash" });
   if (redStop) return { ...redStop, depositTxHash };
   const redeemTxHash = red.hash;
+  evidenceSeen.redeemTxHash = redeemTxHash;
   const redeemBroadcast = { ...redeemSending, stage: "redeem-broadcast", redeemTxHash };
 
   const redeemReceipt = await waitForTxSuccess(publicClient, redeemTxHash);
@@ -687,6 +797,13 @@ export function revalidateAaveEnvelope({ envelope, intent, signerContext, consum
   if (!env) return "no_permission";
   if (!intent || typeof intent.nonce !== "string" || !intent.nonce) return "errand_nonce_missing";
   if (typeof nowMs !== "number" || !Number.isFinite(nowMs)) return "permission_clock_missing";
+  // [A-791 / A-758 review hardening] `authorize` compares `nowMs > expiresAt`, which is false for a missing or string expiry, so a
+  // forged sealed envelope without a numeric lifetime would pass forever. Require the issuer's shape here: finite numeric
+  // issuedAt <= expiresAt, and issuedAt <= nowMs < expiresAt. Anything else is refused before authorize runs (authorize itself
+  // still refuses any state other than "permitted").
+  if (typeof env.issuedAt !== "number" || !Number.isFinite(env.issuedAt) || typeof env.expiresAt !== "number" || !Number.isFinite(env.expiresAt) || env.issuedAt > env.expiresAt) return "envelope_lifetime_malformed";
+  if (nowMs < env.issuedAt) return "envelope_not_yet_valid";
+  if (nowMs >= env.expiresAt) return "permission_expired";
   if (env.nonce !== intent.nonce) return "envelope_nonce_mismatch";
   if (!(consumedNonces instanceof Set) || !consumedNonces.has(intent.nonce)) return "envelope_not_consumed_for_errand";
   const r = authorize(env, aaveRequestFromIntent(intent), { nowMs, consumedNonces: null, context: plainOnce(signerContext) });
@@ -833,7 +950,7 @@ export function checkAaveFeeGuard({ step, amountRaw, quote, caps } = {}) {
 export async function advanceAaveLaneGuarded(opts = {}) {
   const {
     profile, piggy: rawPiggy, intent: callerIntent, preview, envelope, signerContext, consumedNonces,
-    read, quote, caps, executor, storage, nowMs, nowIso,
+    read, quote, caps, executor, storage, nowMs, nowIso, evidence: evidenceSink = null,
   } = opts || {};
   const refuse = (reason, extra = {}) => ({ status: "blocked", reason, sent: false, retry: false, ...extra });
   if (MAINNET_LANE_CONFIG.liveExecution !== false || MAINNET_LANE_CONFIG.reader !== null || profile?.liveExecution !== false) {
@@ -883,11 +1000,23 @@ export async function advanceAaveLaneGuarded(opts = {}) {
     // A throw after the lane started cannot prove nothing was sent: unknown, reconcile by reading.
     return { status: "unknown", reason: "lane_threw", retry: false, next: "reconcile_read_only", ...facts };
   }
-  if (out.status === "blocked") return { ...out, sent: false, retry: false, ...facts };
-  if (out.status === "unknown" || out.status === "pending" || out.status === "unsaved" || out.status === "reconcile_first") {
-    return { ...out, retry: false, next: "reconcile_read_only", ...facts };
-  }
-  return { ...out, retry: false, ...facts };
+  let res;
+  if (out.status === "blocked") res = { ...out, sent: false, retry: false, ...facts };
+  else if (out.status === "unknown" || out.status === "pending" || out.status === "unsaved" || out.status === "reconcile_first") {
+    res = { ...out, retry: false, next: "reconcile_read_only", ...facts };
+  } else res = { ...out, retry: false, ...facts };
+  // [A-883] Evidence sidecar after the lane's result is final: the errand's recorded step hashes, observed only.
+  observeLaneIntentEvidence(evidenceSink, out);
+  return res;
+}
+
+function observeLaneIntentEvidence(evidenceSink, out) {
+  const cfg = evidenceSidecarConfig(evidenceSink);
+  if (!cfg) return;
+  try {
+    const intent = out?.intent;
+    if (intent && typeof intent === "object") recordSecondTxEvidence(cfg, { laneIntent: intent });
+  } catch { /* evidence layer only */ }
 }
 
 /**
@@ -895,7 +1024,7 @@ export async function advanceAaveLaneGuarded(opts = {}) {
  * to call, so a reconcile can never broadcast. "*_sending" becomes unknown; "*_sent" reads its receipt.
  */
 export async function reconcileAaveLaneReadOnly(opts = {}) {
-  const { profile, piggy: rawPiggy, executor, storage, nowIso } = opts || {};
+  const { profile, piggy: rawPiggy, executor, storage, nowIso, evidence: evidenceSink = null } = opts || {};
   const piggySnap = plainOnce(rawPiggy);
   if (!piggySnap || typeof piggySnap.id !== "string" || typeof piggySnap.address !== "string") return { status: "unknown", reason: "missing_piggy", sent: false, retry: false };
   const piggy = { id: piggySnap.id, address: piggySnap.address };
@@ -908,7 +1037,9 @@ export async function reconcileAaveLaneReadOnly(opts = {}) {
   } catch {
     return { status: "unknown", reason: "reconcile_threw", sent: false, retry: false };
   }
-  return { ...out, sent: false, retry: false };
+  const res = { ...out, sent: false, retry: false };
+  observeLaneIntentEvidence(evidenceSink, out); // [A-883] after the read-only result is final
+  return res;
 }
 
 /**
@@ -916,7 +1047,7 @@ export async function reconcileAaveLaneReadOnly(opts = {}) {
  * each the `quoted` object a guarded step returned. A measured field never falls back to a quote, and a quote
  * never stands in for a measurement: what was not measured is "UNKNOWN".
  */
-export function buildAaveGuardedReceipt({ profile, piggy, intent, after, nowIso, quotes } = {}) {
+export function buildAaveGuardedReceipt({ profile, piggy, intent, after, nowIso, quotes, evidence: evidenceSink = null } = {}) {
   const built = buildLaneReceipt({ profile, piggy: piggy || {}, intent, after, nowIso });
   if (!built.receipt) return { record: null, reason: built.reason };
   const rc = built.receipt;
@@ -930,6 +1061,9 @@ export function buildAaveGuardedReceipt({ profile, piggy, intent, after, nowIso,
     });
   };
   const measuredGas = (s) => (Number.isSafeInteger(rc.gasUsed?.[s]) ? rc.gasUsed[s] : AAVE_GUARD_UNKNOWN);
+  // [A-883] Evidence sidecar: the finished errand's lane Receipt tx hashes, observed only (the record is unchanged).
+  const evCfg = evidenceSidecarConfig(evidenceSink);
+  if (evCfg) recordSecondTxEvidence(evCfg, { laneReceipt: rc });
   return {
     record: Object.freeze({
       schema: "araso_mainnet_lane_receipt_split_v1",
@@ -963,4 +1097,229 @@ export function buildAaveGuardedReceipt({ profile, piggy, intent, after, nowIso,
     }),
     reason: null,
   };
+}
+
+// ── Second mainnet merge · per-protocol descriptors and fail-closed execution routes (live stays off) ─────────
+// Five protocols, five shapes. Each descriptor carries its own protocol block (aave / neverland / curvance /
+// abil / kintsu); there is no shared "lending" shape and no field one protocol borrows from another.
+// The four non-Aave lanes are NOT imported by product code (their own suites pin that). A caller binds them by
+// injection (`lanes`), and every bound lane is re-checked against its descriptor before it is consulted; a lane
+// whose exports drifted is refused. The route below has no path that returns allowed:true: it collects the
+// protocol's own refusals (reader evidence, lane boundary, still-unproven fields/steps, gates) and then refuses
+// on the live gate. Nothing here sends, signs, issues a permission or reads a network.
+export const SECOND_MAINNET_DESCRIPTOR_SCHEMA = "araso_second_mainnet_descriptor_v1";
+const MERGE_LOCKS = Object.freeze({ ready: false, executable: false, executionPermission: false, createsPermission: false, liveExecution: false });
+const ff = (a) => Object.freeze([...a]);
+
+export const SECOND_MAINNET_DESCRIPTORS = Object.freeze({
+  "aave-usdc": Object.freeze({
+    schema: SECOND_MAINNET_DESCRIPTOR_SCHEMA, jobId: "aave-usdc", protocol: "aave", evidenceClass: LANE_FORK_EVIDENCE.label,
+    steps: ff(AAVE_STEPS),
+    lane: Object.freeze({ binding: "built_in", boundary: "advanceAaveLaneGuarded" }),
+    aave: Object.freeze({
+      exitObserved: LANE_FORK_EVIDENCE.exit,
+      receiptTokenMustMatchRecorded: true,
+      stepProof: ff(["exact_permission_envelope", "stored_errand", "block_tagged_step_evidence", "supply_cap_evidence", "exit_liquidity_precheck", "fee_guard", "rebuilt_calldata"]),
+      unmeasured: ff(LANE_FORK_EVIDENCE.unmeasured),
+    }),
+    ...MERGE_LOCKS,
+  }),
+  "neverland-usdc": Object.freeze({
+    schema: SECOND_MAINNET_DESCRIPTOR_SCHEMA, jobId: "neverland-usdc", protocol: "neverland", evidenceClass: "PASS_FORK_SIM",
+    steps: ff(["approve", "supply", "withdraw", "withdrawPartial"]),
+    lane: Object.freeze({ binding: "injected", jobIdExport: "NEVERLAND_JOB_ID", gate: "neverlandExecutionGate", readiness: "neverlandReadiness" }),
+    neverland: Object.freeze({
+      receiptTokenShape: "reader_assumed",
+      exitObserved: "whole_position_next_block_no_time_warp",
+      exitTiming: "UNKNOWN",
+      unprovenSteps: ff(["withdrawPartial"]),
+      unknownFields: ff(["exitTiming", "exitLiquidity", "supplyCap", "reserveFlags", "supplyRate", "gasFeeUsd", "feeCap", "freshnessWindow", "eligibilityPolicy"]),
+    }),
+    ...MERGE_LOCKS,
+  }),
+  "curvance-usdc": Object.freeze({
+    schema: SECOND_MAINNET_DESCRIPTOR_SCHEMA, jobId: "curvance-usdc", protocol: "curvance", evidenceClass: "PASS_FORK_SIM",
+    steps: ff(["approve", "deposit", "redeem", "redeemPartial", "withdraw", "mint"]),
+    lane: Object.freeze({ binding: "injected", jobIdExport: "CURVANCE_JOB_ID", gate: "curvanceExecutionGate", readiness: "curvanceReadiness" }),
+    curvance: Object.freeze({
+      shareAccounting: "measured_only",
+      sharesAssumedEqualToAmount: false,
+      holdingPeriod: "UNKNOWN",
+      exitObserved: "whole_position_next_block_no_time_warp",
+      unprovenSteps: ff(["redeemPartial", "withdraw", "mint"]),
+      unknownFields: ff(["exitTiming", "holdingPeriod", "exitLiquidity", "depositCap", "sharePrice", "expectedShares", "expectedAssetsBack", "minSharesOut", "feeOrHaircut", "supplyRate", "gasFeeUsd", "feeCap", "freshnessWindow", "eligibilityPolicy"]),
+    }),
+    ...MERGE_LOCKS,
+  }),
+  "abil-spot": Object.freeze({
+    schema: SECOND_MAINNET_DESCRIPTOR_SCHEMA, jobId: "abil-spot", protocol: "abil", evidenceClass: "PASS_FORK_SIM",
+    steps: ff(["buy", "sell"]),
+    lane: Object.freeze({ binding: "injected", jobIdExport: "ABIL_JOB_ID", gate: "abilExecutionGate", readiness: "abilReadiness" }),
+    abil: Object.freeze({
+      eligibilityGates: ff(["eligibility", "kyc", "geo"]),
+      rightsGate: Object.freeze({ id: "economic_exposure_only_no_shareholder_rights", required: true, satisfied: false }),
+      blockingFields: ff(["eligibility", "kyc", "geo", "rights", "redemption", "secondaryLiquidity", "quote", "minOut", "exitEvidence", "dividend", "freshness", "priceImpact"]),
+      quote: "UNKNOWN",
+      forkMinOutIsProbeOnly: true,
+    }),
+    ...MERGE_LOCKS,
+  }),
+  "kintsu-smon": Object.freeze({
+    schema: SECOND_MAINNET_DESCRIPTOR_SCHEMA, jobId: "kintsu-smon", protocol: "kintsu", evidenceClass: "PASS_FORK_SIM_WITH_PENDING",
+    steps: ff(["deposit", "requestUnlock", "cancelUnlockRequest", "submitBatch", "redeem", "return"]),
+    lane: Object.freeze({ binding: "injected", jobIdExport: "KINTSU_JOB_ID", gate: "kintsuExecutionGate", readiness: "kintsuReadiness" }),
+    kintsu: Object.freeze({
+      exitSemantics: "pending",
+      returnProof: "unproven",
+      returnComplete: false,
+      immediateExit: false,
+      eta: "UNKNOWN",
+      cooldown: "UNKNOWN",
+      unprovenSteps: ff(["submitBatch", "redeem", "return"]),
+    }),
+    ...MERGE_LOCKS,
+  }),
+});
+export const SECOND_MAINNET_JOB_IDS = Object.freeze(Object.keys(SECOND_MAINNET_DESCRIPTORS));
+const MERGE_PROTOCOL_KEYS = Object.freeze(["aave", "neverland", "curvance", "abil", "kintsu"]);
+
+const ownKey = (o, k) => !!o && (typeof o === "object" || typeof o === "function") && Object.prototype.hasOwnProperty.call(o, k);
+const sameList = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** Structural check of one merged descriptor. { ok: true } or { error }. */
+export function validateSecondMainnetDescriptor(d) {
+  if (!d || typeof d !== "object") return { error: "descriptor_missing" };
+  if (d.schema !== SECOND_MAINNET_DESCRIPTOR_SCHEMA) return { error: "descriptor_schema" };
+  for (const k of Object.keys(MERGE_LOCKS)) if (!ownKey(d, k) || d[k] !== false) return { error: `descriptor_lock_not_false:${k}` };
+  if (!MERGE_PROTOCOL_KEYS.includes(d.protocol) || !ownKey(d, d.protocol)) return { error: "descriptor_protocol_block" };
+  const foreign = MERGE_PROTOCOL_KEYS.find((k) => k !== d.protocol && ownKey(d, k));
+  if (foreign) return { error: `descriptor_foreign_block:${foreign}` };
+  const p = d[d.protocol];
+  if (d.protocol === "kintsu" && (p.returnComplete !== false || p.immediateExit !== false || p.returnProof !== "unproven" || p.exitSemantics !== "pending")) return { error: "kintsu_return_claimed" };
+  if (d.protocol === "abil") {
+    if (!p.rightsGate || p.rightsGate.required !== true || p.rightsGate.satisfied !== false) return { error: "abil_rights_gate_not_blocking" };
+    for (const f of ["eligibility", "kyc", "geo", "rights"]) if (!Array.isArray(p.blockingFields) || !p.blockingFields.includes(f)) return { error: `abil_gate_not_blocking:${f}` };
+  }
+  if (d.protocol === "curvance" && p.sharesAssumedEqualToAmount !== false) return { error: "curvance_one_to_one_claimed" };
+  if (d.protocol === "neverland" && p.receiptTokenShape !== "reader_assumed") return { error: "neverland_shape_claimed" };
+  return { ok: true };
+}
+
+// A bound lane must still say what its descriptor says. Anything else is drift and the route is refused.
+function mergeLaneProblem(d, lanes) {
+  if (d.lane.binding === "built_in") return LANE_JOB_ID === d.jobId && LANE_FORK_EVIDENCE.label === d.evidenceClass ? null : "lane_descriptor_drift:aave";
+  const lane = ownKey(lanes, d.jobId) ? lanes[d.jobId] : null;
+  if (!lane || typeof lane !== "object") return "lane_not_bound";
+  const read = (name) => (ownKey(lane, name) ? lane[name] : undefined);
+  if (read(d.lane.jobIdExport) !== d.jobId) return "lane_descriptor_drift:job_id";
+  if (typeof read(d.lane.gate) !== "function" || typeof read(d.lane.readiness) !== "function") return "lane_descriptor_drift:boundary";
+  const p = d[d.protocol];
+  if (d.protocol === "neverland") {
+    if (!sameList(read("NEVERLAND_UNKNOWN_FIELDS"), p.unknownFields) || !sameList(read("NEVERLAND_UNPROVEN_STEPS"), p.unprovenSteps)) return "lane_descriptor_drift:neverland_unknowns";
+    if (read("NEVERLAND_FORK_EVIDENCE")?.exitObserved !== p.exitObserved || read("NEVERLAND_FORK_EVIDENCE")?.label !== d.evidenceClass) return "lane_descriptor_drift:neverland_evidence";
+  } else if (d.protocol === "curvance") {
+    if (!sameList(read("CURVANCE_UNKNOWN_FIELDS"), p.unknownFields) || !sameList(read("CURVANCE_UNPROVEN_STEPS"), p.unprovenSteps)) return "lane_descriptor_drift:curvance_unknowns";
+    if (read("CURVANCE_FORK_EVIDENCE")?.exitObserved !== p.exitObserved || read("CURVANCE_FORK_EVIDENCE")?.label !== d.evidenceClass) return "lane_descriptor_drift:curvance_evidence";
+  } else if (d.protocol === "abil") {
+    const fields = read("ABIL_BLOCKING_FIELDS");
+    if (!sameList(read("ABIL_BLOCKING_FIELD_NAMES"), p.blockingFields)) return "lane_descriptor_drift:abil_blocking_fields";
+    for (const f of p.blockingFields) if (!ownKey(fields, f) || fields[f].blocking !== true || fields[f].value !== "UNKNOWN") return `lane_descriptor_drift:abil_field:${f}`;
+    let gate = null;
+    try { gate = typeof read("abilRightsGate") === "function" ? read("abilRightsGate")(null) : null; } catch { gate = null; }
+    if (!gate || gate.id !== p.rightsGate.id || gate.required !== true || gate.satisfied !== false) return "lane_descriptor_drift:abil_rights_gate";
+  } else if (d.protocol === "kintsu") {
+    if (!sameList(read("KINTSU_UNPROVEN_STEPS"), p.unprovenSteps)) return "lane_descriptor_drift:kintsu_unproven_steps";
+    const ev = read("KINTSU_FORK_EVIDENCE");
+    if (ev?.exitSemantics !== p.exitSemantics || ev?.label !== d.evidenceClass) return "lane_descriptor_drift:kintsu_evidence";
+    const stages = read("KINTSU_STAGE");
+    if (!stages || typeof stages !== "object" || Object.values(stages).some((s) => /return|redeem|done|complete|final/i.test(String(s)))) return "lane_descriptor_drift:kintsu_return_stage";
+  }
+  return null;
+}
+
+// What the protocol itself still lacks, independent of the lane's own gate. Reader unknowns are carried, not judged away.
+function mergeProofGaps(d, route, step, lanes) {
+  const gaps = [];
+  const p = d[d.protocol];
+  if (d.protocol === "aave") {
+    if (route?.read?.receiptToken?.matchesRecorded !== true) gaps.push("aave_receipt_token_not_matching_recorded");
+    gaps.push("aave_guarded_boundary_only");
+  } else if (d.protocol === "neverland") {
+    if (route?.status === CURRENT_READER_STATUS.NEVERLAND_DERIVED_ASSUMED) gaps.push("neverland_receipt_token_shape_assumed");
+    if (p.unprovenSteps.includes(step)) gaps.push(`unproven_step:${step}`);
+    for (const f of p.unknownFields) gaps.push(`unknown_field:${f}`);
+  } else if (d.protocol === "curvance") {
+    if (p.unprovenSteps.includes(step)) gaps.push(`unproven_step:${step}`);
+    for (const f of p.unknownFields) gaps.push(`unknown_field:${f}`);
+  } else if (d.protocol === "abil") {
+    let gate = null;
+    const lane = ownKey(lanes, d.jobId) ? lanes[d.jobId] : null;
+    try { gate = lane && typeof lane.abilRightsGate === "function" ? lane.abilRightsGate(null) : null; } catch { gate = null; }
+    if (!gate || gate.satisfied !== true) gaps.push("rights_gate_unsatisfied");
+    for (const f of p.blockingFields) gaps.push(`blocking_field:${f}`);
+    // The reader never has a quote source (its quote is always UNKNOWN); a caller value cannot stand in for one.
+    gaps.push("abil_quote_unknown");
+  } else if (d.protocol === "kintsu") {
+    if (p.unprovenSteps.includes(step)) gaps.push(`unproven_step:${step}`);
+    gaps.push("kintsu_return_unproven");
+  }
+  return gaps;
+}
+
+/**
+ * Could this protocol's step run, given its routed reader evidence and its bound lane? Never. The answer lists
+ * every refusal in order — reader route, lane binding / drift, the lane's own gate, the protocol's still-open
+ * proof, the live gate — and `reason` is the first. Caller-supplied claims (`proof`, `ready`, …) are ignored.
+ */
+export function routeSecondMainnetExecution(input) {
+  const { jobId, step, route, lanes, profile, piggy, executor } = input && typeof input === "object" ? input : {};
+  const d = typeof jobId === "string" && ownKey(SECOND_MAINNET_DESCRIPTORS, jobId) ? SECOND_MAINNET_DESCRIPTORS[jobId] : null;
+  const base = { kind: "second_mainnet_execution_route", allowed: false, action: "none", actionCount: 0, sent: false, ...MERGE_LOCKS };
+  if (!d) return Object.freeze({ ...base, jobId: null, protocol: null, step: null, reason: "unknown_route", blockedBy: ff(["unknown_route"]), readerEvidence: "unknown", unknown: ff([]) });
+  const blockedBy = [];
+  const valid = validateSecondMainnetDescriptor(d);
+  if (valid.error) blockedBy.push(`descriptor:${valid.error}`);
+  if (typeof step !== "string" || !d.steps.includes(step)) blockedBy.push("unknown_step");
+  const r = route && typeof route === "object" && route.kind === "second_reader_route" ? route : null;
+  if (!r) blockedBy.push("reader_route_missing");
+  else if (r.jobId !== d.jobId) blockedBy.push("reader_route_job_mismatch");
+  else if (r.evidence !== "observed") blockedBy.push(`reader_evidence_unknown:${r.unknownClass || "missing"}`);
+  const laneProblem = mergeLaneProblem(d, lanes);
+  if (laneProblem) blockedBy.push(laneProblem);
+  if (!laneProblem && d.lane.binding === "injected") {
+    let gate = null;
+    try { gate = lanes[d.jobId][d.lane.gate]({ profile, piggy, executor, step }); } catch { gate = null; }
+    blockedBy.push(gate && typeof gate.reason === "string" ? `lane:${gate.reason}` : "lane:gate_unreadable");
+  }
+  blockedBy.push(...mergeProofGaps(d, r && r.jobId === d.jobId ? r : null, step, lanes));
+  if (MAINNET_LANE_CONFIG.liveExecution !== false || MAINNET_LANE_CONFIG.reader !== null || profile?.liveExecution !== false) blockedBy.push("live_execution_disabled");
+  else blockedBy.push("live_gate_closed");
+  blockedBy.push("merge_route_has_no_execution_path");
+  const extra = d.protocol === "kintsu" ? { returnComplete: false, immediateExit: false }
+    : d.protocol === "abil" ? { rightsGate: d.abil.rightsGate } : {};
+  return Object.freeze({
+    ...base, jobId: d.jobId, protocol: d.protocol, step: typeof step === "string" ? step : null,
+    reason: blockedBy[0], blockedBy: ff([...new Set(blockedBy)]),
+    readerEvidence: r && r.jobId === d.jobId ? r.evidence : "unknown",
+    unknown: ff(r && r.jobId === d.jobId && Array.isArray(r.unknown) ? r.unknown : []),
+    ...extra,
+  });
+}
+
+/**
+ * How a Kintsu errand may be shown. Return is unproven: never complete, never immediate, no ETA, whatever the
+ * stage or claim passed in. The word comes from the bound lane's own outcome words (none / holding / pending),
+ * otherwise "unknown".
+ */
+export function secondKintsuReturnView({ stage, lanes } = {}) {
+  const d = SECOND_MAINNET_DESCRIPTORS["kintsu-smon"];
+  let word = "unknown";
+  if (!mergeLaneProblem(d, lanes)) {
+    try { word = lanes[d.jobId].kintsuOutcomeWord(stage); } catch { word = "unknown"; }
+  }
+  if (!["none", "holding", "pending"].includes(word)) word = "unknown";
+  return Object.freeze({
+    jobId: d.jobId, word, returnProof: d.kintsu.returnProof, returnComplete: false, immediateExit: false,
+    eta: "UNKNOWN", cooldown: "UNKNOWN", finalReturn: "UNKNOWN",
+  });
 }

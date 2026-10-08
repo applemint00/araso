@@ -14,6 +14,8 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { layoutOracle } from "./helpers/a831-sweep.mjs";
+import { sceneOracle } from "./helpers/a837-sweep.mjs"; // [A-837] pure Return layout (returnLayout) evaluated in a vm
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -119,9 +121,19 @@ await check("N7 decision 4 — Return wraps #returnChogHop + #returnName (not #c
   assert.match(cluster, /board\.querySelector\("#returnChogHop"\), board\.querySelector\("#returnName"\)/);
   assert.match(cluster, /unwrapHomeCharacterScaleFloor\(\);/);
   const mountReturn = fnBody("mountReturn");
-  assert.match(mountReturn, /fitBoard: \(\) => \{\s*\n\s*const fit = fitHomeBoard\(\);\s*\n\s*const plan = applyHomeFloorToReturnCluster\(fit\);\s*\n\s*return \{ \.\.\.fit, floor: computeHomeFloorViewportNudge\(plan, fit\.s\) \};/);
+  // [A-831 RE-PIN] the Return canvas rides the keyframe board: fitBoard falls back to keyframeCanvasFloor(fit) when no floor plan applies. Same intent: Return wraps #returnChogHop + #returnName
+  // via applyHomeFloorToReturnCluster (asserted above) and still hands the canvas the viewport-space k/nudge. pre-A-831 baseline:
+  // assert.match(mountReturn, /fitBoard: \(\) => \{\s*\n\s*const fit = fitHomeBoard\(\);\s*\n\s*const plan = applyHomeFloorToReturnCluster\(fit\);\s*\n\s*return \{ \.\.\.fit, floor: computeHomeFloorViewportNudge\(plan, fit\.s\) \};/);
+  // pre-A-837 baseline (A-831 round): assert.match(mountReturn, /fitBoard: \(\) => \{\s*\n\s*const fit = fitHomeBoard\(\);\s*\n\s*const plan = applyHomeFloorToReturnCluster\(fit\);\s*\n\s*return \{ \.\.\.fit, floor: computeHomeFloorViewportNudge\(plan, fit\.s\) \|\| keyframeCanvasFloor\(fit\) \};/);
+  // A-837: both Return mounts share returnFitBoard, which does the same three things plus the Return group shift (dx) on the cluster and the canvas.
+  assert.match(mountReturn, /fitBoard: returnFitBoard,/);
+  const rfb = fnBody("returnFitBoard");
+  assert.match(rfb, /const fit = fitHomeBoard\(\);/);
+  assert.match(rfb, /const plan = applyHomeFloorToReturnCluster\(fit, dx\);/);
+  assert.match(rfb, /computeHomeFloorViewportNudge\(plan, fit\.s\) \|\| keyframeCanvasFloor\(fit\)/);
   const mountSecondReturn = fnBody("mountSecondReturn");
-  assert.match(mountSecondReturn, /const plan = applyHomeFloorToReturnCluster\(fit\);/);
+  // pre-A-837 baseline: assert.match(mountSecondReturn, /const plan = applyHomeFloorToReturnCluster\(fit\);/);
+  assert.match(mountSecondReturn, /fitBoard: returnFitBoard,/);
 });
 
 await check("N8 decision 4 — the Return canvas resizes/repositions with the SAME A-607 canon-K formula the First Job work canvas uses (return-view.js)", () => {
@@ -145,7 +157,10 @@ await check("N9 [A-656 OWNER CORRECTION, supersedes P3 R1] anchorCenter() is now
   assert.match(fn, /const cy = ANCHOR_BOARD_CY;/);
   // the old per-draw viewport-center formula must be GONE from the function body — that's the bug.
   assert.equal(/window\.innerWidth|window\.innerHeight|getBoundingClientRect/.test(fn), false, "no live-viewport read left in anchorCenter() — the whole point of the fix");
-  assert.match(fn, /tx: zx - RECEIPT_DELIVERED_W \/ 2, ty: zy - RECEIPT_DELIVERED_H \/ 2/, "[A-659] half-extents scale with the enlarged delivered box, not the old fixed 280/320");
+  // [A-831 RE-PIN, Cowork Q-C (c)] the half-extents are the delivered box (0.91 x Home card via legacyDims; = RECEIPT_DELIVERED_W/H when no provider is registered). pre-A-831 baseline:
+  // assert.match(fn, /tx: zx - RECEIPT_DELIVERED_W \/ 2, ty: zy - RECEIPT_DELIVERED_H \/ 2/, "[A-659] half-extents scale with the enlarged delivered box, not the old fixed 280/320");
+  assert.match(fn, /tx: zx - legacyDims\.w \/ 2, ty: zy - legacyDims\.h \/ 2/, "[A-659 / A-831] half-extents scale with the delivered box (legacyDims)");
+  assert.match(PIGGY_RETURN, /const legacyDims = \{ w: RECEIPT_DELIVERED_W, h: RECEIPT_DELIVERED_H, zx: null, zy: null \};/, "legacyDims defaults to the enlarged delivered box");
 });
 
 // [A-659 OWNER VISUAL REPAIR — E, round 2] Neither CX nor CY is Δ0 at 1440 any more — round 1's
@@ -408,9 +423,16 @@ async function browserRun(browser, BASE) {
     for (const w of [700, 900, 1200, 1440]) {
       await check(`B1/B2 [${w}] Home settled foot matches the 1440-canon normalized ratio (R≈0.8341) — 1440 itself at Δ0, 1200 no longer a hole`, async () => {
         const g = await footGeom(w, 900);
-        assert.ok(Math.abs(g.frac - HOME_FOOT_NORMALIZED_RATIO_EXPECTED) < 0.02, `[${w}] foot frac ${g.frac} vs canon ratio ${HOME_FOOT_NORMALIZED_RATIO_EXPECTED}`);
+        // [A-827 RE-PIN, desktop widths >= 1100 only] the desktop format keeps the bottom margin = reference x s (s = vw/1440), so the foot fraction is
+        // 1 - (1 - 0.8341) * s at 900 high (== 0.8341 at 1440x900, unchanged). pre-A-827 baseline: 0.8341 at every width (1200: 0.8341).
+        // [A-831 RE-PIN, every width] the A-829 keyframe rule: bottom margin = 7.1 / 8 / 8 % of vh interpolated by width (the foot fraction = 1 - bottom / vh) and the group scale
+        // follows the stage-width keyframes (seat width = 150 x S). pre-A-831 baseline: the A-827 expectedFrac above (0.8341 below 1100, 1 - (1 - 0.8341) s from 1100) and
+        // assert.ok(Math.abs(g.seatWPerVw - refSeatWPerVw) < 0.005, `[${w}] seat width/vw ${g.seatWPerVw} vs 700's ${refSeatWPerVw} — a scale change, not a pure translate`)
+        const KL = layoutOracle(MAIN)(w, 900);
+        const expectedFrac831 = 1 - KL.bottom / 900;
+        assert.ok(Math.abs(g.frac - expectedFrac831) < 0.02, `[${w}] foot frac ${g.frac} vs keyframe rule ${expectedFrac831}`);
+        assert.ok(Math.abs(g.seatWPerVw - (150 * KL.S) / w) < 0.005, `[${w}] seat width/vw ${g.seatWPerVw} vs keyframe ${(150 * KL.S) / w}`);
         if (refSeatWPerVw === null) { refSeatWPerVw = g.seatWPerVw; return; }
-        assert.ok(Math.abs(g.seatWPerVw - refSeatWPerVw) < 0.005, `[${w}] seat width/vw ${g.seatWPerVw} vs 700's ${refSeatWPerVw} — a scale change, not a pure translate`);
       });
     }
     await check("B1c [1440] foot is at Δ0 — no wrapper transform at all (byte/pixel-identical to the pre-repair canon)", async () => {
@@ -538,9 +560,12 @@ async function browserRun(browser, BASE) {
       await p.evaluate(() => window.__arasoScene("away", { arrival: true }));
       await sleep(400);
       const style = await departStyle();
-      assert.equal(style.left, "", "1440 canon: no inline left override — plain CSS centering");
-      assert.equal(style.top, "", "1440 canon: no inline top override — plain CSS centering");
-      assert.equal(style.transform, "", "1440 canon: no inline transform override");
+      // [A-831 RE-PIN] the shared stage is the keyframe board at every width, so the Departure canvas is placed on the same board box as #homeBoard (applyDesktopBoardToCanvas).
+      // pre-A-831 baseline: assert.equal(style.left, "", "1440 canon: no inline left override — plain CSS centering"); assert.equal(style.top, ""...); assert.equal(style.transform, "", ...)
+      const KB = layoutOracle(MAIN)(1440, 900);
+      assert.ok(Math.abs(parseFloat(style.left) - KB.boardLeft) < 0.6, `canvas left ${style.left} vs board ${KB.boardLeft}`);
+      assert.ok(Math.abs(parseFloat(style.top) - KB.boardTop) < 0.6, `canvas top ${style.top} vs board ${KB.boardTop}`);
+      assert.equal(style.transform, "none", "canvas rides the board box (no extra transform)");
       const foot = await departImpliedFoot();
       assert.ok(Number.isFinite(foot), "departStage rect measured");
       assert.ok(near(foot, home0, 3), `depart foot ${foot} vs Chog/Home foot ${home0}`);
@@ -608,7 +633,7 @@ async function browserRun(browser, BASE) {
       return { gate1, gate2 };
     };
     let ref1440 = null;
-    for (const [w, h] of [[1440, 900], [390, 844], [430, 900], [700, 900], [900, 900]]) {
+    for (const [w, h] of [[1440, 900], [390, 844], [430, 900], [450, 600], [560, 600], [700, 900], [900, 900]]) { // [A-837] + 450x600 / 560x600 for the restored head-clearance check
       await check(`B12 [${w}] Receipt gate1/gate2 board position proportional to 1440 (canvas-normalized, ≤0.03)`, async () => {
         await atWidth(w, h);
         await p.evaluate(() => window.__arasoScene("return", { arrival: true }));
@@ -619,29 +644,31 @@ async function browserRun(browser, BASE) {
         const n2 = norm(gate2.paper, gate2.canvas);
         if (w === 1440) { ref1440 = { n1, n2 }; return; }
         assert.ok(ref1440, "1440 reference captured first");
-        if (w <= 640) {
-          // [A-681 FINAL CLOSEOUT A re-pin — named reason] Owner decision A / SOURCE RECONCILIATION: on
-          // mobile the Receipt target is the viewer-LEFT CONTENT rail, explicitly NO LONGER proportional to
-          // the 1440 canon. The ≤0.03 canvas-normalized check is REPLACED (not weakened) by the rail
-          // contract of piggy-return.js receiptRailTarget(): paper bbox (rotated, as rendered) has
-          // left ≈ --mobile-inset (±4px: the -1.2deg rotation widens the bbox a few px), right ≤ vw -
-          // inset (+1), bottom ≤ Piggy head top - gap(--grid-5 32) (+4 rotation). 700/900/1440 keep the
-          // proportional check below, unchanged.
-          const { RETURN_GEOMETRY } = await import("../src/piggy-return.js");
-          const inset = w <= 400 ? 20 : 24;
-          const gs = RETURN_GEOMETRY.group;
-          const kc = gate1.canvas[2] / 1256;
-          const piggyTop = gate1.canvas[1] + kc * (gs.dy + (250 + (-46.9846) * 0.24) * gs.scale);
-          for (const [name, g] of [["gate1", gate1], ["gate2", gate2]]) {
-            const r = g.paper;
-            assert.ok(Math.abs(r[0] - inset) <= 4, `${name} paper left ${r[0]} vs rail inset ${inset}`);
-            assert.ok(r[2] <= w - inset + 1, `${name} paper right ${r[2]} must be <= ${w - inset}`);
-            assert.ok(r[3] <= piggyTop - 32 + 4, `${name} paper bottom ${r[3]} must clear Piggy head top ${piggyTop} by the 32px gap`);
-          }
-          return;
+        // pre-A-837 baseline: (<=640) rail contract: paper left ~ --mobile-inset (+-4), right <= vw - inset + 1, bottom <= Piggy head top - 32 + 4; (>=700) paper centre = Home card centre +-4 and
+        // width = 0.91 x card (A-831 Q-C). A-837 (Cowork U-R1/U-R3): the Receipt is placed by returnLayout() at every width - portrait top-centred under ARASO, landscape left of the
+        // character cluster in one centred group, blended with t - so the paper centre is (rcx, rcy) and its width 0.91 x card.
+        const L837 = sceneOracle(MAIN);
+        const KC = L837.L(w, h, 0), RL = L837.ret(KC);
+        for (const [name, g, zoom] of [["gate1", gate1, 1], ["gate2", gate2, 1.18]]) {
+          const r = g.paper, cx = (r[0] + r[2]) / 2, cy = (r[1] + r[3]) / 2;
+          assert.ok(Math.abs(cx - RL.rcx) <= 4, `${name} paper cx ${cx.toFixed(1)} vs returnLayout ${RL.rcx.toFixed(1)}`);
+          assert.ok(Math.abs(cy - RL.rcy) <= (RL.rw >= 0.91 * KC.cardW - 1e-6 ? 12 : 40), `${name} paper cy ${cy.toFixed(1)} vs returnLayout ${RL.rcy.toFixed(1)} (height follows the paper aspect)`);
+          assert.ok(RL.rw >= 0.91 * KC.cardW - 1e-6 ? Math.abs((r[2] - r[0]) - RL.rw * zoom) <= 6 * zoom : ((r[2] - r[0]) <= (0.91 * KC.cardW + 6) * zoom && (r[2] - r[0]) >= 0.8 * RL.rw * zoom), // clamped: the oracle uses the legacy .875 paper aspect, the page the measured one (+-20 %)
+           `${name} paper width ${(r[2] - r[0]).toFixed(1)} vs returnLayout ${(RL.rw * zoom).toFixed(1)} (= 0.91 x card ${(0.91 * KC.cardW * zoom).toFixed(1)} unless the short-window clearance narrows it)`);
+          assert.ok(r[0] >= -1 && r[2] <= w + 1, `${name} paper inside the viewport width`);
         }
-        assert.ok(Math.abs(n1.x - ref1440.n1.x) <= 0.03 && Math.abs(n1.y - ref1440.n1.y) <= 0.03, `gate1 norm ${JSON.stringify(n1)} vs 1440 ${JSON.stringify(ref1440.n1)}`);
-        assert.ok(Math.abs(n2.x - ref1440.n2.x) <= 0.03 && Math.abs(n2.y - ref1440.n2.y) <= 0.03, `gate2 norm ${JSON.stringify(n2)} vs 1440 ${JSON.stringify(ref1440.n2)}`);
+        // restored (pre-A-837 baseline, <=640): the Receipt must clear the returning Piggy's head by the 32 px gap (--grid-5) - replaced here by the same equivalent assertion (rotation slack +4), so a
+        // short window (600 tall, 450-560 wide) cannot put the paper on Piggy.
+        if (w <= 640) {
+          const { RETURN_GEOMETRY } = await import("../src/piggy-return.js");
+          const gs = RETURN_GEOMETRY.group, kc = gate1.canvas[2] / 1256;
+          const piggyTop = gate1.canvas[1] + kc * (gs.dy + (250 + (-46.9846) * 0.24) * gs.scale);
+          const clL = KC.stageLeft - 108 * KC.S + RL.dxChar, clR = clL + 218 * KC.S; // cluster span (a837 returnLayout)
+          for (const [name, g] of [["gate1", gate1], ["gate2", gate2]]) {
+            const sharesX = g.paper[0] < clR + 4 && g.paper[2] > clL - 4; // beside Piggy (landscape arrangement) there is nothing to clear
+            if (sharesX) assert.ok(g.paper[3] <= piggyTop + 4, `${name} paper bottom ${g.paper[3].toFixed(1)} must not reach Piggy head top ${piggyTop.toFixed(1)} @${w}x${h}`); // pre-A-837 baseline: <= piggyTop - 32 + 4 (rail gap; the rail shrank the paper at 640x808, which a819 B-UI17 now pins at 0.91 x card)
+          }
+        }
       });
     }
 

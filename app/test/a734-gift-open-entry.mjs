@@ -69,7 +69,8 @@ function mintLink(origin, giftId) {
 const EXPECTED_HEADER_RULE = {
   source: "/(.*)",
   headers: [
-    { key: "Content-Security-Policy", value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self' https://testnet-rpc.monad.xyz; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'" },
+    // pre-A-859 baseline: connect-src 'self' https://testnet-rpc.monad.xyz;
+    { key: "Content-Security-Policy", value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self' https://testnet-rpc.monad.xyz https://rpc.monad.xyz; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'" },
     { key: "Referrer-Policy", value: "no-referrer" },
     { key: "X-Content-Type-Options", value: "nosniff" },
     { key: "Permissions-Policy", value: "publickey-credentials-create=(self), publickey-credentials-get=(self), accelerometer=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), interest-cohort=()" },
@@ -97,8 +98,9 @@ await check("S2 vercel.json: security headers byte-identical to pre-A-734 and th
 });
 await check("S3 vercel.json: /api/grant function config, build/output/install untouched", () => {
   deq({ b: VERCEL.buildCommand, o: VERCEL.outputDirectory, i: VERCEL.installCommand, f: VERCEL.functions },
-    { b: "npm run build", o: "dist", i: "npm ci", f: { "api/grant.js": { includeFiles: "relayer/src/policy.mjs" } } });
-  deq(Object.keys(VERCEL).sort(), ["buildCommand", "functions", "headers", "installCommand", "outputDirectory", "rewrites"]);
+    { b: "npm run build", o: "dist", i: "npm ci", f: { "api/grant.js": { includeFiles: "relayer/src/policy.mjs" },
+      "api/gift-sponsor.js": { maxDuration: 60, includeFiles: "relayer/src/**" }, "api/gift-sponsor-reconcile.js": { maxDuration: 60, includeFiles: "relayer/src/**" } } }); // pre-A-913 baseline: only "api/grant.js"
+  deq(Object.keys(VERCEL).sort(), ["buildCommand", "crons", "functions", "headers", "installCommand", "outputDirectory", "rewrites"]); // pre-A-913 baseline: no "crons"
 });
 await check("S4 claim URL contract unchanged: buildClaimUrl → <origin>/claim#g=<id>&t=<token>&v=1, token fragment-only; parse round-trips; query never carries it", () => {
   const { token, url } = mintLink("https://arasoo.vercel.app", "gift s4/é");
@@ -146,7 +148,8 @@ await check("S7 the only UI caller of beginGiftPiggy is openGiftForExistingPiggy
   for (const n of ["checkPiggy", "recoverPiggy", "beginAddPiggy", "runModelAAdmission"]) {
     for (const bad of ["pendingGiftClaim", "takePendingGiftClaim", "bindGiftToNewPiggy", "settleBoundGiftClaim", "giftPaper"]) assert.equal(stripComments(fnBody(n)).includes(bad), false, `${n} ↛ ${bad}`);
   }
-  assert.equal(calls(/await settleBoundGiftClaim\(/g), 2, "settle sites still openPiggy + beginGiftPiggy only");
+  // [A-897 re-pin · pre-A-897 P1 baseline: 2] a third site = a897GiftOpenPromotion (same-#1 promotion, case 2); openPiggy + beginGiftPiggy unchanged.
+  assert.equal(calls(/await settleBoundGiftClaim\(/g), 3, "settle sites: openPiggy + beginGiftPiggy + a897GiftOpenPromotion (same-#1)");
 });
 await check("S8 new entry code: no storage, no network, no logging, no token/giftId handling, no Hatch, no create", () => {
   const NEW = ["giftPaperKind", "offerGiftPaperAtBoot", "startGiftOpen", "openGiftForExistingPiggy", "openGiftInvite", "handleGiftOpenActivate"].map((n) => stripComments(fnBody(n))).join("\n");
@@ -424,7 +427,8 @@ await check("N12 no Gift: the Invite markup (mobile + wide) is byte-identical to
   for (const kind of ["mobile", "wide"]) {
     const now = markupWith(MAIN, { kind });
     assert.ok(now.includes('id="inviteFaceButton"') && now.includes("something small") && now.includes("just for you") && !now.includes("giftOpenButton") && !now.includes("data-gift-paper"));
-    if (BEFORE) assert.equal(now, markupWith(BEFORE, { kind }), kind);
+    // pre-A-912 baseline: assert.equal(now, markupWith(BEFORE, { kind }), kind). [A-912 re-pin, Cowork-approved] A-912 removes the mobile Invite line `it's safe. only you can open it.` (invite__copy); that one line is removed from the pre-A-734 side.
+    if (BEFORE) assert.equal(now, markupWith(BEFORE, { kind }).replace(/\n\s*<p class="invite__copy">it's safe\. only you can open it\.<\/p>/, ""), kind);
   }
   if (!BEFORE) console.log("      note N12: pre-A-734 snapshot absent (public checkout) — content checks only");
 });

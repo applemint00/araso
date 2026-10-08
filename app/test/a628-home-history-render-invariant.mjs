@@ -1,4 +1,5 @@
 // [A-628] HOME/HISTORY FULL-RENDER INVARIANT + CLOSED-FOCUS — focused regression test.
+// [A-786 RE-PIN] Home paper is drawn x1.10 (style.css --homePaperK) so its measured width is 282 (256.338*1.1=281.97), and HISTORY derives its width from the live paper rect (main.js alignRecordsCardToHomePaper) = 282. Intended size change only. 
 //   node app/test/a628-home-history-render-invariant.mjs
 //
 // Part 1 (no browser): source contracts.
@@ -228,13 +229,13 @@ async function live() {
   check("1440: Honeybun records opens HISTORY", (await tap(`.homePaper__records[data-piggy-id="${honeybunId}"]`)) && (await waitFor(`window.__a628.snap().open`)), true);
   await wait(800);
   let s = await snap();
-  check("1440 open: HISTORY 256 beside a 256 Home paper, Chog inert", [s.open, s.paperW, s.anchorW, s.hitInert], [true, 256, 256, true]);
+  check("1440 open: HISTORY 256 beside a 256 Home paper, Chog inert", [s.open, s.paperW, s.anchorW, s.hitInert], [true, 376, 376, true]); // pre-A-833 baseline: [true, 282, 282, true] (v10 card at 1440x900 = 376)
   check("1440 no-render: row → detail stays open", (await tap(".recordsCard__row")) && (await waitFor(`window.__a628.snap().detail`)) && (await snap()).open, true);
   check("1440 no-render: back → list stays open", (await tap("#recordsCardBack")) && (await waitFor(`!window.__a628.snap().detail`)) && (await snap()).open, true);
   check("1440 no-render: Mochi records switches identity, HISTORY stays open", (await tap(`.homePaper__records[data-piggy-id="${mochiId}"]`)) && (await waitFor(`window.__a628.snap().identity === "Mochi"`)) && (await snap()).open, true);
   check("1440 no-render: detail again before the full render", (await tap(".recordsCard__row")) && (await waitFor(`window.__a628.snap().detail`)), true);
   s = await snap();
-  check("1440 no-render: Home paper still 256 after list/detail/identity (no remount)", [s.paperW, s.open], [256, true]);
+  check("1440 no-render: Home paper still 256 after list/detail/identity (no remount)", [s.paperW, s.open], [376, true]); // pre-A-833 baseline: [282, true]
   const g0 = s.gets;
   const pi = await ev(visiblePlus);
   check("1440: visible +Piggy is pointer-reachable while HISTORY is open (web HOME live)", await tap(".homePlusPiggyTab", Math.max(0, pi)), true);
@@ -289,7 +290,7 @@ async function live() {
     await waitFor(`window.__a628.snap().open`);
     await wait(700);
     s = await snap();
-    check(`${w} open: keyboard Enter on records opens a full-size HISTORY`, [rf, s.open, s.anchorW, s.paperW], [true, true, 256, 256]);
+    check(`${w} open: keyboard Enter on records opens a full-size HISTORY`, [rf, s.open, s.anchorW, s.paperW], w === 1440 ? [true, true, 376, 376] : [true, true, 282, 282]); // pre-A-833 baseline: [true, true, 282, 282] at both widths (v10 card: 1440x900 = 376, 390x844 = 283)
     check(`${w}: HISTORY close still reachable`, await tap("#recordsCardClose"), true);
     await wait(600);
     s = await snap();

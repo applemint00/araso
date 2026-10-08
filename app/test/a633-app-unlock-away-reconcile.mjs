@@ -460,11 +460,13 @@ await check("D9 record changed while reading (another outcome already settled it
   assert.equal(r.calls.finish.length, 0);
   assert.equal(r.storage.getItem("araso.txHash"), null);
 });
-await check("D10 Away line strings are exactly the card's: checking… / still out. / can't tell yet.", () => {
+await check("D10 Away line strings: checking… / still out working. (A-893b pending wording; later opens not back yet.) / can't tell yet.", () => {
   const ctx = {};
   vm.createContext(ctx);
   vm.runInContext(`${fnBody("awayRestoreLineMarkup")}\nthis.f = awayRestoreLineMarkup;`, ctx);
-  deq(["checking", "pending", "unknown"].map((k) => ctx.f(k)), ["checking…", "still out.", "can't tell yet."]);
+  // [A-893b re-pin · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로", Away-slot pending wording only; kinds/decisions unchanged]
+  // pre-A-893 baseline: "still out."  (pending, first open of the Away; later opens "not back yet." — a893 N7)
+  deq(["checking", "pending", "unknown"].map((k) => ctx.f(k)), ["checking…", "still out working.", "can't tell yet."]);
 });
 await check("D11 viem's not-yet-mined error name is the one reconcile treats as pending", () => {
   assert.equal(new TransactionReceiptNotFoundError({ hash: D }).name, "TransactionReceiptNotFoundError");

@@ -189,7 +189,8 @@ export function encodeKintsuStep(step, args = {}) {
 
 /**
  * Could this step run for this Piggy? Always { allowed: false }. The first refusal comes from the
- * existing boundaries, in order: proof of the step, the chain profile, the profile's Job, the record
+ * existing boundaries, in order: proof of the step, the chain profile, the profile's Job, the explicit
+ * live gate (liveExecution must be exactly true), the record
  * binding (chain-profile.js — it binds USDC only, so a MON errand cannot be bound), the shared local-fork
  * executor refusal, and finally the fact that no Kintsu lane reaches the send chokepoint.
  */
@@ -199,6 +200,10 @@ export function kintsuExecutionGate({ profile, piggy = {}, executor, step } = {}
   if (problem) return refuse(problem);
   if (!isProfileActive(profile)) return refuse("profile_blocked");
   if (profile.jobId !== KINTSU_JOB_ID) return refuse("profile_not_kintsu_lane");
+  // Explicit live gate: unless the profile says liveExecution === true (exactly true, not truthy), Kintsu refuses here,
+  // before binding or any executor is looked at. Every profile has liveExecution:false today, so this is the refusal a real
+  // Kintsu profile meets. A true value only reaches the remaining boundaries, which still end on "kintsu_lane_not_wired".
+  if (profile.liveExecution !== true) return refuse("live_execution_disabled");
   const { error } = bindRecordToProfile(profile, { piggyId: piggy.id, piggyAddress: piggy.address, asset: KINTSU_FORK_EVIDENCE.entryAsset });
   if (error) return refuse(error);
   const refused = executorRefusal(profile, executor);

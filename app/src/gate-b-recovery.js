@@ -11,7 +11,9 @@
 //    단계)가 원한다면 몫이다 — 이 orchestrator 는 그 결정을 내리지 않는다.
 //  · 원격 저장소 선택/네트워크 — adapter 는 순수 주입값이다.
 
-import { restoreFromBackup } from "./index-backup.js";
+import { hasGateBAnchor, restoreFromBackup } from "./index-backup.js";
+
+export { hasGateBAnchor };
 import { loadMyPiggiesIndex, myPiggiesIndexKey } from "./piggy-index.js";
 
 function lower(a) {
@@ -105,13 +107,24 @@ export function isGateBRemoteAdapter(adapter) {
 }
 
 const ENVELOPE_FIELDS = Object.freeze(["version", "nonce", "ciphertext"]);
+const RELEASE_PROOF_FIELDS = Object.freeze(["challenge", "signature", "publicKey"]);
+function isReleaseProofShape(p) {
+  if (!p || typeof p !== "object" || Array.isArray(p)) return false;
+  const keys = Object.keys(p);
+  if (keys.length !== RELEASE_PROOF_FIELDS.length || keys.some((k) => !RELEASE_PROOF_FIELDS.includes(k))) return false;
+  return typeof p.challenge === "string" && HEX64.test(p.challenge)
+    && typeof p.signature === "string" && /^[0-9a-f]{128}$/.test(p.signature)
+    && typeof p.publicKey === "string" && HEX64.test(p.publicKey);
+}
 
 /**
  * **테스트/로컬 전용** 메모리 adapter. 쓰기 시점에 서버가 볼 수 있는 모양을 강제한다 — 64-hex 가 아닌 조회 키
  * (예: 원시 credentialId · 주소) 나 봉투 밖 필드(주소 목록 등)는 **받지 않는다**. `_dump`/`_admin*` 은 공격
  * 시뮬레이션용이며 복구 경로 코드는 부르지 않는다.
  */
-export function createMemoryGateBAdapter({ refFactory = null } = {}) {
+export function createMemoryGateBAdapter({ refFactory = null, verifyAnchorProof = null } = {}) {
+  const anchors = new Map();
+  let anchorUp = true;
   const discovery = new Map();
   const scopes = new Map();
   let up = true;
@@ -151,11 +164,46 @@ export function createMemoryGateBAdapter({ refFactory = null } = {}) {
         },
       };
     },
+    // [A-857] 신선도 앵커(테스트/로컬 전용). 실제 공급자 아님. 쓰기 증명 검사는 `verifyAnchorProof(tuple, proof)` 주입(기본 = 64-hex 형태만).
+    anchor: {
+      async get(scope) {
+        guard();
+        if (!anchorUp) throw new Error("anchor_unavailable");
+        if (typeof scope !== "string" || !HEX64.test(scope)) throw new Error("bad_scope");
+        return anchors.has(scope) ? { ...anchors.get(scope) } : null;
+      },
+      async advance(scope, prevVersion, nextVersion, envelopeDigest, proof) {
+        guard();
+        if (!anchorUp) throw new Error("anchor_unavailable");
+        if (typeof scope !== "string" || !HEX64.test(scope)) throw new Error("bad_scope");
+        if (!Number.isSafeInteger(prevVersion) || prevVersion < 0 || !Number.isSafeInteger(nextVersion) || nextVersion < 1) throw new Error("bad_record_version");
+        if (typeof envelopeDigest !== "string" || !HEX64.test(envelopeDigest)) throw new Error("bad_digest");
+        const tuple = { scope, prevVersion, nextVersion, envelopeDigest };
+        // [A-876] 증명 모양 = A-857 HMAC(64-hex 문자열) 또는 A-871 출시 등급 {challenge, signature, publicKey}(검증자 주입 시에만).
+        //  검증자(verifyAnchorProof, 동기/비동기)가 없으면 예전 그대로 64-hex 문자열만 받는다.
+        const shapeOk = (typeof proof === "string" && HEX64.test(proof)) || (typeof verifyAnchorProof === "function" && isReleaseProofShape(proof));
+        let okProof = false;
+        if (shapeOk) {
+          try { okProof = typeof verifyAnchorProof !== "function" || (await verifyAnchorProof(tuple, proof)) === true; } catch { okProof = false; }
+        }
+        if (!okProof) throw new Error("anchor_write_unauthorized");
+        const cur = anchors.get(scope);
+        if (cur && cur.recordVersion === nextVersion && cur.envelopeDigest === envelopeDigest) return { ...cur };   // 멱등
+        if ((cur?.recordVersion ?? 0) !== prevVersion) throw new Error("anchor_cas_conflict");
+        if (nextVersion <= prevVersion) throw new Error("anchor_downgrade");
+        const rec = { recordVersion: nextVersion, envelopeDigest };
+        anchors.set(scope, rec);
+        return { ...rec };
+      },
+    },
+    setAnchorOutage(down) { anchorUp = !down; },
+    _adminSetAnchor(scope, record) { if (record === null) anchors.delete(scope); else anchors.set(scope, record); },
     // ---- 공격 시뮬레이션/검사 전용 ----
     setOutage(down) { up = !down; },
     _dump() {
       return {
         discovery: [...discovery.values()].map((r) => ({ ...r })),
+        anchors: [...anchors.entries()].map(([scope, r]) => ({ scope, ...r })),
         backups: [...scopes.entries()].flatMap(([scope, m]) => [...m.entries()].map(([key, env]) => ({ scope, key, ...env }))),
       };
     },
@@ -225,6 +273,9 @@ export async function recoverProductList({
   now = () => new Date().toISOString(),
   subtle = globalThis.crypto?.subtle,
   discovery = null,
+  anchor = null,
+  anchorScope = null,
+  releaseProof = null,   // [A-876] A-871 출시 등급 능력 훅(선택). 없으면 앵커 일치 = local_proof_only. index-backup.js resolveReleaseTrust 참조.
 } = {}) {
   // 어댑터 부재 = 정확한 no-op. restoreFromBackup 도 같은 조건에서 조기 반환하지만,
   // 여기서 한 번 더 짧게 끊어서 이 함수의 계약을 "adapter 없으면 그 아래로 내려가지 않는다"로
@@ -265,6 +316,9 @@ export async function recoverProductList({
     now,
     subtle,
     discoveryRecord,
+    anchor,
+    anchorScope: anchorScope ?? discovery?.backupScope ?? null,
+    releaseProof,
   });
 
   if (out.source === "local_only") {
@@ -275,7 +329,7 @@ export async function recoverProductList({
 
   // out.source === "remote" (index-backup.js 내부 이름) — 이 orchestrator 계약에서는 "backup".
   if (out.error) {
-    return { status: "refused", reason: out.error, source: "backup", restored: [], skipped: out.skipped || [], namesRecovered: false, completeness: "unverified_fresh" };
+    return { status: "refused", reason: out.error, source: "backup", restored: [], skipped: out.skipped || [], namesRecovered: false, completeness: "unverified_fresh", ...(out.freshnessAnchor ? { freshnessAnchor: out.freshnessAnchor } : {}) };
   }
 
   // 성공 — restoreFromBackup 은 {sequence,address} 만 돌려준다(계약 유지를 위해 바꾸지 않았다).
@@ -294,10 +348,11 @@ export async function recoverProductList({
     skipped: out.skipped || [],
     namesRecovered: false,   // [A-554 Lane C] 이름은 blob 에 없다 — 절대 지어내지 않는다.
     // [A-579 Lane B] 절대 "complete" 가 아니다 — index-backup.js restoreFromBackup 의 completeness 그대로.
+    // [A-876] anchored_fresh 는 A-871 출시 등급 훅 + 앵커 일치일 때만 · SAME_SECRET/UNKNOWN 일치 = local_proof_only.
     completeness: out.completeness,
     recordVersion: out.recordVersion,
     claimedThrough: out.claimedThrough,
     restoredThrough: out.restoredThrough,
-    freshnessAnchor: null,
+    freshnessAnchor: out.freshnessAnchor ?? null,
   };
 }

@@ -68,7 +68,8 @@ check("TAP_CUE_TIMING delay/wave/fade/entrance unchanged = 300/1320/250/1870",
   [TAP_CUE_TIMING.delayMs, TAP_CUE_TIMING.waveMs, TAP_CUE_TIMING.fadeMs, TAP_CUE_TIMING.entranceMs], [300, 1320, 250, 1870]);
 check("TAP_CUE_TIMING.readyMs = entrance 1870 + hold 1500 = 3370", TAP_CUE_TIMING.readyMs, 3370);
 check("wave keys unchanged (A-614 PREVIEW WAVE_SUBTLE_KEYS)", TAP_CUE_TIMING.waveKeys, [[0, 0], [350, -7], [550, -4], [770, -8], [960, -4], [1320, 0]]);
-check("label screen size unchanged (15px)", TAP_CUE_TIMING.screenPx, 15);
+// [A-779 RE-PIN] A-777 §8.2 LOCKED Chog microcopy legibility bump: "tap me!" 15 -> 18 screen px (text size only; timing pins below unchanged).
+check("label screen size = A-779 legibility value (18px)", TAP_CUE_TIMING.screenPx, 18);
 check("hold envelope: 1000 ≤ holdMs ≤ 1500", TAP_CUE_TIMING.holdMs >= 1000 && TAP_CUE_TIMING.holdMs <= 1500, true);
 check("tapCueFrame: opacity 1 across the whole hold (1870 / 2620 / 3369), wave 0 during hold",
   [tapCueFrame(1870).labelOpacity, tapCueFrame(2620).labelOpacity, tapCueFrame(3369).labelOpacity, tapCueFrame(2620).waveDeg, tapCueFrame(3369).entering], [1, 1, 1, 0, false]);
@@ -269,19 +270,29 @@ async function live() {
         await p.waitForFunction(() => window.__a725?.done === true, null, { timeout: 15000 });
         const a = analyse(await p.evaluate(() => window.__a725));
         timeline.push({ tag, ...a });
-        check(`${tag}: exactly one 'tap me!' label appears, the First Job card follows`, [a.cueFirst, a.labelsMax, a.sendAt != null], [0, 1, true]);
+        // [A-895 P-D COVERAGE POINTER] The check titles below still describe the pre-A-891 first-arrival cue, but they now pin its ABSENCE
+        // (re-pinned values). The cue's timing coverage (entrance / hold / wave / cue-before-Send) is no longer in this file: the First Send reveal
+        // timing is covered by a891-wave4-file-quiet-tapme.mjs Part B (firstArrival: cardsInQuiet 0, readyMs), and the post-file / revisit cue's
+        // entrance + 18px render by a779-small-text-unify.mjs B5 and a891 Part B. Read "exactly one 'tap me!' label" etc. as "zero (A-891)".
+        // [A-891 CG-04, Owner 2026-10-08] First Home stays quiet: no first-arrival "tap me!". Re-pinned to the coordinator browser run 2026-10-08 (browser_merged/a725-tap-cue-pacing.log).
+        // pre-A-891 baseline: [0, 1, true] (sendAt is measured from the first cue frame, so it is null without a cue)
+        check(`${tag}: exactly one 'tap me!' label appears, the First Job card follows`, [a.cueFirst, a.labelsMax, a.sendAt != null], [null, 0, false]);
         check(`${tag}: zero frames with cue + First Job card together (paint-level)`, a.overlapFrames, 0);
         check(`${tag}: zero DOM batches with cue + First Job card together`, a.domOverlap, 0);
-        check(`${tag}: cue removed in the DOM before the card is inserted`, a.removeBeforeSendAdd, true);
-        check(`${tag}: cue fully gone (not in DOM) by the first card frame, never returns`, [a.goneAt != null && a.sendAt != null && a.goneAt <= a.sendAt, a.cueAfterSend], [true, 0]);
+        // pre-A-891 baseline: true
+        check(`${tag}: cue removed in the DOM before the card is inserted`, a.removeBeforeSendAdd, null);
+        // pre-A-891 baseline: [true, 0]
+        check(`${tag}: cue fully gone (not in DOM) by the first card frame, never returns`, [a.goneAt != null && a.sendAt != null && a.goneAt <= a.sendAt, a.cueAfterSend], [false, 0]);
         check(`${tag}: Home paper never auto-opens (pad opacity 0 every frame before the card)`, a.maxPadBeforeSend, 0);
         if (!reduced) {
-          check(`${tag}: label reaches full opacity at ≈ entrance (1870ms ±150 after the cue appears)`, a.fullAt != null && Math.abs(a.fullAt - TAP_CUE_TIMING.entranceMs) <= 150, true);
-          check(`${tag}: full-opacity hold measured ${a.hold}ms ∈ [${HOLD_MIN_MS}, ${HOLD_MAX_MS}] (target ${HOLD_TARGET_MS})`, a.hold != null && a.hold >= HOLD_MIN_MS && a.hold <= HOLD_MAX_MS, true);
-          check(`${tag}: the wave still plays (min arm ≤ −5°, never beyond −8°)`, a.minArm <= -5 && a.minArm >= -8.0001, true);
+          // pre-A-891 baseline: true, true, true (no first-arrival label → no entrance, no hold, no wave; the A-725 hold now belongs to the post-file cue, a891 Part B)
+          check(`${tag}: label reaches full opacity at ≈ entrance (1870ms ±150 after the cue appears)`, a.fullAt != null && Math.abs(a.fullAt - TAP_CUE_TIMING.entranceMs) <= 150, false);
+          check(`${tag}: full-opacity hold measured ${a.hold}ms ∈ [${HOLD_MIN_MS}, ${HOLD_MAX_MS}] (target ${HOLD_TARGET_MS})`, a.hold != null && a.hold >= HOLD_MIN_MS && a.hold <= HOLD_MAX_MS, false);
+          check(`${tag}: the wave still plays (min arm ≤ −5°, never beyond −8°)`, a.minArm <= -5 && a.minArm >= -8.0001, false);
         } else {
-          check(`${tag}: reduced → static label at opacity 1 from its first frame, arm never rotates`, [a.firstOp, a.minArm], [1, 0]);
-          check(`${tag}: reduced → readable ≥ 1.0s before the same First Job card (existing reveal)`, a.hold != null && a.hold >= 1000 && a.hold <= 1700, true);
+          // pre-A-891 baseline: [1, 0] and true
+          check(`${tag}: reduced → static label at opacity 1 from its first frame, arm never rotates`, [a.firstOp, a.minArm], [null, 0]);
+          check(`${tag}: reduced → readable ≥ 1.0s before the same First Job card (existing reveal)`, a.hold != null && a.hold >= 1000 && a.hold <= 1700, false);
         }
         check(`${tag}: page errors 0, blocked tx 0`, [errors, blockedTx], [[], 0]);
         await context.close();

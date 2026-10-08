@@ -319,7 +319,14 @@ await check("A-774 source: preparedSignProblem unchanged (gasPrice still forbidd
   assert.ok(s.includes(cond) && s.indexOf(cond) < s.indexOf("preparedSignProblem(toSign)"));
   const ex = readFileSync(new URL("../src/money-executor.js", import.meta.url), "utf8");
   const strict = ex.slice(ex.indexOf("if (strict) {"));
-  assert.ok(strict.includes(cond) && strict.indexOf(cond) < strict.indexOf("preparedSignProblem(toSign)"));
+  // [A-791 re-pin, named reason: the strict path and the VIEM_SEND compat path now share ONE signing-copy helper
+  // (signingCopy) so both guard and sign the same object. The strip condition is byte-identical, it lives only in that
+  // helper (still exactly one `delete gasPrice` in the file), and both paths call it before preparedSignProblem.]
+  const helper = ex.slice(ex.indexOf("export function signingCopy("), ex.indexOf("function passed("));
+  assert.ok(helper.includes(cond), "signingCopy carries the exact A-774 strip condition");
+  assert.ok(strict.includes("const toSign = signingCopy(prepared);") && strict.indexOf("const toSign = signingCopy(prepared);") < strict.indexOf("preparedSignProblem(toSign)"));
+  const viemSend = ex.slice(ex.indexOf("let viemSendRequest = null;"), ex.indexOf("// Compat transports: the hash exists only once the send returns."));
+  assert.ok(viemSend.indexOf("signingCopy(") > 0 && viemSend.indexOf("signingCopy(") < viemSend.indexOf("preparedSignProblem(toSign)"), "VIEM_SEND builds the same signing copy before the guard");
   assert.equal((MAIN.match(/delete [a-zA-Z.]*gasPrice/g) || []).length, 1);
   assert.equal((ex.match(/delete [a-zA-Z.]*gasPrice/g) || []).length, 1);
 });
@@ -411,6 +418,7 @@ function makeFirst({ visibleShares }) {
   const env = {
     localStorage: storage, state, document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     isAllowedPiggyRpId: () => true,
+    signerSince: Date.now(), // [A-896 harness wiring] live signer stamped now (wall clock) so sendPiggyOnce's 60 s margin check sees a fresh signer
     activeAccount: { address: "0xabc", signTransaction: async (p) => `0xa${p.nonce}` },
     navigator: { locks: fakeLocks() }, keccak256,
     activeSession: { signDigest: async () => ({ compact: new Uint8Array([1]), recovery: 0 }) },

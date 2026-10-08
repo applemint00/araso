@@ -31,6 +31,9 @@ export const AMBIENT_WEIGHTS = Object.freeze({
 // Density: never two visible Piggies in the same prop-heavy state; at most one sleep sequence.
 export const AMBIENT_PROP_HEAVY = Object.freeze([S.WATCHING, S.LISTEN, S.DRINK]);
 export const AMBIENT_SLEEP = Object.freeze([S.FLOP_SLEEP]);
+// [A-790 OWNER DECISION LOCK 2026-10-05 (B)] Sleep is NOT part of the random pool any more: a Piggy only sleeps
+// through the active-Piggy 90s inactivity clock below. AMBIENT_WEIGHTS / AMBIENT_MOTION_STATES keep the model
+// values (the sleep entry is the recorded canon weight) but assignHomeAmbient() never draws a sleep state.
 // Loop lengths (s) of the confirmed cues; used only to stagger phase offsets.
 export const AMBIENT_CYCLE_S = Object.freeze({
   [S.IDLE]: 3.2,
@@ -54,7 +57,9 @@ export const AMBIENT_CYCLE_S = Object.freeze({
 //   The reverse of the deep-sleep part is NOT separately recorded in canon, so (per the A-744 card) the
 //   forward timings are reversed as-is: blanket lowers 2.4s, drowsy undoes over 3.2s, roll back 1.5s,
 //   landed rest 1.7s, Flop in reverse 1.3s (lying → seated idle) — 10.1s in all.
-// TRIGGER: DORMANT. No wake trigger (tap / timer / interrupt) is recorded in canon (A656 VERIFY: "Wake
+// [A-790 2026-10-06] The trigger is now decided (Owner lock (B): any meaningful interaction) and wired for the active
+// Piggy through createActiveSleepClock()/piggyWakeStartFor() below; PIGGY_WAKE.wakeStartS stays null (the start is per-sleep, passed in).
+// (historic A-744 text follows) TRIGGER: DORMANT. No wake trigger (tap / timer / interrupt) is recorded in canon (A656 VERIFY: "Wake
 // trigger UNKNOWN") — Owner-open. So the reverse is implemented and tested but NOTHING in the product starts
 // it: piggyWakePhase() only wakes when a caller passes an explicit `wakeStartS`, and no product caller does.
 // With no start the sleeper behaves exactly as before A-744 (asleep; 77.1s cue then the 64s rest loop).
@@ -91,6 +96,102 @@ export function piggyWakePhase(elapsedS, reduced = false, wakeStartS = null) {
   const u = e - wakeStartS;
   if (u < W.durationS) return Object.freeze({ phase: "waking", forwardT: W.forwardTimeAt(u), awakeS: 0 });
   return Object.freeze({ phase: "awake", forwardT: 0, awakeS: u - W.durationS });
+}
+
+// ── [A-803 2026-10-06 · SUPERSEDES A-790's "only the active/main Piggy sleeps" rule] ───────────────────
+// Sleep eligibility follows each Piggy's own resolved Home behavior, never its role or the Piggy count:
+// a Home Piggy whose current behavior is plain IDLE may sleep after ACTIVE_SLEEP_AFTER_MS of inactivity
+// whether it is single, main (seat) or a companion. Any other ambient action (watching / drink / listen /
+// sunshine) or runtime action (work / away / return) never sleeps while it is in that behavior.
+// (A-790 evidence stays as history; this is the newest Owner decision.)
+export const HOME_SLEEP_ELIGIBLE_STATES = Object.freeze([S.IDLE]);
+export function homeSleepEligible(resolvedState) {
+  return HOME_SLEEP_ELIGIBLE_STATES.includes(resolvedState);
+}
+
+// [옛 규칙 · A-803(101–107줄)이 대체 · 기록으로만 둠]
+// ── [A-790] Active-Piggy sleep clock + wake start ───────────────────────────────────────────────────
+// OWNER DECISION LOCK 2026-10-05 (B): ONLY the active/main Piggy sleeps, after 90 s of inactivity; any
+// meaningful interaction wakes it with the existing reverse-Flop (piggyWakePhase). Chog stays on its own 60 s
+// (chog-home.js SLEEP_IDLE_MS) — nothing here touches it.
+// Inactivity = no meaningful user interaction. Meaningful = window `pointerdown` (tap/click/touch anywhere on
+// Home, incl. the Piggy, Chog, Work/Away/Return buttons) or `keydown`. NOT meaningful: pointermove / hover /
+// scroll / timers / re-renders / resize. Leaving Home for Work, Away or Return also resets the clock (main.js).
+export const ACTIVE_SLEEP_AFTER_MS = 90000;
+export const ACTIVE_SLEEP_INTERACTION_EVENTS = Object.freeze(["pointerdown", "keydown"]);
+
+// Forward time of the sleeper at `elapsedS` seconds after it began to sleep (same mapping as piggyWakePhase).
+function sleeperForwardT(elapsedS) {
+  const e = Number.isFinite(elapsedS) ? Math.max(0, elapsedS) : 0;
+  return e <= 77.1 ? e : 13.1 + ((e - 13.1) % 64);
+}
+
+// wakeStartS (in the sleeper's own elapsed frame) for a wake triggered at `elapsedS`.
+//   interaction BEFORE deep sleep (still flopping/rolling/drowsy, forward t < durationS): the reverse begins at
+//   exactly that forward time -> the first wake frame equals the frame on screen (no snap).
+//   interaction in deep sleep: begins at the canonical deep-sleep frame (as A-744; only the breath/turn phase
+//   of the rest loop can differ from the frame on screen — snapFreeStartS documents the exact-match instant).
+export function piggyWakeStartFor(elapsedS) {
+  const e = Number.isFinite(elapsedS) ? Math.max(0, elapsedS) : 0;
+  const D = PIGGY_WAKE.durationS;
+  const c = Math.min(D, sleeperForwardT(e));
+  return e - (D - c);
+}
+
+// Pure, injectable (fake timers in tests). Modes: awake -> sleeping (after afterMs of no interact()) ->
+// waking (interact() while sleeping; lasts the REMAINING reverse-Flop) -> awake (inactivity counts again).
+// `slept` stays true after a wake until the next sleep so the caller keeps the seated-idle (awake) frame
+// instead of snapping back to a mid-cycle ambient pose.
+export function createActiveSleepClock({ now = () => Date.now(), setTimer = setTimeout, clearTimer = clearTimeout, afterMs = ACTIVE_SLEEP_AFTER_MS, onChange = null } = {}) {
+  let mode = "awake";
+  let slept = false;
+  let sleepStartMs = 0;
+  let wakeStartS = null;
+  let timer = null;
+  const emit = () => { if (typeof onChange === "function") onChange(mode); };
+  const clear = () => { if (timer !== null) { clearTimer(timer); timer = null; } };
+  const arm = () => {
+    clear();
+    timer = setTimer(() => {
+      timer = null;
+      if (mode !== "awake") return;
+      mode = "sleeping";
+      slept = true;
+      sleepStartMs = now();
+      wakeStartS = null;
+      emit();
+    }, afterMs);
+  };
+  return {
+    // start counting inactivity (no-op while sleeping/waking or when already counting)
+    arm() { if (mode === "awake" && timer === null) arm(); },
+    // meaningful interaction. Returns true when it started a wake.
+    // opts.instant (reduced motion: nothing animates) = sleeper is simply awake at once, no reverse-Flop.
+    interact(opts = null) {
+      if (mode === "awake") { arm(); return false; }
+      if (mode === "waking") return false;
+      if (opts && opts.instant) { clear(); mode = "awake"; slept = false; wakeStartS = null; emit(); arm(); return true; }
+      const e = (now() - sleepStartMs) / 1000;
+      wakeStartS = piggyWakeStartFor(e);
+      mode = "waking";
+      clear();
+      const remainS = Math.max(0, PIGGY_WAKE.durationS - (e - wakeStartS));
+      timer = setTimer(() => {
+        timer = null;
+        mode = "awake";
+        emit();
+        arm();
+      }, Math.round(remainS * 1000));
+      emit();
+      return true;
+    },
+    // scene change that takes the Piggy away from the Home layer (Work/Away/Return) or no seat: back to plain awake
+    reset() { clear(); mode = "awake"; slept = false; wakeStartS = null; },
+    snapshot() {
+      return Object.freeze({ mode, slept, sleepStartMs, elapsedS: slept ? Math.max(0, (now() - sleepStartMs) / 1000) : 0, wakeStartS });
+    },
+    setOnChange(fn) { onChange = fn; },
+  };
 }
 
 function piggyIdOf(value) {
@@ -201,12 +302,12 @@ export function assignHomeAmbient(piggyIds, nonce, { eligible = null } = {}) {
   const ids = uniqueIds(piggyIds);
   const order = stableOrder(ids, nonce, "ambient");
   const out = new Map();
-  let sleepTaken = false;
   const propTaken = new Set();
   order.forEach((id, rank) => {
     const rng = seededRandom(hashSeed(`${nonce}|${id}|ambient`));
     const candidates = AMBIENT_MOTION_STATES.filter((state) => {
-      if (AMBIENT_SLEEP.includes(state) && sleepTaken) return false;
+      // [A-790] never sleep by random assignment (companions never sleep; the active Piggy sleeps only via the 90s clock)
+      if (AMBIENT_SLEEP.includes(state)) return false;
       if (AMBIENT_PROP_HEAVY.includes(state) && propTaken.has(state)) return false;
       if (typeof eligible === "function" && state !== S.IDLE && !eligible(id, state)) return false;
       return true;
@@ -218,7 +319,6 @@ export function assignHomeAmbient(piggyIds, nonce, { eligible = null } = {}) {
       roll -= AMBIENT_WEIGHTS[state];
       if (roll < 0) { picked = state; break; }
     }
-    if (AMBIENT_SLEEP.includes(picked)) sleepTaken = true;
     if (AMBIENT_PROP_HEAVY.includes(picked)) propTaken.add(picked);
     const bucket = (rank + rng()) / Math.max(1, order.length);
     out.set(id, Object.freeze({ state: picked, phaseS: bucket * AMBIENT_CYCLE_S[picked] }));
@@ -348,27 +448,23 @@ export function planHomeSlots({ width, seat, chog, foot, paper, brand = null, sa
         ["M2", atSize(safe.x + wA + gap, floorY - bLift - hB, wB, hB)],
       ].slice(0, Math.min(2, mobileVisibleCap));
     })()
-    : band === "mid"
-      ? [
-        ["WN1", at(foot.x - gap - w, foot.y)],
-        ["WN2", at(foot.r - w, foot.y - gap - h)],
-        ["WN3", at(foot.x, foot.b + gap)],
-        // [A-728 4:3 mid-band coverage] WN2/WN3 need vh ≳ 900 (the fixed 456.9px foot is centred),
-        // so at 1024×768 / 1180×820 only SEAT+WN1 fit and a 3rd Piggy went card-only. WA1 (the
-        // already-adopted 1440 lower-left seat-floor slot, same formula) is a FALLBACK: it is tried
-        // only when a WN candidate was rejected, so tall mid viewports (700×900, 900×900) keep the
-        // exact measured plan SEAT,WN1..WN3 and their seeded slot preference (homeSlotPreference).
-        ["WA1", at(foot.x - gap - w, seat.y), { fallback: true }],
-      ]
-      : [
-        ["W2", at(foot.r + gap, foot.y)],
-        ["W3", at(foot.r - w, foot.y - gap - h)],
-        ["W4", at(paper.x, foot.b + gap)],
-        // Owner/coordinator resolution 2026-09-30: measured WA1 (lower-left, seat floor line) and
-        // WA2 (upper-left) are adopted, so 1440×900 fills W1 → W2 → WA1 → WA2 (W3/W4 do not fit there).
-        ["WA1", at(foot.x - gap - w, seat.y)],
-        ["WA2", at(foot.x - gap - w, foot.y)],
+    : (() => {
+      // [A-831 · A-829 / A-682 item 1 / A-788 — Cowork Q-A (a)] Home shows Main + up to 2 smaller companions in ONE lower-left cluster: on the Main floor line, left of the
+      // character stage (Chog ink), BELOW the Home card — and below the two-card footprint (`foot`, History open) — never behind or over a card. Same companion scales as the
+      // mobile cluster (A .425 / B .375 of the seat), shrunk further only when the strip between the footprint and the floor is shorter than that. Replaces the old
+      // fixed-rect formulas (W2/W3/W4/WA1/WA2 and WN1..WN3, all anchored to the pre-v10 centred paper), which no longer fit the larger / zone-placed v10 card.
+      // Names are kept (web: WA1, WA2; mid: WN1, WN2) so the seeded slot preference / wide-pose code is untouched. No motion, state or timing change.
+      const floorY = seat.b;
+      const strip = Math.max(0, floorY - (foot.b + gap + 0.5));
+      const sA = Math.min(HOME_EXTRA_A_SCALE, strip / h), sB = Math.min(HOME_EXTRA_B_SCALE, strip / h);
+      const wA = w * sA, hA = h * sA, wB = w * sB, hB = h * sB;
+      const xA = chog.x - gap - 0.5 - wA;
+      const names = band === "mid" ? ["WN1", "WN2"] : ["WA1", "WA2"];
+      return [
+        [names[0], atSize(xA, floorY - hA, wA, hA)],
+        [names[1], atSize(xA - gap - 0.5 - wB, floorY - hB - Math.max(0, Math.min(hB * 0.15, strip - hB)), wB, hB)],
       ];
+    })();
   const seatName = band === "mobile" ? "M0" : band === "mid" ? "SEAT" : "W1";
   const slots = [{ name: seatName, rect: seat, seat: true }];
   const rejected = [];
