@@ -123,6 +123,7 @@ export function mountReturnView(opts) {
   // 알람 hop 과 숨김은 **바깥 wrapper** 에만 건다.
   // `#chogHome` 자신의 transform 은 chog-home.js 의 corner 배치다 — 덮으면 판 밖으로 나간다.
   const chogWrap = root.querySelector("#returnChogHop");
+  if (chogWrap) chogWrap.style.translate = `0px ${RETURN_GEOMETRY.chogDrop || 0}px`; // [A-920 item 3] same drop as placeChog() below, set before the first frame
 
   // Home Chog — 수령 전의 소유자. 도착해 있는 idle 로만 붙인다(시작 모션 0).
   let homeChog = null;
@@ -271,6 +272,8 @@ export function mountReturnView(opts) {
     // 원본 알람 hop(−5·sin, 무대 단위)을 현재 board 축척으로. 내부 transform 은 건드리지 않는다.
     const hop = (meta && meta.alertHop) || 0;
     chogWrap.style.transform = hop ? `translateY(${hop * RETURN_GEOMETRY.group.scale}px)` : "";
+    // [A-920 item 3] the Return Chog stands RETURN_GEOMETRY.chogDrop board units below the Home floor line (mock img_25-27); the CSS individual `translate` composes with the hop transform above.
+    chogWrap.style.translate = `0px ${RETURN_GEOMETRY.chogDrop || 0}px`;
   }
 
   // [A-414-e] "문서 받기 전 checking 0" — Chog 옆 발화(main.js state.awayLine/

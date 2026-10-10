@@ -320,6 +320,7 @@ function openApp(storage, { href = `${ORIGIN}/`, credential, address = null, sec
     __GIFT_RECORD_SOURCE__: giftRecordSource,
     __ISSUANCE_AUTHORITY__: issuanceAuthority,
     __GIFT_CLAIM_SUBMITTER__: giftSubmitter,
+    releaseAllows: () => true, // [A-943] BOOT_SRC now holds the [A-943] block; this harness runs at the dev-server default (level 2). pre-A-943: not needed
   };
   vm.createContext(ctx);
   vm.runInContext(

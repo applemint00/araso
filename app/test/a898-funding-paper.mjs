@@ -27,8 +27,9 @@ const view = (p) => FP.fundingPaperView(p);
 
 await check("A1 exactly three rows in order with the Owner labels", () => {
   const v = view(open());
-  assert.deepEqual(v.rows.map((r) => r.id), ["card", "bank", "crypto"]);
-  assert.deepEqual(v.rows.map((r) => r.label), ["Pay with card", "Bank transfer", "Pay with crypto"]);
+  // [A-924 RE-PIN · A-920 item 5, Cowork 06:35] mock order crypto first. pre-A-924 baseline: ["card", "bank", "crypto"] / ["Pay with card", "Bank transfer", "Pay with crypto"]
+  assert.deepEqual(v.rows.map((r) => r.id), ["crypto", "card", "bank"]);
+  assert.deepEqual(v.rows.map((r) => r.label), ["Pay with crypto", "Pay with card", "Bank transfer"]);
 });
 await check("A2 card/bank are available:false with a reason; crypto is available", () => {
   const v = view(open());

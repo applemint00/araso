@@ -320,8 +320,11 @@ await check("N7 main.js boundaries: DEV preview fixture and an unauthenticated s
 await check("N8 static: lane UI paths never reach permission / executor / lane intent / Send; canSend refuses lane mode; reader gets no config", () => {
   const lanePaths = [...LANE_FUNCTIONS, "handleSecondLaneTry"].map((n) => stripComments(fnBody(n))).join("\n");
   assert.equal(/advanceLaneIntent|startLaneIntent|buildLanePermissionPreview|executeMoneyStep|issuePermission|authorize\(|consume\(|requestGrant|sendTransaction|signDigest|handleSecondSend|setScene\("secondAway"|outcome\s*=|executionPermission:\s*true|permission\s*=\s*true/.test(lanePaths), false);
-  assert.match(stripComments(fnBody("refreshSecondLaneCandidates")), /readSecondCurrent\(\{ profile: CHAIN_PROFILE, piggyAddress: state\.address \|\| "" \}\)/);
-  assert.equal(/rpcUrl|fetchImpl/.test(stripComments(fnBody("refreshSecondLaneCandidates"))), false);
+  // [A-938 RE-PIN] the reader now gets the profile rpcUrl + fetch + clock, read-only (testnet/blocked profile has no rpcUrl = no_rpc); the URL may come ONLY from CHAIN_PROFILE.rpcUrl.
+  // pre-A-938: the exact call without config, and no rpcUrl / fetchImpl (/ transport) word in the function at all.
+  assert.match(stripComments(fnBody("refreshSecondLaneCandidates")), /readSecondCurrent\(\{ profile: CHAIN_PROFILE, piggyAddress: state\.address \|\| "", rpcUrl: CHAIN_PROFILE\.rpcUrl, fetchImpl: fetch, now: \(\) => new Date\(\)\.toISOString\(\) \}\)/);
+  assert.deepEqual([...stripComments(fnBody("refreshSecondLaneCandidates")).matchAll(/rpcUrl:\s*([^,}]+)/g)].map((m) => m[1].trim()), ["CHAIN_PROFILE.rpcUrl"]);
+  assert.equal(/transport/.test(stripComments(fnBody("refreshSecondLaneCandidates"))), false);
   const vm = stripComments(fnBody("buildSecondJourneyViewModel"));
   assert.match(vm, /const canSend =\s*!laneMode &&\s*devPreview &&/);
   assert.match(vm, /laneMode \? \(chosen \? \{ status: chosen\.derivedStatus, executionPermission: false \} : null\)/);

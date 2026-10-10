@@ -351,7 +351,8 @@ await check("S4 import graph: the Kintsu module is imported by no product file; 
   const importers = (mod) => files.filter((f) => f !== mod && new RegExp(`from "\\./${mod.replace(/\./g, "\\.")}"`).test(SRC(f)));
   assert.deepEqual(importers("mainnet-job-kintsu.js"), []);
   assert.deepEqual(importers("mainnet-job-aave.js"), ["mainnet-job-lane.js"]);
-  assert.deepEqual(importers("mainnet-job-common.js").sort(), ["mainnet-job-aave.js", "mainnet-job-abil.js", "mainnet-job-curvance.js", "mainnet-job-kintsu.js", "mainnet-job-lane.js", "mainnet-job-neverland.js"]);
+  // [A-939 RE-PIN] + mainnet-job-lp.js (the new LP module imports the shared helpers). pre-A-939 baseline: the 6 modules without it
+  assert.deepEqual(importers("mainnet-job-common.js").sort(), ["mainnet-job-aave.js", "mainnet-job-abil.js", "mainnet-job-curvance.js", "mainnet-job-kintsu.js", "mainnet-job-lane.js", "mainnet-job-lp.js", "mainnet-job-neverland.js"]);
   assert.equal(/mainnet-job-(kintsu|aave|common)/.test(SRC("main.js")), false);
 });
 

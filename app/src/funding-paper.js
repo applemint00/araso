@@ -19,7 +19,7 @@ import { resumeAfterFunding } from "./funding-intent-bridge.js";
 // ── [A-898 LOGIC] ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 export const FUNDING_ROW = Object.freeze({ CARD: "card", BANK: "bank", CRYPTO: "crypto" });
-export const FUNDING_ROW_ORDER = Object.freeze([FUNDING_ROW.CARD, FUNDING_ROW.BANK, FUNDING_ROW.CRYPTO]);
+export const FUNDING_ROW_ORDER = Object.freeze([FUNDING_ROW.CRYPTO, FUNDING_ROW.CARD, FUNDING_ROW.BANK]); // [A-920 item 5 · A-924] mock order, crypto first (Cowork 06:35: this one line). pre-A-924 baseline: [CARD, BANK, CRYPTO]
 // Owner copy (gift_card_20261004/README 2026-10-08 "Add money / Send a Piggy 흐름"). Verbatim.
 export const FUNDING_ROW_LABEL = Object.freeze({
   card: "Pay with card",

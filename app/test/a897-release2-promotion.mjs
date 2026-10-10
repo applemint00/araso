@@ -3,6 +3,7 @@
 // Part U: gift-claim-entry.js (evidence ladder C4 -> C5 weak fallback, same-#1 binding), piggy-index.js / piggy-registry.js (promotion admit).
 // Part M: node:vm over the ACTUAL main.js [A-897] block: branches (has / unknown / none), fresh device, #2/#3, case 3, Name-it.
 // Part S: static - the block is the only main.js change vs the pre-A-897 copy, // comments only, no fetch call, wrappers keep originals.
+import { restorePreA920 } from "./helpers/a920-restore.mjs";
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import crypto from "node:crypto";
@@ -419,7 +420,7 @@ await check("S1 main.js differs from the pre-A-897 copy ONLY by the [A-897] P1/P
   if (!BEFORE && !existsSync(path.join(REPO, "_private"))) { const sk = new Error("skip"); sk.publicSkip = "pre-A-897 main.js baseline exists only in the private workspace (public checkout)"; throw sk; }
   assert.ok(BEFORE, "before/main.js missing");
   const cut = (src, a, b) => { const i = src.indexOf(a); assert.ok(i >= 0, a); let j = src.indexOf(b, i); assert.ok(j >= 0, b); j = src.indexOf("\n", j) + 1; return [src.slice(0, i), src.slice(j)]; };
-  let [h, t] = cut(MAIN, "// ── [A-897] P1 Release-2", "// ── [A-897] end P1");
+  let [h, t] = cut(restorePreA920(MAIN), "// ── [A-897] P1 Release-2", "// ── [A-897] end P1"); // [A-920 RE-PIN] pre-A-920 baseline: cut(MAIN, ...) (A-920 edits four main.js functions + eight const lines, pinned by a920-main-js-scope.mjs)
   assert.equal(MAIN.indexOf("// ── [A-897] P1 Release-2", MAIN.indexOf("// ── [A-897] P1 Release-2") + 1), -1, "one P1 block");
   let rest = h + t.slice(1);
   // pre-A-912 baseline: main.js == the pre-A-897 copy plus the A-897 blocks. [A-912 re-pin, Cowork-approved] strip the A-912 additions first: the A912_PRODUCT_BUILD const, the

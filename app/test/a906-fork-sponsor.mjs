@@ -19,11 +19,13 @@ import { decodeAbiParameters, encodeAbiParameters, encodeFunctionData, getAddres
 import { GIFT_SPONSOR_PINS, giftSponsorRedeemData, buildExactExecutionTerms, buildTimestampTerms, createGiftSponsorSession, sponsorCommitHash, toExecutorAuthorizationList, validateGiftSponsorRequest } from "../src/gift-sponsor-7702.js";
 import { preparedSignProblem } from "../src/money-executor.js";
 import { createGiftSponsorPolicy, createGiftSponsorService, openGiftSponsorLedger } from "../../relayer/src/gift-sponsor-service.mjs";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
+import { pathToFileURL } from "node:url"; // [A-932]
 
 const skip = (why) => { console.log(`SKIP  a906-fork-sponsor — ${why}; 0 checks run`); process.exit(0); };
 const REPO = new URL("../../", import.meta.url);
 const ART = new URL("_private/ops/harness/gift-mainnet-fork-native/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json", REPO);
-const RAW_DIR = new URL("_private/ops/receipts/A906_gift_sponsor_adopt/raw/", REPO);
+const RAW_DIR = pathToFileURL(testOutDir("a906-fork-sponsor", process.env.A906_RAW_OUT) + "/"); // [A-932] pre-A-932 baseline: receipts/A906_gift_sponsor_adopt/raw/
 if (!process.env.A906_FORK && !process.env.A906_FORK_URL) skip("not requested (run: A906_FORK=1 node app/test/a906-fork-sponsor.mjs)");
 if (spawnSync("anvil", ["--version"], { stdio: "ignore" }).status !== 0) skip("anvil not installed");
 if (!existsSync(ART)) skip("local escrow artifact absent (public checkout)");

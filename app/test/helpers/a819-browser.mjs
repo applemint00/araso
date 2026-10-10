@@ -11,6 +11,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { launch, sleep, REPO } from "./a803-browser.mjs";
+import { testOutDir } from "./test-out.mjs"; // [A-932]
 
 export { sleep, REPO, launch };
 
@@ -212,7 +213,7 @@ export async function measureInvitePhaseResize(H, fromW, toW, h, { atMs = 1500, 
 // ---- CLI ----------------------------------------------------------------------------------------------------------------
 async function cli() {
   const [phase = "before", item = "all", outArg] = process.argv.slice(2);
-  const out = path.resolve(outArg || path.join(REPO, "_private/ops/receipts/A819_ui_wave1_responsive", phase));
+  const out = testOutDir(`a819-browser-${phase}`, outArg); // [A-932] pre-A-932 baseline default: receipts/A819_ui_wave1_responsive/<phase>
   mkdirSync(path.join(out, "shots"), { recursive: true });
   const want = (n) => item === "all" || item === n;
   const save = (name, obj) => writeFileSync(path.join(out, name), JSON.stringify(obj, null, 1));

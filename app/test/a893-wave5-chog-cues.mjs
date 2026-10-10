@@ -258,7 +258,8 @@ await check("N9 protected bodies (PROTECTED_PINS_MAP_20261007, incl. render / mo
 await check("N10 CG-06 verify-only: Return skip still offered only after the first result motion; return-view.js / send-card.js untouched; no Third+ compact", () => {
   const rv = readFileSync(path.join(REPO, "app/src/return-view.js"), "utf8");
   // pre-A-891-merge baseline: return-view.js == A-893 HASH_BEFORE c44d28669d32c10f2515326b12d6458eb601957febc9d95a3570955ae5004ac6 (A-891 UI-19 edited it; A-893 still must not)
-  assert.equal(sha(rv), "c01be5d750dadf0fdc787a02f1ff328205b4818013d3f6df924c435671b47605", "return-view.js == post-A-891 (A-893 untouched)");
+  // [A-920 RE-PIN] return-view.js adds the Return Chog drop (mock img_25-27). pre-A-920 baseline: sha c01be5d750dadf0fdc787a02f1ff328205b4818013d3f6df924c435671b47605
+  assert.equal(sha(rv), "9e691c94360ba5275393ee7483bd5e994b739f6a5a317aa0ad38cb176f309221", "return-view.js == post-A-891 + A-920 Chog drop (A-893 untouched)");
   assert.match(rv, /if \(skipBtn && allowSkip\) \{/);
   assert.equal((MAIN.match(/allowSkip: state\.resultMotionSeen === true,/g) || []).length, 2, "First + Second Return pass the same first-result gate");
   assert.equal(sha(readFileSync(path.join(REPO, "app/src/send-card.js"), "utf8")), "975f2b6d791ba05fdb7be901304e7303d4bcc87f3f90b25bcb614b476ce2add3", "send-card.js (First Send card copy) untouched");

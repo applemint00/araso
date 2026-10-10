@@ -10,11 +10,12 @@
 // 1440 Move money: `ok` / `Send` sits beside the paper on the right (Owner answer 7). Keyboard: focus puts the screen in typing mode (card / paper up, Send / ok hidden); the real keyboard height needs a device (UNKNOWN here).
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a917 browser part (ARASO_TEST_BROWSER=1 to run)"); process.exit(0); }
 
 const { launch, sleep, REPO } = await import("./helpers/a803-browser.mjs");
-const OUT = path.resolve(process.argv[2] || path.join(REPO, "_private/ops/receipts/A917_a911_framer_layout/app-run"));
+const OUT = testOutDir("a917-a911-framer-layout-browser", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A917_a911_framer_layout/app-run
 mkdirSync(OUT, { recursive: true });
 const SIZES = [{ id: "390", w: 390, h: 844 }, { id: "810", w: 810, h: 1080 }, { id: "1440", w: 1440, h: 900 }, { id: "390i", w: 390, h: 844, top: 59, bottom: 34 }];
 const OUT_ADDR = "0x1111111111111111111111111111111111111111";
@@ -94,6 +95,7 @@ async function openTab() {
 
 const { a911Z, a911Bottom, a911SideM } = await import("../src/a911-screens.js");
 async function step(name, fn) { try { await fn(); } catch (e) { stepErrors.push({ step: name, error: String((e && e.message) || e).slice(0, 500) }); console.log(`STEP ERROR  ${name}: ${String((e && e.message) || e).slice(0, 200)}`); } }
+const FREEZE = process.env.ARASO_SWEEP === "freeze"; // [A-926] ARASO_SWEEP=freeze → full sweep; otherwise 390/390i/810/1440 only (A-923 rule 2: 1px sweep once, at freeze)
 const SWEEP_STEP = Number(process.env.A917_SWEEP_STEP || 25);
 
 // the shared button + the picked card (Gift) on the open own screen
@@ -188,54 +190,57 @@ try {
     results.places[size.id] = Object.fromEntries(Object.entries(got).map(([n, m]) => [n, m.act]));
   }
 
-  // 2) coarse width sweep (the full 1 px sweep is in the design receipt): no size / place steps, always on the rule
-  for (const [name, reach] of SCREENS) {
-    await step(`sweep ${name}`, async () => {
-      await reach({ id: "sweep", w: 1440, h: 900 });
-      const rows = [];
-      for (let w = 360; w <= 1600; w += SWEEP_STEP) {
-        await p.setViewportSize({ width: w, height: 900 }); await sleep(260);
-        const m = await measure();
-        if (!m.act) { must(false, `[sweep ${name} ${w}] button missing`); continue; }
-        const e = expectPlace(m, { bottom: 0 });
-        must(near(m.act.r, e.right, 0.6) && near(m.act.b, e.bottom, 0.6), `[sweep ${name} ${w}] on the rule (r ${R1(m.act.r)}/${R1(e.right)} b ${R1(m.act.b)}/${R1(e.bottom)})`);
-        rows.push({ ...m.act, vw: w, z: e.z });
-      }
-      results.sweep[name] = rows;
-      for (let i = 1; i < rows.length; i += 1) {
-        const a = rows[i - 1], b = rows[i], dw = b.vw - a.vw;
-        const lim = (b.vw > 1440 ? dw / a.vw : 0.00045 * dw) + 0.002; // above 1440 z follows W / 1440 (A-829 cap 1.33), so a step is dw / W
-        // x is measured from the right side (right = margin line). A 25 px step may move z by <= 0.9 %; a media-query step (1 -> 1.15 -> 1.35) would be 15 % / 17 %
-        must(Math.abs(b.h - a.h) / a.h <= lim, `[sweep ${name} ${a.vw}->${b.vw}] height step ${R1(a.h)} -> ${R1(b.h)}`);
-        must(Math.abs(b.w - a.w) / a.w <= lim, `[sweep ${name} ${a.vw}->${b.vw}] width step ${R1(a.w)} -> ${R1(b.w)}`);
-        must(Math.abs((b.vw - b.x) - (a.vw - a.x)) <= 0.2 * dw + 1, `[sweep ${name} ${a.vw}->${b.vw}] distance of the left edge from the right side ${R1(a.vw - a.x)} -> ${R1(b.vw - b.x)}`);
-        must(Math.abs(b.y - a.y) <= 0.05 * dw + 1, `[sweep ${name} ${a.vw}->${b.vw}] y step ${R1(a.y)} -> ${R1(b.y)}`);
-      }
-    });
-  }
+  // [A-926] ARASO_SWEEP=freeze → full sweep; otherwise 390/390i/810/1440 only (A-923 rule 2: 1px sweep once, at freeze)
+  if (FREEZE) {
+    // 2) coarse width sweep (the full 1 px sweep is in the design receipt): no size / place steps, always on the rule
+    for (const [name, reach] of SCREENS) {
+      await step(`sweep ${name}`, async () => {
+        await reach({ id: "sweep", w: 1440, h: 900 });
+        const rows = [];
+        for (let w = 360; w <= 1600; w += SWEEP_STEP) {
+          await p.setViewportSize({ width: w, height: 900 }); await sleep(260);
+          const m = await measure();
+          if (!m.act) { must(false, `[sweep ${name} ${w}] button missing`); continue; }
+          const e = expectPlace(m, { bottom: 0 });
+          must(near(m.act.r, e.right, 0.6) && near(m.act.b, e.bottom, 0.6), `[sweep ${name} ${w}] on the rule (r ${R1(m.act.r)}/${R1(e.right)} b ${R1(m.act.b)}/${R1(e.bottom)})`);
+          rows.push({ ...m.act, vw: w, z: e.z });
+        }
+        results.sweep[name] = rows;
+        for (let i = 1; i < rows.length; i += 1) {
+          const a = rows[i - 1], b = rows[i], dw = b.vw - a.vw;
+          const lim = (b.vw > 1440 ? dw / a.vw : 0.00045 * dw) + 0.002; // above 1440 z follows W / 1440 (A-829 cap 1.33), so a step is dw / W
+          // x is measured from the right side (right = margin line). A 25 px step may move z by <= 0.9 %; a media-query step (1 -> 1.15 -> 1.35) would be 15 % / 17 %
+          must(Math.abs(b.h - a.h) / a.h <= lim, `[sweep ${name} ${a.vw}->${b.vw}] height step ${R1(a.h)} -> ${R1(b.h)}`);
+          must(Math.abs(b.w - a.w) / a.w <= lim, `[sweep ${name} ${a.vw}->${b.vw}] width step ${R1(a.w)} -> ${R1(b.w)}`);
+          must(Math.abs((b.vw - b.x) - (a.vw - a.x)) <= 0.2 * dw + 1, `[sweep ${name} ${a.vw}->${b.vw}] distance of the left edge from the right side ${R1(a.vw - a.x)} -> ${R1(b.vw - b.x)}`);
+          must(Math.abs(b.y - a.y) <= 0.05 * dw + 1, `[sweep ${name} ${a.vw}->${b.vw}] y step ${R1(a.y)} -> ${R1(b.y)}`);
+        }
+      });
+    }
 
-  // 3) Gift card at the 1024 arrangement switch: no size step (neighbour 1 px <= 1 %), 1000..1100 in 1 px steps, two heights
-  for (const h of [900, 720]) {
-    await step(`card sweep ${h}`, async () => {
-      await reachGift({ id: "card", w: 1000, h }, { stopAtPick: true });
-      await p.setViewportSize({ width: 1000, height: h }); await sleep(400);
-      const rows = [];
-      for (let w = 1000; w <= 1100; w += 1) {
-        await p.setViewportSize({ width: w, height: h }); await sleep(120);
-        const m = await measure();
-        if (m.card) rows.push({ w, h, cw: m.card.w, ch: m.card.h, cx: m.card.x, cy: m.card.y });
-      }
-      must(rows.length >= 95, `[card sweep ${h}] picked card measured at ${rows.length}/101 widths`);
-      let worst = 0;
-      for (let i = 1; i < rows.length; i += 1) {
-        const d = Math.max(Math.abs(rows[i].ch - rows[i - 1].ch) / rows[i - 1].ch, Math.abs(rows[i].cw - rows[i - 1].cw) / rows[i - 1].cw);
-        worst = Math.max(worst, d);
-        must(d <= 0.01, `[card sweep ${h} ${rows[i - 1].w}->${rows[i].w}] card box step ${R1(rows[i - 1].ch)} -> ${R1(rows[i].ch)} (${R1(d * 100)} %)`);
-      }
-      console.log(`card sweep height ${h}: ${rows.length} widths, worst neighbour 1 px change ${R1(worst * 100)} %`);
-      results.cardSweep.push({ height: h, worstPct: R1(worst * 100), rows });
-    });
-  }
+    // 3) Gift card at the 1024 arrangement switch: no size step (neighbour 1 px <= 1 %), 1000..1100 in 1 px steps, two heights
+    for (const h of [900, 720]) {
+      await step(`card sweep ${h}`, async () => {
+        await reachGift({ id: "card", w: 1000, h }, { stopAtPick: true });
+        await p.setViewportSize({ width: 1000, height: h }); await sleep(400);
+        const rows = [];
+        for (let w = 1000; w <= 1100; w += 1) {
+          await p.setViewportSize({ width: w, height: h }); await sleep(120);
+          const m = await measure();
+          if (m.card) rows.push({ w, h, cw: m.card.w, ch: m.card.h, cx: m.card.x, cy: m.card.y });
+        }
+        must(rows.length >= 95, `[card sweep ${h}] picked card measured at ${rows.length}/101 widths`);
+        let worst = 0;
+        for (let i = 1; i < rows.length; i += 1) {
+          const d = Math.max(Math.abs(rows[i].ch - rows[i - 1].ch) / rows[i - 1].ch, Math.abs(rows[i].cw - rows[i - 1].cw) / rows[i - 1].cw);
+          worst = Math.max(worst, d);
+          must(d <= 0.01, `[card sweep ${h} ${rows[i - 1].w}->${rows[i].w}] card box step ${R1(rows[i - 1].ch)} -> ${R1(rows[i].ch)} (${R1(d * 100)} %)`);
+        }
+        console.log(`card sweep height ${h}: ${rows.length} widths, worst neighbour 1 px change ${R1(worst * 100)} %`);
+        results.cardSweep.push({ height: h, worstPct: R1(worst * 100), rows });
+      });
+    }
+  } else console.log("sweep skipped (ARASO_SWEEP!=freeze)");
 } catch (e) {
   stepErrors.push({ step: "run", error: String((e && e.stack) || e).slice(0, 600) });
   console.log("ERROR", stepErrors[stepErrors.length - 1].error);

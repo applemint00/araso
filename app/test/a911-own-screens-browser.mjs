@@ -8,11 +8,12 @@
 // 1440 Move money: `ok` / `Send` sits beside the paper on the right (Owner answer 7). Keyboard: focus puts the screen in typing mode (card / paper up, Send / ok hidden); the real keyboard height needs a device (UNKNOWN here).
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a911 browser part (ARASO_TEST_BROWSER=1 to run)"); process.exit(0); }
 
 const { launch, sleep, REPO } = await import("./helpers/a803-browser.mjs");
-const OUT = path.resolve(process.argv[2] || path.join(REPO, "_private/ops/receipts/A911_own_screens/browser"));
+const OUT = testOutDir("a911-own-screens-browser", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A911_own_screens/browser
 mkdirSync(OUT, { recursive: true });
 const SIZES = [{ id: "390", w: 390, h: 844 }, { id: "810", w: 810, h: 1080 }, { id: "1440", w: 1440, h: 900 }, { id: "390i", w: 390, h: 844, top: 59, bottom: 34 }];
 const OUT_ADDR = "0x1111111111111111111111111111111111111111";
@@ -239,7 +240,8 @@ async function frameMoveOut(size, kind) {
     await tapSel('.a911-piggy[data-pick="1"]', "pick a Piggy");
   }
   await waitFor("[data-a905-amount-view]", 4000);
-  must((await p.locator('input[data-a905-field="amount"]').count()) === 0, `[move-out-2 ${size.id}] no typed-amount input (chips only)`);
+  // [A-924 RE-PIN · Owner 06:4x ③] Move out = `all` + typed amount: exactly one amount input (inputmode decimal). pre-A-924 baseline: no typed-amount input (chips only)
+  must((await p.locator('input#a924OutAmount[data-a905-field="amount"][inputmode="decimal"]').count()) === 1, `[move-out-2 ${size.id}] one typed-amount input (all + typed)`);
   await snap("move-out-2-amount", size, { kinds: ["move"], act: true });
   await tapSel('[data-a905-act="out-choice"]', "amount chip").catch(() => {}); await sleep(300);
   await tapSel("#a905OutOk", "amount ok");

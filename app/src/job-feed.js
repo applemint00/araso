@@ -27,7 +27,15 @@ export const FIRST_JOB_RECEIPT = Object.freeze({
   receiptClosed: true,
 });
 
-export const EXPLORE_ERRANDS = Object.freeze([
+// [A-936] LP errand copy — EXACTLY the two strings the Owner will decide (canon CONVO_20261006_resource_lp_metro_ops_canon.md §1.3–1.4: copy OPEN).
+// Placeholders only; no LP / range / IL jargon is shown. Change these two values and nothing else when the Owner decides.
+export const LP_ERRAND_COPY = Object.freeze({
+  label: "help with trades", // [A-944] Owner-approved title — the Explore Paper errand line
+  description: "earn a little when people swap", // [A-944] Owner-approved short description; constant only, no screen line for it yet (adding one needs a design GO)
+  receiptLine: "[COPY OPEN · Owner]", // the one-liner on the Return receipt (still open)
+});
+
+const BASE_EXPLORE_ERRANDS = Object.freeze([
   {
     id: "market",
     label: "시장 다녀오기",
@@ -131,8 +139,66 @@ export const EXPLORE_ERRANDS = Object.freeze([
     testSize: "known",
     cost: "known",
     availability: "open",
-  },
-]);
+  },]);
+
+// [A-936 · Owner 08:2x "첫묶음으로 넣던지 최우선으로 그 당시에 가능하다면"] LP errand placement = the EXISTING order (baseScore descending, the
+// array is authored in that order and main.js computeExploreDisplayErrands slices it as is). No new sort / slot rule: the LP entry is inserted where
+// its score falls, the other 8 keep their order. "Possible now" = LP_PATH_READY (the FORK-labeled receipt path is wired end to end in this build):
+// open → 0.46 (above today's top 0.45 = round 1, first) · otherwise watch → 0.34 (Grow kind, right after grow; ties keep array order).
+export const LP_PATH_READY = false;
+export const LP_ERRAND = Object.freeze({
+  id: "lp",
+  label: LP_ERRAND_COPY.label,
+  // lane "LP" (card A-936 ①), NOT "Grow": second-journey-view.js exploreCandidateDestinations maps a candidate family to the FIRST errand
+  // with that lane — an LP entry with lane "Grow" placed first (open, 0.46) would steal the grow_stable candidates from `grow` (OUTBOX 질문).
+  lane: "LP",
+  kind: "errand_intent",
+  reason: "liquidity",
+  baseScore: LP_PATH_READY ? 0.46 : 0.34,
+  permission: "known",
+  exit: "known",
+  testSize: "known",
+  cost: "known",
+  availability: LP_PATH_READY ? "open" : "watch",
+});
+export function insertByScore(list, entry) { // exported for the a936 placement test only
+  const at = list.findIndex((e) => e.baseScore < entry.baseScore); // first strictly lower score: equal scores keep the existing ones first
+  return at < 0 ? [...list, entry] : [...list.slice(0, at), entry, ...list.slice(at)];
+}
+export { BASE_EXPLORE_ERRANDS };
+export const EXPLORE_ERRANDS = Object.freeze(insertByScore(BASE_EXPLORE_ERRANDS, LP_ERRAND));
+
+// [A-936 ②] The LP Return receipt DATA (A-808 fork run, receipts/A808_second_lp_fork/WRITER_NOTES.md §1–2) for the EXISTING Second receipt
+// fields (name · date · wentOut · cameBack · kept · statusLabel). Grade is FORK and can never be LIVE / READY. Not the user's money: these
+// values are a fork fixture and must never be written into balances, History or receipts storage (pure data, no side effects).
+export const LP_FORK_GRADE = "FORK";
+export const LP_FORK_RECEIPT = Object.freeze({
+  grade: LP_FORK_GRADE,
+  sourceTask: "A-808",
+  chainId: 143,
+  forkBlock: 110874000,
+  venue: "Curve Stableswap-NG", // detail / technical view only
+  pair: "AUSD · USDC · USDT0", // detail / technical view only (not hard-coded USDC/MON, canon §1.3)
+  wentOut: "10 USDC",
+  cameBack: "9.999506 USDC",
+  roundTripLoss: "0.000494 USDC (0.00494%)",
+  fees: "UNKNOWN", // fork-local swaps only, not market activity
+  txCount: 69,
+  reverted: 0,
+});
+export function lpForkReceiptFields(name = "Piggy", now = new Date()) {
+  return Object.freeze({
+    name,
+    date: now.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
+    wentOut: LP_FORK_RECEIPT.wentOut,
+    cameBack: LP_FORK_RECEIPT.cameBack,
+    kept: `−${LP_FORK_RECEIPT.roundTripLoss}`,
+    statusLabel: `${LP_FORK_GRADE.toLowerCase()} · ${LP_ERRAND_COPY.receiptLine}`,
+    grade: LP_FORK_GRADE,
+    empty: false,
+  });
+}
+
 
 export const SHMON_CURRENT_EVIDENCE = Object.freeze({
   sourceTask: "A-188",

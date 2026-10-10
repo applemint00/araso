@@ -24,6 +24,7 @@ export const A911_COPY = Object.freeze({
   network: "Monad network",
   copy: "copy",
   copied: "copied",
+  confirm: "Needs your OK — nothing has been sent yet.", // [A-920 item 6 · A-924] existing app copy: money-tab.js OUT_CONFIRM_NOTE / main.js moneyIntentMarkup (mock O3)
 });
 
 const FACE_ICON = `<svg class="a911-act__icon" viewBox="0 0 22 22" fill="none" stroke="#E0B100" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M2 7 V5 Q2 2 5 2 H7 M15 2 H17 Q20 2 20 5 V7 M20 15 V17 Q20 20 17 20 H15 M7 20 H5 Q2 20 2 17 V15"/><circle cx="7.5" cy="9" r="0.9" fill="#E0B100" stroke="none"/><circle cx="14.5" cy="9" r="0.9" fill="#E0B100" stroke="none"/><path d="M8 14.5 Q11 16.5 14 14.5"/></svg>`;
@@ -165,7 +166,11 @@ export function a911MoneyMarkup(view = {}) {
 //   out: step "pick" { rows } | "amount" { piggy:{name}, balance, amount, choices:[{id,label,selected}] } | "address" { piggy, amount, asset, address, notice } }
 const sw = (dir) => `<div class="a911-sw" role="group">${["in", "out"].map((v) => `<button class="a911-sw__opt" type="button" data-dir="${v}" data-a905-act="dir" data-a905-arg="${v}" aria-pressed="${dir === v}">${v}</button>`).join("")}</div>`;
 const mono = (addr) => `<div class="a911-mono" data-a898-address="1">${esc(addr)}</div>`;
-const chips2 = (choices) => `<div class="a911-chips a911-chips--paper" role="group" aria-label="$">${(choices || []).map((c) => `<button class="a911-chip${c.selected ? " is-on" : ""}" type="button" aria-pressed="${!!c.selected}" data-a905-act="out-choice" data-a905-arg="${esc(c.id)}">${esc(c.label)}</button>`).join("")}</div>`;
+// [A-924 · Owner 06:4x ③] Move out chips = `all · <balance>` + `custom`; `custom` is a <label> for the amount field (tap = number keyboard, no JS, no amount set).
+// pre-A-924 baseline: every chip was an out-choice button (custom filtered out upstream)
+const chips2 = (choices) => `<div class="a911-chips a911-chips--paper" role="group" aria-label="$">${(choices || []).map((c) => c.id === "custom"
+  ? `<label class="a911-chip" for="a924OutAmount">${esc(c.label)}</label>`
+  : `<button class="a911-chip${c.selected ? " is-on" : ""}" type="button" aria-pressed="${!!c.selected}" data-a905-act="out-choice" data-a905-arg="${esc(c.id)}">${esc(c.label)}</button>`).join("")}</div>`;
 
 function moveBody(view) {
   const s = view.step;
@@ -194,11 +199,16 @@ function moveBody(view) {
   if (s === "pick") return list(view.rows, { pick: "out-pick" });
   if (s === "amount") {
     return `<div class="a911-note a911-note--top">from <u>${esc(view.piggy.name)}</u> · ${esc(view.balance)}</div>
-      <div class="a911-amtField" data-a905-amount-view="1">${view.amount ? esc(view.amount) : "$"}</div>${chips2(view.choices)}`; // [A-911] read-only: chips only (typing your own = follow-up card)
+      <label class="a911-amtLine"><span class="a911-amtLine__cur" aria-hidden="true">$</span><input class="a911-amtField" id="a924OutAmount" type="text" inputmode="decimal" enterkeyhint="done" autocomplete="off" spellcheck="false" data-a905-field="amount" aria-label="total" value="${esc(view.amount || "")}" /></label>${chips2(view.choices)}`;
+      // [A-924 · Owner 06:4x ③] typed amount on the send? paper `$5` underline grammar; the existing a905 "amount" input listener + send-money resolveAmount validate it.
+      // pre-A-924 baseline: read-only <div class="a911-amtField" data-a905-amount-view> ("$" when empty), chips only
   }
-  return `<div class="a911-line"><span>${esc(view.piggy.name)}</span><span class="a911-line__r">${esc(view.amount)}<small>${esc(view.asset || "USDC")}</small></span></div>
+  // [A-920 item 6 · A-924] mock O3 (money_screens_mock.html:96-98): amount as `$20` + small USDC, and the existing confirm note (A911_COPY.confirm) under the address line.
+  // pre-A-924 baseline: `20` + small USDC, no note under the address.
+  return `<div class="a911-line"><span>${esc(view.piggy.name)}</span><span class="a911-line__r">${money$(view.amount)}<small>${esc(view.asset || "USDC")}</small></span></div>
     <div class="a911-note">to</div>
     <textarea class="a911-addrField" rows="2" spellcheck="false" autocomplete="off" aria-label="to" data-a905-field="address">${esc(view.address)}</textarea>
+    <div class="a911-note" data-a924-confirm-note="1">${esc(A911_COPY.confirm)}</div>
     ${view.notice ? `<div class="a911-note">${esc(view.notice)}</div>` : ""}`;
 }
 
@@ -251,7 +261,11 @@ export function a911Fit(root, { width = window.innerWidth, height = window.inner
   const link = root.querySelector(".a911-link");
   const gap = 20 * z;
   // [A-917 Cowork 19:20] the card size must not step at 1024: the controls' height is reserved on both sides of the arrangement switch (beside <-> below). Pre-A-917: 0 when beside, so the card grew ~1.6 % there.
-  const ctrlH = !typing && ctrl ? ctrl.getBoundingClientRect().height + gap : 0;
+  // [A-920 item 7 · A-924] >= 1024 the controls sit BESIDE the card, so their height is only reserved as a straight ramp 1 -> 0 from 1024 to the 1440 keyframe:
+  // no step at the 1024 arrangement switch (A-917 Cowork 19:20 / A-829 #1) and the 1440 pick card reaches its keyframe (1.6 = mock ~345 x 541; A-919 row 7).
+  // pre-A-924 baseline: the full controls height was reserved at every width (1440 pick card 270 x 428).
+  const reserve = W < 1024 ? 1 : Math.max(0, Math.min(1, (1440 - W) / (1440 - 1024)));
+  const ctrlH = !typing && ctrl ? (ctrl.getBoundingClientRect().height + gap) * reserve : 0;
   const linkH = link ? link.getBoundingClientRect().height + gap : 0;
   const fit = (want, extra) => Math.max(0.45, Math.min(want, (availH - extra - 4) / 342));
   if (root.dataset.a911 === "gift") {

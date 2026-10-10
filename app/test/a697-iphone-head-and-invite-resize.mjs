@@ -67,7 +67,7 @@ const ctx = vm.createContext({
 });
 function ctx_kind() { return win.innerWidth >= 900 ? "wide" : "mobile"; }
 vm.runInContext(
-  `const HOME_TOOLBAR_RESIZE_DELTA_PX = 150;\n${MAIN.match(/const INVITE_WIDE_ART_SCALE = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_PHONE_ART_SCALE = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_CONTENT_W = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_CONTENT_H = [^;]+;/)[0]}\n${cutFn("inviteGroupScale")}\n${cutFn("inviteHolePhase")}\n${cutFn("isToolbarOnlyResizeDelta")}\n${cutFn("debouncedHomeResizeListener")}\n${cutFn("wantedInviteKind")}\n${cutFn("fitInvite")}\nglobalThis.onResize = debouncedHomeResizeListener(fitInvite);`,
+  `/* [A-920 RE-PIN] the vm also needs hkKey + the three A-920 keyframe consts (inviteGroupScale reads them). pre-A-920 baseline: no such lines */const HOME_TOOLBAR_RESIZE_DELTA_PX = 150;\n${MAIN.match(/const INVITE_WIDE_ART_SCALE = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_PHONE_ART_SCALE = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_CONTENT_W = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_CONTENT_H = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_GROUP_K = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_OFFSET_X = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_OFFSET_Y = [^;]+;/)[0]}\n${cutFn("hkKey")}\n${cutFn("inviteGroupScale")}\n${cutFn("inviteHolePhase")}\n${cutFn("isToolbarOnlyResizeDelta")}\n${cutFn("debouncedHomeResizeListener")}\n${cutFn("wantedInviteKind")}\n${cutFn("fitInvite")}\nglobalThis.onResize = debouncedHomeResizeListener(fitInvite);`,
   ctx,
 );
 const live = () => timers.filter((t) => !t.dead);

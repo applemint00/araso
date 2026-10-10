@@ -244,7 +244,7 @@ function testnetPiggy(overrides = {}) {
   const target = testnetPiggy();
   const client = fakeClient({ chainId: 10143, balance: 12500000n }); // 12.5 USDC (6 decimals)
   const out = await reconcileConfirmedFunding({
-    evidence: { chainId: "monad-testnet", tokenAddress: TESTNET_USDC, targetAddress: TARGET_ADDR, targetPiggyId: "honeybun", txHash: "0xdeadbeef", decimals: 6, assetSymbol: "USDC" },
+    evidence: { chainId: "monad-testnet", tokenAddress: TESTNET_USDC, targetAddress: TARGET_ADDR, targetPiggyId: "honeybun", txHash: "0xdeadbeef", decimals: 6, assetSymbol: "USDC", status: "confirmed" }, // pre-A-931 baseline: no status (A-931 G3 requires evidence status "confirmed")
     piggies: [target, other], client, runtimeChainId: "monad-testnet", now: TS,
   });
   check("3. reconcile ok", out.ok === true);
@@ -300,7 +300,7 @@ function testnetPiggy(overrides = {}) {
 {
   const withBirth = testnetPiggy({ valuation: { usd: "0", source: "birth_unfunded", at: TS } });
   const client = fakeClient({ chainId: 10143, balance: 10000000n }); // 10.0 USDC
-  const evidence = { chainId: "monad-testnet", tokenAddress: TESTNET_USDC, targetAddress: TARGET_ADDR, targetPiggyId: "honeybun", txHash: "0xval1", decimals: 6, assetSymbol: "USDC" };
+  const evidence = { chainId: "monad-testnet", tokenAddress: TESTNET_USDC, targetAddress: TARGET_ADDR, targetPiggyId: "honeybun", txHash: "0xval1", decimals: 6, assetSymbol: "USDC", status: "confirmed" }; // pre-A-931 baseline: no status (A-931 G3 requires evidence status "confirmed")
 
   const noQuote = await reconcileConfirmedFunding({ evidence, piggies: [withBirth], client, runtimeChainId: "monad-testnet", now: TS });
   const noQuotePiggy = noQuote.piggies.find((p) => p.id === "honeybun");

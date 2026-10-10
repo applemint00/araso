@@ -15,6 +15,7 @@
 // O1..O5 out (picker skipped / shown, Away row not pickable, amount, address, confirm) · G1 / G2 Gift pay step (1 / 2+ payers) · TAP measured sizes.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a905 browser part (ARASO_TEST_BROWSER=1 to run)"); process.exit(0); }
 
@@ -22,7 +23,7 @@ if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a905 browser pa
 export const JAR_CENTRE_PROBE = `(() => { const jar = document.querySelector("#a905Jar"); if (!jar) return null; const b = jar.getBoundingClientRect(); const t = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2); return { jarCentreHit: Boolean(t && (t === jar || jar.contains(t))), w: b.width, h: b.height }; })()`;
 
 const { launch, sleep, REPO } = await import("./helpers/a803-browser.mjs");
-const OUT = path.resolve(process.argv[2] || path.join(REPO, "_private/ops/receipts/A905_money_tab_jar/browser"));
+const OUT = testOutDir("a905-money-browser", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A905_money_tab_jar/browser
 mkdirSync(OUT, { recursive: true });
 const SIZES = [[390, 844], [810, 1080], [1440, 900]];
 const MIN_TAP = 44;
@@ -290,7 +291,8 @@ async function frameInMulti(size) {
   const fundRows = await p.evaluate(() => [...document.querySelectorAll("[data-a898-row]")].map((b) => `${(b.querySelector("span")?.textContent || b.textContent).replace(/^[>\s]+/, "").trim()}${b.dataset.a905Act === "plan-fund" ? "" : " (dim)"}`));
   must(legs.length === 2, `[I3 ${size[0]}] plan shows a row per leg (got ${legs.length})`);
   must(fundRows.length === 3, `[I3 ${size[0]}] plan offers the three Funding rows (got ${fundRows.join(" | ")})`);
-  must(fundRows[0] === "Pay with card (dim)" && fundRows[1] === "Bank transfer (dim)" && fundRows[2] === "Pay with crypto", `[I3 ${size[0]}] card + bank dim, crypto enabled (got ${fundRows.join(" | ")})`);
+  // [A-924 RE-PIN · A-920 item 5 / Owner 06:4x ②] mock order crypto first. pre-A-924 baseline: card (dim) · bank (dim) · crypto
+  must(fundRows[0] === "Pay with crypto" && fundRows[1] === "Pay with card (dim)" && fundRows[2] === "Bank transfer (dim)", `[I3 ${size[0]}] crypto enabled first, card + bank dim (got ${fundRows.join(" | ")})`);
   await snap("I3", size, { sels: ["[data-add-money-leg]", '[data-a905-act="plan-fund"]'] });
   note("I3-legs", size, { legs, fundRows });
   await waCheckpoint(`I2/I3 ${size[0]}`, m0);

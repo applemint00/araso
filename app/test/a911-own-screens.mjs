@@ -122,7 +122,7 @@ check("D2 Move out: pick list, amount (chips + ok), address is a textarea (wraps
   const pick = a911MoveMarkup({ dir: "out", step: "pick", rows: PIGGIES });
   assert.ok(pick.includes('data-a905-act="out-pick"') && pick.includes('data-pick="0"'));
   const amount = a911MoveMarkup({ dir: "out", step: "amount", piggy: { name: "Honeybun" }, balance: "$20", amount: "", choices: [{ id: "20", label: "$20" }], canOk: false });
-  assert.ok(!amount.includes('<input') && amount.includes('data-a905-amount-view') && amount.includes('id="a905OutOk"') && amount.includes('data-a905-act="out-choice"'));
+  assert.ok(amount.includes('id="a924OutAmount"') && amount.includes('data-a905-field="amount"') && amount.includes('inputmode="decimal"') && amount.includes('id="a905OutOk"') && amount.includes('data-a905-act="out-choice"')) // [A-924 RE-PIN · Owner 06:4x ③] typed amount input. pre-A-924 baseline: !amount.includes('<input') && amount.includes('data-a905-amount-view');
   const addr = a911MoveMarkup({ dir: "out", step: "address", piggy: { name: "Honeybun" }, amount: "20", address: "0xabc", canSend: false });
   assert.ok(/<textarea class="a911-addrField"[^>]*data-a905-field="address"/.test(addr), "address is a textarea");
   assert.ok(addr.includes('id="a905OutFaceId"') && /<span class="a911-act__label">Send<\/span>/.test(addr) && /id="a905OutFaceId"[^>]*disabled/.test(addr));
@@ -130,7 +130,9 @@ check("D2 Move out: pick list, amount (chips + ok), address is a textarea (wraps
 });
 
 check("E1 no new copy: every visible word in the builders is an existing/Owner line", () => {
-  const allowed = /^(Araso|Gift a Piggy|Money|Move money|Send|ok|in|out|TO|FROM|tap to turn it over|for you|back|Not ready yet|Monad network|copy|copied|Gift gas cost|Araso fee|need|more|Add money|Use MON for the remaining|What's this\?|Try again|USDC|MON|from|to|total|still out working\.|Pay with crypto|nothing moved\.|checking…|can't tell yet\.|name|a few words…|unknown|\$?[\d.,]+|[·—>&gt;]+)$/;
+  // [A-924 RE-PIN] + "Needs your OK — nothing has been sent yet." (existing app copy: money-tab.js OUT_CONFIRM_NOTE; mock O3, A-920 item 6). The Gift front captions
+  // (mock gift_screen_mock.html :85 / :93 / :101) are ≤ 7 words and pass the existing short-line rule. pre-A-924 baseline: the regex below without the Needs-your-OK line
+  const allowed = /^(Needs your OK — nothing has been sent yet\.|Araso|Gift a Piggy|Money|Move money|Send|ok|in|out|TO|FROM|tap to turn it over|for you|back|Not ready yet|Monad network|copy|copied|Gift gas cost|Araso fee|need|more|Add money|Use MON for the remaining|What's this\?|Try again|USDC|MON|from|to|total|still out working\.|Pay with crypto|nothing moved\.|checking…|can't tell yet\.|name|a few words…|unknown|\$?[\d.,]+|[·—>&gt;]+)$/;
   const views = [a911GiftMarkup({ ...GIFT, stage: "pick", picked: "01", short: true, shortfallUsd: "12", monOption: { offered: true, remainingUsd: "12" }, requote: true, canSend: true }),
     a911MoneyMarkup({ total: "$38", assets: "20 USDC", canMove: true, canGift: true, piggies: PIGGIES }),
     a911MoveMarkup({ dir: "in", step: "crypto", assets: [{ id: "USDC" }, { id: "MON" }], address: "0x1" }),

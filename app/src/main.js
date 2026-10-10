@@ -117,6 +117,7 @@ import { HOME_UNKNOWN_LABEL } from "./home-paper.js";
 import { GIFT_CREATE_CHAIN_ID, buildGiftCreateStepCalls, confirmGiftCreateStep, giftCreateConfigProblem, needsGasRegistration, registerGasDeposit } from "./gift-create-plan.js";
 import { runGiftCreateCalls } from "./gift-send-paper.js";
 // ── [A-915] end imports ──
+import { releaseAllows } from "./release-gate.js"; // [A-943] used only in the two [A-943] blocks (boot · Second entries)
 import { legacyTestnetPathOpen, profileScope, resolveChainProfile } from "./chain-profile.js";
 import { reconcileConfirmedFunding } from "./funding-reconcile.js";
 import {
@@ -3836,7 +3837,7 @@ async function refreshSecondLaneCandidates() {
   let currentRead;
   try {
     // No rpcUrl / transport / clock: the product reader stays unconfigured (gate G3), so this reads nothing.
-    currentRead = await readSecondCurrent({ profile: CHAIN_PROFILE, piggyAddress: state.address || "" });
+    currentRead = await readSecondCurrent({ profile: CHAIN_PROFILE, piggyAddress: state.address || "", rpcUrl: CHAIN_PROFILE.rpcUrl, fetchImpl: fetch, now: () => new Date().toISOString() }); // [A-938] read-only; no rpcUrl on testnet/blocked = no_rpc (pre-A-938: profile + piggyAddress only)
   } catch {
     currentRead = { kind: "second_current_read", piggyAddress: null, candidates: [] };
   }
@@ -3903,7 +3904,7 @@ async function secondHomeRecheckRead(eventId) {
       return { currentRead: out?.currentRead, agreedRules: out?.agreedRules && typeof out.agreedRules === "object" ? out.agreedRules : {} };
     }
   }
-  return { currentRead: await readSecondCurrent({ profile: CHAIN_PROFILE, piggyAddress: state.address || "" }), agreedRules: {} };
+  return { currentRead: await readSecondCurrent({ profile: CHAIN_PROFILE, piggyAddress: state.address || "", rpcUrl: CHAIN_PROFILE.rpcUrl, fetchImpl: fetch, now: () => new Date().toISOString() }), agreedRules: {} }; // [A-938] same as above
 }
 
 async function recheckSecondCandidatesOnHome() {
@@ -5445,13 +5446,26 @@ function inviteHolePhase(kind, L, scale) {
 }
 const INVITE_WIDE_ART_SCALE = 1.125;
 const INVITE_PHONE_ART_SCALE = 390 / 420;
+const INVITE_OFFSET_X = [-15.1, -15.7, 0]; // [A-920] board units at 390 / 810 / 1440
+const INVITE_OFFSET_Y = [16.3, 22.2, 0];
+const INVITE_GROUP_K = [0.927, 0.84, 1]; // [A-920] mock keyframes 390 / 810 / 1440
 const INVITE_CONTENT_W = { mobile: 380, wide: 760 };
 const INVITE_CONTENT_H = { mobile: 768, wide: 720 };
 function inviteGroupScale(kind, L, vw, vh) {
   const wide = kind === "wide";
   const rule = wide ? (INVITE_WIDE_ART_SCALE * L.cardW) / 377 : INVITE_PHONE_ART_SCALE * Math.min(L.cardW / 283, vh / 780);
   const key = wide ? "wide" : "mobile";
-  return Math.min(rule, vw / INVITE_CONTENT_W[key], vh / INVITE_CONTENT_H[key]);
+  // [A-920 item 4] the Owner mocks (img_30 / 31 / 33) size the whole content group as one keyframe factor on the HomeCard rule: 390 / 810 / 1440, straight line between (hkKey, ends held), 1 at 1440.
+  // pre-A-920 baseline: return Math.min(rule, ...) (factor 1 at every width: envelope / Face ID / Chog 1.06 x at 390, 1.19 x at 810).
+  const out = Math.min(rule * hkKey(vw, INVITE_GROUP_K, true), vw / INVITE_CONTENT_W[key], vh / INVITE_CONTENT_H[key]);
+  // [A-920 item 4] position: the content group (envelope, sparkle, Face ID, Chog) sits at the mock x / y (img_30 / 31 / 33: ~13 px left / 14 px down at 390, 17 / 24 at 810, same at 1440) as a board-unit
+  // offset keyframe, straight line between; the notebook (lines, holes, tape) stays where it is. Written as --invDx / --invDy on the board, read by one style.css rule. No basis for "Invite 390 centred" was found in
+  // 94_VISUAL_DIRECTION (:306 only says the group scales together), so the mock x is used. pre-A-920 baseline: no offset.
+  if (typeof document !== "undefined") {
+    const board = document.querySelector(".invite");
+    if (board) { board.style.setProperty("--invDx", `${hkKey(vw, INVITE_OFFSET_X, true)}px`); board.style.setProperty("--invDy", `${hkKey(vw, INVITE_OFFSET_Y, true)}px`); }
+  }
+  return out;
 }
 
 // [A-819 UI-03] see fitInvite(). Reads the live phase and the elapsed time of each animated layer (the Web Animations
@@ -6245,6 +6259,10 @@ const NAME_CARD_BOARD_TOP = 292;
 const NAME_PEEK_CONTACT_X = 800; // board x of the peek head where it meets the card top (A-607 arrival pose: ink x685-915)
 const NAME_PEEK_VISIBLE = 147; // board px of head above the card top (A-607 name_arrival_1440: top ink y 145 at board scale 1.125)
 const NAME_RIG_RATIO = 0.981; // Name rig scale / Home stage scale S at the pre-A-831 1440x900 reference (1.125 / 1.1465)
+const NAME_TOP_K = [0.3258, 0.2509, 0.3144]; // [A-920] mock card top / vh at 390 / 810 / 1440 (275/844, 271/1080, 283/900)
+const NAME_PEEK_DX_K = [0.071, -0.007, 0.049]; // [A-920] peek ink shift, in card widths (mock - pre-A-920 app)
+const NAME_CHOG_DROP_K = [0.013, 0.0167, 0.0211]; // [A-920] Chog feet below the Home floor line, / vh
+const NAME_CHOG_DX_K = [-3, -5, -6]; // [A-920] Chog ink left shift, px (length keyframe)
 const NAME_CHOG_BOX_W = 107.6; // style.css .nameScene__chog box
 const NAME_CHOG_BOX_H_PX = 139.9;
 const NAME_CHOG_INK = { l: 1.9, r: 104.2, b: 136.9 }; // ink box (incl. the black outline: pixels differing from the ground) inside the sibling at scale 1, box px (measured at 1440x900, g 1.202: ink x 194-317, bottom 828). pre-review baseline: { l: 12.2, r: 94, b: 130 } = bright pixels only (the outline was missed, ink sat ~12 px left of M + .06 W)
@@ -6254,13 +6272,17 @@ function nameSceneLayout(L, vw = window.innerWidth, vh = window.innerHeight) {
   const cardW = Math.min(1.55 * L.cardW, 0.9 * (vw - 2 * L.M));
   const sc = cardW / NAME_CARD_BOARD_W;
   const rigScale = NAME_RIG_RATIO * L.S;
-  const cardTop = Math.max(vh / 2 - 108 * sc, L.asBottom + NAME_PEEK_VISIBLE * rigScale + 0.02 * vh);
+  // [A-920 item 1] card top = the mock keyframes (img_20 / 21 / 22): fraction of the viewport height at 390 / 810 / 1440, straight line between. The Piggy peek rig and the Chog follow the card as in the mock
+  // (peek sideways shift in card widths, Chog drop below the Home floor line and ink-left shift: same three keyframes). pre-A-920 baseline: cardTop = Math.max(vh / 2 - 108 * sc, ...) (73 / 120 / 30 px too low).
+  const cardTop = Math.max(hkKey(vw, NAME_TOP_K, true) * vh, L.asBottom + NAME_PEEK_VISIBLE * rigScale + 0.02 * vh);
   const chogG = (L.S * HOME_CHOG_INK_W) / (NAME_CHOG_INK.r - NAME_CHOG_INK.l);
-  const inkLeft = L.M + 0.06 * vw * L.posT;
+  const inkLeft = L.M + 0.06 * vw * L.posT + hkKey(vw, NAME_CHOG_DX_K);
+  const chogDrop = hkKey(vw, NAME_CHOG_DROP_K, true) * vh;
   return {
     cardW, sc, rigG: rigScale / sc, cardTop,
+    peekDx: hkKey(vw, NAME_PEEK_DX_K, true) * NAME_CARD_BOARD_W,
     tx: vw / 2 - NAME_CARD_BOARD_CX * sc, ty: cardTop - NAME_CARD_BOARD_TOP * sc,
-    chogG, chogLeft: inkLeft - NAME_CHOG_INK.l * chogG, chogBottom: vh - (L.floorY - HOME_CHOG_FOOT_GAP * L.S + (NAME_CHOG_BOX_H_PX - NAME_CHOG_INK.b) * chogG),
+    chogG, chogLeft: inkLeft - NAME_CHOG_INK.l * chogG, chogBottom: vh - (L.floorY - HOME_CHOG_FOOT_GAP * L.S + (NAME_CHOG_BOX_H_PX - NAME_CHOG_INK.b) * chogG) - chogDrop,
   };
 }
 function fitNameScene() {
@@ -6275,7 +6297,7 @@ function fitNameScene() {
     const n = nameSceneLayout(f.L);
     board.style.transform = `translate(${n.tx}px, ${n.ty}px) scale(${n.sc})`;
     const rig = document.querySelector("#namePiggy");
-    if (rig) { rig.style.transformOrigin = `${NAME_PEEK_CONTACT_X}px ${NAME_CARD_BOARD_TOP}px`; rig.style.scale = String(n.rigG); }
+    if (rig) { rig.style.transformOrigin = `${NAME_PEEK_CONTACT_X}px ${NAME_CARD_BOARD_TOP}px`; rig.style.scale = String(n.rigG); rig.style.translate = `${n.peekDx}px 0px`; }
     // [A-662] `.nameScene__chog` is a `.stage`-level sibling of `#nameScene`; applyOnboardingPhoneFoot() (shared with Hatch) writes its phone foot, the v10 placement follows it.
     applyOnboardingPhoneFoot();
     const chog = document.querySelector(".nameScene__chog");
@@ -6661,6 +6683,7 @@ async function settleConfirmedFundingEvidence({ applied, context, client, storag
     amount: receipt.resolvedAmount,
     txHash: receipt.txHash,
     at: receipt.at || nowValue,
+    status: receipt.status, // [A-931] G5: the receipt keeps its grade (applyFundingResult "confirmed"); pre-A-931 baseline: no status
     ...(context.targetPiggyId ? { piggyId: context.targetPiggyId } : {}),
   };
   // 증거(영수증)는 잔액 재조정의 성패와 무관하게 항상 남긴다. 같은 tx 재생은
@@ -6685,6 +6708,7 @@ async function settleConfirmedFundingEvidence({ applied, context, client, storag
     txHash: receipt.txHash,
     decimals: context.decimals,
     assetSymbol: context.assetSymbol,
+    status: receipt.status, // [A-931] G3: reconcileConfirmedFunding records only "confirmed" evidence; pre-A-931 baseline: no status
   };
   const outcome = await reconcileConfirmedFunding({
     evidence,
@@ -10767,7 +10791,21 @@ function a905AwayAnchors() {
   const mobile = band === "mobile";
   const top = mobile ? resolveCssLengthVarPx("--mobile-top-safe", 14) : 16;
   const bottom = mobile ? resolveCssLengthVarPx("--mobile-bottom-safe", 20) : 16;
-  return { vw, vh, seat: null, seatImg: null, name: null, chog: C, paper: P, foot: F, brand: brandBox && brandBox.width ? toRect(brandBox) : null, safe: slotRect(16, top, vw - 16, vh - bottom) };
+  // [A-918 E] Away Home has no seat Piggy, but the jar keeps the SAME spot (Owner "같은 자리"): the invisible seat box = where #homeSeat would sit
+  // on this width's #homeBoard (same board units layoutHomeCharacter() uses, same character-stage transform), so jarSpotFromSeat() gives one place.
+  const seatImg = a918SeatBoxFromBoard();
+  return { vw, vh, seat: null, seatImg, name: null, chog: C, paper: P, foot: F, brand: brandBox && brandBox.width ? toRect(brandBox) : null, safe: slotRect(16, top, vw - 16, vh - bottom) };
+}
+// [A-918 E] seat art box in viewport px from the board: board rect / HOME_BOARD_W = the board scale; seat = HOME_SEAT_L / floor-based top / W / H in board units.
+function a918SeatBoxFromBoard() {
+  const board = document.querySelector("#homeBoard");
+  if (!board) return null;
+  const b = board.getBoundingClientRect();
+  if (!(b.width > 0)) return null;
+  const k = b.width / HOME_BOARD_W;
+  const x = b.left + HOME_SEAT_L * k;
+  const y = b.top + (HOME_FLOOR - HOME_SEAT_H * HOME_SEAT_FOOT) * k;
+  return slotRect(x, y, x + HOME_SEAT_W * k, y + HOME_SEAT_H * k);
 }
 
 function a905JarRemove() {
@@ -11050,7 +11088,7 @@ function a911MoveView(m, snap) {
     const who = v.piggy || { name: "" };
     if (v.stage === "amount") {
       const row = v.rows.find((r) => r.id === v.piggy?.id);
-      return { dir: "out", step: "amount", typing: s.typing, piggy: who, balance: row ? row.amount : HOME_UNKNOWN_LABEL, amount: v.amount, choices: v.choices.filter((c) => c.value !== "custom").map((c) => ({ id: c.value, label: c.label, selected: c.value === v.amount })), canOk: v.canNext };
+      return { dir: "out", step: "amount", typing: s.typing, piggy: who, balance: row ? row.amount : HOME_UNKNOWN_LABEL, amount: v.amount, choices: v.choices.map((c) => ({ id: c.value, label: c.label, selected: c.value === v.amount })), canOk: v.canNext }; // [A-924] "custom" kept (it focuses the amount field). pre-A-924 baseline: .filter((c) => c.value !== "custom")
     }
     const sendReady = typeof MONEY_TAB_CONFIG.sendMoney === "function" && (v.stage === "confirm" ? v.faceIdEnabled : v.canNext); // the live seam is null today: Send stays disabled
     return { dir: "out", step: "address", typing: s.typing, piggy: who, amount: v.amount, asset: "USDC", address: v.address, notice: v.refusal ? "nothing moved." : "", canSend: sendReady };
@@ -12386,6 +12424,7 @@ const RET_STAGE_REF_W = 309; // character art reference width (mockup generator:
 // returning Piggy's head top at the two-tap gate, board units (piggy-return.js GROUP_DY + (gate stage y 250 + body.y x gate size .24) x GROUP_SCALE; a656 B12 piggyTop)
 const RET_GATE_PIGGY_TOP = 491.75 - 515 * (150 / 218) + (250 + -46.9846 * 0.24) * (150 / 218);
 const RET_CLUSTER_OFF = -108; // board units: Return cluster (Piggy at the gate + Chog) left edge relative to the Home stage left, measured on the live Return frame (1440: 815 vs stage 959 at S 1.33; 390: 75 vs 159 at S .778). pre-A-837 review baseline: -149.6 (read from mockup 27, whose own stage differs)
+const RET_RCX_SHIFT = [0, 0, -11]; // [A-920] Receipt x keyframe, px at 390 / 810 / 1440
 const RET_CLUSTER_W = 218; // board units: cluster width without the caption (live 1440: 290 px at S 1.33 = mockup 27; mockup 25: 170 px at S .778)
 // paperAspect = the rendered .receiptPaper rotated-bbox w/h (receiptPaperAspect()); the legacy delivered box aspect until it is measured.
 function returnLayout(L = desktopFormat()?.L, paperAspect = 1 / RECEIPT_ASPECT_H_PER_W) {
@@ -12431,7 +12470,10 @@ function returnLayout(L = desktopFormat()?.L, paperAspect = 1 / RECEIPT_ASPECT_H
   const topAtA = (w, a) => Math.max(L.asBottom, topP + (L.floorY - 368 * ck - (0.55 * w) / a - topP) * t);
   const raise = hkClamp((L.vw - 640) / 60, 0, 1) * Math.max(0, topAtA(rw, paperAspect) + rh - (topAtA(rw, preAspect) + rw / preAspect));
   const top = Math.max(L.asBottom, Math.min(topFor(rw, f), topAt(rw) - raise));
-  return { rcx: rcxP + (rcxL - rcxP) * t, rcy: top + rh / 2, top, rw, rh, dxChar: dxP + (dxL - dxP) * t };
+  // [A-920 item 3] Receipt x: the mock (img_27) has the paper 11 px further left of the character group at 1440 (gap 51 vs 40 px). One length keyframe 390 / 810 / 1440 = [0, 0, -11] (hkKey length mode, straight line,
+  // landscape weight t only; the character group / dxChar are not touched). pre-A-920 baseline: rcx: rcxP + (rcxL - rcxP) * t
+  const a920Rcx = hkKey(L.vw, RET_RCX_SHIFT) * t;
+  return { rcx: rcxP + (rcxL - rcxP) * t + a920Rcx, rcy: top + rh / 2, top, rw, rh, dxChar: dxP + (dxL - dxP) * t };
 }
 // The delivered box must have the paper's OWN rendered aspect (return-view.js contain-fits the rotated paper into it): otherwise a paper that is taller at <=640 (its own
 // A-666 type rules) is height-limited and comes out narrower than 0.91 x HomeCard. Same quantity return-view.js measures for the rail; memoised per element and width.
@@ -13345,8 +13387,10 @@ function chogHomeMarkupForAway() {
 }
 
 function renderAway() {
+  // [A-920 item 9 · A-924] ARASO on the outside Home: the same arasoBrandMarkup() line as the other screens (Cowork 21:14). pre-A-924 baseline: no ARASO here
   return `
     <section class="stage" data-scene="away">
+      ${arasoBrandMarkup()}
       <canvas class="departStage" id="departStage" aria-hidden="true"></canvas>
       <div class="homeBoard" id="homeBoard">
         ${chogHomeMarkupForAway()}
@@ -13606,6 +13650,19 @@ if (typeof document !== "undefined") {
   document.addEventListener("keydown", a891FileboxPaperClose);
 }
 // ── [/A-891] ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── [A-943] Release gate · Second entries — second: no Explore from any caller · no post-file "tap me!" cue that would lead to the Second intro.
+// The original bodies stay byte-identical; both are wrapped once at load (same pattern as the A-897 wiring). Callers run later (timers / taps).
+{
+  const a943BaseOpenSecondJourneyExplore = openSecondJourneyExplore;
+  openSecondJourneyExplore = (...args) => (releaseAllows("second") ? a943BaseOpenSecondJourneyExplore(...args) : undefined);
+  const a943BaseArmPostFileQuietHome = a891ArmPostFileQuietHome;
+  a891ArmPostFileQuietHome = (...args) => {
+    if (releaseAllows("second")) return a943BaseArmPostFileQuietHome(...args);
+    a891CueChog = null;
+    return undefined;
+  };
+}
+// ── [A-943] end Second entries ──
 // ── [A-912] small fixes (comments only; behaviour lives in chog-home.js · second-journey-view.js · style.css [A-912]) ─────────────────
 // 1 Chog speech: chog-home.js settleChogOneLine() keeps one speech line on screen (a newer line makes the older one leave, "tap me!" included).
 // 2 Readiness: amount = underline only, unknown values "—" (second-journey-view.js, style.css).
@@ -14737,6 +14794,14 @@ if (typeof location !== "undefined") {
     stripClaimFragmentFromUrl();
   }
 }
+
+// ── [A-943] Release gate · boot — main.js asks releaseAllows() (release-gate.js; VITE_ARASO_RELEASE_LEVEL, unset build = 1) here and in the
+// [A-943] Second-entry block right after the [/A-891] block. Level 1 = First Journey only. Runs before offerGiftPaperAtBoot() and the first render.
+//   afterSecond: a stored "Second done" mark is not honoured → honey jar · Money · Gift send · + Piggy stay closed
+//   gift:        a Gift link is not held (no Gift Open paper · no A-897 promotion); its token already left the address bar above (A-563)
+if (!releaseAllows("afterSecond")) state.secondJourneyCompletedOnce = false;
+if (!releaseAllows("gift")) pendingGiftClaim = null;
+// ── [A-943] end boot ──
 
 // [A-733] TESTER INVITE INTRO — `/?i=<code>` 첫 기기 한정 오버레이. 코드는 표시/라벨 신호일 뿐이다:
 // 접근 게이트 0 · 신원/키/PRF/주소/시퀀스/레지스트리/Receipt/SEQ-5/Gift 입력 0 · 저장 0(저장하는 건 araso.introSeen="1" 하나,

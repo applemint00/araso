@@ -7,12 +7,13 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const MAIN = readFileSync(path.join(REPO, "app/src/main.js"), "utf8");
 const CSS = readFileSync(path.join(REPO, "app/src/style.css"), "utf8");
-const RECEIPT = path.join(REPO, "_private/ops/receipts/A833_history_placement_motion");
+const RECEIPT = testOutDir("a833-history-placement-motion", process.env.A833_OUT); // [A-932] pre-A-932 baseline: receipts/A833_history_placement_motion
 let pass = 0, fail = 0;
 async function check(label, fn) {
   try { await fn(); console.log(`PASS  ${label}`); pass += 1; }

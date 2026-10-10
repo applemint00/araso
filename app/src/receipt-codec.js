@@ -129,6 +129,9 @@ function decodeAddMoneyRow(row) {
     ...(logIndex !== null ? { logIndex } : {}),
     ...(blockNumber !== null ? { blockNumber } : {}),
     ...(typeof row.piggyId === "string" && row.piggyId.trim() !== "" ? { piggyId: row.piggyId.trim() } : {}),
+    // [A-931 G5] the grade travels with the receipt; an old row (no status) reads as UNKNOWN, never as confirmed. No migration, no UI.
+    // pre-A-931 baseline: status dropped on decode
+    status: nonEmptyString(row.status) ? row.status.trim() : "unknown", // = funding-entry.js FUNDING_STATE.UNKNOWN (same word; no import into this leaf codec)
   };
 }
 
@@ -147,6 +150,7 @@ function encodeAddMoneyRow(receipt) {
     ...(receipt.logIndex !== undefined && receipt.logIndex !== null ? { logIndex: receipt.logIndex } : {}),
     ...(receipt.blockNumber !== undefined && receipt.blockNumber !== null ? { blockNumber: String(receipt.blockNumber) } : {}),
     ...(typeof receipt.piggyId === "string" && receipt.piggyId.trim() !== "" ? { piggyId: receipt.piggyId.trim() } : {}),
+    ...(nonEmptyString(receipt.status) ? { status: receipt.status.trim() } : {}), // [A-931 G5] pre-A-931 baseline: no status written
   };
 }
 

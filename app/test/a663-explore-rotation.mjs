@@ -65,11 +65,12 @@ check("MAX_EXPLORE_VISIBLE is 3 in the live source (A-663 Owner: 5 -> 3)", () =>
 });
 
 check("8 canonical errands, 3 rounds (ceil(8/3)), last round naturally short (2) — never fabricated to 3", () => {
-  assert.equal(ALL.length, 8);
+  // [A-936 RE-PIN] the LP errand is the 9th (after grow) → rounds 3/3/3. pre-A-936 baseline: 8 errands, rounds 3/3/2
+  assert.equal(ALL.length, 9);
   assert.equal(exploreRoundCount(), 3);
   assert.equal(computeExploreDisplayErrands({ seedStage: 0 }).length, 3);
   assert.equal(computeExploreDisplayErrands({ seedStage: 1 }).length, 3);
-  assert.equal(computeExploreDisplayErrands({ seedStage: 2 }).length, 2);
+  assert.equal(computeExploreDisplayErrands({ seedStage: 2 }).length, 3);
 });
 
 check("<=3 visible at once for every round, never >3", () => {
@@ -88,7 +89,7 @@ check("no duplicate within one shown set, and no duplicate across the full trave
       seen.add(id);
     }
   }
-  assert.equal(seen.size, 8, "all 8 canonical errands are reachable with no duplicates across rounds");
+  assert.equal(seen.size, 9, "all 9 canonical errands are reachable with no duplicates across rounds"); // [A-936 RE-PIN] pre-A-936 baseline: 8
 });
 
 check("deterministic: same round always returns the same set (no Math.random, stable across repeated calls)", () => {

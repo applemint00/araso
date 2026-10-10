@@ -185,7 +185,7 @@ export function outView(out, piggies, { config = MONEY_TAB_CONFIG, chain = null 
     rows: (Array.isArray(piggies) ? piggies : []).map((p) => ({ id: p.id, name: p.name || p.id, amount: p.valuation && typeof p.valuation.usd === "string" ? `$${p.valuation.usd}` : HOME_UNKNOWN_LABEL, away: p.location === "away" })),
     piggy: c.piggy ? { id: c.piggy.id, name: c.piggy.name || c.piggy.id } : null,
     amount: out.amount,
-    choices: available ? amountChoices(available) : [],
+    choices: available ? amountChoices(available, { presets: [] }) : [], // [A-924 · Owner 06:4x ③] Move out = `all · <balance>` + typed (no fixed $ presets). pre-A-924 baseline: amountChoices(available) (presets $20 / $50)
     address: out.address,
     addressStatus: c.dest.status,
     canNext: out.stage === OUT_STAGE.AMOUNT ? c.amount.amount !== null : out.stage === OUT_STAGE.ADDRESS ? canSendTo(c.dest) && c.amount.amount !== null : false,

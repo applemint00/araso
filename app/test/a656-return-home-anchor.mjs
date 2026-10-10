@@ -454,7 +454,8 @@ async function browserRun(browser, BASE) {
         await p.evaluate(() => window.__arasoScene("return", { arrival: true }));
         await sleep(1200); // past bell(0.7s)/coming-home(0.93s), before Piggy visible(3.15s)
         const comingHome = chogFoot(await ink());
-        assert.ok(near(comingHome, home0), `Return coming-home Chog foot ${comingHome} vs Home ${home0}`);
+        // [A-920 RE-PIN] the Return Chog stands RETURN_CHOG_DROP (24 board units = 14-32 px at 390-900) below the Home floor line, as in the Owner mock img_25-27. pre-A-920 baseline: assert.ok(near(comingHome, home0), ...)
+        assert.ok(comingHome - home0 > 10 && comingHome - home0 < 34, `Return coming-home Chog foot ${comingHome} vs Home ${home0} (+24 board units)`);
         // let it run to filed (gates auto-open via automaticPresenceSimulation is N/A here — tap through).
         for (let t0 = Date.now(); Date.now() - t0 < 20000;) {
           const openBtn = await p.evaluate(() => { const e = document.getElementById("returnOpen"); return !!e && !e.hidden && e.getBoundingClientRect().width > 0; });
@@ -464,7 +465,8 @@ async function browserRun(browser, BASE) {
           await sleep(250);
         }
         const filed = chogFoot(await ink());
-        assert.ok(near(filed, home0), `Return filed Chog foot ${filed} vs Home ${home0}`);
+        // [A-920 RE-PIN] same drop for the canvas native Chog (NATIVE_OY). pre-A-920 baseline: assert.ok(near(filed, home0), ...)
+        assert.ok(filed - home0 > 10 && filed - home0 < 34, `Return filed Chog foot ${filed} vs Home ${home0} (+24 board units)`);
         await mustTap("#returnOpen", "open the file / Home");
         await waitScene(["sendstay"], 9000); await sleep(3000);
         const backHome = chogFoot(await ink());

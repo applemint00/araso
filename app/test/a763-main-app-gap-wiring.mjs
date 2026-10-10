@@ -123,8 +123,11 @@ await check("M2 mainnet profile: live off, legacy First path sealed (sendPiggy /
 await check("M3 main consumes Second evidence read-only: unconfigured reader, no lane module / A-762 route name, no executor", () => {
   const code = stripComments(MAIN);
   const refresh = stripComments(fnBody("refreshSecondLaneCandidates"));
-  assert.match(refresh, /readSecondCurrent\(\{ profile: CHAIN_PROFILE, piggyAddress: state\.address \|\| "" \}\)/);
-  assert.equal(/rpcUrl|transport|fetchImpl/.test(refresh), false);
+  // [A-938 RE-PIN] the reader now gets the profile rpcUrl + fetch + clock, read-only (testnet/blocked profile has no rpcUrl = no_rpc); the URL may come ONLY from CHAIN_PROFILE.rpcUrl.
+  // pre-A-938: the exact call without config, and no rpcUrl / fetchImpl (/ transport) word in the function at all.
+  assert.match(refresh, /readSecondCurrent\(\{ profile: CHAIN_PROFILE, piggyAddress: state\.address \|\| "", rpcUrl: CHAIN_PROFILE\.rpcUrl, fetchImpl: fetch, now: \(\) => new Date\(\)\.toISOString\(\) \}\)/);
+  assert.deepEqual([...refresh.matchAll(/rpcUrl:\s*([^,}]+)/g)].map((m) => m[1].trim()), ["CHAIN_PROFILE.rpcUrl"]);
+  assert.equal(/transport/.test(refresh), false);
   // pins respected (a757:348, a759:298, a760:376, a761:372, a762:337): product names none of these
   assert.equal(/mainnet-job-(neverland|curvance|abil|kintsu)/.test(MAIN), false);
   // [A-791 re-pin, named reason: A-791 wires the A-762 route into main as evidence (a762 S1 narrowed the same way). The route names

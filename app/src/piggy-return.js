@@ -149,8 +149,16 @@ const legacyDims = { w: RECEIPT_DELIVERED_W, h: RECEIPT_DELIVERED_H, zx: null, z
 // <= vw - inset: baseW is sized so baseW*(1+READ_ZOOM_GAIN) <= vw - 2*inset.
 const READ_ZOOM_GAIN = 0.18;                    // drawAt `zoom = 1 + READ_ZOOM_GAIN * …` (was literal 0.18)
 const READ_ZOOM_MAX = 1 + READ_ZOOM_GAIN;
-const PIGGY_GATE_STAGE_Y = 250;                 // drawAt `y = 250` (Piggy at the gate; settle===0)
-const PIGGY_GATE_SIZE = 0.24;                   // drawAt `mix(0.24, 0.20, settle)` at settle===0
+// [A-920 item 3] Piggy at the gate, back to the mock (img_25 / 26 / 27): 5 % smaller (0.24 -> 0.228), feet 26 board units lower (y +37.8 stage units, +13.9 for the smaller size so the feet land where
+// the +26 says), x +5.7 so the centre stays. One constant in board / stage units: it follows the Home stage scale S at every width (the mock offsets / S = 25.7 / 26.2 / 26.3 at 390 / 810 / 1440),
+// so there is no per-width value. All three fade into the unchanged seat pose with `settle`, as before. pre-A-920 baseline: PIGGY_GATE_STAGE_Y = 250, PIGGY_GATE_SIZE = 0.24, no dx.
+const PIGGY_GATE_STAGE_Y = 250 + 51.7;          // drawAt `y = PIGGY_GATE_STAGE_Y` (Piggy at the gate; settle===0)
+const PIGGY_GATE_SIZE = 0.228;                  // drawAt `mix(PIGGY_GATE_SIZE, 0.20, settle)` at settle===0
+const PIGGY_GATE_DX = 5.7;                      // stage units added to the gate x (centre kept after the size change)
+// [A-920 item 3] the Return Chog stands 24 board units lower than the Home floor line in the mock (ink TOP mock - app = 18 / 28 / 33 px = 23.2 / 23.7 / 24.8 board units at S .777 / 1.183 / 1.33; the mock's feet are cut
+// by its annotation box at the floor line, so the top edge is the comparable one). DOM Chog (return-view.js placeChog)
+// and the canvas native Chog (NATIVE_OY below) use this one value so the hand-over at t = 11.4 does not jump. pre-A-920 baseline: 0.
+const RETURN_CHOG_DROP = 24;
 // [A-831 · Cowork Q-C (c) · canon A-835 item 5] Receipt size = 0.91 x the Home card width. main.js registers a provider that answers the delivered Receipt's
 // viewport-px width; it replaces the fixed 280x320 x RECEIPT_SIZE_SCALE legacy size (and the legacy end of the 640..700 blend) by that width at the same aspect, about the
 // same legacy centre. Unregistered / answering null -> the exact previous size. Position = main.js returnLayout() (A-837).
@@ -220,7 +228,7 @@ const NATIVE_INK = { x0: 393.06, y0: 189.65, x1: 1763.38, y1: 2095.25 };
 const HOME_CHOG = { centerX: 891, floorY: 648, inkH: 118.28125 };
 const NATIVE_K = HOME_CHOG.inkH / (NATIVE_INK.y1 - NATIVE_INK.y0);   // board px / native unit
 const NATIVE_OX = HOME_CHOG.centerX - ((NATIVE_INK.x0 + NATIVE_INK.x1) / 2) * NATIVE_K;
-const NATIVE_OY = HOME_CHOG.floorY - NATIVE_INK.y1 * NATIVE_K;
+const NATIVE_OY = HOME_CHOG.floorY + RETURN_CHOG_DROP - NATIVE_INK.y1 * NATIVE_K; // [A-920] pre-A-920 baseline: HOME_CHOG.floorY - ...
 // 원본의 frame24 이동량(무대 −41, −8)은 같은 무대 배율로 board 에 옮긴다.
 const NATIVE_STEP_DX = -41 * GROUP_SCALE;
 const NATIVE_STEP_DY = -8 * GROUP_SCALE;
@@ -490,9 +498,9 @@ export function createReturnRenderer(canvas, opts) {
     const delW = railTarget ? railTarget.w : legacyDims.w;
     const delH = railTarget ? railTarget.h : legacyDims.h;
 
-    let x = mix(210, 520, emerge), y = 250;
+    let x = mix(210, 520, emerge) + PIGGY_GATE_DX, y = PIGGY_GATE_STAGE_Y;
     x = mix(x, 880, settle); y = mix(y, 508, settle);
-    const size = mix(0.24, 0.20, settle);
+    const size = mix(PIGGY_GATE_SIZE, 0.20, settle);
 
     const moving = (t >= 3.15 && t < 5.25) || (t >= 8.85 && t < 10.9);
     const frame = moving
@@ -717,6 +725,7 @@ export function createReturnRenderer(canvas, opts) {
 export const RETURN_GEOMETRY = {
   board: [BOARD_W, BOARD_H], stage: [STAGE_W, STAGE_H],
   group: { scale: GROUP_SCALE, dx: GROUP_DX, dy: GROUP_DY },
+  chogDrop: RETURN_CHOG_DROP, // [A-920]
   seatRect: SEAT_RECT,
   nativeBridge: { k: NATIVE_K, ox: NATIVE_OX, oy: NATIVE_OY, stepDx: NATIVE_STEP_DX, stepDy: NATIVE_STEP_DY, homeChog: HOME_CHOG, ink: NATIVE_INK },
   gates: { receipt: RECEIPT_GATE_S, zoomDone: ZOOM_DONE_S, pickup: PICKUP_S, total: RETURN_TOTAL_S },

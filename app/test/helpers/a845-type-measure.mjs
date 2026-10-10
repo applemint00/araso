@@ -11,6 +11,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { launch, sleep, REPO } from "./a803-browser.mjs";
+import { testOutDir } from "./test-out.mjs"; // [A-932]
 
 export const STYLE_PX = { title: 26, choice: 18, button: 16, body: 14, label: 13, detail: 12, weekday: 12 * 0.7 };
 export const SIZES = [[390, 844], [810, 1080], [1440, 900]];
@@ -119,7 +120,7 @@ const CHOG_PROBES = `(() => {
   return true;
 })()`;
 
-export async function measureAll(outDir = path.join(REPO, "_private/ops/receipts/A845_type_styles/browser")) {
+export async function measureAll(outDir = testOutDir("a845-type-measure")) { // [A-932] pre-A-932 baseline default: receipts/A845_type_styles/browser
   const shots = path.join(outDir, "shots"); mkdirSync(shots, { recursive: true });
   const R = { at: new Date().toISOString(), sizes: SIZES, sweepH: SWEEP_H, sweepW: SWEEP_W, notes: [] };
   const H = await launch();
@@ -289,7 +290,7 @@ export function evaluate(R) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const out = process.argv[2] || path.join(REPO, "_private/ops/receipts/A845_type_styles/browser");
+  const out = testOutDir("a845-type-measure", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A845_type_styles/browser
   const R = await measureAll(out);
   const E = evaluate(R);
   writeFileSync(path.join(out, "a845_evaluate.json"), JSON.stringify(E, null, 1));

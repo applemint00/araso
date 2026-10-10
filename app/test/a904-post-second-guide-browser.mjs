@@ -3,10 +3,11 @@
 // max 3 Home entries · reduced motion = still glow (no animation) · frames 390 / 1440. Nothing is sent; no non-local request.
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a904 browser part (ARASO_TEST_BROWSER=1 to run)"); process.exit(0); }
 const { launch, sleep, REPO } = await import("./helpers/a803-browser.mjs");
-const OUT = path.resolve(process.argv[2] || path.join(REPO, "_private/ops/receipts/A904_post_second_guide/browser"));
+const OUT = testOutDir("a904-post-second-guide-browser", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A904_post_second_guide/browser
 mkdirSync(OUT, { recursive: true });
 const KEY = "araso.a904JarGuide";
 const failures = [];

@@ -11,6 +11,7 @@
 // and injects nothing: G7/G8 need the live seams (market/gas/executor) which are null in the product, so they are recorded as "needs injected seams".
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 if (process.env.ARASO_TEST_BROWSER !== "1") {
   console.log("SKIP  a898-funding-gift-browser: set ARASO_TEST_BROWSER=1 (headless Chrome + local vite port)");
@@ -18,7 +19,7 @@ if (process.env.ARASO_TEST_BROWSER !== "1") {
 }
 
 const { launch, sleep, REPO } = await import("./helpers/a803-browser.mjs");
-const OUT = path.resolve(process.argv[2] || path.join(REPO, "_private/ops/receipts/A898_funding_gift_send/browser"));
+const OUT = testOutDir("a898-funding-gift-browser", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A898_funding_gift_send/browser
 mkdirSync(OUT, { recursive: true });
 const SIZES = [[390, 844], [1440, 900]];
 const frames = {};

@@ -25,23 +25,29 @@ await check("J2 away-only Home still shows the jar (away scenes pass the gate; g
   assert.equal(J.jarGate({ secondJourneyCompletedOnce: true, scene: "away" }), true);
   assert.equal(J.jarGate({ secondJourneyCompletedOnce: true, scene: "secondAway" }), false, "secondAway: the Second card owns the paper slot (cardClaimed), the paper cannot open");
   assert.equal(J.jarGate.length <= 1, true);
-  const slot = J.planJarSlot({ anchors: { ...anchors(), seatImg: null, name: null } });
-  assert.ok(slot, "a slot exists with no seat Piggy");
+  // [A-918 RE-PIN · A-923 merge] pre-A-918 baseline: planJarSlot({ seatImg: null }) returned a slot from the free-space scan. A-918 E (Owner "같은 자리"): Away passes the
+  // invisible seat box (main.js a918SeatBoxFromBoard) as seatImg; no seat box = no jar (fallback 0).
+  assert.equal(J.planJarSlot({ anchors: { ...anchors(), seatImg: null, name: null } }), null, "no seat box = no jar (scan removed)");
+  const slot = J.planJarSlot({ anchors: { ...anchors(), seatImg: R(250, 500, 450, 700), name: null } });
+  assert.ok(slot && slot.spot === "mock", "away: the invisible seat box gives the same mock spot");
 });
-await check("J3 placement clears Chog / footprint / paper / names / brand / occupied, stays inside safe, deterministic", () => {
+// pre-A-918 baseline: J3 asserted the free-cell safe-slot (seat-right / seat-left / scan) clearing Chog / footprint / paper / names / brand / occupied, and J4 "no spot that fits = no jar".
+// A-918: with a seat Piggy the jar has ONE spot from the seat art box (ratio of the mock); no blockers, no fallback. Full proof = a918-honey-jar-spot-browser.mjs.
+await check("J3 [A-918] one fixed mock spot from the seat art box, same ratio at every width, deterministic", () => {
+  let last = null;
   for (const vw of [390, 810, 1440]) {
-    const a = anchors(vw); if (vw < 1440) { a.safe = R(16, 16, vw - 16, 844); a.foot = R(20, 100, vw - 20, 560); a.paper = R(20, 100, vw - 20, 560); a.chog = R(vw / 2 - 60, 300, vw / 2 + 60, 460); a.seatImg = R(20, 600, 160, 760); a.name = R(20, 760, 160, 790); a.brand = R(vw / 2 - 40, 20, vw / 2 + 40, 50); }
-    const occupied = [R(170, 640, 260, 740)];
-    const s1 = J.planJarSlot({ anchors: a, occupied }); const s2 = J.planJarSlot({ anchors: a, occupied });
-    assert.ok(s1, `slot at ${vw}`); assert.deepEqual(s1, s2, "stable, no teleport");
-    const c = R(s1.x, s1.y, s1.x + s1.w, s1.y + s1.h);
-    assert.ok(M.rectInside(c, a.safe));
-    for (const b of [a.chog, a.foot, a.paper, a.brand, a.name, ...occupied]) assert.equal(M.rectsTouch(c, b, 0), false);
-    assert.ok(s1.w >= J.JAR_MIN_TAP_PX);
+    const a = anchors(vw); a.seatImg = R(vw / 2, 600, vw / 2 + vw / 4, 600 + vw / 4 * 1.044);
+    const s1 = J.planJarSlot({ anchors: a }); const s2 = J.planJarSlot({ anchors: a });
+    assert.ok(s1); assert.deepEqual(s1, s2); assert.equal(s1.spot, "mock");
+    const w = a.seatImg.r - a.seatImg.x, h = a.seatImg.b - a.seatImg.y;
+    const rel = { cx: (s1.x + s1.w / 2 - a.seatImg.x) / w, bottom: (s1.y + s1.h - a.seatImg.y) / h, size: s1.w / w };
+    assert.ok(Math.abs(rel.cx - J.JAR_MOCK_CX) < 1e-9 && Math.abs(rel.bottom - J.JAR_MOCK_BOTTOM) < 1e-9 && Math.abs(rel.size - J.JAR_MOCK_W) < 1e-9);
+    if (last) assert.ok(Math.abs(rel.cx - last.cx) < 1e-9);
+    last = rel;
   }
 });
-await check("J4 no spot that fits = no jar (never overlaps instead)", () => {
-  const a = anchors(); a.foot = R(0, 0, 1440, 900);
+await check("J4 [A-918] no seat box = no jar (scan removed, fallback 0)", () => {
+  const a = anchors(); a.foot = R(0, 0, 1440, 900); a.seatImg = null;
   assert.equal(J.planJarSlot({ anchors: a }), null);
 });
 await check("J5 markup matches the class contract (honey before img, vars, no text, no aria copy)", () => {
@@ -104,7 +110,8 @@ await check("J11 z-order: jar layer sits inside #homeBoard before #chogHome (abo
 });
 await check("J12 jar min tap is expressed in board-local px (scaled), mount keeps the same-spot jar, drop falls into the jar", () => {
   const h = J.honeyJarLayerMarkup({ x: 1, y: 2, size: 96, minTap: 88 });
-  assert.ok(h.includes("min-width:88px") && h.includes("min-height:88px"));
+  // pre-A-918 baseline: assert.ok(h.includes("min-width:88px") && h.includes("min-height:88px")) (the art grew with the floor). A-918: the tap box is --a905Tap around the art.
+  assert.ok(h.includes("--a905Tap:88px"));
   const css = SRC("style.css");
   assert.ok(css.includes("translateY(340%)"), "drop travels into the jar body");
   assert.ok(SRC("main.js").includes("same spot: keep the mounted jar"));

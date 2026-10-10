@@ -10,6 +10,7 @@
 // 값으로 돌아온다, 증거를 지우지 않는다).
 
 import { valueAsset } from "./valuation-source.js";
+import { FUNDING_STATE } from "./funding-entry.js"; // [A-931] the existing funding status vocabulary
 
 const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 
@@ -121,6 +122,12 @@ export async function reconcileConfirmedFunding({
 } = {}) {
   const rows = Array.isArray(piggies) ? piggies.map((p) => ({ ...p, assets: [...(p.assets || [])] })) : [];
   const key = reconcileEvidenceKey(evidence);
+
+  // [A-931 G3] defence in depth: the function itself records only CONFIRMED evidence (the caller gate main.js applyFunding stays as is). Runs BEFORE the seen-key check (A-931 opus review #3).
+  // Missing / unknown / any other status = nothing recorded, same refusal shape as a binding failure. pre-A-931 baseline: no status check here.
+  if (evidence?.status !== FUNDING_STATE.CONFIRMED) {
+    return { ok: false, reason: "evidence_not_confirmed", piggies: rows, valuationKnown: null, dedupeKey: key };
+  }
 
   if (seenEvidenceKeys.has(key)) {
     return { ok: true, reason: "already_reconciled", piggies: rows, valuationKnown: null, dedupeKey: key };

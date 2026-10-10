@@ -370,7 +370,8 @@ async function browserWidth(browser, BASE, w, shots) {
       }));
       assert.equal(v.dir, "in"); assert.equal(v.step, "rows");
       assert.equal(v.percentFields, 0); assert.equal(v.rows, 0);
-      assert.deepEqual(v.paperRows, [{ id: "card", disabled: true }, { id: "bank", disabled: true }, { id: "crypto", disabled: false }]);
+      // [A-924 RE-PIN · A-920 item 5] crypto first (mock order). pre-A-924 baseline: card · bank · crypto
+      assert.deepEqual(v.paperRows, [{ id: "crypto", disabled: false }, { id: "card", disabled: true }, { id: "bank", disabled: true }]);
       assert.deepEqual(delta(c0, await counters()), { webauthn: 0, tx: 0 });
       await shot("T1_1piggy_single");
       await closeScreens();
@@ -493,7 +494,8 @@ async function browserWidth(browser, BASE, w, shots) {
       // A-905 (Cowork decision): 2+ `in` goes allocation → the Funding rows (Card / Bank transfer / Crypto); card/bank are disabled and crypto enabled INSIDE the Funding Paper
       // that a row tap opens (a898-funding-gift-browser pins that). Here, before any row is tapped, the plan offers exactly the three rows and nothing was sent.
       // pre-A-911 baseline: three plan-fund buttons. A-911: card + bank are always dim ("Not ready yet", not a button), crypto is the one enabled plan-fund row.
-      assert.deepEqual(v.fundingRows, [{ id: "card", label: "Pay with card", disabled: true, plan: false }, { id: "bank", label: "Bank transfer", disabled: true, plan: false }, { id: "crypto", label: "Pay with crypto", disabled: false, plan: true }]);
+      // [A-924 RE-PIN · A-920 item 5] crypto first (mock order). pre-A-924 baseline: card · bank · crypto
+      assert.deepEqual(v.fundingRows, [{ id: "crypto", label: "Pay with crypto", disabled: false, plan: true }, { id: "card", label: "Pay with card", disabled: true, plan: false }, { id: "bank", label: "Bank transfer", disabled: true, plan: false }]);
       assert.equal(v.methods.length, 0, "the old methods list is gone");
       assert.equal(v.inputs, 0);
       assert.deepEqual(delta(c0, await counters()), { webauthn: 0, tx: 0 });

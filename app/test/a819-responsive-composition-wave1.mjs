@@ -49,7 +49,8 @@ await check("N1 read-only files stay byte-identical to the card's BEFORE hash (c
   // [A-845 RE-PIN] chog-home.js changed only in the tap-cue type size (A-843 item 6, stage-scaled). pre-A-845 baseline: before["app/src/chog-home.js"] (7d1c417f…938f)
   // [A-891 RE-PIN] return-view.js changed only for UI-19 (folder hit, "open the file" text hidden). pre-A-891 baseline: before["app/src/return-view.js"] (c44d2866…4ac6)
   // [A-912 RE-PIN, Cowork-approved] chog-home.js adds settleChogOneLine() + one MutationObserver (one Chog speech line). pre-A-912 baseline: chog-home.js 1c15f704a1f1294ed68d21b796985db17bd423f4a9256b30ea9a154ead9828e3
-  const A845 = { "app/src/chog-home.js": "a9b1702853d2adfd60dac4e748ed185bc878487fe9d3c09975e5675b3c9a2ca8", "app/src/return-view.js": "c01be5d750dadf0fdc787a02f1ff328205b4818013d3f6df924c435671b47605" };
+  // [A-920 RE-PIN] return-view.js adds the Return Chog drop (RETURN_GEOMETRY.chogDrop, mock img_25-27). pre-A-920 baseline: return-view.js c01be5d750dadf0fdc787a02f1ff328205b4818013d3f6df924c435671b47605
+  const A845 = { "app/src/chog-home.js": "a9b1702853d2adfd60dac4e748ed185bc878487fe9d3c09975e5675b3c9a2ca8", "app/src/return-view.js": "9e691c94360ba5275393ee7483bd5e994b739f6a5a317aa0ad38cb176f309221" };
   for (const p of ["app/src/chog-home.js", "app/src/return-view.js"]) assert.equal(sha(readFileSync(path.join(REPO, p))), A845[p] ?? before[p], p);
 });
 
@@ -113,7 +114,7 @@ await check("N5 Return Receipt: the rail + blend hand-over are gone; the Receipt
 
 await check("N6 Receipt constants the two-tap flow and the rail contract depend on are unchanged (zoom gain, gate Piggy stage, receiptRailTarget export, size scale)", () => {
   const p = strip(PRET);
-  for (const keep of [/const READ_ZOOM_GAIN = 0\.18;/, /const PIGGY_GATE_STAGE_Y = 250;/, /const PIGGY_GATE_SIZE = 0\.24;/, /export function receiptRailTarget\(rail, view\)/, /const RECEIPT_SIZE_SCALE = 228 \/ 196;/]) assert.match(p, keep);
+  for (const keep of [/const READ_ZOOM_GAIN = 0\.18;/, /const PIGGY_GATE_STAGE_Y = 250 \+ 51\.7;/, /const PIGGY_GATE_SIZE = 0\.228;/ /* [A-920 RE-PIN] pre-A-920 baseline: /const PIGGY_GATE_STAGE_Y = 250;/, /const PIGGY_GATE_SIZE = 0\.24;/ */, /export function receiptRailTarget\(rail, view\)/, /const RECEIPT_SIZE_SCALE = 228 \/ 196;/]) assert.match(p, keep);
 });
 
 await check("N7 Invite: crossing the 900 boundary carries phase + each layer's animation clock through the re-render; no timer is created/cleared; fitInvite stays self-contained for the a697 vm cut", () => {

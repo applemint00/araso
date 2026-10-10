@@ -30,7 +30,7 @@ import { createViemGiftSponsorChain } from "../../api/_lib/gift-sponsor-runtime.
 const skip = (why) => { console.log(`SKIP  a915-fork-create — ${why}; 0 checks run`); process.exit(0); };
 const REPO = new URL("../../", import.meta.url);
 const ART = new URL("_private/ops/harness/gift-mainnet-fork-native/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json", REPO);
-const RAW_DIR = new URL("_private/ops/receipts/A915_gift_create_143/raw/", REPO);
+const RAW_DIR = pathToFileURL(testOutDir("a915-fork-create", process.env.A915_RAW_OUT) + "/"); // [A-932] pre-A-932 baseline: receipts/A915_gift_create_143/raw/
 if (!process.env.A915_FORK && !process.env.A915_FORK_URL) skip("not requested (run: A915_FORK=1 node app/test/a915-fork-create.mjs)");
 if (spawnSync("anvil", ["--version"], { stdio: "ignore" }).status !== 0) skip("anvil not installed");
 if (!existsSync(ART)) skip("local escrow artifact absent (public checkout)");
@@ -68,6 +68,8 @@ import { executeMoneyStep, TRANSPORT_KIND } from "../src/money-executor.js";
 import { runGiftCreateCalls } from "../src/gift-send-paper.js";
 import { GIFT_CREATE_CHAIN_ID } from "../src/gift-create-plan.js";
 import { createWalletClient, defineChain } from "viem";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
+import { pathToFileURL } from "node:url"; // [A-932]
 
 const CHAIN = 143;
 const USDC = getAddress("0x754704Bc059F8C67012fEd69BC8A327a5aafb603");

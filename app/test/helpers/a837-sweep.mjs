@@ -35,7 +35,7 @@ export function sceneOracle(main = readFileSync(MAIN_PATH, "utf8")) {
   vm.runInContext([
     "const HOME_SEAT_W = 150; const HOME_SEAT_H = (HOME_SEAT_W * 551) / 528; const HOME_CENTER = 1041; const HOME_SEAT_L = HOME_CENTER - 0.4991 * HOME_SEAT_W;",
     ...consts, main.match(/const NAME_CHOG_INK = [^;]+;/)[0],
-    main.match(/const hkClamp = [^;]+;/)[0], fnSrc(main, "hkKey"), fnSrc(main, "homeKeyframeLayout"), fnSrc(main, "nameSceneLayout"), fnSrc(main, "returnLayout"),
+    main.match(/const hkClamp = [^;]+;/)[0], ...["NAME_TOP_K", "NAME_PEEK_DX_K", "NAME_CHOG_DROP_K", "NAME_CHOG_DX_K", "RET_RCX_SHIFT"].map((k) => main.match(new RegExp(`const ${k} = [^;]+;`))[0]) /* [A-920 RE-PIN] the A-920 keyframe consts nameSceneLayout / returnLayout read; pre-A-920 baseline: none */, fnSrc(main, "hkKey"), fnSrc(main, "homeKeyframeLayout"), fnSrc(main, "nameSceneLayout"), fnSrc(main, "returnLayout"),
     "globalThis.__o = { L: homeKeyframeLayout, name: nameSceneLayout, ret: returnLayout };",
   ].join("\n"), ctx);
   return ctx.__o;

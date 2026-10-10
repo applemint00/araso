@@ -48,6 +48,9 @@ const PROFILES = Object.freeze({
     usdc: usdcFor(CHAIN_PROFILE_ID.MAINNET),
     // The one Job this profile carries. One asset (USDC), one errand per Piggy.
     jobId: "aave-usdc",
+    // Read-only RPC for the product reader (CSP connect-src already allows it, vercel.json). Reads only; no write path uses it.
+    // Testnet / blocked profiles have no rpcUrl, so their reader rows stay `no_rpc`.
+    rpcUrl: "https://rpc.monad.xyz",
     // Off. Turning it on is a separate Owner decision; see the mainnet lane module.
     liveExecution: false,
     reason: null,

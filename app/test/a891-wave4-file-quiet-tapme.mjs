@@ -9,6 +9,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { TAP_CUE_TIMING } from "../src/chog-home.js";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -17,7 +18,7 @@ const MAIN = rd("app/src/main.js");
 const CSS = rd("app/src/style.css");
 const RV = rd("app/src/return-view.js");
 const PRET = rd("app/src/piggy-return.js");
-const RECEIPTS = path.join(REPO, "_private/ops/receipts/A891_wave4_file_quiet_tapme");
+const A891_PRE_ROOT = path.join(REPO, "_private/ops/receipts/A891_wave4_file_quiet_tapme"); // [A-932] read-only (pre copies); output = testOutDir
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 const cutFn = (src, name) => { const i = src.indexOf(`function ${name}(`); if (i < 0) return null; let d = 0, st = false; for (let j = src.indexOf("{", i); j < src.length; j += 1) { if (src[j] === "{") { d += 1; st = true; } else if (src[j] === "}") { d -= 1; if (st && d === 0) return src.slice(i, j + 1); } } return null; };
@@ -203,7 +204,7 @@ await check("N10 UI-19 filebox: the STORED Receipt (no synthesis) opens centred;
 });
 
 await check("N11 protected bodies byte-identical to the A-891 pre-copy (render 866133cf…, arasoBrandMarkup, money/auth, a734 Invite); chog-home.js untouched", () => {
-  const preP = path.join(RECEIPTS, "pre_copies/app/src/main.js");
+  const preP = path.join(A891_PRE_ROOT, "pre_copies/app/src/main.js");
   assert.equal(sha(cutFn(MAIN, "render")).slice(0, 16), "866133cf60711093", "render() pin");
   if (!existsSync(preP)) return;
   const PRE = readFileSync(preP, "utf8");
@@ -257,7 +258,7 @@ if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  Part B - set AR
 // seeds), then: DEV return jump → tap through → filed → line → Home → quiet ≥ 8 s → cue (+ wave) → tap → intro → Explore; reload = no
 // repeat; folder tap → stored Receipt centred → tap closes; First arrival = no cue + First Send reveal ≈ settle + readyMs (normal) / 1200 (reduced).
 const { launch, sleep } = await import("./helpers/a803-browser.mjs");
-const OUT = path.join(RECEIPTS, "browser");
+const OUT = testOutDir("a891-wave4-file-quiet-tapme", process.env.A891_OUT); // [A-932] pre-A-932 baseline: receipts/A891_wave4_file_quiet_tapme/browser (A891_PRE_ROOT = the read-only pre copy)
 mkdirSync(OUT, { recursive: true });
 const series = {};
 for (const reduced of [false, true]) {

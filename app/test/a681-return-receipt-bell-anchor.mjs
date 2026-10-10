@@ -64,10 +64,11 @@ check("anchorCenter() legacy body untouched (a656 N9 pins it too)",
   has(RETURN_SRC, /const cx = ANCHOR_BOARD_CX;\s*\n\s*const cy = ANCHOR_BOARD_CY;/), true);
 check("READ_ZOOM_GAIN = 0.18 and drawAt zoom uses it", has(RETURN_SRC, /const READ_ZOOM_GAIN = 0\.18;/)
   && has(RETURN_SRC, /const zoom = 1 \+ READ_ZOOM_GAIN \* smooth\(\(t - 7\.3\) \/ 0\.3\) \* \(1 - pickup\);/), true);
-check("PIGGY_GATE_STAGE_Y = 250 mirrors drawAt `y = 250`", has(RETURN_SRC, /const PIGGY_GATE_STAGE_Y = 250;/)
-  && has(RETURN_SRC, /let x = mix\(210, 520, emerge\), y = 250;/), true);
-check("PIGGY_GATE_SIZE = 0.24 mirrors drawAt `mix(0.24, 0.20, settle)`", has(RETURN_SRC, /const PIGGY_GATE_SIZE = 0\.24;/)
-  && has(RETURN_SRC, /const size = mix\(0\.24, 0\.20, settle\);/), true);
+// [A-920 RE-PIN] the gate pose moved to the Owner mock (Piggy 5 % smaller, feet 26 board units lower). pre-A-920 baseline: `const PIGGY_GATE_STAGE_Y = 250;` + `let x = mix(210, 520, emerge), y = 250;` and `const PIGGY_GATE_SIZE = 0.24;` + `const size = mix(0.24, 0.20, settle);`
+check("PIGGY_GATE_STAGE_Y = 250 + 51.7 mirrors drawAt `y = PIGGY_GATE_STAGE_Y`", has(RETURN_SRC, /const PIGGY_GATE_STAGE_Y = 250 \+ 51\.7;/)
+  && has(RETURN_SRC, /let x = mix\(210, 520, emerge\) \+ PIGGY_GATE_DX, y = PIGGY_GATE_STAGE_Y;/), true);
+check("PIGGY_GATE_SIZE = 0.228 mirrors drawAt `mix(PIGGY_GATE_SIZE, 0.20, settle)`", has(RETURN_SRC, /const PIGGY_GATE_SIZE = 0\.228;/)
+  && has(RETURN_SRC, /const size = mix\(PIGGY_GATE_SIZE, 0\.20, settle\);/), true);
 check("drawAt: rail path swaps ONLY the target (anchor, delW/delH); toss/pickup start sizes untouched",
   has(RETURN_SRC, /const anchor = railTarget \|\| anchorCenter\(\);/)
     && has(RETURN_SRC, /let rw = mix\(size \* 280 \* 1\.12, delW, delivery\);/)
@@ -153,7 +154,7 @@ for (const [vw, vh] of [[390, 844], [430, 900]]) {
   check(`${L} gate1 (zoom 1): paperBoard left == rail inset`, gate1.l, r.inset, 1e-6);
   check(`${L} gate2 (zoom 1.18): left stays on the rail inset (left-centre pivot)`, gate2.l, r.inset, 1e-6);
   check(`${L} gate2: right edge <= vw - inset`, gate2.l + gate2.w <= vw - r.inset + 1e-6, true);
-  check(`${L} gate2: bottom clears Piggy head by gap`, gate2.t + gate2.h <= sim(vw, vh).view.top + kk * (GDY + (250 + -46.9846 * 0.24) * GS) - r.gap + 1e-6, true);
+  check(`${L} gate2: bottom clears Piggy head by gap`, gate2.t + gate2.h <= sim(vw, vh).view.top + kk * (GDY + (250 + 51.7 + -46.9846 * 0.228) * GS) - r.gap /* [A-920 RE-PIN] pre-A-920 baseline: (250 + -46.9846 * 0.24) */ + 1e-6, true);
   check(`${L} gate1 -> gate2 growth is exactly READ zoom 1.18 (no coordinate-system jump)`, gate2.w / gate1.w, 1.18, 1e-9);
   const thrown = vpRect(drawMeta(view, 6.3 + 0.42, r).paperBoard);
   check(`${L} throw end (delivery=1) == gate1 rect (same coordinate system)`, thrown.l + "," + thrown.w.toFixed(6), gate1.l + "," + gate1.w.toFixed(6));

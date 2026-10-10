@@ -45,6 +45,7 @@ const feed = buildSecondJobCandidateFeed();
     "받을 것 받아오기",
     "자산 조각 가져오기",
     "돈 좀 일시키고 오기",
+    "help with trades", // [A-936 RE-PIN] LP errand right after grow; pre-A-936 baseline: 8 labels without it. [A-944] pre-A-944: "[COPY OPEN · Owner]"
     "다른 자리로 옮기기",
     "집에 있기",
   ]);
@@ -62,7 +63,7 @@ check("selector can rank Explore errands without admitting protocol destinations
 check("destination pool is separate from visible lanes", () => {
   const lanes = buildVisibleLaneChoices();
   const destinations = buildDestinationFixtures(TEST_RUNTIME_CONTEXT);
-  assert.equal(lanes.length, 8);
+  assert.equal(lanes.length, 9); // [A-936 RE-PIN] + LP errand; pre-A-936 baseline: 8 (destination pool unchanged: 4)
   assert.equal(destinations.length, 4);
   assert.equal(destinations.every((destination) => destination.destinationKind === "destination_job_fixture"), true);
   assert.equal(lanes.every((lane) => lane.destinationId === null), true);

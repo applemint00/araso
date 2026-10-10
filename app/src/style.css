@@ -1006,6 +1006,8 @@ h1 {
   color: rgba(237, 232, 220, 0.55);
   pointer-events: none;
   user-select: none;
+  /* [A-920 item 8 · A-924] one ARASO lettering on every screen: upright (the Gift / Money / Move screens inherited their italic body face). pre-A-924 baseline: no font-style (inherited) */
+  font-style: normal;
 }
 
 @media (max-width: 640px) {
@@ -4111,10 +4113,13 @@ h1 {
 .secondJourneyCard .secondJourney__footer { position: relative; z-index: 3; }
 
 .secondJourneyCard .secondJourney__body { top:96px; height:440px; } /* [A-421] +12 = 버튼 음영(0 2px 0 + 0 5px 7px) 자리. overflow:auto 가 잘라 버튼이 납작했음 */
+/* [A-920 item 2] the candidates step is the SAME card as the interests step (A-847 UI-24: one card, one size; mock img_15/16/17): no width / margin override here, so the card keeps the base .sendCard
+   box (438.46 local, 285 on a 390 phone) and the left edge on the margin line at every width. The body keeps the base box (left 30, width 378) + the 8 px text inset. Only the readiness card (a .job row
+   outside the candidates step) keeps the A-421 380 box. pre-A-920 baseline: .secondJourneyCard:has(.job), .secondJourneyCard--candidates { width:380px; margin-left:-190px } and body width:312px for the candidates step. */
+.secondJourneyCard:not(.secondJourneyCard--candidates) .secondJourney__body:has(> .job) { width:312px; }
 .secondJourneyCard .secondJourney__body:has(> .job),
-.secondJourneyCard--candidates .secondJourney__body { display:flex; flex-direction:column; padding-left:8px; padding-bottom:12px; width:312px; }
-.secondJourneyCard:has(.job),
-.secondJourneyCard--candidates { width:380px; margin-left:-190px; } /* [A-849 UI-24] keyed on the candidates step, not on a candidate existing: 0 / 1 / 3 rows keep one size + the bottom footer */
+.secondJourneyCard--candidates .secondJourney__body { display:flex; flex-direction:column; padding-left:8px; padding-bottom:12px; }
+.secondJourneyCard:has(.job):not(.secondJourneyCard--candidates) { width:380px; margin-left:-190px; } /* [A-849 UI-24] keyed on the candidates step, not on a candidate existing: 0 / 1 / 3 rows keep one size + the bottom footer */
 /* [A-849 UI-20] scrolling stays (long content still scrolls) but the scrollbar is never drawn */
 .secondJourney__body { scrollbar-width: none; -ms-overflow-style: none; }
 .secondJourney__body::-webkit-scrollbar { display: none; width: 0; height: 0; }
@@ -4555,7 +4560,7 @@ html .secondJourneyCard .secondJourney__picked { margin: 0.6439em 0 0.0920em; li
   .note--quiet .line { font-size: 28px; }
   .authCard__body { font-size: 15px; }
   .invite__copy { font-size: 15px; }
-  .invite__face { font-size: 18px; }
+  /* [A-920 item 4] the Face ID label is Button 16 (A-843 #2) at every width: the <=640 18px step is gone, the board scale carries the size. pre-A-920 baseline: .invite__face { font-size: 18px; } */
   .invite--wide .invite__face { font-size: 19.5px; }
   .sendCard__message { font-size: 15px; }
   .sendCard__stay { font-size: 15px; }
@@ -5061,6 +5066,12 @@ html .nameCard__gotLine { font-size: var(--tsTitle); }
 html .nameCard__field input { font-size: var(--tsChoice); }
 html .nameCard__day { font-size: var(--tsDetail); }
 html .nameCard__weekday { font-size: var(--tsWeekday); }
+/* [A-927] date / weekday pair, ONE shared rule for the Send card and the Name card (원칙 0): Playfair's old-style digits ("9", "3", "4", "5", "7")
+   descend below the date line, and with the 10 px line box their ink reached the weekday caps (a845 B3: "OCTOBER 9" × "FRIDAY" 0.62–1.89 px;
+   a927 all 366 × 7 labels: worst −1.56 send / −2.15 name local px). The extra gap is in em of the weekday line, so it scales with the card text.
+   pre-A-927 baseline: margin-top 4px (base rules .sendCard__weekday / .nameCard__weekday) */
+html .sendCard__weekday,
+html .nameCard__weekday { margin-top: calc(4px + 0.32em); } /* 0.32em = the smallest round value giving >= 1 on-screen px on both cards (a927) */
 /* Chog out-of-card text (speech, "tap me!", "… is coming home", away line) = Choice, scaled with the character stage: one local
    px at every width (replaces the 24 / 28 / 33 / 49 / 141 px per-breakpoint values and the fixed-screen-px tap cue). The line's
    bottom edge stays on the base anchor (top 236 + 1.2 x 24 = 264.8 local px) so bigger text grows upward; the <=640 away line
@@ -5206,7 +5217,8 @@ body:has(.stage[data-scene="sendstay"]) {
 /* ARASO on the left margin line, font = card width x .064, top = 2 x font (+ safe-area): Second, Name, Return. */
 .stage[data-scene="explore"] .arasoBrand,
 .stage--name .arasoBrand,
-.stage[data-scene="return"] .arasoBrand {
+.stage[data-scene="return"] .arasoBrand,
+.stage[data-scene="away"] .arasoBrand /* [A-920 item 9 · A-924] outside Home: the same ARASO spot as Home (A-829 --hlM / --hlAsTop / --hlAsFont) */ {
   left: var(--hlM, 140px);
   top: calc(var(--hlAsTop, 32px) + var(--hk-safe-top, 0px));
   font-size: var(--hlAsFont, 12px);
@@ -5280,6 +5292,11 @@ body:has(.stage[data-scene="sendstay"]) {
   left: 336px; /* pre-A-839 baseline: 414px (80 px right of the centre); the sticker is centred on the viewport */
   top: calc((800px - var(--invVh, 800px) / var(--invS, 1)) / 2 - 17px - 23.8px); /* opaque tape margin of tape@2x (wide) */
 }
+/* [A-920 item 4] content group offset to the mock position (main.js inviteGroupScale writes --invDx / --invDy in board units); individual `translate` composes with the existing transforms / animations. */
+.invite__hero,
+.invite__burst,
+.invite__face,
+.invite__chog { translate: var(--invDx, 0px) var(--invDy, 0px); }
 .stage--invite .arasoBrand {
   left: var(--hlM, 140px);
   top: calc(var(--hlAsTop, 32px) + var(--hk-safe-top, 0px));
@@ -5865,12 +5882,13 @@ html .a905-jarLayer {
 html .a905-jar {
   --a905JarSize: 60px; /* Owner 2026-10-08 "60" (pre-A-905 jar-size baseline: 48px) */
   position: absolute;
-  left: var(--a905JarX, 0px);
-  top: var(--a905JarY, 0px);
-  width: 1em;
-  height: 1em;
-  min-width: 44px;
-  min-height: 44px;
+  /* [A-918] --a905JarX/Y/Size = the ART box (follows the Piggy art); the button is the tap box = max(art, --a905Tap) around the art centre.
+     pre-A-918 baseline: left/top = art box, width/height 1em, min 44 (the art grew with the floor). */
+  --a905Pad: max(0px, calc((var(--a905Tap, 44px) - 1em) / 2));
+  left: calc(var(--a905JarX, 0px) - var(--a905Pad));
+  top: calc(var(--a905JarY, 0px) - var(--a905Pad));
+  width: max(1em, var(--a905Tap, 44px));
+  height: max(1em, var(--a905Tap, 44px));
   margin: 0;
   padding: 0;
   border: 0;
@@ -5880,11 +5898,20 @@ html .a905-jar {
   cursor: pointer;
   pointer-events: auto;
   -webkit-tap-highlight-color: transparent;
-  transition: transform 0.08s ease-out;
 }
-html .a905-jar:active { transform: translateY(2px) scale(0.96); }
+/* [A-918] the press animates the ART (the tap box stays >= 44 while pressed). pre-A-918 baseline: the button itself took `transition: transform .08s` and `:active { translateY(2px) scale(.96) }` */
+html .a905-jar__art { transition: transform 0.08s ease-out; }
+html .a905-jar:active .a905-jar__art { transform: translateY(2px) scale(0.96); }
 html .a905-jar:focus-visible { outline: none; }
 html .a905-jar:focus-visible .a905-jar__img { filter: drop-shadow(0 0 0.04em #e0b100); }
+html .a905-jar__art {
+  position: absolute;
+  left: var(--a905Pad);
+  top: var(--a905Pad);
+  width: 1em;
+  height: 1em;
+  pointer-events: none;
+}
 html .a905-jar__fill {
   position: absolute;
   inset: 0;
@@ -5965,9 +5992,8 @@ html .a905-jar:not([data-bump="1"]) .a905-jar__shine { animation: a905Shine 9s e
 }
 /* [A-905 merge] same meaning as (prefers-reduced-motion: reduce); written this way so the A-735 invite guard stays the last `reduce` block (a735 A6 locates it by lastIndexOf). */
 @media not all and (prefers-reduced-motion: no-preference) {
-  html .a905-jar,
-  html .a905-jar:active { transition-duration: 0s; }
-  html .a905-jar:active { transform: translateY(2px); }
+  html .a905-jar__art { transition-duration: 0s; }
+  html .a905-jar:active .a905-jar__art { transform: translateY(2px); }
   html .a905-jar .a905-jar__drop,
   html .a905-jar .a905-jar__honey,
   html .a905-jar .a905-jar__shine,
@@ -5984,10 +6010,11 @@ html .a905-jar:not([data-bump="1"]) .a905-jar__shine { animation: a905Shine 9s e
 html .a905-jar[data-a904="twinkle"]::after {
   content: "";
   position: absolute;
-  left: -30%;
-  top: -30%;
-  width: 160%;
-  height: 160%;
+  /* [A-918] centred on the jar ART (1em), not the tap box: 160% of the art, art centre = button centre. pre-A-918 baseline: left/top -30%, 160% of the button */
+  left: calc(50% - 0.8em);
+  top: calc(50% - 0.8em);
+  width: 1.6em;
+  height: 1.6em;
   background: url("/invite/burst@2x.png") center / contain no-repeat;
   opacity: 0.4;
   pointer-events: none;
@@ -6537,10 +6564,16 @@ html .a911-textBtn { min-height: 44px; padding: 0 6px; font-size: var(--a911-lab
 html .a911-faceLine { font-size: var(--a911-detail); color: rgba(237, 232, 220, 0.6); }
 /* link step: small card + link + copy (-> yellow check) + share */
 html .a911-link {
-  display: inline-flex; align-items: center; gap: 10px; max-width: 100%;
-  border: 1.5px solid rgba(237, 232, 220, 0.55); border-radius: 10px; padding: 6px 6px 6px 14px;
+  /* [A-920 item 7 · A-924] link pill back to the mock (gift_screen_mock.html:56: padding 10 / 14, gap 10, 22 px icons; A-919 390: mock ~210 x 43 vs 245 x 58), scaled with --a911-z
+     (A-829 keyframes); text = Body (A-843). The icons keep a 44 px tap box through a centred ::before (the visible pill no longer grows to 44 + padding).
+     pre-A-924 baseline: gap 10px; padding 6px 6px 6px 14px; icon buttons 44 x 44 inside the pill */
+  display: inline-flex; align-items: center; gap: calc(10px * var(--a911-z)); max-width: 100%;
+  border: 1.5px solid rgba(237, 232, 220, 0.55); border-radius: 10px; padding: calc(10px * var(--a911-z)) calc(14px * var(--a911-z));
   font-size: var(--a911-body); color: var(--a911-cream); text-decoration: none; min-height: 0;
 }
+html .a911-link .a911-ibtn { position: relative; width: calc(22px * var(--a911-z)); height: calc(22px * var(--a911-z)); }
+html .a911-link .a911-ibtn::before { content: ""; position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; transform: translate(-50%, -50%); }
+html .a911-link .a911-ico { width: calc(22px * var(--a911-z)); height: calc(22px * var(--a911-z)); }
 html .a911-link__url { min-width: 0; overflow-wrap: anywhere; }
 html .a911-ibtn { flex: none; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; }
 html .a911-ico { display: block; width: 22px; height: 22px; }
@@ -6662,6 +6695,10 @@ html .a911-link__url { user-select: all; }
   html .a911-screen[data-typing="1"] .a911-body > * { animation: a911-rise 200ms ease-out; }
   @keyframes a911-rise { from { transform: translateY(14px); } to { transform: none; } }
 }
+/* [A-924 · Owner 06:4x ③] Move out typed amount: "$" + the input on one underline (send? paper `$5` grammar, Title on the paper); input >= 16 px (no iPhone zoom). */
+html .a911-amtLine { display: inline-flex; align-items: baseline; gap: 2px; border-bottom: 1.5px solid var(--a911-ink); padding-bottom: 2px; max-width: 180px; }
+html .a911-amtLine__cur { font: 700 var(--a911-title) / 1.1 var(--a911-serif); font-style: normal; color: var(--a911-ink); }
+html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-width: none; width: 6em; font-size: max(16px, var(--a911-title)); color: var(--a911-ink); background: transparent; border-radius: 0; outline: none; }
 /* ── [A-911] end ───────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
 
 @media (max-width: 640px) {

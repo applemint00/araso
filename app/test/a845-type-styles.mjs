@@ -6,12 +6,14 @@
 //     ARASO_TEST_BROWSER=1 node app/test/a845-type-styles.mjs
 //   runs helpers/a845-type-measure.mjs (390x844 / 810x1080 / 1440x900 + 1 px sweeps), writes
 //   _private/ops/receipts/A845_type_styles/browser/a845_measure.json (+ screenshots) and checks the evidence contract.
+import { restorePreA920 } from "./helpers/a920-restore.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sceneOracle } from "./helpers/a837-sweep.mjs";
+import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -142,13 +144,14 @@ await check("N8 main.js changed by A-845 ONLY inside returnLayout() (Cowork R1 (
     // A-915: the delimited [A-915] imports block + the [A-915] Gift create wiring block + three typeof-guarded one-line hooks inside a898FaceId (pre-Face-ID refusal · executor fallback · plan extras);
     // pre-A-904 baseline: the delimited [A-904] jar-guide block is cut before hashing (same sha as before A-904).
     // removing exactly those restores the pre-A-915 sha above (checked when re-pinning); returnLayout() and every protected body untouched.
-    assert.equal(createHash("sha256").update(cutFn(MAIN, "returnLayout").replace(/\/\/ ── \[A-904\] One-time guide[\s\S]*?\/\/ ── \[\/A-904\][^\n]*\n\n/, "")).digest("hex"), "389621a855387a8569f7e5608663136aaa564afc02b994d1359463b6fda3c370", "main.js outside returnLayout() == post-A-895 P-D + A-896 + A-893b + A-905 + A-898 fit + A-915");
+    assert.equal(createHash("sha256").update(cutFn(restorePreA920(MAIN), "returnLayout") /* [A-920 RE-PIN] A-920 edits four main.js functions + eight const lines (a920-main-js-scope.mjs pins that scope); restorePreA920 puts the pre-A-920 text back first. pre-A-920 baseline: cutFn(MAIN, "returnLayout") */.replace(/\/\/ ── \[A-904\] One-time guide[\s\S]*?\/\/ ── \[\/A-904\][^\n]*\n\n/, "")).digest("hex"), "2f114a1067a56e585bef36f8ee1b268a83b4a57b228b3aa29895ffc299b3bae0", "main.js outside returnLayout() == post-A-895 P-D + A-896 + A-893b + A-905 + A-898 fit + A-915 + A-918");
+    // [A-918 RE-PIN · A-923 merge, hash pin -> new sha256] pre-A-918 baseline: 389621a855387a8569f7e5608663136aaa564afc02b994d1359463b6fda3c370. A-918 changes main.js in one place only (the [A-905] away-anchors block: a918SeatBoxFromBoard); returnLayout() untouched.
   }
   // [A-845 regression review R1] the post-A-845 returnLayout() text itself is pinned (function keyword through its closing brace)
   {
     const i = MAIN.indexOf("function returnLayout("); let d = 0, st = false, body = null;
     for (let j = MAIN.indexOf("{", i); j < MAIN.length; j += 1) { if (MAIN[j] === "{") { d += 1; st = true; } else if (MAIN[j] === "}") { d -= 1; if (st && d === 0) { body = MAIN.slice(i, j + 1); break; } } }
-    assert.equal(createHash("sha256").update(body).digest("hex"), "618680116efb9e8c10988f414c9a248944141331e78e56e8fe2bdbf7b2fa603f", "returnLayout() == the A-845 R1 (i) text");
+    assert.equal(createHash("sha256").update(body).digest("hex"), "d2ce2b9bd2140d8041deb557de0d74c179e6b03f0d88544d304c3f9d8dab6dca", "returnLayout() == the A-845 R1 (i) text + the A-920 Receipt x keyframe"); // [A-920 RE-PIN] returnLayout() gets the RET_RCX_SHIFT term (Cowork 20:55). pre-A-920 baseline: 618680116efb9e8c10988f414c9a248944141331e78e56e8fe2bdbf7b2fa603f
   }
   if (existsSync(pre)) {
     const f = path.join(REPO, "_private/ops/receipts/A845_type_styles/pre/HASH_BEFORE.txt");
@@ -162,7 +165,7 @@ if (process.env.ARASO_TEST_BROWSER !== "1") console.log("SKIP  browser part (ARA
 else if (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) console.log("SKIP  browser part — local harness absent");
 else {
   const { measureAll, evaluate } = await import("./helpers/a845-type-measure.mjs");
-  const OUT = path.join(REPO, "_private/ops/receipts/A845_type_styles/browser");
+  const OUT = testOutDir("a845-type-styles", process.env.A845_OUT); // [A-932] pre-A-932 baseline: receipts/A845_type_styles/browser
   let R = null;
   await check("B0 measurement ran (390x844 / 810x1080 / 1440x900 + sweeps), JSON written", async () => { R = await measureAll(OUT); assert.ok(R && !R.error, R && R.error); });
   if (R && !R.error) {
