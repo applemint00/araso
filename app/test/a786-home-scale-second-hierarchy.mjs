@@ -1,10 +1,10 @@
 // [A-786] Home scale x1.10 + Second candidate hierarchy. Browser test (390x844, 430x932, 1440x900) against the pre-A-786 baseline
-// (A786 receipts before/measure.json, tree after A-763/A-779). Needs local port binding + _private/ops/harness playwright; SKIPs otherwise.
+// (A786 receipts before/measure.json, tree after A-763/A-779). Needs local port binding + $ARASO_PRIVATE_BASE/ops/harness playwright; SKIPs otherwise.
 //   Node part: allowed-surface checks. Browser: paper scale ~1.10 w/ text, centre kept, no overlap/clip, Piggy/Chog +-1px,
 //   no new scroll, candidates (>18px css, plain text, no chrome), OK disabled->enabled on pick, Home strings unchanged.
 import assert from "node:assert/strict";
-// [A-779] before/after capture — real headless Chromium (playwright from _private/ops/harness), vite --mode a172-local.
-//   node _private/ops/receipts/A786_small_text_unify/capture.mjs <outDir>
+// [A-779] before/after capture — real headless Chromium (playwright from $ARASO_PRIVATE_BASE/ops/harness), vite --mode a172-local.
+//   node $ARASO_PRIVATE_BASE/ops/receipts/A786_small_text_unify/capture.mjs <outDir>
 // Walks: Name -> (tap me! cue) -> First Send card -> Home -> coming-home probe -> Explore -> Second candidates (before/after pick).
 // Records bounding boxes of card / paper / character elements and computed font-sizes of every text role involved,
 // plus a screenshot per scene. The coming-home line is a DOM probe: the real `#returnArrivalAlarm` markup
@@ -18,6 +18,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -25,7 +26,7 @@ const OUT = process.env.TMPDIR ? path.join(process.env.TMPDIR, "a786shots") : pa
 mkdirSync(OUT, { recursive: true });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const VPS = (process.env.A786_VPS || "390x844,430x932,1440x900").split(",").map((s) => s.split("x").map(Number));
-const { chromium } = existsSync(path.join(REPO, "_private/ops/harness/package.json")) ? createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright") : {}; // [A-888] public-clone guard: harness absent → browser part SKIPs below
+const { chromium } = existsSync(privatePath("ops/harness/package.json")) ? createRequire(privatePath("ops/harness/package.json"))("playwright") : {}; // [A-888] public-clone guard: harness absent → browser part SKIPs below
 
 function freePort() { return new Promise((res, rej) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); s.on("error", rej); }); }
 
@@ -200,7 +201,7 @@ await check("A1 css: --homePaperK 1.1 on .homePaper (one step), centre-preservin
 await check("A2 no copy change: Home paper / candidate strings are not touched by this card (style.css only)", () => { assert.equal(/content:\s*["'][^"']+["']/.test(CSS.slice(CSS.indexOf(":root { --homePaperK"))), false); });
 const near = (a, b, t, m) => assert.ok(Math.abs(a - b) <= t, `${m}: ${a} vs ${b}`);
 const ov = (p, c) => !(c.x >= p.x + p.w || c.x + c.w <= p.x || c.y >= p.y + p.h || c.y + c.h <= p.y);
-if (!existsSync(path.join(REPO, "_private"))) console.log("SKIP  browser part — local harness absent");
+if (!existsSync(privatePath())) console.log("SKIP  browser part — local harness absent");
 else {
   let server = null, BASE = process.env.A786_BASE || "";
   if (!BASE) {

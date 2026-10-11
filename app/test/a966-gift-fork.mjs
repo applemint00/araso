@@ -19,6 +19,7 @@ import { FORK_BOOT_PATH, selectBootProfile } from "../src/boot-profile.js";
 import { FORK_CHAIN_ID, FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "../src/funding-context.js";
 import { GIFT_ESCROW_COMMITTED_TOPIC0, receiptHasGiftCommit } from "../src/gift-claim-entry.js";
 import { readGiftSponsorForkEnv } from "../../api/_lib/gift-sponsor-runtime.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -245,7 +246,7 @@ await check("main.js: exactly one contiguous [A-966] block, right after the [A-9
   assert.ok(at < MAIN.indexOf("const pendingRead = readClaimFragment(location.href);"));
 });
 await check("main.js outside the [A-966] block is byte-equal to the pre-card copy (private workspace)", () => {
-  const pre = path.join(REPO, "_private/wt/a966d/pre/app/src/main.js");
+  const pre = privatePath("wt/a966d/pre/app/src/main.js");
   if (!existsSync(pre)) { console.log("      (pre-card copy is private-workspace only — skipped)"); return; }
   assert.equal(A1023_CUT(A977_CUT(MAIN)) /* [A-1023 RE-PIN] pre-A-1023: A977_CUT(MAIN) */.replace(BLOCK_RE, "").replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "") /* [A-974 re-pin] the later [A-974] fork entry block is cut too; pre-A-974: MAIN.replace(BLOCK_RE, "") */, readFileSync(pre, "utf8"));
 });

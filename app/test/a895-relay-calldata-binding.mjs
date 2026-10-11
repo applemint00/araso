@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeFunctionData, decodeFunctionData, parseAbi, toFunctionSelector, getAddress } from "viem";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls++; throw new Error("A-895 test: network forbidden"); };
@@ -89,7 +90,7 @@ t("decode accepts upper-case hex", decodeRelayDepositCalldata("0x" + depData().s
 
 // ── 2. pinned depository table ───────────────────────────────────────────────────────────────────
 t("pinned table: frozen, origin 8453 only, depository == A-885/A-886 /chains value", Object.isFrozen(RELAY_PINNED_CHAINS) && Object.isFrozen(RELAY_PINNED_CHAINS[8453]) && Object.keys(RELAY_PINNED_CHAINS).join() === "8453" && RELAY_PINNED_CHAINS[8453].v2Depository === DEP);
-const snap = path.join(ROOT, "_private/ops/receipts/A886_relay_funding_sim/raw/relay-chains.json");
+const snap = privatePath("ops/receipts/A886_relay_funding_sim/raw/relay-chains.json");
 if (existsSync(snap)) {
   const buf = readFileSync(snap);
   const base = JSON.parse(buf).chains.find((c) => c.id === 8453);

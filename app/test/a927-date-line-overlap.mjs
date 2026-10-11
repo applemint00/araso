@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import { launch, sleep, harnessPresent } from "./helpers/a803-browser.mjs";
 
 if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a927 browser part (ARASO_TEST_BROWSER=1 to run)"); process.exit(0); }
-if (!harnessPresent()) { console.log("SKIP  a927 (no _private/ops/harness)"); process.exit(0); }
+if (!harnessPresent()) { console.log("SKIP  a927 (no private harness)"); process.exit(0); }
 
 // every month-day label of a leap year + every weekday label (uppercase, en-US: the cards' own format)
 const days = [], weekdays = new Set();

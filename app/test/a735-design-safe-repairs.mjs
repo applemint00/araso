@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 import { layoutOracle } from "./helpers/a831-sweep.mjs"; // [A-839] pure Home layout (k = HomeCard / 282) for the k-scaled B1 baseline
+import { privatePath, PRIVATE_DIR } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const css = readFileSync(path.join(REPO, "app/src/style.css"), "utf8");
@@ -77,7 +78,7 @@ await check("A6 reduced motion: style.css guards check-pulse / tear-shake / env 
 
 
 // ── Part C: Work? confirmed cue (criterion 4) — node, no browser ─────────────────────────────────────────
-// Canon: _private/design/piggy/home_motion_confirmed_20260926 README + preview.js:14,1087-1125 drawConfirmedWorkCue.
+// Canon: $ARASO_PRIVATE_BASE/design/piggy/home_motion_confirmed_20260926 README + preview.js:14,1087-1125 drawConfirmedWorkCue.
 const depart = await import(new URL("../src/piggy-depart.js", import.meta.url));
 const mainSrc = readFileSync(path.join(REPO, "app/src/main.js"), "utf8");
 const departSrc = readFileSync(path.join(REPO, "app/src/piggy-depart.js"), "utf8");
@@ -118,7 +119,7 @@ await check("C4 draw calls: surprised eyes (canon cover rect + 2 canon paths) on
   assert.equal(run(1.8).some((x) => x[0] === "translate" && x[2] && Math.abs(x[2]) > 0 && x[1] === 0 && x[2] === -18), false);
   for (const t of [0, 0.5, 1.175, 1.8]) { const c = run(t); assert.equal(cnt(c, "save"), cnt(c, "restore"), `save/restore @${t}`); }
 });
-const C5_REF = path.join(REPO, "_private/design/piggy/home_motion_confirmed_20260926/snapshot/_private/ops/receipts/A583_multi_piggy_motion_preview/preview.js");
+const C5_REF = privatePath("design/piggy/home_motion_confirmed_20260926/snapshot", PRIVATE_DIR, "ops/receipts/A583_multi_piggy_motion_preview/preview.js");
 if (!existsSync(C5_REF)) console.log("SKIP  C5 canon art only — local reference source absent (public checkout)");
 else await check("C5 canon art only: the eye paths in piggy-depart.js are byte-identical to the Owner-confirmed preview.js SURPRISED_EYES; old 3.6s blink loop + -4px loop are gone from the work branch", () => {
   const pv = readFileSync(C5_REF, "utf8");
@@ -161,9 +162,9 @@ process.exit(fail === 0 ? 0 : 1);
 function freePort() { return new Promise((res, rej) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); s.on("error", rej); }); }
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private"))) { console.log("SKIP  Part B — local browser harness absent (public checkout)"); return; }
+  if (!existsSync(privatePath())) { console.log("SKIP  Part B — local browser harness absent (public checkout)"); return; }
   let chromium;
-  try { ({ chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright")); }
+  try { ({ chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright")); }
   catch (e) { await check("B0 playwright available (local harness)", () => { throw e; }); return; }
   let server = null, BASE = process.env.A735_BASE || "";
   if (!BASE) {

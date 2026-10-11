@@ -16,6 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
 import { sceneOracle } from "./helpers/a837-sweep.mjs"; // [A-837] pure Return layout (returnLayout) evaluated in a vm
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -294,13 +295,13 @@ if (process.env.A656_NODE_ONLY === "1") {
 }
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private"))) {
+  if (!existsSync(privatePath())) {
     console.log("SKIP  Part B — local browser harness absent (public checkout); browser scenarios not run");
     return;
   }
   let chromium;
   try {
-    const req = createRequire(path.join(REPO, "_private/ops/harness/package.json"));
+    const req = createRequire(privatePath("ops/harness/package.json"));
     ({ chromium } = req("playwright"));
   } catch (e) {
     await check("B0 playwright available (local harness)", () => { throw e; });

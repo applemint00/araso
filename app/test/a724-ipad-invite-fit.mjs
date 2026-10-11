@@ -15,6 +15,7 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -78,11 +79,11 @@ async function measure(page) {
 }
 
 async function main() {
-  if (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) {
+  if (!existsSync(privatePath("ops/harness/package.json"))) {
     console.log("SKIP  browser part — local harness absent (public checkout)");
     return;
   }
-  const { chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright");
+  const { chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright");
   const OUT = process.env.A724_OUT || "";
   const PHASE = process.env.A724_PHASE || "run";
   if (OUT) mkdirSync(path.join(OUT, "shots"), { recursive: true });

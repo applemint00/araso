@@ -26,6 +26,7 @@ import { admitSequencedPiggy, registerControlledPiggy, renameIndexedPiggy } from
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
 import { tapCueFrame, TAP_CUE_TIMING } from "../src/chog-home.js";
 import { FORK_MODE_ENV, FORK_MODE_SEED, RUN_SCOPE, forkKey } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): + Piggy / "Second done" open only on the fork profile since A-948
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -123,9 +124,9 @@ check("all widths: folded flap + every +Piggy tab pointer-events:auto (style.css
 }
 for (const [app, pkg] of [["home-paper-multi.js", "home_paper_multi_20260923/home-paper-multi.js"], ["home-paper-multi.css", "home_paper_multi_20260923/home-paper-multi.css"], ["home-peek.js", "home_peek_20260923/home-peek.js"]]) {
   // Public checkout: the design package is local-only. Without it this comparison prints SKIP (not PASS).
-  if (!existsSync(path.join(REPO_ROOT, "_private"))) { console.log(`SKIP  ${app} package comparison — design package absent (public checkout)`); continue; }
+  if (!existsSync(privatePath())) { console.log(`SKIP  ${app} package comparison — design package absent (public checkout)`); continue; }
   check(`${app} still byte-identical to the Owner-confirmed package`,
-    readFileSync(path.join(APP_DIR, "src", app), "utf8") === readFileSync(path.join(REPO_ROOT, "_private/design", pkg), "utf8"), true);
+    readFileSync(path.join(APP_DIR, "src", app), "utf8") === readFileSync(privatePath("design", pkg), "utf8"), true);
 }
 
 // ═══ Part 2 — live browser ══════════════════════════════════════════════════════════════════

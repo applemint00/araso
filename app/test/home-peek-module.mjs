@@ -1,5 +1,5 @@
 // [A-540] HOME peek + `+ Piggy` tab (1-Piggy path) module contract — 네트워크 0(실제 fetch 0)
-// · 브라우저 0. Owner-confirmed source: _private/design/home_peek_20260923/home-peek.{js,css}.
+// · 브라우저 0. Owner-confirmed source: $ARASO_PRIVATE_BASE/design/home_peek_20260923/home-peek.{js,css}.
 //   node app/test/home-peek-module.mjs
 //
 // Two kinds of checks:
@@ -13,16 +13,17 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { mountPlusPiggyTab } from "../src/home-peek.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let pass = 0;
 function check(label, fn) { fn(); console.log(`PASS  ${label}`); pass += 1; }
 
 // ── 1. verbatim copy ────────────────────────────────────────────────────────────────────
 // Public checkout: the design package is local-only. Without it the package-based checks print SKIP (not PASS).
-const HAS_PKG = existsSync(new URL("../../_private", import.meta.url));
-const PKG_JS = HAS_PKG ? readFileSync(new URL("../../_private/design/home_peek_20260923/home-peek.js", import.meta.url), "utf8") : null;
+const HAS_PKG = existsSync(privatePath());
+const PKG_JS = HAS_PKG ? readFileSync(privatePath("design/home_peek_20260923/home-peek.js"), "utf8") : null;
 const APP_JS = readFileSync(new URL("../src/home-peek.js", import.meta.url), "utf8");
-const PKG_CSS = HAS_PKG ? readFileSync(new URL("../../_private/design/home_peek_20260923/home-peek.css", import.meta.url), "utf8") : null;
+const PKG_CSS = HAS_PKG ? readFileSync(privatePath("design/home_peek_20260923/home-peek.css"), "utf8") : null;
 const APP_CSS = readFileSync(new URL("../src/home-peek.css", import.meta.url), "utf8");
 const pkgCheck = (label, fn) => (HAS_PKG ? check(label, fn) : console.log(`SKIP  ${label} — design package absent (public checkout)`));
 

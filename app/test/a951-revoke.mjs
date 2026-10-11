@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { encodeFunctionData, parseAbi, toFunctionSelector } from "viem";
 import * as R from "../src/mainnet-job-revoke.js";
 import { EVIDENCE_LABEL } from "../src/second-job-readiness.js";
+import { privatePath, PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls += 1; throw new Error("A-951 test: network forbidden"); };
 let pass = 0, fail = 0;
@@ -92,7 +93,7 @@ check("module imports no executor / signer / network; no private path or card id
   const src = readFileSync(SRC, "utf8");
   const code = src.replace(/^\/\/.*$/gm, "");
   assert.ok(!/money-executor|executeMoneyStep|issuePermission|fetch\(|createWalletClient|sendTransaction/.test(code));
-  assert.ok(!/_private/.test(src)); assert.ok(!/\bA-\d{3}\b/.test(src));
+  assert.ok(!PRIVATE_RE.test(src)); assert.ok(!/\bA-\d{3}\b/.test(src));
   assert.ok(!/\b(apy|yield|venue)\b|["'`>](safe|instant)\b/i.test(src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1")));
   const imports = [...src.matchAll(/^import .* from "([^"]+)";$/gm)].map((m) => m[1]);
   assert.deepEqual(imports.sort(), ["./chain-profile.js", "./mainnet-job-common.js", "./permission-envelope.js", "./second-job-readiness.js", "viem"]);
@@ -100,8 +101,7 @@ check("module imports no executor / signer / network; no private path or card id
 check("evidence label is the shared PASS_FORK_SIM word", () => assert.equal(R.REVOKE_FORK_EVIDENCE.label, EVIDENCE_LABEL.FORK_SIM));
 
 // (b) constants == the private run record (skipped in a public checkout)
-let root = HERE; while (root !== path.dirname(root) && !existsSync(path.join(root, "_private/ops/receipts/A787_second_broad_fork"))) root = path.dirname(root);
-const RUN = path.join(root, "_private/ops/receipts/A787_second_broad_fork/laneB/raw/laneB_run.json");
+const RUN = privatePath("ops/receipts/A787_second_broad_fork/laneB/raw/laneB_run.json");
 if (existsSync(RUN)) {
   const r = JSON.parse(readFileSync(RUN, "utf8"));
   const sc = r.scenarios.find((s) => s.scenario === "protect_revoke_stale_allowance");

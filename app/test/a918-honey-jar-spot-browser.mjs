@@ -1,6 +1,6 @@
 // [A-918] Honey jar on the mock spot: browser frames + 1 px sweep.
 //   ARASO_TEST_BROWSER=1 node app/test/a918-honey-jar-spot-browser.mjs            (serves this tree's app/)
-//   A918_ROOT=<dir> ...                                                           (serve another tree, e.g. _private/wt/a918d from main)
+//   A918_ROOT=<dir> ...                                                           (serve another tree, e.g. $ARASO_PRIVATE_BASE/wt/a918d from main)
 //   A918_SWEEP_STEP=1 (default 1; the real run) · A918_OUT=<receipt dir>
 // Skipped unless ARASO_TEST_BROWSER=1 (Chromium cannot launch inside the sandbox: run with the sandbox disabled via the permission gate).
 // Proves: the jar art sits at the mock ratio to the seat Piggy art box at every width (centre x = left-foot anchor, bottom = floor line, size = mock/seat ratio),
@@ -11,12 +11,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a918 honey jar spot browser (ARASO_TEST_BROWSER=1 to run)"); process.exit(0); }
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const APP = process.env.A918_ROOT ? path.resolve(process.env.A918_ROOT) : path.resolve(HERE, "..");
-let REPO = HERE; while (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) { const up = path.dirname(REPO); if (up === REPO) throw new Error("repo root not found"); REPO = up; }
+if (!existsSync(privatePath("ops/harness/package.json"))) { console.log("SKIP  a918 (no private harness — set ARASO_PRIVATE_BASE)"); process.exit(0); } // [A-1033]
+let REPO = HERE; while (!existsSync(path.join(REPO, "node_modules/.bin/vite"))) { const up = path.dirname(REPO); if (up === REPO) throw new Error("repo root not found"); REPO = up; } // [A-1033] repo root = first parent with the dev server; pre-A-1033: first parent holding the private harness
 const OUT = testOutDir("a918-honey-jar-spot-browser", process.env.A918_OUT); // [A-932] pre-A-932 baseline default: receipts/A918_honey_jar_spot
 const FR = path.join(OUT, "frames");
 mkdirSync(FR, { recursive: true });
@@ -24,7 +26,7 @@ const FREEZE = process.env.ARASO_SWEEP === "freeze"; // [A-926] ARASO_SWEEP=free
 const STEP = process.env.A918_SWEEP_STEP ? Number(process.env.A918_SWEEP_STEP) : 1;
 const J = await import(pathToFileURL(path.join(APP, "src/honey-jar.js")).href);
 const { FORK_MODE_ENV } = await import(pathToFileURL(path.join(REPO, "app/test/helpers/fork-mode.mjs")).href); // [A-950]
-const MOCK_HTML = path.join(REPO, "_private/design/gift_card_20261004/honey_jar_mock.html");
+const MOCK_HTML = privatePath("design/gift_card_20261004/honey_jar_mock.html");
 
 const freePort = () => new Promise((res, rej) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); s.on("error", rej); });
 const port = await freePort();

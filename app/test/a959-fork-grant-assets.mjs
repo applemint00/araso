@@ -5,7 +5,7 @@
 //   3 entry grant list = table ∩ ledger-keyable (ENTRY_ASSETS) · each once · repeat entry / 2 concurrent entries = 1 per asset
 //   4 the A-949 Admin (private harness, skipped when absent): WETH / AUSD rows read from the same table, amounts = server config with the
 //     A-959 defaults, the Public Guard section byte-equal to the pre-A-959 copy (no new public method).
-// The real fork run (anvil, 4 assets on the chain) = _private/ops/harness/a949-fork-infra/a959-grant-run.mjs (receipt A959).
+// The real fork run (anvil, 4 assets on the chain) = $ARASO_PRIVATE_BASE/ops/harness/a949-fork-infra/a959-grant-run.mjs (receipt A959).
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -18,6 +18,7 @@ import { createForkAdminClient, forkAssetTable, forkGrantAssets, isForkGrantAsse
 import { createMemoryForkLedgerStore } from "../../api/_lib/fork-ledger-store-contract.js";
 import { ENTRY_ASSETS } from "../../api/_lib/fork-ledger-contract.js";
 import { resolveChainProfile } from "../src/chain-profile.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let netCalls = 0;
 globalThis.fetch = async () => { netCalls += 1; throw new Error("A-959 test: network forbidden"); };
@@ -160,8 +161,8 @@ await check("3 config.grantAssets cannot add an asset outside the table or the l
 });
 
 // ── 4 ── (private harness; a public checkout has none)
-const INFRA = path.join(REPO, "_private/ops/harness/a949-fork-infra/fork-infra.mjs");
-const PRE = path.join(REPO, "_private/wt/a959d/pre/fork-infra.mjs");
+const INFRA = privatePath("ops/harness/a949-fork-infra/fork-infra.mjs");
+const PRE = privatePath("wt/a959d/pre/fork-infra.mjs");
 if (existsSync(INFRA)) {
   const infra = readFileSync(INFRA, "utf8");
   await check("4 Admin: asset rows read from the fork asset table · A-959 defaults WETH 1.5e18 / AUSD 150e6 · amounts overridable by server env", async () => {
@@ -178,7 +179,7 @@ if (existsSync(INFRA)) {
     assert.match(infra, /s\.listen\(port, "127\.0\.0\.1"/);
     assert.match(infra, /if \(!tokenOk\(request\.headers\.authorization\)\) \{ send\(401/);
   });
-} else console.log("SKIP  4 (no _private harness in this checkout)");
+} else console.log("SKIP  4 (no private harness in this checkout)");
 
 await check("network 0", async () => { assert.equal(netCalls, 0); });
 console.log(`\nA-959 fork grant assets: ${pass} PASS / ${fail} FAIL`);

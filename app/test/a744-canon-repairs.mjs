@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
 import { sceneOracle } from "./helpers/a837-sweep.mjs"; // [A-837] pure Name layout (nameSceneLayout) evaluated in a vm
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -228,9 +229,9 @@ function SNAP(containerSel) {
 function freePort() { return null; }
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) { console.log("SKIP  Part B — local browser harness absent"); return; }
+  if (!existsSync(privatePath("ops/harness/package.json"))) { console.log("SKIP  Part B — local browser harness absent"); return; }
   let chromium;
-  try { ({ chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright")); }
+  try { ({ chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright")); }
   catch (e) { await check("B0 playwright available", () => { throw e; }); return; }
   let server = null, BASE = process.env.A744_BASE || "";
   if (!BASE) {

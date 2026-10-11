@@ -1,13 +1,14 @@
 // [A-961] Fork Gift sponsor runtime (api/_lib/gift-sponsor-runtime.js, appended block). Node only, network 0, no port.
 // Checks: the 143 runtime text and the A-946 fork block are byte-identical to before; the relayer service is untouched; the fork runtime reads ONLY
 // the GIFT_SPONSOR_FORK_* names (and the 143 runtime never reads them); its policy is the fork id; its preflight refuses a non-fork chain id and a
-// non-A-935 escrow code before any pin read. The live run (escrow deploy + sponsored claim on a local fork) = _private/ops/harness/a961-gift-fork/run.mjs.
+// non-A-935 escrow code before any pin read. The live run (escrow deploy + sponsored claim on a local fork) = $ARASO_PRIVATE_BASE/ops/harness/a961-gift-fork/run.mjs.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const RT = await import(path.join(REPO, "api/_lib/gift-sponsor-runtime.js"));
@@ -95,7 +96,7 @@ await check("fork runtime: policy = fork id + fork pins; preflight refuses a non
 });
 
 await check("escrow runtime pin = A-935 DEPLOY_PACKET runtime keccak (private packet; skipped in a public checkout)", () => {
-  const p = path.join(REPO, "_private/ops/receipts/A935_gift_mainnet_deploy/DEPLOY_PACKET.md");
+  const p = privatePath("ops/receipts/A935_gift_mainnet_deploy/DEPLOY_PACKET.md");
   if (!existsSync(p)) { console.log("      (skip: private packet absent)"); return; }
   assert.ok(readFileSync(p, "utf8").includes(RT.GIFT_SPONSOR_FORK_ESCROW_RUNTIME_KECCAK), "pin appears in the A-935 packet");
 });

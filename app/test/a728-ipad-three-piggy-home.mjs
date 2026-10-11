@@ -18,6 +18,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -66,8 +67,8 @@ await check("N0 reference module = the pre-A-831 piggy-motion-state.js (pre/ cop
   //   assert.ok(src.includes("{ fallback: true }") && src.includes("opt?.fallback"), "A-728 fallback present in source"); const before = stripA728(src); assert.ok(!/fallback: true|opt\?\.fallback|A-728 4:3/.test(before), ...); B = import(before)
   assert.ok(src.includes("A-831 · A-829 / A-682 item 1"), "A-831 companion cluster present in source");
   // Round 3: B = the pre-A-831 module (receipt pre-copy), imported through a temp .mjs copy; used only for the widths the cluster does not touch (<= 640, mobile band).
-  if (!existsSync(path.join(REPO, "_private/ops/receipts/A831_home_keyframe_layout/pre/piggy-motion-state.js"))) { console.log("INFO  N0 pre-A-831 reference module — private pre-copy absent (public checkout); source assertion passed"); return "SKIP"; } // [A-888] public-clone guard
-  const pre = readFileSync(path.join(REPO, "_private/ops/receipts/A831_home_keyframe_layout/pre/piggy-motion-state.js"), "utf8");
+  if (!existsSync(privatePath("ops/receipts/A831_home_keyframe_layout/pre/piggy-motion-state.js"))) { console.log("INFO  N0 pre-A-831 reference module — private pre-copy absent (public checkout); source assertion passed"); return "SKIP"; } // [A-888] public-clone guard
+  const pre = readFileSync(privatePath("ops/receipts/A831_home_keyframe_layout/pre/piggy-motion-state.js"), "utf8");
   const dir = mkdtempSync(path.join(tmpdir(), "a728-"));
   const f = path.join(dir, "piggy-motion-state.pre-a831.mjs");
   writeFileSync(f, pre);
@@ -135,9 +136,9 @@ console.log(`\n${pass}/${pass + fail} PASS`);
 process.exit(fail === 0 ? 0 : 1);
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private"))) { console.log("SKIP  Part B — local browser harness absent (public checkout)"); return; }
+  if (!existsSync(privatePath())) { console.log("SKIP  Part B — local browser harness absent (public checkout)"); return; }
   let chromium;
-  try { ({ chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright")); }
+  try { ({ chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright")); }
   catch (e) { await check("B0 playwright available (local harness)", () => { throw e; }); return; }
   let server = null;
   let BASE = process.env.A728_BASE_URL || "";

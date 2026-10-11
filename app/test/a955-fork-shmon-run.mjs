@@ -10,12 +10,13 @@ import * as CP from "../src/chain-profile.js";
 import * as SM from "../src/mainnet-job-shmon.js";
 import { mapForkMoneySplit } from "../src/receipt-evidence-second.js";
 import { FORK_CHAIN_ID } from "../src/funding-context.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 globalThis.fetch = async () => { throw new Error("A-955 test: network forbidden"); };
 let pass = 0, fail = 0;
 const check = (n, f) => { try { f(); pass += 1; console.log(`PASS  ${n}`); } catch (e) { fail += 1; console.log(`FAIL  ${n}\n      ${String(e && e.message || e).split("\n")[0]}`); } };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const RUN = path.resolve(HERE, "..", "..", "_private/ops/receipts/A955_fork_assets/fork/raw/run.json");
+const RUN = privatePath("ops/receipts/A955_fork_assets/fork/raw/run.json");
 if (!existsSync(RUN)) { console.log("SKIP  no lab-fork record in this checkout"); process.exit(0); }
 const r = JSON.parse(readFileSync(RUN, "utf8"));
 const s = r.shmon;

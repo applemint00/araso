@@ -8,20 +8,21 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { FORK_MODE_ENV, FORK_MODE_INIT, FORK_MODE_OFF, FORK_SCOPE, forkKey, forkRpcStub } from "./fork-mode.mjs"; // [A-974] + forkRpcStub
+import { privatePath } from "./private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 export { FORK_MODE_ENV, FORK_MODE_INIT };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(HERE, "..", "..", "..");
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res, rej) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); s.on("error", rej); });
-export const harnessPresent = () => existsSync(path.join(REPO, "_private/ops/harness/package.json"));
+export const harnessPresent = () => existsSync(privatePath("ops/harness/package.json"));
 
 // [A-950] fork-profile mode (STALE_TESTS.md class (a)): launch({ forkMode: true }) boots the local dev server with the dummy fork config and stores
 // journey "2" before the app loads (helpers/fork-mode.mjs), so the Second UI can open (A-948: level >= 2 AND fork profile). Default off = the
 // unchanged testnet dev server. On the fork profile the storage scope is "monad-fork" and the testnet legacy receipts are not read.
 export async function launch({ forkMode = false } = {}) {
   if (FORK_MODE_OFF) forkMode = false; // A950_FORK_MODE=0: the forkMode-off regression run (helpers/fork-mode.mjs)
-  const { chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright");
+  const { chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright");
   let server = null, BASE = process.env.A803_BASE_URL || "";
   // A reused server (A803_BASE_URL) must say it carries the fork env (A803_BASE_FORK=1, set by the suite that spawned it with FORK_MODE_ENV).
   if (forkMode && BASE && process.env.A803_BASE_FORK !== "1") throw new Error("launch({forkMode:true}) cannot reuse A803_BASE_URL without A803_BASE_FORK=1: the fork env must be on the server that serves the page");

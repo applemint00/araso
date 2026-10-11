@@ -23,6 +23,7 @@ import * as COMMON from "../src/mainnet-job-common.js";
 import { MAINNET_LANE_CONFIG } from "../src/mainnet-job-lane.js";
 import { resolveChainProfile } from "../src/chain-profile.js";
 import { authorize, issuePermission, permissionNonce } from "../src/permission-envelope.js";
+import { privatePath, PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const {
   NEVERLAND_ACTION, NEVERLAND_FIELDS, NEVERLAND_FORK_EVIDENCE, NEVERLAND_FORK_SIZE_RAW, NEVERLAND_JOB_ID, NEVERLAND_PROOF,
@@ -43,8 +44,8 @@ const BLOCKED = resolveChainProfile("nonsense-profile");
 const PIGGY = { id: "piggy-1", address: "0x1111111111111111111111111111111111111111" };
 const FORK_EXECUTOR = { kind: "local_fork", chainId: 143, forkBlock: 108999816, send: async () => { throw new Error("no send in this suite"); }, receipt: async () => null };
 const LIVE_EXECUTOR = { ...FORK_EXECUTOR, kind: "live" };
-const NEVERLAND_RAW = path.join(REPO, "_private/ops/receipts/A652_mainnet_fork_lab/raw/neverland-usdc.json");
-const NEVERLAND_HARNESS_OLD = path.join(REPO, "_private/ops/receipts/A480_fork_lab/G_neverland/run.mjs");
+const NEVERLAND_RAW = privatePath("ops/receipts/A652_mainnet_fork_lab/raw/neverland-usdc.json");
+const NEVERLAND_HARNESS_OLD = privatePath("ops/receipts/A480_fork_lab/G_neverland/run.mjs");
 
 let pass = 0;
 let fail = 0;
@@ -303,7 +304,7 @@ await check("S2 live stays off: lane config unchanged, nothing in the product im
 
 await check("S3 hygiene: no private path, card id or yield / venue / safe / instant wording in the shipped module", () => {
   const src = SRC(MODULE);
-  assert.equal(/_private|receipts\//.test(src), false);
+  assert.equal(PRIVATE_RE.test(src) || /receipts\//.test(src), false);
   assert.equal(/\bA-\d{3}\b/.test(src), false);
   assert.equal(/\b(apy|apr|yield|venue|earn)\b|["'`>](safe|instant|immediate)\b/i.test(strip(src)), false);
   assert.equal(/\bcash\b|receiptOnly|receipt_only/i.test(src), false);

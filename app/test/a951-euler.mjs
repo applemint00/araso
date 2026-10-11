@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeFunctionData, parseAbi } from "viem";
 import * as EU from "../src/mainnet-job-euler.js";
+import { privatePath, PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls += 1; throw new Error("A-951 test: network forbidden"); };
 let pass = 0, fail = 0;
@@ -13,7 +14,7 @@ const check = (n, f) => { try { f(); pass += 1; console.log(`PASS  ${n}`); } cat
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SRC = readFileSync(path.join(HERE, "..", "src", "mainnet-job-euler.js"), "utf8");
 // The private run record / harness, when this checkout has them (walk up: app/test or a private worktree copy).
-const findPrivate = (rel) => { let d = HERE; for (let i = 0; i < 6; i++) { const p = path.join(d, rel); if (existsSync(p)) return p; d = path.dirname(d); } return null; };
+const findPrivate = (rel) => { const p = privatePath(rel); return existsSync(p) ? p : null; }; // [A-1033] one root; pre-A-1033: walked up 6 parents from app/test
 // Harness actor (a787-laneA-run.mjs :22) — the Piggy in every vector, so the comparison is against the exact recorded calls.
 const ACTOR = "0x0e1aF437Cc134921dedA89ADaDe025f655b5B8e4";
 // The harness's own ABI strings (a787-laneA-run.mjs :23 erc20 · :34 evAbi), copied verbatim — encoding with these is the harness encoding.
@@ -85,12 +86,12 @@ check("module imports no executor / signer / network; no card id or private path
   const code = SRC.replace(/^\/\/.*$/gm, "");
   assert.ok(!/money-executor|executeMoneyStep|issuePermission|fetch\(|createWalletClient|sendTransaction/.test(code));
   assert.deepEqual([...SRC.matchAll(/from "([^"]+)"/g)].map((m) => m[1]).sort(), ["./chain-profile.js", "./mainnet-job-common.js", "./permission-envelope.js", "./second-job-readiness.js", "viem"]);
-  assert.equal(/_private/.test(SRC), false); assert.equal(/\bA-\d{3}\b/.test(SRC), false);
+  assert.equal(PRIVATE_RE.test(SRC), false); assert.equal(/\bA-\d{3}\b/.test(SRC), false);
 });
 
 // (b) constants == the recorded harness values
-const RUN = findPrivate("_private/ops/receipts/A787_second_broad_fork/laneA/raw_run.json");
-const HARNESS = findPrivate("_private/ops/harness/a787-laneA-run.mjs");
+const RUN = findPrivate("ops/receipts/A787_second_broad_fork/laneA/raw_run.json");
+const HARNESS = findPrivate("ops/harness/a787-laneA-run.mjs");
 if (RUN) {
   const r = JSON.parse(readFileSync(RUN, "utf8")), E = r.euler, rt = E.noWarp_round_trip, F = EU.EULER_FORK_EVIDENCE;
   check("(b) constants == the A-787 run record (pin · vault · asset · queues · measured · gas)", () => {

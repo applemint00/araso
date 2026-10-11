@@ -1,5 +1,5 @@
 // [A-912] Small fixes (Owner 2026-10-08 "자잘한 것"): Chog one line · readiness underline + "—" · filebox Receipt/Home/ARASO · Invite line · Receipt label.
-//   node app/test/a912-small-fixes.mjs   (source + fake-DOM contracts; no browser. Frames: _private/ops/receipts/A912_small_fixes/frames/a912-frames.mjs)
+//   node app/test/a912-small-fixes.mjs   (source + fake-DOM contracts; no browser. Frames: $ARASO_PRIVATE_BASE/ops/receipts/A912_small_fixes/frames/a912-frames.mjs)
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import path from "node:path";

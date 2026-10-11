@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const APP = new URL("..", import.meta.url).pathname;
 let fails = 0;
@@ -33,9 +34,9 @@ check("index.html links the manifest exactly once", () => {
   const links = HTML.match(/<link\s+rel="manifest"\s+href="\/manifest\.webmanifest"\s*\/?>/g) || [];
   assert.equal(links.length, 1, "found " + links.length);
 });
-check("hygiene: no _private / A-number / local path", () => {
+check("hygiene: no private dir / A-number / local path", () => {
   const raw = readFileSync(mpath, "utf8");
-  assert.ok(!/_private|\bA-\d+|\/Users\/|\.env/.test(raw));
+  assert.ok(!(PRIVATE_RE.test(raw) || /\bA-\d+|\/Users\/|\.env/.test(raw)));
 });
 console.log(fails ? `FAIL ${fails}` : "ALL PASS");
 process.exit(fails ? 1 : 0);

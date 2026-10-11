@@ -12,6 +12,7 @@ import { CLAIM_PATH, JOURNEY_KEY, selectBootProfile, storedJourney } from "../sr
 import { journeyFeatureOpen, releaseAllows } from "../src/release-gate.js";
 import { registerJourneySessionDisposer, switchJourney } from "../src/journey-switch.js";
 import { CHAIN_PROFILE_ID, resolveChainProfile } from "../src/chain-profile.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let netCalls = 0;
 globalThis.fetch = async () => { netCalls += 1; throw new Error("A-948 test: network forbidden"); };
@@ -57,7 +58,7 @@ await check("row 7: \"/claim\" · level 1/2 · journey 1/2 · fork env with/with
   }
 });
 await check("row 7 (snapshot): \"/claim\" byte-compared with the pre-A-948 boot-profile.js snapshot over 64 combinations", async () => {
-  const snap = path.join(HERE, "..", "..", "_private", "ops", "receipts", "A948_journey_switch", "boot-profile.pre_A948.js");
+  const snap = privatePath("ops", "receipts", "A948_journey_switch", "boot-profile.pre_A948.js");
   if (!existsSync(snap)) { console.log("      (snapshot is private-workspace only — public checkout: compared by the rule above)"); return; }
   // the snapshot imports ./chain-profile.js + ./release-gate.js: point them at the live modules (chain-profile unchanged by A-948; release-gate only appended)
   const srcDir = path.join(HERE, "..", "src");

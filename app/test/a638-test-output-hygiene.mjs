@@ -5,7 +5,7 @@
 // receipt evidence directory, so every ordinary/full-suite run overwrote that evidence.
 // This guard proves (from source) that the general regression test now writes its runtime
 // screenshots/results only to a unique per-run OS temp directory and never into any
-// `_private/ops/receipts/**` path. No browser, no Vite, no writes.
+// `$ARASO_PRIVATE_BASE/ops/receipts/**` path. No browser, no Vite, no writes.
 //
 // The optional argv[2] lets a reviewer point the same checks at another copy of the file
 // (e.g. the pre-repair copy, which must FAIL).
@@ -13,6 +13,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PRIVATE_DIR } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const target = process.argv[2]
@@ -42,7 +43,7 @@ check(
 );
 
 // 2. No code line names any receipts path.
-check("no code line contains `_private/ops/receipts`", !code.includes("_private/ops/receipts"));
+check("no code line contains `<private dir>/ops/receipts`", !code.includes(`${PRIVATE_DIR}/ops/receipts`));
 check("no code line contains `receipts/`", !/receipts\//.test(code));
 
 // 3. OUT_DIR is derived from mkdtempSync under the OS temp dir (TMPDIR || os.tmpdir()).

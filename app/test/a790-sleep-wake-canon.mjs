@@ -2,7 +2,7 @@
 // meaningful interaction; companions never sleep; any meaningful interaction wakes it with the existing reverse-Flop; Chog's 60 s untouched.
 //   Part N (node, fake timers, always): clock 89s/90s, interaction resets, wake phases (piggyWakePhase), companions never slept by
 //   assignHomeAmbient over many ticks/seeds, Chog constants/behaviour unchanged, main.js wiring (seat-only, reduced guard).
-//   Part B (browser, needs local port + _private/ops/harness playwright; SKIPs otherwise): 2 real Piggies; seat sleeps/wakes, companion never.
+//   Part B (browser, needs local port + $ARASO_PRIVATE_BASE/ops/harness playwright; SKIPs otherwise): 2 real Piggies; seat sleeps/wakes, companion never.
 //   Env: A790_REAL90=0 skips the one real-time 90 s wait · A790_VPS=1440x900,390x844
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -12,6 +12,7 @@ import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -164,14 +165,14 @@ await check("N9 visual-only: the sleep wiring touches no money/auth/storage/sele
 });
 
 // ═══ Part B (browser) ═══════════════════════════════════════════════════════════════════════════
-if (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) {
+if (!existsSync(privatePath("ops/harness/package.json"))) {
   console.log("SKIP  Part B — local harness absent; browser scenarios not run");
 } else {
   await runBrowser();
 }
 
 async function runBrowser() {
-  const { chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright");
+  const { chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright");
     let server = null, BASE = process.env.A790_BASE_URL || "";
   if (!BASE) {
     const port = await freePort();

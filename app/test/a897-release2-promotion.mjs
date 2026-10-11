@@ -14,6 +14,7 @@ import * as GE from "../src/gift-claim-entry.js";
 import * as PI from "../src/piggy-index.js";
 import * as PR from "../src/piggy-registry.js";
 import { modelASaltHex } from "../src/piggy-session.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 // [A-1023 RE-PIN] (Owner 10-11 14:1x: only the approved post-ee4fa91 hunks are cut; no whole-card exclusion) receipts/A1023_pin_attribution/ATTRIBUTION.md.
 // The delimited [A-979 ④] badge block is cut by its markers; every other approved hunk (A-979 ④ import · A-995 ①②③ · A-995-b) is restored to its
 // exact ee4fa91 text and only when it occurs exactly once — anything else stays in place, so any other main.js change still fails this pin.
@@ -23,7 +24,7 @@ const A1023_CUT = (s) => { s = s.replace(/^\/\/ ── \[A-979 ④\] Fork virtua
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
 const MAIN = readFileSync(path.join(REPO, "app/src/main.js"), "utf8");
-const BEFORE_PATH = path.join(REPO, "_private/ops/receipts/A897_release2_promotion/before/main.js");
+const BEFORE_PATH = privatePath("ops/receipts/A897_release2_promotion/before/main.js");
 const BEFORE = existsSync(BEFORE_PATH) ? readFileSync(BEFORE_PATH, "utf8") : null;
 let pass = 0; let fail = 0;
 async function check(label, fn) {
@@ -422,8 +423,8 @@ await check("M12 local hashes: read from the legacy receipt store as confirm-onl
 // ═══ Part S — static ═══════════════════════════════════════════════════════════════════════════
 await check("S1 main.js differs from the pre-A-897 copy ONLY by the [A-897] P1/P2 blocks and the two P1-fix one-line edits (computeInitialScene Name-it guard · displayPiggyName index fallback)", async () => {
   // [A-897 P1-fix · pre-A-897 P1-fix baseline: blocks only] P2 Q1 / Q5 made Cowork-approved edits inside computeInitialScene and displayPiggyName; they are reverted here to compare the rest.
-  // [A-921 B0] the pre-A-897 main.js baseline is a private-workspace snapshot; a public checkout has no _private/, so this comparison is SKIPPED there (reason printed). With _private/ present it still FAILS when the baseline is missing.
-  if (!BEFORE && !existsSync(path.join(REPO, "_private"))) { const sk = new Error("skip"); sk.publicSkip = "pre-A-897 main.js baseline exists only in the private workspace (public checkout)"; throw sk; }
+  // [A-921 B0] the pre-A-897 main.js baseline is a private-workspace snapshot; a public checkout has no private dir, so this comparison is SKIPPED there (reason printed). With the private dir present it still FAILS when the baseline is missing.
+  if (!BEFORE && !existsSync(privatePath())) { const sk = new Error("skip"); sk.publicSkip = "pre-A-897 main.js baseline exists only in the private workspace (public checkout)"; throw sk; }
   assert.ok(BEFORE, "before/main.js missing");
   const cut = (src, a, b) => { const i = src.indexOf(a); assert.ok(i >= 0, a); let j = src.indexOf(b, i); assert.ok(j >= 0, b); j = src.indexOf("\n", j) + 1; return [src.slice(0, i), src.slice(j)]; };
   let [h, t] = cut(restorePreA920(A1023_CUT(MAIN)) /* [A-1023 RE-PIN] pre-A-1023: restorePreA920(MAIN) */, "// ── [A-897] P1 Release-2", "// ── [A-897] end P1"); // [A-920 RE-PIN] pre-A-920 baseline: cut(MAIN, ...) (A-920 edits four main.js functions + eight const lines, pinned by a920-main-js-scope.mjs)

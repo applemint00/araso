@@ -4,8 +4,8 @@
 // real "… is coming home" / away lines need an on-chain trip; the real "tap me!" is also sampled at 390x844 on first arrival.
 //   Library: measureAll(outDir) -> result (also written to outDir/a845_measure.json + outDir/shots/*.png); evaluate(result) -> misses.
 //   CLI:     ARASO_TEST_BROWSER=1 node app/test/helpers/a845-type-measure.mjs [outDir]   (also writes outDir/a845_evaluate.json)
-//   BEFORE:  A845_CSS_FROM=_private/ops/receipts/A845_type_styles/pre/app_src_style.css ARASO_TEST_BROWSER=1 \
-//              node app/test/helpers/a845-type-measure.mjs _private/ops/receipts/A845_type_styles/browser_pre
+//   BEFORE:  A845_CSS_FROM=$ARASO_PRIVATE_BASE/ops/receipts/A845_type_styles/pre/app_src_style.css ARASO_TEST_BROWSER=1 \
+//              node app/test/helpers/a845-type-measure.mjs $ARASO_PRIVATE_BASE/ops/receipts/A845_type_styles/browser_pre
 //            (same walk, page style.css swapped to the pre-A-845 copy; compare overflow / hitAreaReach / lineBoxOverlaps / overlaps)
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";

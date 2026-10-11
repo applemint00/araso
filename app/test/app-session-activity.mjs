@@ -14,11 +14,12 @@ import crypto from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { getEvmAddress, createSecp256k1SigningSession } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 // Public checkout: the pre-change snapshot is local-only. Without it, §9/§10 print SKIP (not PASS).
-const PRE = existsSync(new URL("../../_private", import.meta.url)) ? readFileSync(
-  new URL("../../_private/ops/receipts/A565_app_idle_activity/pre/main.js.pre", import.meta.url),
+const PRE = existsSync(privatePath()) ? readFileSync(
+  privatePath("ops/receipts/A565_app_idle_activity/pre/main.js.pre"),
   "utf8",
 ) : null;
 

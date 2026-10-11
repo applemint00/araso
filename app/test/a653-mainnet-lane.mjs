@@ -39,6 +39,7 @@ import {
 import { classifySecondReceipt } from "../src/second-journey-receipt-bridge.js";
 import { createGiftRecordSource } from "../src/gift-record-source.js";
 import { FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "../src/funding-context.js";
+import { privatePath, PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -584,12 +585,12 @@ await check("N17 legacy testnet paths sealed off-testnet: state init, send start
   assert.match(MAIN, /const publicClient = LEGACY_TESTNET_PATH\s*\? createPublicClient\(\{\s*chain: MONAD_TESTNET,\s*transport: http\(MONAD_TESTNET_RPC\),\s*\}\)\s*: sealedTestnetClient\(\);/);
 });
 
-await check("N18 render() byte-identical to HEAD (sha256 of its source); the lane module has no _private path or card id in shipped strings", () => {
+await check("N18 render() byte-identical to HEAD (sha256 of its source); the lane module has no private-dir path or card id in shipped strings", () => {
   const h = createHash("sha256").update(fnBody("render")).digest("hex");
   assert.equal(h, "866133cf607110939b5ce2b05ad9ff253ee7ab77f8448b3977faa974a9d3e27c");
   for (const f of ["app/src/chain-profile.js", "app/src/mainnet-job-lane.js"]) {
     const src = readFileSync(path.join(REPO, f), "utf8");
-    assert.equal(/_private/.test(src), false, `${f}: _private`);
+    assert.equal(PRIVATE_RE.test(src), false, `${f}: private dir path`);
     assert.equal(/\bA-\d{3}\b/.test(src), false, `${f}: card id`);
     const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
     assert.equal(/\b(apy|yield|venue)\b|["'`>](safe|instant)\b/i.test(code), false, `${f}: yield/venue wording`);
@@ -729,14 +730,14 @@ async function startVite(port, profile) {
 }
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private"))) {
+  if (!existsSync(privatePath())) {
     console.log("SKIP  Part B — local browser harness absent (public checkout); browser scenarios not run");
     if (fail > 0) process.exit(1);
     return;
   }
   let chromium;
   try {
-    const req = createRequire(path.join(REPO, "_private/ops/harness/package.json"));
+    const req = createRequire(privatePath("ops/harness/package.json"));
     ({ chromium } = req("playwright"));
   } catch (e) {
     await check("B0 playwright available (local harness)", () => { throw e; });

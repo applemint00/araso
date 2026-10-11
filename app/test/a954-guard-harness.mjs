@@ -1,16 +1,17 @@
 // [A-954] A-949 fork harness, A-954 additions (node only, no anvil, no network): (1) the start refuses unless anvil's --fork-url is the
 // process's own read-only proxy; (2) the Public Guard answers araso_guardInfo itself with the name the app checks; (3) CORS only for
 // dev-app origins given as start arguments (default none, no "*"); (4) anvil keeps its A-949 hardening. The live behaviour of all four
-// is exercised by the real run (_private/ops/harness/a949-fork-infra/a954-app-link-run.mjs). Skips when this checkout has no _private.
+// is exercised by the real run ($ARASO_PRIVATE_BASE/ops/harness/a949-fork-infra/a954-app-link-run.mjs). Skips when this checkout has no private dir.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FORK_GUARD_METHOD, FORK_GUARD_NAME } from "../src/chain-profile.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const FILE = path.resolve(HERE, "..", "..", "_private/ops/harness/a949-fork-infra/fork-infra.mjs");
-if (!existsSync(FILE)) { console.log("SKIP  no _private harness in this checkout"); process.exit(0); }
+const FILE = privatePath("ops/harness/a949-fork-infra/fork-infra.mjs");
+if (!existsSync(FILE)) { console.log("SKIP  no private harness in this checkout"); process.exit(0); }
 const SRC = readFileSync(FILE, "utf8");
 let pass = 0, fail = 0;
 const check = (n, f) => { try { f(); pass += 1; console.log(`PASS  ${n}`); } catch (e) { fail += 1; console.log(`FAIL  ${n}\n      ${String(e && e.message || e).split("\n")[0]}`); } };

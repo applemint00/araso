@@ -7,6 +7,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { layoutOracle } from "./helpers/a831-sweep.mjs"; // [A-839] pitch = 32 x HomeCard / 282
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -41,9 +42,9 @@ check("no new url() image in body rule", !/url\(/.test(body));
 
 // ---- browser
 async function main() {
-  if (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) { console.log("SKIP  browser part — harness absent"); return; }
+  if (!existsSync(privatePath("ops/harness/package.json"))) { console.log("SKIP  browser part — harness absent"); return; }
   if (process.env.A736_NODE_ONLY === "1") { console.log("SKIP  browser part — A736_NODE_ONLY"); return; }
-  const { chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright");
+  const { chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright");
   const OUT = process.env.A736_OUT || "";
   if (OUT) mkdirSync(OUT, { recursive: true });
   let server = null, BASE = process.env.A736_BASE_URL || "";

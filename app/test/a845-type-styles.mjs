@@ -2,10 +2,10 @@
 // so in-card text scales with its card at every width; Chog out-of-card text scales with the character stage.
 //   Node part (always): tokens, per-card conversion constants vs the main.js layout oracle, role map coverage, no @media in the block,
 //   held items untouched (Receipt step, large readiness numerals), chog-home.js tap cue no longer screen-fixed, a681 block still last.
-//   Browser part (ARASO_TEST_BROWSER=1; needs local port binding + _private/ops/harness playwright):
+//   Browser part (ARASO_TEST_BROWSER=1; needs local port binding + $ARASO_PRIVATE_BASE/ops/harness playwright):
 //     ARASO_TEST_BROWSER=1 node app/test/a845-type-styles.mjs
 //   runs helpers/a845-type-measure.mjs (390x844 / 810x1080 / 1440x900 + 1 px sweeps), writes
-//   _private/ops/receipts/A845_type_styles/browser/a845_measure.json (+ screenshots) and checks the evidence contract.
+//   $ARASO_PRIVATE_BASE/ops/receipts/A845_type_styles/browser/a845_measure.json (+ screenshots) and checks the evidence contract.
 import { restorePreA920 } from "./helpers/a920-restore.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -14,6 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sceneOracle } from "./helpers/a837-sweep.mjs";
 import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -104,7 +105,7 @@ await check("N7 Chog lines keep their bottom anchor (264.8 local = base top 236 
 });
 await check("N8 main.js changed by A-845 ONLY inside returnLayout() (Cowork R1 (i)) vs the pre-A-845 copy, and the a681 final block stays last", () => {
   // [A-845 RE-PIN · Cowork R1 (i)] pre-A-845 baseline: main.js sha256 == HASH_BEFORE (3fc0d51d…). Now: identical to the pre-A-845 copy with the returnLayout() body cut out of both.
-  const pre = path.join(REPO, "_private/ops/receipts/A845_type_styles/pre/app_src_main.js");
+  const pre = privatePath("ops/receipts/A845_type_styles/pre/app_src_main.js");
   if (existsSync(pre)) {
     const PRE_MAIN = readFileSync(pre, "utf8");
     const cutFn = (src, name) => { const i = src.indexOf(`function ${name}(`); assert.ok(i >= 0, name); let d = 0, st = false; for (let j = src.indexOf("{", i); j < src.length; j += 1) { if (src[j] === "{") { d += 1; st = true; } else if (src[j] === "}") { d -= 1; if (st && d === 0) return src.slice(0, i) + src.slice(j + 1); } } throw new Error(`${name} unterminated`); };
@@ -161,7 +162,7 @@ await check("N8 main.js changed by A-845 ONLY inside returnLayout() (Cowork R1 (
     assert.equal(createHash("sha256").update(body).digest("hex"), "d2ce2b9bd2140d8041deb557de0d74c179e6b03f0d88544d304c3f9d8dab6dca", "returnLayout() == the A-845 R1 (i) text + the A-920 Receipt x keyframe"); // [A-920 RE-PIN] returnLayout() gets the RET_RCX_SHIFT term (Cowork 20:55). pre-A-920 baseline: 618680116efb9e8c10988f414c9a248944141331e78e56e8fe2bdbf7b2fa603f
   }
   if (existsSync(pre)) {
-    const f = path.join(REPO, "_private/ops/receipts/A845_type_styles/pre/HASH_BEFORE.txt");
+    const f = privatePath("ops/receipts/A845_type_styles/pre/HASH_BEFORE.txt");
     if (existsSync(f)) assert.equal(createHash("sha256").update(readFileSync(pre, "utf8")).digest("hex"), readFileSync(f, "utf8").split("\n").find((l) => l.endsWith(" app/src/main.js")).split(/\s+/)[0], "pre copy == HASH_BEFORE");
   }
   assert.ok(CSS.trimEnd().endsWith("@media (max-width: 640px) {\n  .homeLiving__name { display: none; }\n}"));
@@ -169,7 +170,7 @@ await check("N8 main.js changed by A-845 ONLY inside returnLayout() (Cowork R1 (
 
 // ── Part B: browser ──────────────────────────────────────────────────────────────────────────────────
 if (process.env.ARASO_TEST_BROWSER !== "1") console.log("SKIP  browser part (ARASO_TEST_BROWSER=1 to run)");
-else if (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) console.log("SKIP  browser part — local harness absent");
+else if (!existsSync(privatePath("ops/harness/package.json"))) console.log("SKIP  browser part — local harness absent");
 else {
   const { measureAll, evaluate } = await import("./helpers/a845-type-measure.mjs");
   const OUT = testOutDir("a845-type-styles", process.env.A845_OUT); // [A-932] pre-A-932 baseline: receipts/A845_type_styles/browser
@@ -187,7 +188,7 @@ else {
     // [A-845 round 4 · coordinator verdict] an ink overlap that the SAME walk measured on the pre-A-845 style.css (browser_pre/a845_evaluate.json,
     // A845_CSS_FROM mode) at the same scene / viewport / text pair is pre-existing (candidates "places to explore?" x picked-interest line =
     // A-849 residue, Owner-visual), as long as it is not deeper than pre + 0.5 px. Anything else still fails. Without the pre file nothing is excluded.
-    const PRE = path.join(REPO, "_private/ops/receipts/A845_type_styles/browser_pre/a845_evaluate.json");
+    const PRE = privatePath("ops/receipts/A845_type_styles/browser_pre/a845_evaluate.json");
     const pairOf = (s) => { const m = s.match(/^(\S+ \S+ ".*?" x ".*?") INK overlap ([\d.]+) px/); return m ? { id: m[1], depth: Number(m[2]) } : null; };
     const preOv = existsSync(PRE) ? JSON.parse(readFileSync(PRE, "utf8")).overlaps.map(pairOf).filter(Boolean) : [];
     const preExisting = [], newOverlaps = [];

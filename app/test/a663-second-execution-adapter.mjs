@@ -1,7 +1,7 @@
 // A-663 Second-owned testnet execution PLUMBING PROOF — node part (no network).
 //   node app/test/a663-second-execution-adapter.mjs
 //
-// Per the A-663 Owner correction (_private/ops/INBOX.md, "TESTNET shMON IS PLUMBING PROOF,
+// Per the A-663 Owner correction ($ARASO_PRIVATE_BASE/ops/INBOX.md, "TESTNET shMON IS PLUMBING PROOF,
 // NOT THE SECOND JOB", 2026-10-01): this file proves the reusable Second-owned
 // execution/pending/receipt plumbing in second-execution-adapter.js — pending-before-
 // broadcast, duplicate-send prevention across reload/reopen, fail-closed permission, a

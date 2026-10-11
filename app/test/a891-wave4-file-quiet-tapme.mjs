@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { TAP_CUE_TIMING } from "../src/chog-home.js";
 import { scopedSecondKey } from "../src/boot-profile.js"; // [A-946 RE-PIN] SECOND_INTRO_SEEN_KEY is now built per chain scope (testnet = same key)
 import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -19,7 +20,7 @@ const MAIN = rd("app/src/main.js");
 const CSS = rd("app/src/style.css");
 const RV = rd("app/src/return-view.js");
 const PRET = rd("app/src/piggy-return.js");
-const A891_PRE_ROOT = path.join(REPO, "_private/ops/receipts/A891_wave4_file_quiet_tapme"); // [A-932] read-only (pre copies); output = testOutDir
+const A891_PRE_ROOT = privatePath("ops/receipts/A891_wave4_file_quiet_tapme"); // [A-932] read-only (pre copies); output = testOutDir
 const sha = (s) => createHash("sha256").update(s).digest("hex");
 const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 const cutFn = (src, name) => { const i = src.indexOf(`function ${name}(`); if (i < 0) return null; let d = 0, st = false; for (let j = src.indexOf("{", i); j < src.length; j += 1) { if (src[j] === "{") { d += 1; st = true; } else if (src[j] === "}") { d -= 1; if (st && d === 0) return src.slice(i, j + 1); } } return null; };
@@ -218,7 +219,7 @@ await check("N11 protected bodies byte-identical to the A-891 pre-copy (render 8
     // [A-893 merge] chogHomeMarkupForExplore / openSecondJourneyExplore are A-893-owned edits (Wave 5 CG-05, Cowork pre-answer):
     // pre-A-893 baseline: compared to the A-891 pre-copy; now compared to the A-893 post body (receipts/A893_wave5_chog_cues/post_main.js) — A-891 still must not touch them.
     const A893_OWNED = new Set(["chogHomeMarkupForExplore", "openSecondJourneyExplore"]);
-    const P893 = path.join(REPO, "_private/ops/receipts/A893_wave5_chog_cues/post_main.js");
+    const P893 = privatePath("ops/receipts/A893_wave5_chog_cues/post_main.js");
     if (A893_OWNED.has(f) && existsSync(P893)) { assert.equal(cutFn(MAIN, f), cutFn(readFileSync(P893, "utf8"), f), `${f} == A-893 post body`); continue; }
     // [A-896 re-pin, named reason: 99e M-L-2 60 s signer margin] sendPiggyOnce (one entry check) is A-896-owned: pinned by sha256 of this file's cutFn() text.
     // pre-A-896 baseline: cutFn(sendPiggyOnce) f1a3d8dea0104b4d2f62780b22e6c1e556485d557a389ee1862305d6ac028fdd (== the A-891 pre-copy body). [A-896 R1 re-pin: + monotonic performance.now stamp/check; prior A-896 value was the old pin]

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls += 1; throw new Error("A-898 test: network forbidden"); };
@@ -139,8 +140,8 @@ await check("A14 main.js wiring: [A-898] blocks are // comments only; crypto pro
 });
 
 // ── relay bridge: refundTo + recipient are passed into the binding (A-901 D2 / review) ──────────────────────────────
-const LIVE = path.join(ROOT, "_private/ops/receipts/A901_relay_proxy/live/live-quote-response.json");
-const LIB = path.join(ROOT, "_private/ops/harness/a886-relay-funding-sim/lib.mjs");
+const LIVE = privatePath("ops/receipts/A901_relay_proxy/live/live-quote-response.json");
+const LIB = privatePath("ops/harness/a886-relay-funding-sim/lib.mjs");
 if (!existsSync(LIVE) || !existsSync(LIB)) {
   console.log("SKIP  B* relay live fixture not present (public clone)");
 } else {

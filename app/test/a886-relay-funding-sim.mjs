@@ -4,8 +4,8 @@
 // stored read-only simulation record. Never executes, signs or sends anything.
 //
 // Private inputs (absent in a public clone → the suite prints SKIP and exits 0):
-//   _private/ops/harness/a886-relay-funding-sim/{lib.mjs, fixture.json, provenance.json}
-//   _private/ops/receipts/A886_relay_funding_sim/{raw/relay-chains.json, sim/run.json}
+//   $ARASO_PRIVATE_BASE/ops/harness/a886-relay-funding-sim/{lib.mjs, fixture.json, provenance.json}
+//   $ARASO_PRIVATE_BASE/ops/receipts/A886_relay_funding_sim/{raw/relay-chains.json, sim/run.json}
 //
 // Policy values below are TEST-ONLY PLACEHOLDERS (lib TEST_ONLY_POLICY): Owner gate G2 is open; they
 // are not recommendations.
@@ -13,13 +13,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls++; throw new Error("A-886 test: network forbidden"); };
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const H = path.join(ROOT, "_private/ops/harness/a886-relay-funding-sim");
-const R = path.join(ROOT, "_private/ops/receipts/A886_relay_funding_sim");
+const H = privatePath("ops/harness/a886-relay-funding-sim");
+const R = privatePath("ops/receipts/A886_relay_funding_sim");
 const need = [path.join(H, "lib.mjs"), path.join(H, "fixture.json"), path.join(H, "provenance.json"), path.join(R, "raw/relay-chains.json")];
 if (!need.every((p) => existsSync(p))) {
   console.log("SKIP a886: private A-886 fixture not present (public clone)");

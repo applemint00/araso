@@ -4,13 +4,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 // Public checkout: every check here runs the local-only isolated harness. Without it, SKIP (not PASS).
-if (!existsSync(new URL("../../_private", import.meta.url))) {
+if (!existsSync(privatePath())) {
   console.log("SKIP  piggy-wallet-birth — local isolated harness absent (public checkout); 0 checks run");
   process.exit(0);
 }
-const SCRIPT = new URL("../../_private/ops/harness/piggy-wallet-birth.mjs", import.meta.url).pathname;
+const SCRIPT = privatePath("ops/harness/piggy-wallet-birth.mjs");
 const SRC = readFileSync(SCRIPT, "utf8");
 const raw = execFileSync("node", [SCRIPT], { encoding: "utf8", timeout: 120000 });
 const out = JSON.parse(raw);

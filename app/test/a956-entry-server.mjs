@@ -17,6 +17,7 @@ import { adminOrigin, createForkAdminClient, forkAdminClientFromEnv } from "../.
 import { createMemoryForkLedgerStore, isForkLedgerStore } from "../../api/_lib/fork-ledger-store-contract.js";
 import { KIND, entryRecord, topupRecord } from "../../api/_lib/fork-ledger-contract.js";
 import { createForkEntryHandler, forkEntryOriginProblem, localForkEntryServiceFromEnv } from "../../api/fork-entry.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let netCalls = 0;
 globalThis.fetch = async () => { netCalls += 1; throw new Error("A-956 test: network forbidden"); };
@@ -507,7 +508,7 @@ await check("api/grant.js untouched by this card (behaviour file byte-equal to t
   // fails once HEAD holds A-960's grant.js (after the release commit / in a clone). pre-A-983: head = git show HEAD:api/grant.js; skip when no git.
   const BASE_GRANT_SHA256 = "3d8334ce18edf632d0354d23c23ec1a7441de5d775dc16d0cb158c7751f10f11";
   // [A-960 re-pin] api/grant.js was changed later by A-960; A-956's claim is checked on A-960's pre-card copy. pre-A-960: src("api/grant.js").
-  const preA960 = path.join(REPO, "_private/wt/a960d/pre/api_grant.js");
+  const preA960 = privatePath("wt/a960d/pre/api_grant.js");
   if (!existsSync(preA960)) { console.log("      (A-960 pre copy absent — skipped)"); return; }
   assert.equal(createHash("sha256").update(readFileSync(preA960, "utf8")).digest("hex"), BASE_GRANT_SHA256); // pre-A-983: assert.equal(readFileSync(preA960, "utf8"), head)
 });

@@ -1,5 +1,5 @@
 // A-893 UI Wave 5 — Chog cues: CG-01 first Send, CG-02 away on app open, CG-05 current picks, CG-06 verify-only.
-// Copy = _private/STUDY/94_VISUAL_DIRECTION.md §[2026-10-08 Owner] "Chog copy locked", exactly.
+// Copy = $ARASO_PRIVATE_BASE/STUDY/94_VISUAL_DIRECTION.md §[2026-10-08 Owner] "Chog copy locked", exactly.
 // Part N (node): locked copy only; CG-05 derivation for 1 / 2 / all / changed picks; CG-01 once-only wiring; CG-02 open/return
 //   trigger (no timer, max two per Away, never during departure, never over the money-truth line); protected bodies and
 //   money-truth strings byte-identical; CG-06 Return skip preserved, Third+ compact not implemented.
@@ -14,6 +14,7 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -278,10 +279,10 @@ function freePort() {
 }
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private"))) { console.log("SKIP  Part B — local browser harness absent"); return; }
+  if (!existsSync(privatePath())) { console.log("SKIP  Part B — local browser harness absent"); return; }
   let chromium;
   try {
-    const req = createRequire(path.join(REPO, "_private/ops/harness/package.json"));
+    const req = createRequire(privatePath("ops/harness/package.json"));
     ({ chromium } = req("playwright"));
   } catch (e) { await check("B0 playwright available (local harness)", () => { throw e; }); return; }
   // [A-950] two passes: forkMode OFF (the unchanged testnet dev server) for the First-journey checks B1 CG-01 / B2 CG-02 (First Send card,

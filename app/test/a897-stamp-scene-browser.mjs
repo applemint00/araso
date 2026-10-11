@@ -11,6 +11,7 @@ import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -243,10 +244,11 @@ function freePort() {
   });
 }
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private")) && !existsSync(path.join(REPO, "..", "..", "_private"))) { console.log("SKIP  Part B — local browser harness absent"); return; }
+  if (!existsSync(privatePath())) { // [A-1033] one root (worktrees point ARASO_PRIVATE_BASE at the main tree); pre-A-1033: || REPO/../../<private dir> fallback
+    console.log("SKIP  Part B — local browser harness absent"); return; }
   let chromium;
   try {
-    const harness = [path.join(REPO, "_private/ops/harness/package.json"), path.join(REPO, "../../ops/harness/package.json")].find((p) => existsSync(p));
+    const harness = [privatePath("ops/harness/package.json"), path.join(REPO, "../../ops/harness/package.json")].find((p) => existsSync(p));
     ({ chromium } = createRequire(harness)("playwright"));
   } catch (e) { await check("B0 playwright available (local harness)", () => { throw e; }); return; }
   const port = await freePort();

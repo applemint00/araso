@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -83,7 +84,7 @@ await check("face paths = piggy_face_peek.svg paths (10 == stand, 2 eyes class=e
   assert.equal([...paths.matchAll(/<path /g)].length, 12);
   assert.equal([...paths.matchAll(/class="eye"/g)].length, 2);
   assert.match(BLOCK, /viewBox="170 10 660 600"/);
-  const peekP = path.join(REPO, "_private/design/reentry_auth_20260928/pwa/piggy_face_dark/piggy_face_peek.svg");
+  const peekP = privatePath("design/reentry_auth_20260928/pwa/piggy_face_dark/piggy_face_peek.svg");
   if (existsSync(peekP)) {
     const peek = readFileSync(peekP, "utf8").replace(/<metadata>[\s\S]*?<\/metadata>/, "");
     assert.equal([...peek.matchAll(/<path[^>]*\/>/g)].map((x) => x[0]).join(""), paths);
@@ -120,8 +121,8 @@ await check("parse/strip functions behave (vm)", () => {
 // ═══ Part B ═══
 async function partB() {
   if (process.env.A733_NODE_ONLY === "1") { console.log("SKIP  Part B (A733_NODE_ONLY=1)"); return; }
-  if (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) { console.log("SKIP  Part B - harness absent"); return; }
-  const { chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright");
+  if (!existsSync(privatePath("ops/harness/package.json"))) { console.log("SKIP  Part B - harness absent"); return; }
+  const { chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright");
   let server = null, BASE = process.env.A733_BASE_URL || "";
   if (!BASE) {
     const port = Number(process.env.A733_PORT || 5825);

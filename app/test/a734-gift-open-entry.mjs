@@ -26,11 +26,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildClaimUrl, createClaimLink, parseClaimUrl } from "../src/gift-piggy-claim-link.js";
 import { GIFT_ENTRY_STATUS, readClaimFragment } from "../src/gift-claim-entry.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
 const MAIN = readFileSync(process.env.A734_MAIN_PATH || path.join(REPO, "app/src/main.js"), "utf8");
-const BEFORE_PATH = path.join(REPO, "_private/ops/receipts/A734_gift_open_entry/before/main.js");
+const BEFORE_PATH = privatePath("ops/receipts/A734_gift_open_entry/before/main.js");
 const BEFORE = existsSync(BEFORE_PATH) ? readFileSync(BEFORE_PATH, "utf8") : null;
 const VERCEL = JSON.parse(readFileSync(process.env.A734_VERCEL_PATH || path.join(REPO, "vercel.json"), "utf8"));
 const norm = (x) => JSON.parse(JSON.stringify(x) ?? "null");
@@ -123,7 +124,7 @@ await check("S5 live Gift stays fail-closed: GIFT_RECORD_CONFIG / GIFT_CLAIM_SUB
   assert.equal((CODE.match(/GIFT_RECORD_CONFIG\s*=/g) || []).length, 1, "assigned once");
   assert.equal((CODE.match(/GIFT_CLAIM_SUBMIT_CONFIG\s*=/g) || []).length, 1, "assigned once");
 });
-// Comment-stripped sha256 prefixes of the pre-A-734 tree (= _private/.../before/main.js, app_before.sha b22bec79…).
+// Comment-stripped sha256 prefixes of the pre-A-734 tree (= $ARASO_PRIVATE_BASE/.../before/main.js, app_before.sha b22bec79…).
 const PINNED = {
   openInvite: "85ec42659fa3680b", startPiggyOpen: "a982f3a9f680db89", checkPiggy: "6ced996d8c9836d3", openPiggy: "974d37202d48b60d",
   recoverPiggy: "9159f2d83c77a8a6", beginGiftPiggy: "456da2932a6d47f4", beginAddPiggy: "64181c00827e6e5b", runModelAAdmission: "bc651294b7e95f27",
@@ -480,10 +481,10 @@ const INIT = `(() => {
 })();`;
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private"))) { console.log("SKIP  Part B — local browser harness absent (public checkout)"); return; }
+  if (!existsSync(privatePath())) { console.log("SKIP  Part B — local browser harness absent (public checkout)"); return; }
   let chromium;
-  try { ({ chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright")); }
-  catch (e) { await check("B0 playwright available (_private/ops/harness)", () => { throw e; }); return; }
+  try { ({ chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright")); }
+  catch (e) { await check("B0 playwright available (private harness)", () => { throw e; }); return; }
   let server = null;
   let BASE = process.env.A734_BASE_URL || "";
   if (!BASE) {

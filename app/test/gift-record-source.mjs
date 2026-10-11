@@ -15,6 +15,7 @@ import { CLAIM_STATUS, TRANSFER_STATUS, claimStatement } from "../src/gift-piggy
 import { beginGiftClaim, GIFT_ENTRY_STATUS, settleGiftClaim } from "../src/gift-claim-entry.js";
 import { FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "../src/funding-context.js";
 import { GIFT_VALUE_DECIMALS } from "../src/gift-value-spec.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let pass = 0;
 function test(label, fn) { fn(); console.log(`PASS  ${label}`); pass += 1; }
@@ -38,8 +39,8 @@ const ZERO_BYTES32 = `0x${"0".repeat(64)}`;
 // Public checkout: the artifact is local-only. Without it this control prints SKIP (not PASS) and the
 // adapter checks below compare against the same pinned shape the control asserts.
 const PINNED_OUTPUT_SHAPE = ["sender:address", "token:address", "amount:uint256", "expiry:uint64", "claimed:bool", "claimTokenHash:bytes32"];
-const ARTIFACT = existsSync(new URL("../../_private", import.meta.url)) ? JSON.parse(
-  readFileSync(new URL("../../_private/ops/harness/gift-mainnet-fork/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json", import.meta.url)),
+const ARTIFACT = existsSync(privatePath()) ? JSON.parse(
+  readFileSync(privatePath("ops/harness/gift-mainnet-fork/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json")),
 ) : null;
 if (ARTIFACT === null) console.log("SKIP  control: real forge artifact gifts() shape — local artifact absent (public checkout)");
 const GIFTS_ABI_ENTRY = ARTIFACT === null ? null : ARTIFACT.abi.find((item) => item.type === "function" && item.name === "gifts");

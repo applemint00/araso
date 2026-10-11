@@ -13,6 +13,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { keccak256, stringToHex } from "viem";
 import { hashClaimToken } from "../src/gift-piggy-claim-link.js";
 import { FORK_CHAIN_ID } from "../src/funding-context.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 let pass = 0; let fail = 0;
@@ -162,10 +163,10 @@ for (const f of [TMP_S, TMP_N]) { try { rmSync(f); } catch {} }
 await check("④ fork virtual cost (not measured): fork gas units · buffer · MON/USD fixture are labelled where they are set (harness · tests) and corrected in the A-961 / A-966 RECEIPTs", () => {
   const LABEL = "fork virtual cost (not measured)";
   const REPO = path.resolve(HERE, "../..");
-  const at = (p) => { try { return readFileSync(path.join(REPO, p), "utf8"); } catch { return null; } };
+  const at = (p) => { try { return readFileSync(path.resolve(REPO, p), "utf8"); } catch { return null; } }; // [A-1033] private places are absolute
   const places = {
-    "_private/ops/harness/a961-gift-fork/run.mjs": [/const GAS_UNITS = \{ install: 120000/, /const BUFFER_BPS = 2000;/],
-    "_private/ops/harness/a961-gift-fork/a966-app-run.mjs": [/const GAS_UNITS = "120000,400000,120000,250000";/, /const BUFFER_BPS = "2000";/, /const MON_USD_FIXTURE = "0\.03";/],
+    [privatePath("ops/harness/a961-gift-fork/run.mjs")]: [/const GAS_UNITS = \{ install: 120000/, /const BUFFER_BPS = 2000;/],
+    [privatePath("ops/harness/a961-gift-fork/a966-app-run.mjs")]: [/const GAS_UNITS = "120000,400000,120000,250000";/, /const BUFFER_BPS = "2000";/, /const MON_USD_FIXTURE = "0\.03";/],
     "app/test/a961-fork-sponsor-runtime.mjs": [/const forkEnv = /],
     "app/test/a913-fork-sponsor.mjs": [/const CLAIM_GAS_UNITS = 80_000;/, /const GAS_UNITS = \{ install: 50_000/],
     "app/test/a915-fork-create.mjs": [/const CLAIM_GAS_UNITS = 80_000;/, /const GAS_UNITS = \{ install: 50_000/],
@@ -183,7 +184,7 @@ await check("④ fork virtual cost (not measured): fork gas units · buffer · M
   }
   const a966 = at("app/test/a966-gift-fork.mjs");
   assert.ok(a966.includes(`the fee line uses fork gas + the fork price (${LABEL})`), "a966 test name");
-  for (const r of ["_private/ops/receipts/A961_gift_fork/RECEIPT.md", "_private/ops/receipts/A966_gift_fork_app/RECEIPT.md"]) {
+  for (const r of [privatePath("ops/receipts/A961_gift_fork/RECEIPT.md"), privatePath("ops/receipts/A966_gift_fork_app/RECEIPT.md")]) {
     const t = at(r); if (t === null) continue;
     assert.match(t, /## \[A-979 ④ correction[^\n]*fork virtual cost \(not measured\)/, r);
   }

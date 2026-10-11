@@ -31,6 +31,7 @@ import { fileURLToPath } from "node:url";
 import { admitSequencedPiggy, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
 import { TAP_CUE_TIMING, tapCueFrame } from "../src/chog-home.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -229,11 +230,11 @@ function cleanup() {
 }
 
 async function live() {
-  if (!existsSync(path.join(REPO_ROOT, "_private/ops/harness/package.json"))) {
+  if (!existsSync(privatePath("ops/harness/package.json"))) {
     console.log("SKIP  Part 2 — local Playwright harness absent (public checkout)");
     return;
   }
-  const req = createRequire(path.join(REPO_ROOT, "_private/ops/harness/package.json"));
+  const req = createRequire(privatePath("ops/harness/package.json"));
   const { chromium } = req("playwright");
   const fx = await buildFixture();
   viteProc = spawn(path.join(REPO_ROOT, "node_modules/.bin/vite"), ["--mode", "a172-local", "--port", String(VITE_PORT), "--strictPort", "--host", "127.0.0.1"], {

@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeAbiParameters, encodeFunctionData, parseAbi, parseAbiParameters, toEventSelector } from "viem";
 import * as K from "../src/mainnet-job-kuru.js";
+import { privatePath, PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls += 1; throw new Error("A-951 test: network forbidden"); };
 let pass = 0, fail = 0;
@@ -103,8 +104,7 @@ check("selectors in the step table == viem selectors of the harness ABI", () => 
   assert.equal(K.KURU_STEPS.depositMargin.selector, sel(H_MA, "deposit", [PIGGY, USDC, 1n]));
   assert.equal(K.KURU_STEPS.withdrawMargin.selector, sel(H_MA, "withdraw", [1n, USDC]));
 });
-const RUN_REL = "_private/ops/receipts/A787_second_broad_fork/laneB/raw/laneB_run.json";
-const RUN = (() => { let d = path.join(HERE, ".."); for (let i = 0; i < 6; i++) { d = path.dirname(d); if (existsSync(path.join(d, RUN_REL))) return path.join(d, RUN_REL); } return path.join(HERE, "..", "..", RUN_REL); })();
+const RUN = privatePath("ops/receipts/A787_second_broad_fork/laneB/raw/laneB_run.json"); // [A-1033] one root; pre-A-1033: walked up 6 parents for the repo-relative path
 if (existsSync(RUN)) {
   const r = JSON.parse(readFileSync(RUN, "utf8"));
   const scn = (n) => r.scenarios.find((s) => s.scenario === n);
@@ -231,7 +231,7 @@ check("module imports no executor / signer / network", () => {
   assert.deepEqual(imports, ["./chain-profile.js", "./mainnet-job-common.js", "./permission-envelope.js", "./second-job-readiness.js", "viem"]);
 });
 check("no private path / card id / yield wording in the module", () => {
-  assert.equal(/_private/.test(SRC), false); assert.equal(/\bA-\d{3}\b/.test(SRC), false);
+  assert.equal(PRIVATE_RE.test(SRC), false); assert.equal(/\bA-\d{3}\b/.test(SRC), false);
   const code = SRC.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/.*$/gm, "$1");
   assert.equal(/\b(apy|yield|venue)\b|["'`>](safe|instant)\b/i.test(code), false);
 });

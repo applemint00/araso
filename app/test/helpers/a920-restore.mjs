@@ -3,9 +3,10 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..", "..");
-export const A920_PRE = path.join(REPO, "_private/ops/receipts/A920_screens_back_to_mock/pre/app_src_main.js");
+export const A920_PRE = privatePath("ops/receipts/A920_screens_back_to_mock/pre/app_src_main.js");
 export const A920_FUNCS = ["nameSceneLayout", "fitNameScene", "inviteGroupScale", "returnLayout"];
 export const A920_CONSTS = ["NAME_TOP_K", "NAME_PEEK_DX_K", "NAME_CHOG_DROP_K", "NAME_CHOG_DX_K", "INVITE_OFFSET_X", "INVITE_OFFSET_Y", "INVITE_GROUP_K", "RET_RCX_SHIFT"];
 const span = (src, name) => { const i = src.indexOf(`function ${name}(`); if (i < 0) throw new Error(`${name} missing`); let d = 0, st = false; for (let j = src.indexOf("{", i); j < src.length; j += 1) { if (src[j] === "{") { d += 1; st = true; } else if (src[j] === "}") { d -= 1; if (st && d === 0) return [i, j + 1]; } } throw new Error(`${name} unterminated`); };

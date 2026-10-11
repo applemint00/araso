@@ -4,6 +4,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const realFetch = globalThis.fetch;
@@ -51,7 +52,7 @@ const count = (s, k) => s.split(`"${k}"`).length - 1;
 }
 
 // ── R1 ──
-const LIVE_PATH = path.join(ROOT, "_private/ops/receipts/A901_relay_proxy/live/live-quote-response.json");
+const LIVE_PATH = privatePath("ops/receipts/A901_relay_proxy/live/live-quote-response.json");
 const L_USER = "0x1df681813a210ee1c57c68f608fbab7fcd42d3ac", L_RECIP = "0x054dcf6978026f5a94a40a84b62652f2a084a916";
 const L_USDC = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 const EVIL = "0x" + "ee".repeat(20);

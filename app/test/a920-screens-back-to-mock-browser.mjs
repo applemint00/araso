@@ -1,6 +1,6 @@
 // [A-920 PART 1] Name card · Second candidates · Return · Invite put back to the Owner mocks (RESPONSIVE_REF img 20/21/22 · 15/16/17 · 25/26/27 · 30/31/33), the Framer way:
 // the fix lives in the shared layout rule (keyframes 390 / 810 / 1440, straight line between, 0 steps), never in one screen.
-// Browser only (ARASO_TEST_BROWSER=1; needs local port binding + _private/ops/harness playwright). Without it this file prints SKIP and exits 0.
+// Browser only (ARASO_TEST_BROWSER=1; needs local port binding + $ARASO_PRIVATE_BASE/ops/harness playwright). Without it this file prints SKIP and exits 0.
 //   ARASO_TEST_BROWSER=1 node app/test/a920-screens-back-to-mock-browser.mjs
 //   A920_FRAMES=<dir>   also writes every frame (390 / 390i / 810 / 1440) + measured.json into <dir>
 //   ARASO_SWEEP=freeze  runs the sweep below (A-926; default csv = receipts/A920_screens_back_to_mock/SWEEP/a920_sweep_freeze.csv)
@@ -10,12 +10,13 @@ import assert from "node:assert/strict";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { launch, sleep, harnessPresent } from "./helpers/a803-browser.mjs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a920 browser part (ARASO_TEST_BROWSER=1 to run)"); process.exit(0); }
-if (!harnessPresent()) { console.log("SKIP  a920 (no _private/ops/harness)"); process.exit(0); }
+if (!harnessPresent()) { console.log("SKIP  a920 (no private harness)"); process.exit(0); }
 
 const FRAMES = process.env.A920_FRAMES || "";
-const SWEEP = process.env.A920_SWEEP || (process.env.ARASO_SWEEP === "freeze" ? path.join(path.dirname(new URL(import.meta.url).pathname), "..", "..", "_private/ops/receipts/A920_screens_back_to_mock/SWEEP/a920_sweep_freeze.csv") : ""); // [A-926] ARASO_SWEEP=freeze → full sweep; otherwise 390/390i/810/1440 only (A-923 rule 2: 1px sweep once, at freeze)
+const SWEEP = process.env.A920_SWEEP || (process.env.ARASO_SWEEP === "freeze" ? privatePath("ops/receipts/A920_screens_back_to_mock/SWEEP/a920_sweep_freeze.csv") : ""); // [A-926] ARASO_SWEEP=freeze → full sweep; otherwise 390/390i/810/1440 only (A-923 rule 2: 1px sweep once, at freeze)
 if (!SWEEP) console.log("sweep skipped (ARASO_SWEEP!=freeze)");
 const STEP = Number(process.env.A920_SWEEP_STEP) || 1;
 if (FRAMES) mkdirSync(FRAMES, { recursive: true });

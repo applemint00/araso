@@ -29,6 +29,7 @@ import { readTxEvidence } from "../src/receipt-evidence-reader.js";
 import { createEvidenceStore, evidenceStoreKey } from "../src/receipt-evidence-store.js";
 import { RECEIPT_KIND } from "../src/receipt-codec.js";
 import { createGiftGasRoute } from "../../relayer/src/server.mjs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 const ENTRY = readFileSync(new URL("../src/gift-claim-entry.js", import.meta.url), "utf8");
@@ -87,7 +88,7 @@ await check("N1 protected / money / auth / render bodies carry no A-887 code; th
 });
 
 await check("N2 strict delta vs the pre-A-887 copy (when present): MAIN minus the A-887 blocks and trigger line == pre copy", () => {
-  const pre = new URL("../../_private/ops/receipts/A887_main_nondesign_wiring/pre/main.js", import.meta.url);
+  const pre = privatePath("ops/receipts/A887_main_nondesign_wiring/pre/main.js");
   if (!existsSync(pre)) { console.log("      (pre copy absent: skipped, recorded in RECEIPT)"); return; }
   const PRE = readFileSync(pre, "utf8");
   const stripped = MAIN.replace(`${IMPORT_BLOCK}// ── [A-887] end imports ──\n`, "")

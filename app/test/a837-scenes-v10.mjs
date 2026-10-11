@@ -8,6 +8,7 @@ import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sceneOracle } from "./helpers/a837-sweep.mjs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -89,13 +90,13 @@ await check("N5 source: pinned literals kept, removed paths gone, pinned functio
   assert.ok(/function homeNarrowBlend\(/.test(code) && /function applyOnboardingPhoneFoot\(/.test(code), "Hatch consumers kept");
   assert.equal(/clock === "second" && board/.test(code), false);
   const cut = (name) => { const i = MAIN.indexOf(`function ${name}(`); let d = 0, st = false; for (let j = MAIN.indexOf("{", i); j < MAIN.length; j += 1) { if (MAIN[j] === "{") { d += 1; st = true; } else if (MAIN[j] === "}") { d -= 1; if (st && d === 0) return MAIN.slice(i, j + 1); } } };
-  if (existsSync(path.join(REPO, "_private/ops/receipts/A837_scenes_v10/pre/main.js"))) { // [A-888] public-clone guard: only the pre-copy comparison needs the private file
-  const PRE = readFileSync(path.join(REPO, "_private/ops/receipts/A837_scenes_v10/pre/main.js"), "utf8");
+  if (existsSync(privatePath("ops/receipts/A837_scenes_v10/pre/main.js"))) { // [A-888] public-clone guard: only the pre-copy comparison needs the private file
+  const PRE = readFileSync(privatePath("ops/receipts/A837_scenes_v10/pre/main.js"), "utf8");
   const cutPre = (name) => { const i = PRE.indexOf(`function ${name}(`); let d = 0, st = false; for (let j = PRE.indexOf("{", i); j < PRE.length; j += 1) { if (PRE[j] === "{") { d += 1; st = true; } else if (PRE[j] === "}") { d -= 1; if (st && d === 0) return PRE.slice(i, j + 1); } } };
   for (const f of ["arasoBrandMarkup", "render", "mountInviteChog", "setInvitePhase", "openInvite"]) assert.equal(cut(f), cutPre(f), `${f} byte-identical to the A-837 pre-copy (hash-pinned)`);
   } else console.log("SKIP  N5 pre-copy byte-identity — private pre-copy absent (public checkout); the other N5 assertions still run");
   const hf = (f) => createHash("sha256").update(readFileSync(path.join(REPO, f))).digest("hex");
-  const before = path.join(REPO, "_private/ops/receipts/A819_ui_wave1_responsive/HASH_BEFORE.txt");
+  const before = privatePath("ops/receipts/A819_ui_wave1_responsive/HASH_BEFORE.txt");
   // [A-845 RE-PIN · Cowork] chog-home.js changed only in the tap-cue type size (A-843 item 6). pre-A-845 baseline: 7d1c417fc6885a85ff1b55a42c1f3791b6d0e08cb74fa8d489ac556c7b27938f (in the A-819 HASH_BEFORE)
   // [A-920 RE-PIN · hash pin → new sha256] return-view.js adds the Return Chog drop (mock img_25-27). pre-A-920 baseline: return-view.js c01be5d750dadf0fdc787a02f1ff328205b4818013d3f6df924c435671b47605
   // [A-891 RE-PIN · hash pin → new sha256] return-view.js changed only for UI-19 (folder hit, "open the file" text hidden). pre-A-891 baseline: t.includes(hf("app/src/return-view.js")) (c44d28669d32c10f2515326b12d6458eb601957febc9d95a3570955ae5004ac6, in the A-819 HASH_BEFORE)

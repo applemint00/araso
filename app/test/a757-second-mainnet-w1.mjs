@@ -26,6 +26,7 @@ import {
 } from "../src/mainnet-job-kintsu.js";
 import { resolveChainProfile } from "../src/chain-profile.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
+import { privatePath, PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -155,7 +156,7 @@ await check("K2 every recorded selector is the keccak of its recorded signature"
   }
 });
 
-const A652_RAW = path.join(REPO, "_private/ops/receipts/A652_mainnet_fork_lab/raw/kintsu-smon.json");
+const A652_RAW = privatePath("ops/receipts/A652_mainnet_fork_lab/raw/kintsu-smon.json");
 await check("K3 module values equal the recorded fork run (skipped when the private record is absent)", () => {
   if (!existsSync(A652_RAW)) return "SKIP";
   const raw = JSON.parse(readFileSync(A652_RAW, "utf8"));
@@ -340,10 +341,10 @@ await check("S2 Kintsu is not Aave-shaped: no Aave import, no approve / Pool / r
   assert.equal(KINTSU_FORK_EVIDENCE.approvalsUsed, 0);
 });
 
-await check("S3 hygiene: no _private path, card id or yield/venue wording in the shipped new modules", () => {
+await check("S3 hygiene: no private-dir path, card id or yield/venue wording in the shipped new modules", () => {
   for (const f of NEW_MODULES) {
     const src = SRC(f);
-    assert.equal(/_private/.test(src), false, `${f}: _private`);
+    assert.equal(PRIVATE_RE.test(src), false, `${f}: private dir path`);
     assert.equal(/\bA-\d{3}\b/.test(src), false, `${f}: card id`);
     assert.equal(/\b(apy|yield|venue)\b|["'`>](safe|instant)\b/i.test(strip(src)), false, `${f}: wording`);
   }

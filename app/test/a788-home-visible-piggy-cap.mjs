@@ -1,5 +1,5 @@
 // [A-788] Home visible-Piggy cap: Main + at most 2 companions (display-only). Browser test against the A-788 pre-change baseline
-// (_private/ops/receipts/A788_home_visible_piggy_cap/before/measure.json). Needs local port binding + _private/ops/harness playwright; SKIPs otherwise.
+// ($ARASO_PRIVATE_BASE/ops/receipts/A788_home_visible_piggy_cap/before/measure.json). Needs local port binding + $ARASO_PRIVATE_BASE/ops/harness playwright; SKIPs otherwise.
 //   Node part: the cap is a visibility rule in main.js only (planHomeSlots / Piggy index / registry / money untouched).
 //   Browser: seeds REAL Piggies (birth + closed First + confirmed Second + `+ Piggy` x5); per logical count (3,4,6) and viewport
 //   (390x844, 430x932, 1200x900, 1440x900): visible <= 3, companions left of the paper/HISTORY footprint, no overlap with Chog/paper,
@@ -14,13 +14,14 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const MAIN = readFileSync(path.join(REPO, "app/src/main.js"), "utf8");
 const SHOTS = process.env.A788_SHOTS || "";
 if (SHOTS) mkdirSync(SHOTS, { recursive: true });
-const BEFORE_JSON = path.join(REPO, "_private/ops/receipts/A788_home_visible_piggy_cap/before/measure.json");
+const BEFORE_JSON = privatePath("ops/receipts/A788_home_visible_piggy_cap/before/measure.json");
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const VPS = (process.env.A788_VPS || "390x844,430x932,1200x900,1440x900").split(",").map((s) => s.split("x").map(Number));
 const COUNTS = (process.env.A788_COUNTS || "3,4,6").split(",").map(Number);
@@ -79,14 +80,14 @@ function SNAP() {
   return out;
 }
 
-if (!existsSync(path.join(REPO, "_private/ops/harness/package.json"))) {
+if (!existsSync(privatePath("ops/harness/package.json"))) {
   console.log("SKIP  Part B — local harness absent; browser scenarios not run");
 } else {
   await runBrowser();
 }
 
 async function runBrowser() {
-  const { chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright");
+  const { chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright");
   const base = existsSync(BEFORE_JSON) ? JSON.parse(readFileSync(BEFORE_JSON, "utf8")) : null;
   let server = null, BASE = process.env.A788_BASE_URL || "";
   if (!BASE) {

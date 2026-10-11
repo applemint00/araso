@@ -26,6 +26,7 @@ import { MAINNET_LANE_CONFIG } from "../src/mainnet-job-lane.js";
 import { RETURN_READ_METHODS, buildExecutionPlan } from "../src/second-job-readiness.js";
 import { resolveChainProfile } from "../src/chain-profile.js";
 import { authorize, issuePermission, permissionNonce } from "../src/permission-envelope.js";
+import { privatePath, PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const {
   ABIL_ACTION, ABIL_BLOCKING_FIELDS, ABIL_BLOCKING_FIELD_NAMES, ABIL_FORK_EVIDENCE, ABIL_FORK_SIZE_RAW, ABIL_JOB_ID,
@@ -46,7 +47,7 @@ const ABIL_PROFILE = { ...MAINNET, jobId: ABIL_JOB_ID, liveExecution: false };
 const PIGGY = { id: "piggy-1", address: "0x1111111111111111111111111111111111111111" };
 const FORK_EXECUTOR = { kind: "local_fork", chainId: 143, forkBlock: 108999816, send: async () => { throw new Error("no send in this suite"); }, receipt: async () => null };
 const LIVE_EXECUTOR = { ...FORK_EXECUTOR, kind: "live" };
-const ABIL_RAW = path.join(REPO, "_private/ops/receipts/A652_mainnet_fork_lab/raw/abil-spot.json");
+const ABIL_RAW = privatePath("ops/receipts/A652_mainnet_fork_lab/raw/abil-spot.json");
 const URL_ = "https://fork.local.invalid/rpc";
 const NOW = "2026-10-05T00:00:00Z";
 const HEAD = 109000000;
@@ -375,7 +376,7 @@ await check("L6 live stays off: lane config unchanged, no product file imports t
 
 await check("L7 hygiene: no private path, card id or yield / instant / guaranteed wording in the shipped module", () => {
   const src = SRC(MODULE);
-  assert.equal(/_private|receipts\//.test(src), false);
+  assert.equal(PRIVATE_RE.test(src) || /receipts\//.test(src), false);
   assert.equal(/\bA-\d{3}\b/.test(src), false);
   assert.equal(/\b(apy|apr|yield|earn|guaranteed)\b|["'`>](safe|instant|immediate)\b/i.test(strip(src)), false);
 });

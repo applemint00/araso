@@ -42,15 +42,16 @@ import { CLAIM_STATUS, TRANSFER_STATUS, attachGiftValue, createClaimLink, sealCl
 import { createGiftGasClient } from "../src/gift-gas-client.js";
 import { createGiftGasLedger, createMemoryGiftGasStore } from "../src/gift-gas-ledger.js";
 import { GIFT_GAS_POLICY, buildGiftValueBinding, giftGasBudget } from "../src/gift-value-spec.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const REPO = new URL("../../", import.meta.url);
 // Public checkout: every check here is built on the local-only fork vector. Without it, SKIP (not PASS).
-if (!existsSync(new URL("_private", REPO))) {
+if (!existsSync(privatePath())) {
   console.log("SKIP  gift-claim-submit — local fork vector absent (public checkout); 0 checks run");
   process.exit(0);
 }
-const FIX =JSON.parse(readFileSync(new URL("_private/ops/harness/gift-mainnet-fork-native/fixtures/proof-input.json", REPO), "utf8"));
-const ARTIFACT = JSON.parse(readFileSync(new URL("_private/ops/harness/gift-mainnet-fork-native/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json", REPO), "utf8"));
+const FIX =JSON.parse(readFileSync(privatePath("ops/harness/gift-mainnet-fork-native/fixtures/proof-input.json"), "utf8"));
+const ARTIFACT = JSON.parse(readFileSync(privatePath("ops/harness/gift-mainnet-fork-native/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json"), "utf8"));
 const ENTRY_SRC = readFileSync(new URL("../src/gift-claim-entry.js", import.meta.url), "utf8");
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 const RECORD_SRC = readFileSync(new URL("../src/gift-record-source.js", import.meta.url), "utf8");

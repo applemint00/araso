@@ -9,13 +9,14 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
 const rd = (p) => readFileSync(path.join(REPO, p), "utf8");
 const MAIN = rd("app/src/main.js");
 const CSS = rd("app/src/style.css");
-const PRE = existsSync(path.join(REPO, "_private/ops/receipts/A839_invite_fullbleed/pre/main.js")) ? rd("_private/ops/receipts/A839_invite_fullbleed/pre/main.js") : null; // [A-888] public-clone guard (null → N3 SKIPs)
+const PRE = existsSync(privatePath("ops/receipts/A839_invite_fullbleed/pre/main.js")) ? readFileSync(privatePath("ops/receipts/A839_invite_fullbleed/pre/main.js"), "utf8") : null; // [A-888] public-clone guard (null → N3 SKIPs)
 const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
 let pass = 0, fail = 0;
 async function check(name, fn) {
@@ -73,9 +74,9 @@ await check("N4 CSS: no dark outer box, paper has no ground, body notebook not h
 });
 // pre-A-891 baseline: endsWith corner line (v[v.length - 1] === the A-839 corner line). Re-pinned per Cowork answer (A-891, OUTBOX "질문 · A-839 test N5"):
 // 94 contains the A-839 corner line and everything after it is later dated newest-wins sections (additions only).
-if (!existsSync(path.join(REPO, "_private/STUDY/94_VISUAL_DIRECTION.md"))) console.log("SKIP  N5 — private design canon absent (public checkout)"); else // [A-888] public-clone guard
+if (!existsSync(privatePath("STUDY/94_VISUAL_DIRECTION.md"))) console.log("SKIP  N5 — private design canon absent (public checkout)"); else // [A-888] public-clone guard
 await check("N5 94_VISUAL_DIRECTION.md contains the A-839 corner line; everything after it is later dated newest-wins sections (append-only)", () => {
-  const v = rd("_private/STUDY/94_VISUAL_DIRECTION.md").trimEnd().split("\n");
+  const v = readFileSync(privatePath("STUDY/94_VISUAL_DIRECTION.md"), "utf8").trimEnd().split("\n");
   const corner = "[A-839] Invite: yellow folded corner removed (Owner 2026-10-06).";
   const at = v.lastIndexOf(corner);
   assert.ok(at >= 0, "A-839 corner line present");

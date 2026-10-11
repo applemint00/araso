@@ -20,6 +20,7 @@ import {
 } from "../src/issuance-authority.js";
 import { issuanceAuthorityRequiredForScope } from "../src/chain-profile.js";
 import { admitIssuedPiggy, admitModelAPiggy, admitSequencedPiggy, loadMyPiggiesIndex, markBornPiggyIssuance, myPiggiesIndexKey, registerControlledPiggy } from "../src/piggy-index.js";
+import { PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
 const INDEX_SRC = readFileSync(new URL("../src/piggy-index.js", import.meta.url), "utf8");
@@ -726,8 +727,8 @@ await check("S3. issuance-authority.js is network-free and search-free: no fetch
   assert.equal(/\.issued\b|\bissued\(/.test(code.replace(/isIssued|queryIssued/g, "")), false, "no registry 'issued' read");
 });
 
-await check("S4. no card id / _private path in chain-profile.js (a653 N18 shipped-string rule) and the profile gate adds no import", () => {
-  assert.equal(/\bA-\d{3}\b/.test(PROFILE_SRC) || /_private/.test(PROFILE_SRC), false);
+await check("S4. no card id / private-dir path in chain-profile.js (a653 N18 shipped-string rule) and the profile gate adds no import", () => {
+  assert.equal(/\bA-\d{3}\b/.test(PROFILE_SRC) || PRIVATE_RE.test(PROFILE_SRC), false);
   assert.equal((PROFILE_SRC.match(/^import /gm) || []).length, 1);
 });
 

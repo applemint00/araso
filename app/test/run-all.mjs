@@ -34,6 +34,9 @@ const WANT_BROWSER = process.env.ARASO_TEST_BROWSER === "1";
 const TIMEOUT_MS = Number(process.env.ARASO_TEST_TIMEOUT_MS) > 0 ? Math.min(Number(process.env.ARASO_TEST_TIMEOUT_MS), 2 ** 31 - 1) : WANT_BROWSER ? 600000 : 180000;
 const KILL_GRACE_MS = 2000;
 const filters = process.argv.slice(2).filter(Boolean);
+// [A-1033] Private baselines come from ARASO_PRIVATE_BASE (helpers/private-base.mjs). Unset = every private comparison inside a suite
+// takes its public-checkout SKIP, which run-all does not count separately — so say it once, up front.
+if (!process.env.ARASO_PRIVATE_BASE) console.log("NOTE  ARASO_PRIVATE_BASE unset — private-baseline comparisons inside suites SKIP (public-checkout mode)");
 
 // A suite needs a browser/dev server when it launches headless Chrome over CDP or starts vite on a port.
 const BROWSER_MARKER = /remote-debugging-port|["']--strictPort["']|node_modules\/\.bin\/vite/;

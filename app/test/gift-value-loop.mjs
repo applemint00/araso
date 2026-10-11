@@ -5,19 +5,20 @@
 //
 //  1) `gift-piggy-claim-link.js` 의 **영수증 문**이 여전히 닫혀 있는가 —
 //     가짜 영수증·로컬 라벨·"성공했을 것"으로는 `value_transferred` 에 못 간다.
-//  2) 하네스가 남긴 실행 기록(`_private/ops/harness/gift-value-run.json`)이
+//  2) 하네스가 남긴 실행 기록(`$ARASO_PRIVATE_BASE/ops/harness/gift-value-run.json`)이
 //     **스스로 앞뒤가 맞는가** — 라벨·잔고 델타·재생 거부·브로드캐스트 0.
 //     기록이 없으면 그렇다고 말하고 통과시키지 않는다(**없음을 성공으로 읽지 않는다**).
 //     포크 실행 자체는 하네스에서만 돈다 — 저장소 테스트는 네트워크를 만지지 않는다.
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 import {
   PROOF_LEVEL, TRANSFER_STATUS, attachTransferReceipt, proofLevel,
   createClaimLink, sealClaimLink, settleClaim, isStorableLinkRecord,
 } from "../src/gift-piggy-claim-link.js";
 
-const RUN_PATH = fileURLToPath(new URL("../../_private/ops/harness/gift-value-run.json", import.meta.url));
+const RUN_PATH = privatePath("ops/harness/gift-value-run.json");
 
 const SENDER = "0x00000000000000000000000000000000000000a1";
 const RECIPIENT = "0x00000000000000000000000000000000000000b2";
@@ -76,7 +77,7 @@ test("a real mined receipt, and only that, reaches value_transferred", async () 
 const SECTION_2_START = cases.length;
 test("the fork run evidence exists — an absent run is not a pass", () => {
   assert.equal(existsSync(RUN_PATH), true,
-    `no harness run at ${RUN_PATH} — run: node _private/ops/harness/gift-value-loop.mjs`);
+    `no harness run at ${RUN_PATH} — run: node $ARASO_PRIVATE_BASE/ops/harness/gift-value-loop.mjs`);
 });
 
 const runData = existsSync(RUN_PATH) ? JSON.parse(readFileSync(RUN_PATH, "utf8")) : null;
@@ -163,7 +164,7 @@ test("the verdict is the fork label and every required check holds", () => need(
   assert.equal(r.verdict, "PASS_FORK_GIFT_VALUE_LOOP");
 }));
 
-if (!existsSync(fileURLToPath(new URL("../../_private", import.meta.url)))) {
+if (!existsSync(privatePath())) {
   const skipped = cases.splice(SECTION_2_START);
   console.log(`SKIP  ${skipped.length} harness-run checks (§2) — local harness workspace absent (public checkout)`);
 }

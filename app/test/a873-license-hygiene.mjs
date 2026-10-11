@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -42,7 +43,7 @@ function runTest() {
 
   // Check for private/sensitive paths
   const forbiddenPatterns = [
-    { pattern: /_private/, name: '_private folder references' },
+    { pattern: PRIVATE_RE, name: 'private folder references' },
     { pattern: /\.env/, name: '.env file references' },
     { pattern: /\/Users\/[^/]+\//, name: 'local user paths' },
     { pattern: /\/home\/[^/]+\//, name: 'local home paths' },

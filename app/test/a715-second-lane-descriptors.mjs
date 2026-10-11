@@ -30,6 +30,7 @@ import {
 } from "../src/mainnet-job-lane.js";
 import { resolveChainProfile } from "../src/chain-profile.js";
 import { createMemoryStorage } from "../src/second-journey-state.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 globalThis.fetch = async () => { throw new Error("real network is forbidden in this suite"); };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -236,8 +237,8 @@ await check("SH2 values: exactly what the build record evidences, nothing more (
 
 // ── SRC · every value traces to recorded evidence ──────────────────────────────────────────────────
 // Each entry: [file, exact phrase]. Line numbers at the time of writing are in the A-715 WRITER_NOTES table.
-const BP = "_private/BUILD_PLAN.md";
-const MX = "_private/ops/receipts/A652_mainnet_fork_lab/MAINNET_FORK_MATRIX.md";
+const BP = privatePath("BUILD_PLAN.md"); // [A-1033] absolute private path; pre-A-1033: repo-relative under the private dir
+const MX = privatePath("ops/receipts/A652_mainnet_fork_lab/MAINNET_FORK_MATRIX.md");
 const RD = "app/src/second-job-readiness.js";
 const RDR = "app/src/second-current-reader.js";
 const SOURCES = {
@@ -265,10 +266,10 @@ const SOURCES = {
   "neverland receipt token shape assumed": [RDR, "aave_v3_shape_assumed_receipt_token_derived"],
 };
 await check("SRC1 every descriptor value cites an exact phrase present in the recorded source", () => {
-  const missingPrivate = [BP, MX].some((f) => !existsSync(path.join(REPO, f)));
+  const missingPrivate = [BP, MX].some((f) => !existsSync(path.resolve(REPO, f))); // [A-1033] resolve: private sources are absolute
   for (const [fact, [file, phrase]] of Object.entries(SOURCES)) {
-    const abs = path.join(REPO, file);
-    if (!existsSync(abs)) { assert.ok(file.startsWith("_private/"), `${file} missing`); continue; }
+    const abs = path.resolve(REPO, file);
+    if (!existsSync(abs)) { assert.ok(file.startsWith(privatePath()), `${file} missing`); continue; }
     assert.ok(readFileSync(abs, "utf8").includes(phrase), `${fact}: phrase not found in ${file}`);
   }
   if (missingPrivate) return "SKIP";

@@ -6,7 +6,7 @@
 // [A-905] Browser frames: honey jar on Home + Money tab + Move money (in/out) + Gift a Piggy, at 390x844, 810x1080 and 1440x900.
 //   ARASO_TEST_BROWSER=1 node app/test/a905-money-browser.mjs [outDir]
 // Skipped unless ARASO_TEST_BROWSER=1 (headless Chrome + a local vite port; npm test stays node-only).
-// Output (default _private/ops/receipts/A905_money_tab_jar/browser/): <frame>_<width>.png screenshots + frames.json (rects, elementFromPoint, text,
+// Output (default $ARASO_PRIVATE_BASE/ops/receipts/A905_money_tab_jar/browser/): <frame>_<width>.png screenshots + frames.json (rects, elementFromPoint, text,
 // tap sizes, counters). This script edits nothing in the app. The only seam it adds is test-side: the vite response of /src/funding-paper.js is
 // rewritten in flight so FUNDING_PAPER_CONFIG.arrivalReader reads `window.__a905Reader` (null until the bump step sets it), which lets ONE confirmed
 // deposit arrive for the arrival-bump clip. Nothing is sent: eth_send* is counted and aborted; every non-local request is answered by a local stub.

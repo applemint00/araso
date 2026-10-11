@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { encodeFunctionData, parseAbi } from "viem";
 import * as LP from "../src/mainnet-job-lp.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 let fetchCalls = 0;
 globalThis.fetch = async () => { fetchCalls += 1; throw new Error("A-939 test: network forbidden"); };
 let pass = 0, fail = 0;
@@ -69,7 +70,7 @@ check("gate never allows: live profile refused, local fork executor still refuse
 check("readiness never ready / executable / live, fork review conditions listed open", () => { const r = LP.lpReadiness({ stage: "exited", profile: liveProfile, executor: forkExec }); assert.equal(r.ready, false); assert.equal(r.executable, false); assert.equal(r.liveExecution, false); assert.ok(r.blockedBy.includes("fork_review_conditions_open")); });
 check("header keeps the 9 A-808 review conditions OPEN", () => { const src = readFileSync(path.join(HERE, "..", "src", "mainnet-job-lp.js"), "utf8"); assert.equal((src.match(/^\/\/ {3}\[ \] [1-9] /gm) || []).length, 9); assert.ok(!/\[x\]/i.test(src)); });
 check("module imports no executor / signer / network", () => { const src = readFileSync(path.join(HERE, "..", "src", "mainnet-job-lp.js"), "utf8"); assert.ok(!/money-executor|executeMoneyStep|issuePermission|fetch\(|createWalletClient|sendTransaction/.test(src.replace(/^\/\/.*$/gm, ""))); });
-const RUN = path.join(HERE, "..", "..", "_private/ops/receipts/A808_second_lp_fork/raw/a808_run.json");
+const RUN = privatePath("ops/receipts/A808_second_lp_fork/raw/a808_run.json");
 if (existsSync(RUN)) {
   const r = JSON.parse(readFileSync(RUN, "utf8"));
   check("constants == the A-808 run record (pool · coins · selectors · block)", () => {

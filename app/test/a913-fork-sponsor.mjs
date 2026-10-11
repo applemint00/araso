@@ -5,8 +5,8 @@
 //    so `npm test` stays hermetic: no network, no port.)
 // Pattern = A-814 partf.mjs: a read-only method-allowlist proxy (127.0.0.1) in front of the upstream, anvil forked from the proxy and bound to
 // 127.0.0.1 only. eth_sendRawTransaction goes ONLY to loopback anvil. All keys are fresh in-memory and never printed. 0 live tx.
-// Skips cleanly (exit 0, "SKIP") when: not requested · anvil absent · local port binding not permitted · _private escrow artifact absent.
-// Raw output: _private/ops/receipts/A913_gift_sponsor_live_ready/app/raw/fork_e2e.json
+// Skips cleanly (exit 0, "SKIP") when: not requested · anvil absent · local port binding not permitted · private escrow artifact absent.
+// Raw output: $ARASO_PRIVATE_BASE/ops/receipts/A913_gift_sponsor_live_ready/app/raw/fork_e2e.json
 import assert from "node:assert/strict";
 import http from "node:http";
 import net from "node:net";
@@ -27,7 +27,7 @@ import { createViemGiftSponsorChain } from "../../api/_lib/gift-sponsor-runtime.
 
 const skip = (why) => { console.log(`SKIP  a913-fork-sponsor — ${why}; 0 checks run`); process.exit(0); };
 const REPO = new URL("../../", import.meta.url);
-const ART = new URL("_private/ops/harness/gift-mainnet-fork-native/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json", REPO);
+const ART = privatePath("ops/harness/gift-mainnet-fork-native/out/GiftPiggyUSDC.sol/GiftPiggyUSDC.json");
 const RAW_DIR = pathToFileURL(testOutDir("a913-fork-sponsor", process.env.A913_RAW_OUT) + "/"); // [A-932] pre-A-932 baseline: receipts/A913_gift_sponsor_live_ready/app/raw/
 if (!process.env.A913_FORK && !process.env.A913_FORK_URL) skip("not requested (run: A913_FORK=1 node app/test/a913-fork-sponsor.mjs)");
 if (spawnSync("anvil", ["--version"], { stdio: "ignore" }).status !== 0) skip("anvil not installed");
@@ -65,6 +65,7 @@ import path from "node:path";
 import { executeMoneyStep } from "../src/money-executor.js";
 import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 import { pathToFileURL } from "node:url"; // [A-932]
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const CHAIN = 143;
 const USDC = getAddress("0x754704Bc059F8C67012fEd69BC8A327a5aafb603");

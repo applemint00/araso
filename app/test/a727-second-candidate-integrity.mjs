@@ -28,6 +28,7 @@ import {
   applyExploreSelection,
 } from "../src/second-journey-state.js";
 import { resolveChainProfile } from "../src/chain-profile.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -259,13 +260,13 @@ function freePort() {
 }
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private"))) {
+  if (!existsSync(privatePath())) {
     console.log("SKIP  Part B — local browser harness absent (public checkout); browser scenarios not run");
     return;
   }
   let chromium;
   try {
-    const req = createRequire(path.join(REPO, "_private/ops/harness/package.json"));
+    const req = createRequire(privatePath("ops/harness/package.json"));
     ({ chromium } = req("playwright"));
   } catch (e) {
     await check("B0 playwright available (local harness)", () => { throw e; });

@@ -16,6 +16,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
+import { privatePath, PRIVATE_DIR } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -240,7 +241,7 @@ await check("N6 public motion assets: 19 confirmed SVGs present, well-formed, no
   for (const f of want) {
     const t = readFileSync(path.join(ASSET_DIR, `${f}.svg`), "utf8");
     assert.ok(t.startsWith("<svg") && t.trimEnd().endsWith("</svg>"), `${f} well-formed`);
-    assert.equal(/_private|do not publish|generated_by|\/Users\/|\bA-[56]\d\d\b|로컬 사본|receipts\//i.test(t.replace(/<c2pa:manifest>[^<]*<\/c2pa:manifest>/, "")), false, `${f} hygiene`);
+    { const u = t.replace(/<c2pa:manifest>[^<]*<\/c2pa:manifest>/, ""); assert.equal(new RegExp(PRIVATE_DIR, "i").test(u) || /do not publish|generated_by|\/Users\/|\bA-[56]\d\d\b|로컬 사본|receipts\//i.test(u), false, `${f} hygiene`); }
     assert.ok(MAIN.includes(`"${f}.svg"`), `${f} is used by the renderer`);
   }
 });
@@ -268,7 +269,7 @@ const CAP = { 390: 3, 430: 3, 700: 3, 900: 3, 1200: 3, 1440: 3 };
 // (641≤vw<1200) vertical-anchor repair moves the settled cluster down by +154.36px (translate
 // only, k=1) to match the 1440 foot fraction — this is the card's own fix, not a regression (see
 // A-656 P12 §P2/sim_midband.diff, and the VERIFY receipt at
-// _private/ops/receipts/A656_return_home_anchor/). 390/430/1440 are untouched (mobile floor and
+// $ARASO_PRIVATE_BASE/ops/receipts/A656_return_home_anchor/). 390/430/1440 are untouched (mobile floor and
 // the 1440 web reference are both out of mid-band's scope). Re-measured on the POST-A-656 tree,
 // same harness, same real WebAuthn birth flow.
 const PRE_ONE = {
@@ -287,13 +288,13 @@ if (process.env.A654_NODE_ONLY === "1") {
 }
 
 async function runBrowser() {
-  if (!existsSync(path.join(REPO, "_private"))) {
+  if (!existsSync(privatePath())) {
     console.log("SKIP  Part B — local browser harness absent (public checkout); browser scenarios not run");
     return;
   }
   let chromium;
   try {
-    const req = createRequire(path.join(REPO, "_private/ops/harness/package.json"));
+    const req = createRequire(privatePath("ops/harness/package.json"));
     ({ chromium } = req("playwright"));
   } catch (e) {
     await check("B0 playwright available (local harness)", () => { throw e; });

@@ -6,10 +6,11 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSoundPlayer, SOUND_MOMENTS, SOUND_STORAGE_KEY, MASTER_GAIN } from "../src/sound.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const read = (p) => readFileSync(path.join(REPO, p), "utf8");
-const sha = (p) => createHash("sha256").update(readFileSync(path.join(REPO, p))).digest("hex");
+const sha = (p) => createHash("sha256").update(readFileSync(path.resolve(REPO, p))).digest("hex"); // [A-1033] resolve: design originals are absolute private paths
 let n = 0;
 const check = async (name, fn) => { await fn(); n += 1; console.log(`ok  ${name}`); };
 
@@ -46,15 +47,15 @@ function make(opts = {}) {
 // ---- assets ----------------------------------------------------------------------------------------------------------
 await check("S1 five WAVs copied byte-identical to the Owner set, only under app/public/sound", () => {
   const pairs = [
-    ["_private/design/sound_home_paper_unfold.wav", "app/public/sound/sound_home_paper_unfold.wav"],
-    ["_private/design/sound_receipt_toss.wav", "app/public/sound/sound_receipt_toss.wav"],
-    ["_private/design/sound_return_bell_dmsd_glass.wav", "app/public/sound/sound_return_bell_dmsd_glass.wav"],
-    ["_private/design/chog/sound_chog_babble_radio_A.wav", "app/public/sound/chog/sound_chog_babble_radio_A.wav"],
-    ["_private/design/chog/sound_chog_babble_radio_B.wav", "app/public/sound/chog/sound_chog_babble_radio_B.wav"],
+    [privatePath("design/sound_home_paper_unfold.wav"), "app/public/sound/sound_home_paper_unfold.wav"],
+    [privatePath("design/sound_receipt_toss.wav"), "app/public/sound/sound_receipt_toss.wav"],
+    [privatePath("design/sound_return_bell_dmsd_glass.wav"), "app/public/sound/sound_return_bell_dmsd_glass.wav"],
+    [privatePath("design/chog/sound_chog_babble_radio_A.wav"), "app/public/sound/chog/sound_chog_babble_radio_A.wav"],
+    [privatePath("design/chog/sound_chog_babble_radio_B.wav"), "app/public/sound/chog/sound_chog_babble_radio_B.wav"],
   ];
   for (const [src, dst] of pairs) {
     assert.ok(existsSync(path.join(REPO, dst)), dst);
-    if (existsSync(path.join(REPO, src))) assert.equal(sha(dst), sha(src), `${dst} == design original`);
+    if (existsSync(path.resolve(REPO, src))) assert.equal(sha(dst), sha(src), `${dst} == design original`); // [A-1033] src is an absolute private path
   }
   for (const m of Object.values(SOUND_MOMENTS)) for (const f of m.files) assert.ok(existsSync(path.join(REPO, "app/public", f)), f);
 });

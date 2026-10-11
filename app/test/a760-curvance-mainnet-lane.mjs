@@ -25,6 +25,7 @@ import * as COMMON from "../src/mainnet-job-common.js";
 import { MAINNET_LANE_CONFIG } from "../src/mainnet-job-lane.js";
 import { resolveChainProfile } from "../src/chain-profile.js";
 import { authorize, issuePermission, permissionNonce } from "../src/permission-envelope.js";
+import { privatePath, PRIVATE_RE } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const {
   CURVANCE_ACTION, CURVANCE_FIELDS, CURVANCE_FORK_EVIDENCE, CURVANCE_FORK_SHARES_RAW, CURVANCE_FORK_SIZE_RAW, CURVANCE_JOB_ID, CURVANCE_PROOF,
@@ -46,8 +47,8 @@ const BLOCKED = resolveChainProfile("nonsense-profile");
 const PIGGY = { id: "piggy-1", address: "0x1111111111111111111111111111111111111111" };
 const FORK_EXECUTOR = { kind: "local_fork", chainId: 143, forkBlock: 108999816, send: async () => { throw new Error("no send in this suite"); }, receipt: async () => null };
 const LIVE_EXECUTOR = { ...FORK_EXECUTOR, kind: "live" };
-const CURVANCE_RAW = path.join(REPO, "_private/ops/receipts/A652_mainnet_fork_lab/raw/curvance-usdc.json");
-const CURVANCE_HARNESS_OLD = path.join(REPO, "_private/ops/receipts/A480_fork_lab/C_curvance/run.mjs");
+const CURVANCE_RAW = privatePath("ops/receipts/A652_mainnet_fork_lab/raw/curvance-usdc.json");
+const CURVANCE_HARNESS_OLD = privatePath("ops/receipts/A480_fork_lab/C_curvance/run.mjs");
 const E = CURVANCE_FORK_EVIDENCE;
 const M = E.measured;
 
@@ -381,7 +382,7 @@ await check("S2 live stays off: lane config unchanged, nothing in the product im
 
 await check("S3 hygiene: no private path, card id or yield / venue / safe / instant / immediate wording in the shipped module", () => {
   const src = SRC(MODULE);
-  assert.equal(/_private|receipts\//.test(src), false);
+  assert.equal(PRIVATE_RE.test(src) || /receipts\//.test(src), false);
   assert.equal(/\bA-\d{3}\b/.test(src), false);
   assert.equal(/\b(apy|apr|yield|venue|earn)\b|["'`>](safe|instant|immediate)\b/i.test(strip(src)), false);
   assert.equal(/\bcash\b|receiptOnly|receipt_only/i.test(src), false);

@@ -1,5 +1,5 @@
 // [A-540] Multi-Piggy HOME paper fold/expand/scroll module contract — 네트워크 0 · 브라우저 0.
-// Owner-confirmed source: _private/design/home_paper_multi_20260923/home-paper-multi.{js,css}.
+// Owner-confirmed source: $ARASO_PRIVATE_BASE/design/home_paper_multi_20260923/home-paper-multi.{js,css}.
 //   node app/test/home-paper-multi.mjs
 //
 // Same two-part approach as home-peek-module.mjs:
@@ -14,16 +14,17 @@
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { existsSync, readFileSync } from "node:fs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 let pass = 0;
 async function check(label, fn) { await fn(); console.log(`PASS  ${label}`); pass += 1; }
 
 // ── 1. verbatim copy ────────────────────────────────────────────────────────────────────
 // Public checkout: the design package is local-only. Without it the two package comparisons print SKIP (not PASS).
-const HAS_PKG = existsSync(new URL("../../_private", import.meta.url));
-const PKG_JS = HAS_PKG ? readFileSync(new URL("../../_private/design/home_paper_multi_20260923/home-paper-multi.js", import.meta.url), "utf8") : null;
+const HAS_PKG = existsSync(privatePath());
+const PKG_JS = HAS_PKG ? readFileSync(privatePath("design/home_paper_multi_20260923/home-paper-multi.js"), "utf8") : null;
 const APP_JS = readFileSync(new URL("../src/home-paper-multi.js", import.meta.url), "utf8");
-const PKG_CSS = HAS_PKG ? readFileSync(new URL("../../_private/design/home_paper_multi_20260923/home-paper-multi.css", import.meta.url), "utf8") : null;
+const PKG_CSS = HAS_PKG ? readFileSync(privatePath("design/home_paper_multi_20260923/home-paper-multi.css"), "utf8") : null;
 const APP_CSS = readFileSync(new URL("../src/home-paper-multi.css", import.meta.url), "utf8");
 const pkgCheck = (label, fn) => (HAS_PKG ? check(label, fn) : console.log(`SKIP  ${label} — design package absent (public checkout)`));
 

@@ -4,7 +4,7 @@
 //   10143 path unchanged · production bundle has the http branch dead-code-eliminated (vite build + grep, with a dev-build control).
 // "dev" is the real vite dev evaluation (createServer + ssrLoadModule: import.meta.env.DEV === true), not a flag this test sets.
 // The raw anvil / Admin answers here are their recorded shapes (anvil: -32601 method not found; Admin: 401); the A-954 real run
-// (_private/ops/harness/a949-fork-infra/a954-app-link-run.mjs) repeats both against the live ports. No network: fetch is stubbed.
+// ($ARASO_PRIVATE_BASE/ops/harness/a949-fork-infra/a954-app-link-run.mjs) repeats both against the live ports. No network: fetch is stubbed.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";

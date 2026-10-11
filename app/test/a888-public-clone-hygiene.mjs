@@ -3,11 +3,11 @@
 // N1  package.json "license" = "MIT" and LICENSE is the MIT text.
 // N2  README: MIT + LICENSE link, Playfair Display + Delicious Handrawn OFL credits (files exist), deployed build
 //     labelled UNKNOWN, LOCAL/LIVE labels, setup / full-test / relayer commands, AI-assistance line, no stale lines.
-// N3  .gitignore covers *.pre_* / *.bak / *.orig backups (plus _private/ and .env*), checked with `git check-ignore`
+// N3  .gitignore covers *.pre_* / *.bak / *.orig backups (plus the private dir and .env*), checked with `git check-ignore`
 //     in a throwaway repo (SKIP if git is unavailable).
 // N4  no personal email address or absolute home-directory path in the public tree (everything except the
 //     ignored/private paths).
-// N5  public clone: copy the tree WITHOUT _private to a temp dir, run the suites that used to read private
+// N5  public clone: copy the tree WITHOUT the private dir to a temp dir, run the suites that used to read private
 //     pre-copies; each must exit 0, print its "(public checkout)" SKIP, and never hit a missing-file error.
 //
 // Exit code: 1 if any FAIL.
@@ -17,6 +17,7 @@ import { cpSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, sta
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PRIVATE_DIR } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -28,7 +29,7 @@ async function check(name, fn) {
 }
 
 // Paths that never ship (mirrors .gitignore): private workspace, secrets, deps, build output, agent files.
-const NOT_PUBLIC = new Set(["_private", "node_modules", "dist", ".git", ".claude", ".agents", ".codex", "Claude outputs", "AGENTS.md", "CLAUDE.md", ".DS_Store"]);
+const NOT_PUBLIC = new Set([PRIVATE_DIR, "node_modules", "dist", ".git", ".claude", ".agents", ".codex", "Claude outputs", "AGENTS.md", "CLAUDE.md", ".DS_Store"]);
 const notPublic = (name) => NOT_PUBLIC.has(name) || name === ".env" || name.startsWith(".env.") || name.startsWith(".grant-ledger.json") || /\.(pre_[^/]*|bak|orig)$/.test(name) || /\.pre_/.test(name);
 
 await check("N1 package.json license = MIT; LICENSE is the MIT text", () => {
@@ -59,18 +60,18 @@ await check("N2 README: license, font credits, evidence labels, deployed build U
   assert.match(md, /Prior work reused from \*\*gift-piggy\*\*/, "prior work disclosure");
   assert.equal(/repository is private/i.test(md), false, "stale 'repository is private'");
   assert.equal(/license not yet added/i.test(md), false, "stale 'license not yet added'");
-  assert.equal(/\bA-\d{3}\b|INBOX|OUTBOX|_private\//.test(md), false, "no internal card / ops references");
+  assert.equal(/\bA-\d{3}\b|INBOX|OUTBOX/.test(md) || md.includes(`${PRIVATE_DIR}/`), false, "no internal card / ops references");
 });
 
-await check("N3 .gitignore ignores *.pre_* / *.bak / *.orig backups (and still _private/, .env*)", () => {
+await check("N3 .gitignore ignores *.pre_* / *.bak / *.orig backups (and still the private dir, .env*)", () => {
   const gi = rd(".gitignore").split("\n").map((l) => l.trim());
-  for (const rule of ["*.pre_*", "*.bak", "*.orig", "_private/", ".env", ".env.*"]) assert.ok(gi.includes(rule), `rule ${rule}`);
+  for (const rule of ["*.pre_*", "*.bak", "*.orig", `${PRIVATE_DIR}/`, ".env", ".env.*"]) assert.ok(gi.includes(rule), `rule ${rule}`);
   if (spawnSync("git", ["--version"]).status !== 0) return "SKIP";
   const dir = mkdtempSync(path.join(tmpdir(), "a888-gi-"));
   try {
     writeFileSync(path.join(dir, ".gitignore"), rd(".gitignore"));
     assert.equal(spawnSync("git", ["init", "-q"], { cwd: dir }).status, 0, "git init");
-    const ignored = ["app/src/main.js.pre_A292_1241", "app/src/style.css.pre_A292_1241", "app/src/main.js.bak", "app/src/main.js.orig", "_private/x.md", ".env", "relayer/.env", ".env.local"];
+    const ignored = ["app/src/main.js.pre_A292_1241", "app/src/style.css.pre_A292_1241", "app/src/main.js.bak", "app/src/main.js.orig", `${PRIVATE_DIR}/x.md`, ".env", "relayer/.env", ".env.local"];
     const kept = ["app/src/main.js", "app/src/style.css", "app/test/a888-public-clone-hygiene.mjs", "README.md", "LICENSE", "package.json"];
     for (const p of ignored) assert.equal(spawnSync("git", ["check-ignore", "-q", "--no-index", p], { cwd: dir }).status, 0, `${p} ignored`);
     for (const p of kept) assert.equal(spawnSync("git", ["check-ignore", "-q", "--no-index", p], { cwd: dir }).status, 1, `${p} not ignored`);
@@ -110,7 +111,7 @@ await check("N4 public tree: no personal email address, no absolute home-directo
   assert.deepEqual(hits, []);
 });
 
-await check("N5 public clone without _private: the formerly private-reading suites exit 0 with a public-checkout SKIP", () => {
+await check("N5 public clone without the private dir: the formerly private-reading suites exit 0 with a public-checkout SKIP", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "a888-clone-"));
   try {
     for (const name of readdirSync(REPO)) {
@@ -118,7 +119,7 @@ await check("N5 public clone without _private: the formerly private-reading suit
       cpSync(path.join(REPO, name), path.join(dir, name), { recursive: true, filter: (src) => !notPublic(path.basename(src)) });
     }
     if (existsSync(path.join(REPO, "node_modules"))) symlinkSync(path.join(REPO, "node_modules"), path.join(dir, "node_modules"), "dir"); // = npm ci
-    assert.equal(existsSync(path.join(dir, "_private")), false, "clone has no _private");
+    assert.equal(existsSync(path.join(dir, PRIVATE_DIR)), false, "clone has no private dir");
     const suites = [
       ["a728-ipad-three-piggy-home.mjs", { A728_NODE_ONLY: "1" }, ["SKIP  N0", "SKIP  N3"]],
       ["a786-home-scale-second-hierarchy.mjs", {}, ["SKIP  browser part"]],
@@ -127,7 +128,7 @@ await check("N5 public clone without _private: the formerly private-reading suit
     ];
     const bad = [];
     for (const [file, env, skips] of suites) {
-      const r = spawnSync(process.execPath, [path.join(dir, "app/test", file)], { cwd: dir, env: { ...process.env, ARASO_TEST_BROWSER: "", ...env }, encoding: "utf8", timeout: 170000 });
+      const r = spawnSync(process.execPath, [path.join(dir, "app/test", file)], { cwd: dir, env: { ...process.env, ARASO_TEST_BROWSER: "", ARASO_PRIVATE_BASE: "", ...env } /* [A-1033] the clone run must not see the main private base */, encoding: "utf8", timeout: 170000 });
       const out = `${r.stdout || ""}${r.stderr || ""}`;
       if (r.status !== 0) bad.push(`${file}: exit ${r.status} ${r.signal || ""}\n${out.split("\n").filter((l) => /FAIL|Error/.test(l)).slice(0, 4).join("\n")}`);
       if (/ENOENT|Cannot find (module|package)/.test(out)) bad.push(`${file}: missing-file error`);

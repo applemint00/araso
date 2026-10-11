@@ -18,6 +18,7 @@ import { ABIL_RECORDED as R, ABIL_UNKNOWN_CLASS, CURRENT_READER_STATUS as S, mak
 import * as ABI from "../src/abi/second-reader-abi.js";
 import { decideCurrentCandidates } from "../src/mainnet-job-lane.js";
 import { RETURN_READ_METHODS } from "../src/second-job-readiness.js";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 globalThis.fetch = async () => { throw new Error("real network is forbidden in this suite"); };
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -143,8 +144,8 @@ await check("H2 bounded: whitelist methods only, recorded addresses only, one pi
 });
 
 // ── SRC · every recorded constant is quoted from already-recorded evidence ──────────────────────────
-const MX = "_private/ops/receipts/A652_mainnet_fork_lab/MAINNET_FORK_MATRIX.md";
-const HN = "_private/ops/harness/a652-mainnet-fork-lab.mjs";
+const MX = privatePath("ops/receipts/A652_mainnet_fork_lab/MAINNET_FORK_MATRIX.md"); // [A-1033] absolute private path; pre-A-1033: repo-relative under the private dir
+const HN = privatePath("ops/harness/a652-mainnet-fork-lab.mjs");
 const RD = "app/src/second-job-readiness.js";
 const SOURCES = {
   router: [MX, "router `0xFE951b693A2FE54BE5148614B109E316B567632F` (11,364 B)"],
@@ -165,8 +166,8 @@ const SOURCES = {
 await check("SRC1 each recorded constant / ABI fragment cites an exact phrase present in the recorded source", () => {
   let skipped = false;
   for (const [fact, [file, phrase]] of Object.entries(SOURCES)) {
-    const abs = path.join(REPO, file);
-    if (!existsSync(abs)) { assert.ok(file.startsWith("_private/"), `${file} missing`); skipped = true; continue; }
+    const abs = path.resolve(REPO, file);
+    if (!existsSync(abs)) { assert.ok(file.startsWith(privatePath()), `${file} missing`); skipped = true; continue; }
     assert.ok(readFileSync(abs, "utf8").includes(phrase), `${fact}: phrase not found in ${file}`);
   }
   return skipped ? "SKIP" : undefined;

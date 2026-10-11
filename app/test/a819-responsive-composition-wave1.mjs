@@ -17,6 +17,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
+import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -39,7 +40,7 @@ const fnSrc = (src, name) => {
   throw new Error(`${name} unterminated`);
 };
 const sha = (s) => createHash("sha256").update(s).digest("hex");
-const RECEIPTS = path.join(REPO, "_private/ops/receipts/A819_ui_wave1_responsive");
+const RECEIPTS = privatePath("ops/receipts/A819_ui_wave1_responsive");
 
 // ═══ Part N ═════════════════════════════════════════════════════════════════════════════════════════════════════════════
 await check("N1 read-only files stay byte-identical to the card's BEFORE hash (chog-home.js, return-view.js) — skipped when the private receipt is absent", () => {
