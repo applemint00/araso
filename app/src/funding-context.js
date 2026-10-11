@@ -17,13 +17,24 @@ const TOKEN_ALLOWLIST = Object.freeze({
   "monad-mainnet": Object.freeze({
     USDC: Object.freeze({ assetId: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", decimals: 6 }),
   }),
+  // [A-946] The shared mainnet fork (Journey 2). Same contract address as mainnet USDC (the fork copies mainnet state), but its own
+  // scope: a fork record never matches a 143 record, because every lookup is keyed by scope first.
+  "monad-fork": Object.freeze({
+    USDC: Object.freeze({ assetId: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603", decimals: 6 }),
+  }),
 });
+
+// [A-946] The one place the fork chain identity is written. Numeric id = the value the A-945 fork run used (anvil --chain-id); never 143 or
+// 10143, so nothing signed or recorded on the fork can be replayed on, or mistaken for, Monad mainnet or testnet.
+export const FORK_CHAIN_ID = 31337143;
+export const FORK_SCOPE = "monad-fork";
 
 // 뷰어/client 의 숫자 체인 id(viem `chain.id`) → 이 앱이 쓰는 문자열 scope. 모르는 숫자는
 // null 이다 — 추측한 이름을 붙이지 않는다.
 export const CHAIN_SCOPE_BY_NUMERIC_ID = Object.freeze({
   10143: "monad-testnet",
   143: "monad-mainnet",
+  [FORK_CHAIN_ID]: FORK_SCOPE, // [A-946]
 });
 
 export function scopeForChainId(numericId) {

@@ -13,6 +13,7 @@ import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -283,9 +284,15 @@ async function runBrowser() {
     const req = createRequire(path.join(REPO, "_private/ops/harness/package.json"));
     ({ chromium } = req("playwright"));
   } catch (e) { await check("B0 playwright available (local harness)", () => { throw e; }); return; }
+  // [A-950] two passes: forkMode OFF (the unchanged testnet dev server) for the First-journey checks B1 CG-01 / B2 CG-02 (First Send card,
+  // First Away restore slot = testnet-only paths); forkMode ON (fork env + journey "2") for the Second check B3 CG-05. pre-A-950: one pass, testnet.
+  for (const fork of [false, true]) await runBrowserPass(chromium, fork);
+}
+
+async function runBrowserPass(chromium, fork) {
   const port = await freePort();
   const server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], {
-    cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", VITE_RELAYER_URL: "__HARNESS_NO_GRANT__" }, stdio: ["ignore", "pipe", "pipe"],
+    cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", ...(fork ? FORK_MODE_ENV : {}) /* [A-950] */, VITE_RELAYER_URL: "__HARNESS_NO_GRANT__" }, stdio: ["ignore", "pipe", "pipe"],
   });
   let browser = null;
   try {
@@ -297,8 +304,8 @@ async function runBrowser() {
     const shots = process.env.A893_SHOTS || "";
     if (shots) mkdirSync(shots, { recursive: true });
     browser = await chromium.launch({ headless: true });
-    for (const [w, h] of [[390, 844], [810, 1080], [1440, 900]]) await browserRun(browser, `http://localhost:${port}/`, shots, w, h, false);
-    await browserRun(browser, `http://localhost:${port}/`, shots, 390, 844, true);
+    for (const [w, h] of [[390, 844], [810, 1080], [1440, 900]]) await browserRun(browser, `http://localhost:${port}/`, shots, w, h, false, fork);
+    await browserRun(browser, `http://localhost:${port}/`, shots, 390, 844, true, fork);
   } finally {
     if (browser) await browser.close().catch(() => {});
     try { server.kill("SIGTERM"); } catch {}
@@ -307,14 +314,16 @@ async function runBrowser() {
   }
 }
 
-async function browserRun(browser, BASE, shots, W, H, reduced) {
-  const tag = `${W}x${H}${reduced ? " reduced" : ""}`;
+async function browserRun(browser, BASE, shots, W, H, reduced, fork) {
+  const tag = `${W}x${H}${reduced ? " reduced" : ""}${fork ? " fork" : ""}`; // [A-950] " fork" = the forkMode-on pass
   const context = await browser.newContext({ viewport: { width: W, height: H }, reducedMotion: reduced ? "reduce" : "no-preference" });
+  if (fork) await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
   await context.route("**/*", async (route) => {
     const body = route.request().postData() || "";
     if (/eth_sendRawTransaction|eth_sendTransaction|eth_sendUserOperation/.test(body)) return route.abort();
     return route.continue();
   });
+  if (fork) await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
   const p = await context.newPage();
   const errors = [];
   p.on("pageerror", (e) => errors.push(String((e && e.message) || e).slice(0, 200)));
@@ -351,12 +360,13 @@ async function browserRun(browser, BASE, shots, W, H, reduced) {
   const mustTap = async (sel, label, idx = 0) => { for (let i = 0; i < 6; i += 1) { const r = await pointAt(sel, idx); if (r) { await p.mouse.click(r.x, r.y); return; } await sleep(600); } throw new Error(`${label}: ${sel} not pointer-reachable`); };
   // [A-891 CG-04/05] after a reload with First done / Second not done: quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore
   // (once per user: forgetIntro() drops araso.secondIntroSeen before a reload so a reopen takes the same product path).
-  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const forgetIntro = () => p.evaluate((k) => localStorage.removeItem(k), forkKey("araso.secondIntroSeen")); // [A-950] fork-scope key (pre-A-950: the testnet key)
   // [r5] deterministic: chog-home.js toggle() calls onTap only on the tap that PINS the Home pad, and A-891 opens the intro only when that
   // tap lands on the Chog instance that is showing the cue. A tap that unpins an already-pinned pad, or lands after a re-mount, opens
   // nothing — a user simply taps again. So: tap up to 3 times (each logged), and if the cue path is gone, take the same product path
   // again (forget the intro fact, reload). Every retry is printed as INFO so a flaky path stays visible.
   const exploreViaTapMe = async (ms = 16000) => {
+    if (fork && (await scene()) === "sendstay") await forkFirstDone(p); // [A-950] fork profile: the cue arms only after a filing (DEV return jump); a reload / the testnet First-done seed does not arm it there — RECEIPT (iii)-1
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const t0 = Date.now();
       while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
@@ -411,6 +421,7 @@ async function browserRun(browser, BASE, shots, W, H, reduced) {
       await sleep(100);
     }
     await sleep(400);
+    if (!fork) { // [A-950] First-journey checks: forkMode off only
     await check(`B1 [${tag}] CG-01 "wanna let Piggy try one?" appears with the first First Send card; card copy unchanged; legible`, async () => {
       assert.equal(cueSeenBeforeCard, false, "never before the card");
       assert.ok(await p.locator("#sendCard").count(), "First Send card shown");
@@ -513,6 +524,8 @@ async function browserRun(browser, BASE, shots, W, H, reduced) {
       }
     });
 
+    } // [A-950] end First-journey checks (forkMode off)
+    if (fork) { // [A-950] Second check: forkMode on only
     // ── B3 CG-05 ───────────────────────────────────────────────────────────────────────────────────────
     await p.evaluate(() => {
       const a = localStorage.getItem("araso.address");
@@ -567,7 +580,7 @@ async function browserRun(browser, BASE, shots, W, H, reduced) {
       // dropping only the unfinished-card draft (araso.secondJourneyDraft.*) so the visit starts at interests instead of resuming the
       // candidates card; the learned interests (araso.secondJourney.*) stay.
       const edit = async () => {
-        await p.evaluate(() => { for (const k of Object.keys(localStorage)) if (k.startsWith("araso.secondJourneyDraft")) localStorage.removeItem(k); localStorage.removeItem("araso.secondIntroSeen"); });
+        await p.evaluate((seenKey) => { for (const k of Object.keys(localStorage)) if (k.startsWith("araso.secondJourneyDraft")) localStorage.removeItem(k); localStorage.removeItem(seenKey); }, forkKey("araso.secondIntroSeen")); // [A-950] fork-scope key (pre-A-950: the testnet key)
         await p.reload({ waitUntil: "networkidle" }); await sleep(600); await unlockIfLocked();
         assert.equal(await exploreViaTapMe(), "explore", "reopen Explore");
         for (let t0 = Date.now(); Date.now() - t0 < 6000 && !(await p.locator("#exploreForm").count());) await sleep(200);
@@ -593,6 +606,7 @@ async function browserRun(browser, BASE, shots, W, H, reduced) {
         assert.equal(resumed.say, n === 2 ? (all === 2 ? "all of them?" : "these two?") : n < 2 ? null : resumed.say, `resume (${n} picks): bubble matches the restored picks`);
       }
     });
+    } // [A-950] end Second check (forkMode on)
     await check(`B4 [${tag}] no page errors`, () => { assert.deepEqual(errors, []); });
   } catch (e) {
     await check(`B [${tag}] flow`, () => { throw e; });

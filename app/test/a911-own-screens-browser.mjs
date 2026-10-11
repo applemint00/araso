@@ -24,7 +24,7 @@ const offsite = [];
 const note = (id, size, facts) => { (frames[id] ||= {})[size.id] = facts; };
 const must = (cond, msg) => { if (!cond) { failures.push(msg); console.log(`ASSERT FAIL  ${msg}`); } };
 
-const H = await launch();
+const H = await launch({ forkMode: true }); // [A-950] fork-profile mode (STALE_TESTS class (a)): Second / "Second done" features open only on the fork profile since A-948
 const { p } = H;
 await H.context.addInitScript(`(() => { const w = window.__wa = { create: 0, get: 0 }; const c = navigator.credentials; if (c) { const oc = c.create.bind(c), og = c.get.bind(c); c.create = (o) => { w.create++; return oc(o); }; c.get = (o) => { w.get++; return og(o); }; } })();`);
 let txCount = 0;
@@ -60,7 +60,7 @@ async function typeInto(sel, value) {
   if (value) await p.keyboard.type(value, { delay: 15 });
   await sleep(250);
 }
-const regKey = async () => `araso.piggyRegistry.monad-testnet.${await p.evaluate(() => localStorage.getItem("araso.address"))}`;
+const regKey = async () => `araso.piggyRegistry.${H.scope}.${await p.evaluate(() => localStorage.getItem("araso.address"))}`;
 /** Local registry seed (test-side localStorage only): n Piggies at home, USDC each; extra Piggies get distinct fake addresses. */
 async function seedPiggies(n, usdc = "38", { away = 0 } = {}) {
   const key = await regKey();
@@ -72,7 +72,7 @@ async function seedPiggies(n, usdc = "38", { away = 0 } = {}) {
     const real = (idx?.piggies || [{ id: "solo", name: "Honeybun", address: a }]).slice(0, 1).map((r) => ({ id: r.id, name: r.name, address: r.address || a, createdAt: at, historyKey: `araso.piggyRegistry.history.${r.id}` })); // the first indexed Piggy = the real one (same seed as a905)
     const extra = Array.from({ length: Math.max(0, n - 1) }, (_, i) => ({ id: `a911-${i + 2}`, name: `Piggy ${i + 2}`, address: `0x${(i + 2).toString(16).padStart(40, "0")}`, createdAt: at, historyKey: `araso.piggyRegistry.history.a911-${i + 2}` }));
     const list = [...real, ...extra].slice(0, n).map((x, i) => ({ ...x, location: i >= n - away ? "away" : "home", assets: [{ symbol: "USDC", quantity: usdc, decimals: 6, sourceTimestamp: at }], valuation: null }));
-    localStorage.setItem(key, JSON.stringify({ version: 1, accountId: a, chainId: "monad-testnet", piggies: list }));
+    localStorage.setItem(key, JSON.stringify({ version: 1, accountId: a, chainId: key.split(".")[2] /* [A-950] the scope in regKey() (pre-A-950: "monad-testnet") */, piggies: list }));
     return list.length;
   }, { key, n, usdc, away });
 }
@@ -276,7 +276,7 @@ async function frameAway(size, scene) {
 // ── run ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 try {
   await H.seedSolo("Honeybun");
-  await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1")); // Second complete (the gate)
+  await p.evaluate((k) => localStorage.setItem(k, "1"), H.secondKey("araso.secondJourneyClosed")); // Second complete (the gate)
   await seedPiggies(1, "38");
   for (const size of SIZES) {
     await step(`money-1 ${size.id}`, () => frameTab("money-1-piggy", size, { expectScroll: false }));

@@ -31,6 +31,7 @@ import {
 import { DECISION_RECEIPT_SCHEMA, validateDecisionReceipt } from "./second-journey-state.js";
 import { authorize, consume, onUnknownOutcome, permissionNonce } from "./permission-envelope.js";
 import { bindRecordToProfile, checkRecordBinding } from "./chain-profile.js";
+import { RPC_DEV_BUILD, rpcUrlAllowed } from "./chain-profile.js"; // [fork-link]
 import { executeMoneyStep, TRANSPORT_KIND } from "./money-executor.js";
 import { mapSecondStateObservation } from "./receipt-evidence-second.js";
 // Protocol-neutral helpers (move-only) and the Aave Job's own facts (move-only). Every public Aave
@@ -99,7 +100,7 @@ export async function readLanePreAction({ profile, piggyAddress, rpcUrl, fetchIm
   if (!ADDR.test(piggyAddress || "")) return { status: "missing_piggy_address", read: null };
   const plan = lanePlan(profile, piggyAddress);
   if (!plan) return { status: "no_read_plan", read: null };
-  if (typeof rpcUrl !== "string" || !/^https:\/\/[^\s]+$/.test(rpcUrl)) return { status: "no_rpc", read: null };
+  if (!rpcUrlAllowed(rpcUrl, { profile, dev: RPC_DEV_BUILD })) return { status: "no_rpc", read: null }; // [fork-link] one judge (chain-profile.js); previous rule: typeof rpcUrl !== "string" || !/^https:\/\/[^\s]+$/.test(rpcUrl)
   if (typeof fetchImpl !== "function" || typeof now !== "function") return { status: "no_transport", read: null };
   const pool = plan.destination;
   const usdc = profile.usdc.address;
@@ -493,6 +494,7 @@ export function startLaneIntent({ profile, piggy = {}, preview, envelope, signer
 }
 
 // Live execution has no path here: only a local fork executor on the same chain id is accepted.
+// [fork-parent] executorRefusal now asks chainMatchesExecutor (same chain, or the profile table's forkOf); this lane stays 143-only (isAaveLaneProfile).
 const executorAllowed = executorRefusal;
 
 function stepTx(intent, step, preview) {
@@ -719,6 +721,7 @@ export function laneReceiptCandidate(receipt) {
 // the freshness definition is an open Owner question, E8), or conflicting decides `unknown`, never `nah`.
 // The candidate universe is whatever the reader reports: every row gets a decision (no top-3 cut here).
 
+// [fork-parent] kept: a current READING is evidence, judged by the chain it was read on (143). A fork reading (31337143) is not 143 evidence.
 const CURRENT_READ_JOB_CHAIN = Object.freeze({ chain: "monad-mainnet", chainId: LANE_FORK_EVIDENCE.chainId });
 const asRaw = (v) => (typeof v === "string" && /^\d+$/.test(v) ? BigInt(v) : null);
 const asBool = (v) => (typeof v === "boolean" ? v : null);

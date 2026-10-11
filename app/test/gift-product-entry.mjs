@@ -321,6 +321,7 @@ function openApp(storage, { href = `${ORIGIN}/`, credential, address = null, sec
     __ISSUANCE_AUTHORITY__: issuanceAuthority,
     __GIFT_CLAIM_SUBMITTER__: giftSubmitter,
     releaseAllows: () => true, // [A-943] BOOT_SRC now holds the [A-943] block; this harness runs at the dev-server default (level 2). pre-A-943: not needed
+    journeyFeatureOpen: () => true, RELEASE_LEVEL: 2, CHAIN_PROFILE: { id: "monad-fork", status: "active" }, registerJourneySessionDisposer: () => {}, // [A-948 RE-PIN] the boot block asks journeyFeatureOpen + registers the session disposer. pre-A-948: not needed
   };
   vm.createContext(ctx);
   vm.runInContext(

@@ -10,6 +10,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 import { layoutOracle } from "./helpers/a831-sweep.mjs";
 import { sceneOracle } from "./helpers/a837-sweep.mjs"; // [A-837] pure Name layout (nameSceneLayout) evaluated in a vm
 
@@ -234,7 +235,7 @@ async function runBrowser() {
   let server = null, BASE = process.env.A744_BASE || "";
   if (!BASE) {
     const port = String(process.env.A744_PORT || 5841);
-    server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", port, "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost" }, stdio: ["ignore", "pipe", "pipe"] });
+    server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", port, "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", ...FORK_MODE_ENV /* [A-950] */ }, stdio: ["ignore", "pipe", "pipe"] });
     try { await new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("vite start timeout")), 30000); server.stdout.on("data", (d) => { if (/ready in/.test(String(d))) { clearTimeout(t); resolve(); } }); server.on("exit", (c) => { clearTimeout(t); reject(new Error(`vite exited ${c}`)); }); }); }
     catch (e) { await check("B0 vite dev server starts (needs local port binding; else pass A744_BASE=http://localhost:5841/ of a running server)", () => { throw e; }); return; }
     BASE = `http://localhost:${port}/`;
@@ -254,8 +255,10 @@ async function runBrowser() {
 async function walk(browser, BASE, w, h, measureOnly) {
   const vp = `${w}x${h}`;
   const context = await browser.newContext({ viewport: { width: w, height: h } });
+  await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
   // test-only clock hook: while window.__a744Freeze is a number Date.now() returns it (the Home-life elapsed clock is Date.now based)
   await context.addInitScript(() => { const real = Date.now.bind(Date); Date.now = () => (typeof window.__a744Freeze === "number" ? window.__a744Freeze : real()); });
+  await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
   const p = await context.newPage();
   const errors = []; p.on("pageerror", (e) => errors.push(String(e.message || e).slice(0, 160)));
   const cdp = await context.newCDPSession(p);
@@ -270,8 +273,9 @@ async function walk(browser, BASE, w, h, measureOnly) {
   // [A-891 CG-04/05] pre-A-891 baseline: after a reload with First done / Second not done, Explore opened by itself (~1.2 s, waitScene(["explore"])).
   // Now (Owner 2026-10-08): quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore. forgetIntro() drops the once-per-user intro fact
   // before a reload so a later reopen takes the same product path (Cowork 2026-10-08: before the intro the cue returns on every reload).
-  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const forgetIntro = () => p.evaluate((k) => localStorage.removeItem(k), forkKey("araso.secondIntroSeen")); // [A-950] fork-scope key (pre-A-950: the testnet key)
   const exploreViaTapMe = async (ms = 16000) => {
+    if ((await scene()) === "sendstay") await forkFirstDone(p); // [A-950] fork profile: the cue arms only after a filing (DEV return jump); a reload / the testnet First-done seed does not arm it there — RECEIPT (iii)-1
     const t0 = Date.now();
     while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
     if (!(await p.locator(".chogHome__tapCue").count())) return `NOCUE:${await scene()}`;
@@ -321,7 +325,7 @@ async function walk(browser, BASE, w, h, measureOnly) {
     await mustTap("#secondOkButton", "ok"); await sleep(1200);
     await snap("action", ".secondJourneyCard");
     await mustTap("#stayButton", "home"); await waitScene(["sendstay"], 5000); await sleep(1500);
-    await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1"));
+    await p.evaluate((k) => localStorage.setItem(k, "1"), forkKey("araso.secondJourneyClosed")); // [A-950] fork-scope key (pre-A-950: the testnet key)
     await p.reload({ waitUntil: "networkidle" }); await sleep(800); await unlock(); await waitScene(["sendstay"], 9000); await sleep(4500);
     const paperOpen = () => p.evaluate(() => { const r = document.querySelector("#homePaper")?.getBoundingClientRect(); return !!r && r.width > 100; });
     const openPaper = async () => { for (let i = 0; i < 5; i += 1) { if (await paperOpen()) return true; await p.locator("#chogHomeHit").click({ force: true }).catch(() => {}); await sleep(1600); } return paperOpen(); };
@@ -559,7 +563,7 @@ async function runChecks(table) {
       const [w, h] = v.split("x").map(Number); const L = O.L(w, h, 0), nl = O.name(L, w, h);
       if (!table[v].name?.s0?.piggy) continue; const n = table[v].name.s0.piggy;
       const g = nl.rigG, sc = nl.sc;
-      const want = [nl.tx + sc * (800 + g * (-36 - 800)), nl.ty + sc * (292 + g * (0 - 292)), sc * g * 1280, sc * g * 800];
+      const want = [nl.tx + sc * (800 + g * (-36 - 800)) + sc * nl.peekDx, nl.ty + sc * (292 + g * (0 - 292)), sc * g * 1280, sc * g * 800]; // stale-pin: A-920 item 1 "Piggy peek + Chog follow the card as in the mock" (Owner "발주 고" 2026-10-08) — fitNameScene rig.style.translate = nameSceneLayout peekDx (board px, x sc); peekDx from the same oracle (a837-sweep A-920 RE-PIN). pre-A-980 baseline: want[0] = nl.tx + sc * (800 + g * (-36 - 800))
       want.forEach((x, i) => assert.ok(Math.abs(n[i] - x) < 0.8, `${v} piggy[${i}] ${n[i]} vs ${x.toFixed(2)}`));
       // card text px = the family's authored px (<=640 and >640 carry their own @media sizes) x the board scale sc: px / sc is constant inside each family
       const get = (re) => table[v].nameSnap.items.find((i) => re.test(i.k)).px;

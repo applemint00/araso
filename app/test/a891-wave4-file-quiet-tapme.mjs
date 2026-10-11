@@ -9,6 +9,7 @@ import path from "node:path";
 import vm from "node:vm";
 import { fileURLToPath } from "node:url";
 import { TAP_CUE_TIMING } from "../src/chog-home.js";
+import { scopedSecondKey } from "../src/boot-profile.js"; // [A-946 RE-PIN] SECOND_INTRO_SEEN_KEY is now built per chain scope (testnet = same key)
 import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -51,7 +52,7 @@ await check("N1 copy: the locked lines appear verbatim, exactly once each, only 
 await check("N2 ~8 s is one named constant with the Owner comment; First Send timing constant untouched", () => {
   assert.match(MAIN, /const POST_FILE_QUIET_HOME_MS = 8000; \/\/ Owner 2026-10-08 ~8 s, tune on device/);
   // pre-A-904 baseline: counted the whole file (2). The [A-904] jar guide reuses the same beat, so its block is cut out first; the A-891 count itself is unchanged.
-  const MAIN_NO_A904 = MAIN.replace(/\/\/ ── \[A-904\] One-time guide[\s\S]*?\/\/ ── \[\/A-904\][^\n]*\n/, "");
+  const MAIN_NO_A904 = MAIN.replace(/\/\/ ── \[A-904\] One-time guide[\s\S]*?\/\/ ── \[\/A-904\][^\n]*\n/, "").replace(/^\/\/ ── \[A-956\] Journey 2 entry[\s\S]*?^\/\/ ── \[A-956\] end Journey 2 entry ──\n/m, ""); // [A-956 RE-PIN] the entry block re-arms the same cue (pre-A-956: A-904 strip only)
   assert.equal((MAIN_NO_A904.match(/POST_FILE_QUIET_HOME_MS/g) || []).length, 2, "declared + used once (the post-file arm)");
   assert.match(MAIN, /const HOME_FIRST_JOURNEY_CARD_MS = 1200;/);
   assert.match(cutFn(MAIN, "a891ArmPostFileQuietHome"), /sceneTimeout\(arm, POST_FILE_QUIET_HOME_MS\);/);
@@ -116,6 +117,7 @@ function makeWorld({ seen = false, secondDone = false, records = false, pinned =
     goHomeFromFilebox: () => { calls.home += 1; state.scene = "sendstay"; },
     runSceneFrames: (f) => { ctx.frame = f; },
     A891_TAP_CUE_TIMING: TAP_CUE_TIMING, HOME_FIRST_JOURNEY_CARD_MS: 1200,
+    scopedSecondKey, RUNTIME_CHAIN_SCOPE: "monad-testnet", // [A-946 RE-PIN] pre-A-946: not needed (the key line was a plain literal)
   });
   const decl = BLOCK.split("\n").filter((l) => /^const (POST_FILE_QUIET_HOME_MS|A891_FILED_LINE|A891_SECOND_INTRO_LINES|A891_FILED_LINE_HOLD_MS|A891_SECOND_INTRO_TO_PAPER_MS|SECOND_INTRO_SEEN_KEY)\b/.test(l)).join("\n");
   vm.runInContext(`${decl}\nlet a891FirstArrivalHold = null; let a891CueChog = null;\n${["a891SecondIntroSeen", "a891ChogSay", "a891AfterFiling", "a891ArmPostFileQuietHome", "a891HomeChogTap"].map((n) => cutFn(MAIN, n)).join("\n")}
@@ -264,8 +266,8 @@ const series = {};
 for (const reduced of [false, true]) {
   for (const [W, H] of [[390, 844], [810, 1080], [1440, 900]]) {
     const tag = `${W}x${H}${reduced ? "R" : ""}`;
-    const B = await launch();
-    const { p } = B;
+    let B = await launch({ forkMode: true }); // [A-950] fork-profile mode (STALE_TESTS class (a)): the post-file cue → Explore opens only on the fork profile since A-948
+    let { p } = B; // [A-974] let: the UI-19 filebox + First arrival tail below runs on a testnet page. pre-A-974 baseline: const B / const { p }
     try {
       await p.emulateMedia({ reducedMotion: reduced ? "reduce" : "no-preference" });
       await p.setViewportSize({ width: W, height: H });
@@ -361,6 +363,14 @@ for (const reduced of [false, true]) {
       await p.reload({ waitUntil: "networkidle" }); await sleep(600); await B.unlock();
       await sleep(10500);
       assert.deepEqual(await p.evaluate(() => [document.querySelector("[data-scene]")?.dataset.scene, !!document.querySelector(".chogHome__tapCue")]), ["sendstay", false], `${tag}: reload = no repeat`);
+      // [A-974] UI-19 filebox + First arrival are First (testnet) assets: the stored legacy receipt (araso.receipts) and the First Send card are read
+      // on the testnet profile only (main.js LEGACY_TESTNET_PATH); the fork never reads them by design, so on the fork the folder tap returns Home
+      // (renderFileBox, no receipt). The tail runs on a fresh forkMode-off page with the same seed. pre-A-974 baseline: the same fork page continued here.
+      await B.close(); B = await launch(); p = B.p;
+      await p.emulateMedia({ reducedMotion: reduced ? "reduce" : "no-preference" });
+      await p.setViewportSize({ width: W, height: H });
+      await B.seedSolo("Honeybun"); await seed();
+      await p.reload({ waitUntil: "networkidle" }); await sleep(600); await B.unlock(); await sleep(1500);
       // UI-19 folder → stored Receipt centred → tap closes
       await p.evaluate(() => window.__arasoScene("return", { arrival: true }));
       for (let t0 = Date.now(); Date.now() - t0 < 30000;) {

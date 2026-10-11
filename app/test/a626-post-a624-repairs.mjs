@@ -25,6 +25,7 @@ import { admitSequencedPiggy, markBornPiggyIssuance, registerControlledPiggy, re
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
 import { TAP_CUE_TIMING, tapCueFrame } from "../src/chog-home.js";
 import { nameCardMarkup } from "../src/name-card.js";
+import { FORK_MODE_ENV, FORK_MODE_SEED, RUN_SCOPE, forkKey } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): + Piggy / "Second done" open only on the fork profile since A-948
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -111,7 +112,7 @@ function stagingStorage() {
   const m = new Map();
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
 }
-const CHAIN = "monad-testnet";
+const CHAIN = RUN_SCOPE; // [A-950] the booted chain scope: "monad-fork" (pre-A-950: "monad-testnet")
 const AT = "2026-09-23T06:00:00.000Z";
 const AT_MS = Date.parse(AT);
 const makeAddr = (seed) => "0x" + seed.toString(16).padStart(40, "0");
@@ -139,8 +140,8 @@ async function buildFixture() {
   saveRegistry(reg, scope, { piggies: born.piggies });
   const mk = ({ piggyId, at, txHash }) => ({ before: "1000000000000000000", after: "900000000000000000", gas: "21000", sent: "100000000000000000", txHash, depositTxHash: `${txHash}-dep`, redeemTxHash: `${txHash}-red`, grantTxHash: `${txHash}-grant`, status: "success", at, piggyId });
   return {
-    "araso.address": SELF_ADDR, "araso.passkey": JSON.stringify(cred), "araso.piggyName": "Honeybun", "araso.birthPlayed": "1", "araso.piggyReceived": "1", "araso.secondJourneyClosed": "1",
-    "araso.receipts": JSON.stringify([mk({ piggyId: honeybunId, at: AT_MS + 60_000, txHash: "0xhoneybun1" }), mk({ piggyId: mochiId, at: AT_MS + 120_000, txHash: "0xmochi1" })]),
+    "araso.address": SELF_ADDR, "araso.passkey": JSON.stringify(cred), "araso.piggyName": "Honeybun", "araso.birthPlayed": "1", "araso.piggyReceived": "1", [forkKey("araso.secondJourneyClosed")]: "1", ...FORK_MODE_SEED, // [A-950] fork-scope key + journey "2" (pre-A-950: "araso.secondJourneyClosed": "1")
+ "araso.receipts": JSON.stringify([mk({ piggyId: honeybunId, at: AT_MS + 60_000, txHash: "0xhoneybun1" }), mk({ piggyId: mochiId, at: AT_MS + 120_000, txHash: "0xmochi1" })]),
     [indexKey]: idx.getItem(indexKey), [piggyRegistryKey(scope)]: reg.getItem(piggyRegistryKey(scope)),
   };
 }
@@ -214,7 +215,7 @@ function cleanup() {
 
 async function live() {
   const fx = await buildFixture();
-  viteProc = spawn(path.join(REPO_ROOT, "node_modules/.bin/vite"), ["--port", String(VITE_PORT), "--strictPort", "--host", "127.0.0.1"], { cwd: APP_DIR, stdio: ["ignore", "pipe", "pipe"] });
+  viteProc = spawn(path.join(REPO_ROOT, "node_modules/.bin/vite"), ["--port", String(VITE_PORT), "--strictPort", "--host", "127.0.0.1"], { cwd: APP_DIR, env: { ...process.env, ...FORK_MODE_ENV } /* [A-950] fork env */, stdio: ["ignore", "pipe", "pipe"] });
   await waitForHttp(APP_URL, 20_000);
   profileDir = mkdtempSync(path.join(process.env.TMPDIR || tmpdir(), "a626-chrome-"));
   chromeProc = spawn("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ["--headless=new", "--disable-gpu", "--no-sandbox", `--user-data-dir=${profileDir}`, `--remote-debugging-port=${CDP_PORT}`, "about:blank"], { stdio: ["ignore", "pipe", "pipe"] });

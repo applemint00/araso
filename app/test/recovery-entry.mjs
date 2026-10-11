@@ -56,7 +56,8 @@ check("credential 없이 이름만 있어도 birth 우선", scene(false, false, 
 // Home(sendstay), Explore 자동재실행 0." 이전에는 완료 표가 세션 메모리뿐이라 새로고침하면
 // 항상 false 가 되어 정본(A-411-n §2 / A-421)을 어겼다(A-461 Lane B 재현 g).
 {
-  checkTrue("완료 사실을 담는 저장 키가 있다", /const SECOND_JOURNEY_CLOSED_KEY = "araso\.secondJourneyClosed";/.test(SRC));
+  // [A-946 RE-PIN] the key is now per chain scope; on testnet scopedSecondKey returns exactly "araso.secondJourneyClosed" (a946 test). pre-A-946: /const SECOND_JOURNEY_CLOSED_KEY = "araso\.secondJourneyClosed";/
+  checkTrue("완료 사실을 담는 저장 키가 있다", /const SECOND_JOURNEY_CLOSED_KEY = scopedSecondKey\("araso\.secondJourneyClosed", RUNTIME_CHAIN_SCOPE\);/.test(SRC));
   checkTrue("state 가 저장 키에서 읽어 초기화된다(재방문에 살아남는다)",
     /secondJourneyCompletedOnce: localStorage\.getItem\(SECOND_JOURNEY_CLOSED_KEY\) === "1",/.test(SRC));
   checkTrue("재방문 자동 전개는 Second 미완일 때만",

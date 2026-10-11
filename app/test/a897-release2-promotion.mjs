@@ -214,6 +214,7 @@ function device({ scope = MAINNET, testnetRows = [[A, "Honeybun"]], mainnetRows 
     console, Promise, Error, JSON, String, Uint8Array, Date, Array, Object,
     fetch: () => { calls.fetch += 1; throw new Error("network forbidden in test"); },
     RUNTIME_CHAIN_SCOPE: scope, CHAIN_PROFILE: { usdc: { address: USDC }, numericChainId: 143 },
+    PROMOTION_TARGET_SCOPE: "monad-mainnet", // [A-946 RE-PIN] the promotion target constant now comes from boot-profile.js (= CHAIN_PROFILE_ID.MAINNET). pre-A-946: not needed
     readMainnetActivity: GE.readMainnetActivity, MAINNET_ACTIVITY: GE.MAINNET_ACTIVITY, GIFT_CLAIM_SUBMIT_STATUS: GE.GIFT_CLAIM_SUBMIT_STATUS,
     myPiggiesIndexKey: PI.myPiggiesIndexKey, piggyRegistryKey: PR.piggyRegistryKey, SHMON_ADDRESS: SHMON, SEND_AMOUNT: 10n ** 15n, RECEIPTS_KEY: KEYS.receipts, PIGGY_NAME_KEY: KEYS.name,
     GIFT_ENTRY_STATUS: GE.GIFT_ENTRY_STATUS, GIFT_RECORD_SOURCE: null, CLAIM_RESULT: { OK: "ok", ALREADY_CLAIMED_BY_OTHER: "already_claimed_by_other", ALREADY_CLAIMED_BY_SAME: "already_claimed_by_same" },
@@ -480,6 +481,12 @@ await check("S1 main.js differs from the pre-A-897 copy ONLY by the [A-897] P1/P
   // pre-A-915 baseline: main.js minus the [A-915] imports block and the [A-915] Gift create wiring block == the pre-A-915 main.js. Re-pin only (standing permission, INBOX :74201);
   // no other assertion changes. (The three typeof-guarded [A-915] hooks live inside a898FaceId, i.e. inside the [A-898] block already stripped above.)
   for (const [a, b] of [["// ── [A-915] imports", "// ── [A-915] end imports"], ["// ── [A-915] Gift create on Monad mainnet", "// ── [A-915] end"]]) { const [x, y] = cut(rest, a, b); rest = x + y; }
+  // [A-966 re-pin] pre-A-966 baseline: no [A-966] block. main.js minus the one delimited [A-966] fork Gift block == the pre-A-966 main.js. Re-pin only.
+  { const [x, y] = cut(rest, "// ── [A-966] Gift on the shared fork", "// ── [A-966] end Gift on the shared fork"); rest = x + y; }
+  // [A-966 re-pin · gap left by A-960] the [A-960] invite block was never cut here (S1 failed on the tree before A-966); cut the same way. pre: no cut.
+  { const [x, y] = cut(rest, "// ── [A-960] invite link → first grant.", "// ── [A-960] end invite link"); rest = x + y; }
+  // [A-974 re-pin] pre-A-974 baseline: no [A-974] block. main.js minus the one delimited [A-974] fork entry block == the pre-A-974 main.js. Re-pin only.
+  { const [x, y] = cut(rest, "// ── [A-974] Fork app entry", "// ── [A-974] end fork app entry"); rest = x + y; }
   assert.equal(rest.replace(/\n{2,}/g, "\n"), BEFORE.replace(/\n{2,}/g, "\n"));
 });
 await check("S2block hygiene: // comments only (the stray /* in main.js), the only fetch is inside a897FetchRpc, testnet reader default null, no storage key invented", async () => {

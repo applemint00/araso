@@ -11,6 +11,7 @@ import { createServer } from "node:net";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 import { layoutOracle } from "./helpers/a831-sweep.mjs"; // [A-839] pure Home layout (k = HomeCard / 282) for the k-scaled B1 baseline
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -167,7 +168,7 @@ async function runBrowser() {
   let server = null, BASE = process.env.A735_BASE || "";
   if (!BASE) {
     const port = await freePort();
-    server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost" }, stdio: ["ignore", "pipe", "pipe"] });
+    server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", ...FORK_MODE_ENV /* [A-950] */ }, stdio: ["ignore", "pipe", "pipe"] });
     try { await new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("vite start timeout")), 30000); server.stdout.on("data", (d) => { if (/ready in/.test(String(d))) { clearTimeout(t); resolve(); } }); server.on("exit", (c) => { clearTimeout(t); reject(new Error(`vite exited ${c}`)); }); }); }
     catch (e) { await check("B0 vite dev server starts (needs local port binding)", () => { throw e; }); return; }
     BASE = `http://localhost:${port}/`;
@@ -200,6 +201,8 @@ function MEASURE([sel, idx]) {
 async function walk(browser, BASE, w, h) {
   const vp = `${w}x${h}`;
   const context = await browser.newContext({ viewport: { width: w, height: h } });
+  await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
+  await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
   const p = await context.newPage();
   const errors = []; p.on("pageerror", (e) => errors.push(String(e.message || e).slice(0, 160)));
   const cdp = await context.newCDPSession(p);
@@ -215,8 +218,9 @@ async function walk(browser, BASE, w, h) {
   // [A-891 CG-04/05] pre-A-891 baseline: after a reload with First done / Second not done, Explore opened by itself (~1.2 s, waitScene(["explore"])).
   // Now (Owner 2026-10-08): quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore. forgetIntro() drops the once-per-user intro fact
   // before a reload so a later reopen takes the same product path (Cowork 2026-10-08: before the intro the cue returns on every reload).
-  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const forgetIntro = () => p.evaluate((k) => localStorage.removeItem(k), forkKey("araso.secondIntroSeen")); // [A-950] fork-scope key (pre-A-950: the testnet key)
   const exploreViaTapMe = async (ms = 16000) => {
+    if ((await scene()) === "sendstay") await forkFirstDone(p); // [A-950] fork profile: the cue arms only after a filing (DEV return jump); a reload / the testnet First-done seed does not arm it there — RECEIPT (iii)-1
     const t0 = Date.now();
     while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
     if (!(await p.locator(".chogHome__tapCue").count())) return `NOCUE:${await scene()}`;
@@ -274,7 +278,7 @@ async function walk(browser, BASE, w, h) {
     await mustTap("#secondOkButton", "ok"); await sleep(1200);
     M.aBack = await m("#stayButton");
     await mustTap("#stayButton", "home"); await waitScene(["sendstay"], 5000); await sleep(1500);
-    await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1"));
+    await p.evaluate((k) => localStorage.setItem(k, "1"), forkKey("araso.secondJourneyClosed")); // [A-950] fork-scope key (pre-A-950: the testnet key)
     await p.reload({ waitUntil: "networkidle" }); await sleep(800); await unlock(); await waitScene(["sendstay"], 9000); await sleep(4500);
     const paperOpen = () => p.evaluate(() => { const r = document.querySelector("#homePaper")?.getBoundingClientRect(); return !!r && r.width > 100; });
     const openPaper = async () => { for (let i = 0; i < 5; i += 1) { if (await paperOpen()) return true; await p.locator("#chogHomeHit").click({ force: true }).catch(() => {}); await sleep(1600); } return paperOpen(); };
@@ -347,6 +351,8 @@ async function walk(browser, BASE, w, h) {
 async function reducedMotion(browser, BASE) {
   const run = async (reduce) => {
     const context = await browser.newContext({ viewport: { width: 700, height: 900 }, reducedMotion: reduce ? "reduce" : "no-preference" });
+    await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
+    await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
     const p = await context.newPage();
     await p.goto(BASE, { waitUntil: "networkidle" });
     // name.css is linked by main.js linkMotionCss() when the Name/hatch scene mounts; link it the same way here

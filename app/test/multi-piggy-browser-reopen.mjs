@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 
 import { admitSequencedPiggy, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
+import { FORK_MODE_ENV, FORK_MODE_OFF, FORK_MODE_SEED, RUN_SCOPE, forkKey, forkRpcStubCdp } from "./helpers/fork-mode.mjs"; // [A-974] + forkRpcStubCdp // [A-950] fork-profile mode (STALE_TESTS class (a)): + Piggy / "Second done" open only on the fork profile since A-948
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -81,7 +82,7 @@ function stagingStorage() {
 // ── fixture: 2 Piggies (Honeybun = first/legacy, unknown valuation; Mochi = Model-A added,
 // known $0 birth_unfunded valuation), 4 receipts (1 Honeybun-tagged, 2 Mochi-tagged, 1
 // ownerless legacy). Built with the REAL library functions, not hand-typed schema. ──────────
-const CHAIN = "monad-testnet"; // must match app/src/main.js secondJourneyScope()'s fixed chainId
+const CHAIN = RUN_SCOPE; // [A-950] the booted chain scope: "monad-fork" (pre-A-950: "monad-testnet") // must match app/src/main.js secondJourneyScope()'s fixed chainId
 const AT = "2026-09-23T06:00:00.000Z";
 const AT_MS = Date.parse(AT);
 
@@ -175,8 +176,8 @@ async function buildFixture() {
     "araso.piggyName": "Honeybun",
     "araso.birthPlayed": "1",
     "araso.piggyReceived": "1",
-    "araso.secondJourneyClosed": "1",
-    "araso.receipts": JSON.stringify(receipts),
+    [forkKey("araso.secondJourneyClosed")]: "1", ...FORK_MODE_SEED, // [A-950] fork-scope key + journey "2" (pre-A-950: "araso.secondJourneyClosed": "1")
+ "araso.receipts": JSON.stringify(receipts),
     [indexKey]: idxStorage.getItem(indexKey),
     [registryKey]: regStorage.getItem(registryKey),
   };
@@ -224,6 +225,7 @@ async function attach(port) {
   const { sessionId } = await send("Target.attachToTarget", { targetId, flatten: true });
   await send("Page.enable", {}, sessionId);
   await send("Runtime.enable", {}, sessionId);
+  await forkRpcStubCdp(send, on, sessionId); // [A-974] fork RPC reads (MY MONEY) + fork entry status answered locally (no-op when A950_FORK_MODE=0). pre-A-974: none
   function on(method, handler) {
     if (!eventHandlers.has(method)) eventHandlers.set(method, []);
     eventHandlers.get(method).push(handler);
@@ -343,7 +345,7 @@ async function startVite() {
   viteProc = spawn(
     viteBin,
     ["--port", String(VITE_PORT), "--strictPort", "--host", "127.0.0.1"],
-    { cwd: APP_DIR, stdio: ["ignore", "pipe", "pipe"] },
+    { cwd: APP_DIR, env: { ...process.env, ...FORK_MODE_ENV } /* [A-950] fork env */, stdio: ["ignore", "pipe", "pipe"] },
   );
   let stderr = "";
   viteProc.stderr.on("data", (d) => {
@@ -540,9 +542,20 @@ async function main() {
 
   // ═══ 4) each Piggy opens the existing RIGHT HISTORY with its own masthead + own rows ═══════
   // ═══ 5) ownerless legacy receipt appears in neither Piggy-specific history ═════════════════
+  // [A-974] HISTORY rows are the legacy testnet receipts (main.js:393 state.receipts, LEGACY_TESTNET_PATH): the fork never reads them by design, so
+  // steps 4/5 (per-Piggy rows) run in the forkMode-off run (A950_FORK_MODE=0); on the fork each Piggy's HISTORY is checked as the empty state.
+  // pre-A-974 baseline: steps 4/5 ran unconditionally (they stopped the fork run here: A-950 multi-piggy row).
+  let honeybunHistory = null, mochiHistory = null;
+  if (!FORK_MODE_OFF) {
+    for (const [id, nm] of [[fx.honeybunId, "Honeybun"], [fx.mochiId, "Mochi"]]) {
+      await h.clickAndWaitForCount(`.homePaper__records[data-piggy-id="${id}"]`, ".recordsCard__empty", 1);
+      check(`4 (fork). ${nm}'s HISTORY masthead + empty state, 0 rows`, [await h.textOf(".recordsCard__identityName"), await h.count(".recordsCard__row")], [nm, 0]);
+      await h.clickAndWaitForCount("#recordsCardClose", "#recordsCardAnchor:not([hidden])", 0);
+    }
+  } else {
   await h.clickAndWaitForCount(`.homePaper__records[data-piggy-id="${fx.honeybunId}"]`, ".recordsCard__row", 1);
   await c.screenshot(path.join(OUT_DIR, "5_honeybun_history.png"));
-  const honeybunHistory = {
+  honeybunHistory = {
     identity: await h.textOf(".recordsCard__identityName"),
     caption: await h.textOf(".recordsCard__caption"),
     anchorCount: await h.count("#recordsCardAnchor"),
@@ -559,7 +572,7 @@ async function main() {
 
   await h.clickAndWaitForCount(`.homePaper__records[data-piggy-id="${fx.mochiId}"]`, ".recordsCard__row", 2);
   await c.screenshot(path.join(OUT_DIR, "6_mochi_history.png"));
-  const mochiHistory = {
+  mochiHistory = {
     identity: await h.textOf(".recordsCard__identityName"),
     caption: await h.textOf(".recordsCard__caption"),
     anchorCount: await h.count("#recordsCardAnchor"),
@@ -574,6 +587,7 @@ async function main() {
   checkTrue("4/5. Honeybun's and Mochi's HISTORY row sets are disjoint", !honeybunHistory.rowIndices.some((i) => mochiHistory.rowIndices.includes(i)));
 
   await h.clickAndWaitForCount("#recordsCardClose", "#recordsCardAnchor:not([hidden])", 0);
+  } // [A-974] end off-mode steps 4/5
 
   // ═══ Gate B territory — cleared localStorage, same real browser/profile. NOT a fresh device,
   // but the narrowest thing this sandbox can exercise for "no local data at all". Reported,

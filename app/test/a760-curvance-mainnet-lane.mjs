@@ -320,7 +320,7 @@ await check("U5 encoder: exact amounts within the fork-proven size; no unlimited
 // ── Part R · reuse of the shared guards ────────────────────────────────────────────────────────────────
 await check("R1 imports the shared exact-amount / address / executor-refusal / binding / nonce helpers and defines no copies", () => {
   assert.match(SRC(MODULE), /import \{ ADDR, executorRefusal, formatUnits, isDigits, lower \} from "\.\/mainnet-job-common\.js";/);
-  assert.match(SRC(MODULE), /import \{ bindRecordToProfile, isProfileActive \} from "\.\/chain-profile\.js";/);
+  assert.match(SRC(MODULE), /import \{ bindRecordToProfile, chainMatchesExecutor, isProfileActive \} from "\.\/chain-profile\.js";/); // pre-A-965: no chainMatchesExecutor (the permission chain line now asks it)
   assert.match(SRC(MODULE), /import \{ permissionNonce \} from "\.\/permission-envelope\.js";/);
   assert.equal(/0x\[0-9a-fA-F\]\{40\}|\^\\d\+\$|function (executorRefusal|bindRecordToProfile|permissionNonce|isDigits|formatUnits|isProfileActive)\b|kind\s*!==\s*"local_fork"/.test(CODE), false);
 });

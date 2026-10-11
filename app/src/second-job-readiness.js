@@ -1,4 +1,5 @@
 import { ACTION, RESULT, decideRules } from "./rule-decision.js";
+import { RPC_DEV_BUILD, rpcUrlAllowed } from "./chain-profile.js"; // [A-954]
 
 export const PREFLIGHT_STATUS = Object.freeze({
   READY: "JOB_READY",
@@ -703,7 +704,7 @@ export async function readReturnObservation(jobId, { rpcUrl, fetchImpl, now, fin
   const destination = FORK_PROVEN_DESTINATIONS.find((d) => d.id === jobId);
   const plan = RETURN_READ_PLANS[jobId];
   if (!destination || !plan || !ADAPTER_ADDR.test(destination.destination || "")) return { observation: null, status: "no_read_plan" };
-  if (typeof rpcUrl !== "string" || !/^https:\/\/[^\s]+$/.test(rpcUrl)) return { observation: null, status: "no_rpc" };
+  if (!rpcUrlAllowed(rpcUrl, { dev: RPC_DEV_BUILD })) return { observation: null, status: "no_rpc" }; // [A-954] one judge (chain-profile.js); pre-A-954: typeof rpcUrl !== "string" || !/^https:\/\/[^\s]+$/.test(rpcUrl)
   if (typeof fetchImpl !== "function" || typeof now !== "function") return { observation: null, status: "no_transport" };
   let id = 0;
   const rpc = async (method, params) => {

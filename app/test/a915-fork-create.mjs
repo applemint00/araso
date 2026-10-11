@@ -78,7 +78,7 @@ const ERC20 = parseAbi(["function balanceOf(address) view returns (uint256)"]);
 const DM_ABI = parseAbi(["function disabledDelegations(bytes32) view returns (bool)"]);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const RAW = { card: "A-915", part: "sender create on 143 + registration + recipient claim", at: new Date().toISOString(), live_tx: 0, upstream: UPSTREAM.replace(/\/\/[^/@]*@/, "//"), checks: [], notes: {} };
-const CLAIM_GAS_UNITS = 80_000; // fixture only (same number as the app's claim step in the budget fixture); the real number is a coordinator measurement
+const CLAIM_GAS_UNITS = 80_000; // [A-979 ④] fork virtual cost (not measured) · fixture only (same number as the app's claim step in the budget fixture); the real number is a coordinator measurement
 
 let anvil; let proxySrv; let pass = 0; let code = 0; let tmpRoot = null;
 const check = async (label, fn) => { try { await fn(); console.log(`PASS  ${label}`); pass += 1; RAW.checks.push({ label, ok: true }); } catch (e) { console.log(`FAIL  ${label}\n      ${String(e?.stack || e).split("\n").slice(0, 9).join("\n      ")}`); code = 1; RAW.checks.push({ label, ok: false, error: String(e?.message || e).slice(0, 300) }); } };
@@ -150,7 +150,7 @@ try {
   const GAS = { gasUnits: { install: 50_000n, commitClaim: 50_000n, revoke: 50_000n, claim: CLAIM_GAS_UNITS, fundingTransfer: 10_000n }, feeInputs: { maxFeePerGasWei: gasPrice * 2n, source: "fork-fixture(2x eth_gasPrice)" }, safety: { bufferBps: 2000 } };
   const SP = { sponsorAddress: sponsorKey.address, chainId: CHAIN };
   const T = GIFT_SPONSOR_PIN_TABLE;
-  const GAS_UNITS = { install: 50_000, commit: 50_000, revoke: 50_000, claim: CLAIM_GAS_UNITS }; // fixtures; claim gas used is MEASURED below (RAW.gas_used_by_kind)
+  const GAS_UNITS = { install: 50_000, commit: 50_000, revoke: 50_000, claim: CLAIM_GAS_UNITS }; // [A-979 ④] fork virtual cost (not measured) · fixtures; claim gas used is MEASURED below (RAW.gas_used_by_kind)
   const policy = createGiftSponsorPolicy({ chainId: CHAIN, escrow: ESCROW, sponsorAddress: sponsorKey.address, ...T.addresses, ...T.hashes[CHAIN], maxExpirySeconds: GIFT_SPONSOR_MAX_EXPIRY_SECONDS, gasUnits: GAS_UNITS, gasBufferBps: GAS.safety.bufferBps });
   assert.ok(policy, "policy accepted (maxExpiry 300, per-step gas units + buffer injected)");
   const publicClient = createPublicClient({ transport: viemHttp(url) });

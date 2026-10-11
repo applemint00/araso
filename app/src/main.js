@@ -118,6 +118,8 @@ import { GIFT_CREATE_CHAIN_ID, buildGiftCreateStepCalls, confirmGiftCreateStep, 
 import { runGiftCreateCalls } from "./gift-send-paper.js";
 // ── [A-915] end imports ──
 import { releaseAllows } from "./release-gate.js"; // [A-943] used only in the two [A-943] blocks (boot · Second entries)
+import { PROMOTION_TARGET_SCOPE, scopedSecondKey, selectBootProfile } from "./boot-profile.js"; // [A-946] boot path → chain profile · chain-scoped Second keys
+import { storedJourney } from "./boot-profile.js"; import { RELEASE_LEVEL, journeyFeatureOpen } from "./release-gate.js"; import { registerJourneySessionDisposer } from "./journey-switch.js"; // [A-948]
 import { legacyTestnetPathOpen, profileScope, resolveChainProfile } from "./chain-profile.js";
 import { reconcileConfirmedFunding } from "./funding-reconcile.js";
 import {
@@ -204,7 +206,9 @@ const MONAD_TESTNET = {
 };
 // Chain profile (chain-profile.js): testnet unless the build config names the mainnet profile
 // id exactly; any other value is blocked (scope "", nothing persists, nothing sends).
-const CHAIN_PROFILE = resolveChainProfile(import.meta.env.VITE_ARASO_CHAIN_PROFILE);
+// [A-946] chosen once at boot by boot-profile.js: "/j2" at release level ≥ 2 = the shared-fork profile, otherwise the build config as before.
+// pre-A-946: const CHAIN_PROFILE = resolveChainProfile(import.meta.env.VITE_ARASO_CHAIN_PROFILE);
+const CHAIN_PROFILE = selectBootProfile({ pathname: typeof location !== "undefined" ? location.pathname : "/", env: import.meta.env, journey: storedJourney() }); // [A-948] + the stored journey (UX state, not a permission)
 const RUNTIME_CHAIN_SCOPE = profileScope(CHAIN_PROFILE);
 // The first shMON send, the relayer grant, the testnet RPC client and the legacy receipt rows
 // (which carry no chain id) exist on testnet only. On any other profile they stay sealed:
@@ -278,7 +282,7 @@ const PIGGY_NAME_KEY = "araso.piggyName"; // 이름 저장 완료 (빈 문자열
 // [A-462 Owner] Second 까지 끝낸 사실은 **영속한다** — 재방문/새로고침이면 조용한 Home 으로
 // 돌아오고 Explore 자동재실행 0. 저장하는 것은 **완료 사실 boolean 하나뿐**이다: 선택/권한/금액
 // 같은 Second 의 일시 상태는 저장하지 않는다(A-411-p 의 "세션 메모리" 결정은 이 판정으로 대체).
-const SECOND_JOURNEY_CLOSED_KEY = "araso.secondJourneyClosed";
+const SECOND_JOURNEY_CLOSED_KEY = scopedSecondKey("araso.secondJourneyClosed", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
 // [A-466 Owner] 결과(귀환/영수증) 모션은 **첫 한 번만 전체 재생**하고, 그 뒤부터 skip 을 보여준다.
 // 단위는 Owner 문구 "결과 모션은 첫 번째만"의 최소 해석 — Journey 종류를 가리지 않고 이 저장소에서
 // **첫 성공 결과 1회**다(First/Second 를 각각 1회로 늘리지 않는다). 저장은 boolean 하나뿐이고,
@@ -4239,7 +4243,7 @@ function advanceExploreNote() {
 }
 
 // [A-421 Owner "시간이랑 고른거 다기록해야해"] 후보 누름·ok 를 시각과 함께 남긴다.
-const SECOND_PICK_LOG_KEY = "araso.secondJourneyPicks";
+const SECOND_PICK_LOG_KEY = scopedSecondKey("araso.secondJourneyPicks", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
 function recordSecondPick(event, destinationId) {
   const sj = state.secondJourney;
   const pool = secondLaneMode(sj) ? secondLaneDestinations(sj) : sj.flow?.destinations || [];
@@ -13528,7 +13532,7 @@ const A891_SECOND_INTRO_LINES = ["I found a few things.", "wanna see a few more?
 const A891_FILED_LINE_HOLD_MS = A891_TAP_CUE_TIMING.holdMs;
 // Intro line → Explore Paper = the existing short beat before a card (HOME_FIRST_JOURNEY_CARD_MS, 1.2 s); not an Owner number, tune on device.
 const A891_SECOND_INTRO_TO_PAPER_MS = HOME_FIRST_JOURNEY_CARD_MS;
-const SECOND_INTRO_SEEN_KEY = "araso.secondIntroSeen";
+const SECOND_INTRO_SEEN_KEY = scopedSecondKey("araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
 let a891FirstArrivalHold = null; // { t } silent frame clock of the removed first-arrival cue (keeps the First Send reveal timing)
 let a891CueChog = null;          // the Home Chog instance that is currently showing the post-file "tap me!"
 
@@ -13654,15 +13658,371 @@ if (typeof document !== "undefined") {
 // The original bodies stay byte-identical; both are wrapped once at load (same pattern as the A-897 wiring). Callers run later (timers / taps).
 {
   const a943BaseOpenSecondJourneyExplore = openSecondJourneyExplore;
-  openSecondJourneyExplore = (...args) => (releaseAllows("second") ? a943BaseOpenSecondJourneyExplore(...args) : undefined);
+  openSecondJourneyExplore = (...args) => (journeyFeatureOpen("second", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE }) ? a943BaseOpenSecondJourneyExplore(...args) : undefined); // [A-948] level AND fork profile
   const a943BaseArmPostFileQuietHome = a891ArmPostFileQuietHome;
   a891ArmPostFileQuietHome = (...args) => {
-    if (releaseAllows("second")) return a943BaseArmPostFileQuietHome(...args);
+    if (journeyFeatureOpen("second", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE })) return a943BaseArmPostFileQuietHome(...args); // [A-948]
     a891CueChog = null;
     return undefined;
   };
 }
 // ── [A-943] end Second entries ──
+// ── [A-956] Journey 2 entry · fork re-check · no switch while sending (card E). One block; the code above it is unchanged. ──────────────
+// Root on testnet at release level ≥ 2 with the fork build config (fork-entry-client.js forkEntryOpen): the existing post-file quiet Home
+// arms the existing "tap me!" cue (only when this device holds an invite and a stored Journey 1 receipt with both tx hashes); the tap asks the
+// server (challenge → live Piggy signature → the server reads Journey 1 on chain 10143 → entry + MON/USDC top-up) instead of the Second
+// intro. Allowed → switchJourney(2). Anything else → the quiet Home stays exactly as it is (no new screen, copy or message). No live signer
+// = no attempt (no new passkey prompt). The intro-seen key is not written on this path (Journey 1 storage unchanged).
+// Fork profile: a fork money entry (Money permission → Face ID) first asks the server again (no cached verdict; a changed fork instance =
+// re-entry needed). Refused = nothing happens (screen unchanged, execution only). New fork execution paths must await a956ForkMoneyAllowed().
+// switchJourney refuses while a signature is in progress or a tx is unconfirmed (journey-switch.js + the probe registered here).
+import { checkForkPermission, forkEntryOpen, forkEntryUrl, journey1Pointers, onForkProfile, readForkInvite, requestForkEntry } from "./fork-entry-client.js";
+import { registerJourneySwitchBusyProbe, switchJourney as a956SwitchJourney } from "./journey-switch.js";
+let a956Signing = 0;
+let a956EntryBusy = false;
+async function a956ForkMoneyAllowed() {
+  if (!onForkProfile(CHAIN_PROFILE)) return false;
+  try {
+    const r = await checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), piggyAddress: state.address, forkInstanceId: CHAIN_PROFILE.forkInstanceId });
+    return r.allowed === true;
+  } catch { return false; }
+}
+async function a956Enter() {
+  const account = activeAccount;
+  const piggy = String(state.address || "").toLowerCase();
+  if (a956EntryBusy || !account || String(account.address || "").toLowerCase() !== piggy || state.appLock) return;
+  a956EntryBusy = true;
+  try {
+    const signMessage = async (message) => {
+      a956Signing += 1;
+      try {
+        if (activeAccount !== account) throw new Error("signer_changed");
+        return await account.signMessage({ message });
+      } finally { a956Signing -= 1; }
+    };
+    const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), piggyAddress: piggy, journey1: journey1Pointers(readReceipts()), signMessage });
+    if (r.allowed === true && state.scene === "sendstay" && activeAccount === account) a956SwitchJourney(2);
+  } catch { return; } finally { a956EntryBusy = false; } // a failure = the quiet Home stays
+}
+{
+  const entryOpen = () => forkEntryOpen({ level: RELEASE_LEVEL, profile: CHAIN_PROFILE, env: import.meta.env });
+  const counted = (fn) => async (...args) => { a956Signing += 1; try { return await fn(...args); } finally { a956Signing -= 1; } };
+  registerJourneySwitchBusyProbe(() => ({ signing: a956Signing > 0 || sendInFlight, unconfirmed: !!readSendPending() }));
+  const a956BaseRequestMoneyPermission = requestMoneyPermission;
+  requestMoneyPermission = counted(async (...args) => {
+    if (onForkProfile(CHAIN_PROFILE) && !(await a956ForkMoneyAllowed())) return undefined;
+    return a956BaseRequestMoneyPermission(...args);
+  });
+  proveFundingTargetControl = counted(proveFundingTargetControl);
+  settleBoundGiftClaim = counted(settleBoundGiftClaim);
+  const a956BaseArm = a891ArmPostFileQuietHome;
+  a891ArmPostFileQuietHome = (...args) => {
+    if (!entryOpen()) return a956BaseArm(...args);
+    a891CueChog = null;
+    if (state.secondJourneyCompletedOnce || !readForkInvite() || !journey1Pointers(readReceipts())) return undefined;
+    const arm = () => {
+      if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || !homeChog) return;
+      if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }
+      if (homeChog.startTapCue?.()) a891CueChog = homeChog;
+    };
+    sceneTimeout(arm, POST_FILE_QUIET_HOME_MS);
+    return undefined;
+  };
+  const a956BaseTap = a891HomeChogTap;
+  a891HomeChogTap = (...args) => {
+    if (!entryOpen()) return a956BaseTap(...args);
+    a891FirstArrivalHold = null;
+    const chog = a891CueChog;
+    if (!chog || chog !== homeChog || state.scene !== "sendstay") return undefined;
+    a891CueChog = null;
+    chog.closeCard?.();
+    a956Enter();
+    return undefined;
+  };
+}
+// ── [A-956] end Journey 2 entry ──
+// ── [A-960] invite link → first grant. One block; the code above and below is unchanged. ──────────────────────────────────────────────
+// Boot: `#invite=<secret>` leaves the address bar right here — before the Gift fragment read further down, which therefore still sees an
+// unchanged `#g=…&t=…&v=…` — and is kept on this device (fork-entry-client.js FORK_INVITE_KEY, the slot the Journey 2 entry already reads).
+// Grant: requestGrant() first binds the invite to the live Piggy (server challenge → live signer signature, no new passkey prompt → bind),
+// once per Piggy on this device, then asks for the grant exactly as before. Binding failure is silent; the server decides the grant.
+// No screen, no copy, no new scene. The local harness (__HARNESS_NO_GRANT__) is untouched.
+import { bindInviteBeforeGrant as a960BindInviteBeforeGrant, inviteBoundFor as a960InviteBoundFor, markInviteBound as a960MarkInviteBound, readForkInvite as a960ReadInvite, storeInvite as a960StoreInvite, takeInviteFromHash as a960TakeInviteFromHash } from "./fork-entry-client.js";
+try {
+  if (typeof location !== "undefined" && typeof history !== "undefined" && typeof location.hash === "string" && location.hash.length > 1) {
+    const a960Taken = a960TakeInviteFromHash(location.hash);
+    if (a960Taken.found) {
+      if (a960Taken.token) a960StoreInvite(a960Taken.token, safeLocalStorage());
+      history.replaceState(null, "", location.pathname + location.search + a960Taken.hash);
+    }
+  }
+} catch {} // no-op: the app boots exactly as before
+async function a960BindInvite(address) {
+  try {
+    const storage = safeLocalStorage();
+    const invite = a960ReadInvite(storage);
+    const account = activeAccount;
+    const piggy = String(address || "").toLowerCase();
+    if (!invite || !account || String(account.address || "").toLowerCase() !== piggy || a960InviteBoundFor(storage, piggy)) return;
+    const r = await a960BindInviteBeforeGrant({ url: `${RELAYER_URL}/grant`, invite, piggyAddress: piggy, signMessage: (message) => account.signMessage({ message }) });
+    if (r.bound === true) a960MarkInviteBound(storage, piggy);
+  } catch {} // silent: the grant call below decides
+}
+{
+  const a960BaseRequestGrant = requestGrant;
+  requestGrant = async (address) => {
+    if (!(isLocalDevRpId() && RELAYER_URL === "__HARNESS_NO_GRANT__")) await a960BindInvite(address);
+    return a960BaseRequestGrant(address);
+  };
+}
+// ── [A-960] end invite link → first grant ──
+// ── [A-966] Gift on the shared fork (record source · sponsored claim · create step). One block; the code above and below is unchanged. ────────────
+// Off the fork nothing here runs (A966_FORK_GIFT = null): the testnet / mainnet Gift paths stay exactly as they are (mainnet Gift stays OFF, the
+// GIFT_RECORD_CONFIG / GIFT_CLAIM_SUBMIT_CONFIG / A915_GIFT_CREATE_CONFIG literals stay null). On the fork profile (release level ≥ 2, journeyFeatureOpen
+// "forkGift") with a complete fork Gift build config:
+//   · record source  = the fork escrow (the local-fork escrow address below; fork_local_test_only, accepted on the fork profile only), read through the page's
+//                      fork RPC under the one RPC judge (chain-profile.js rpcUrlAllowed); handed to gift-claim-entry.js useForkGiftRecordSource;
+//   · claim          = the base settle still opens the record, checks the signer and signs the claim statement; only its "no transport" end goes
+//                      to the 7702 sponsor submitter (same-origin POST /api/gift-sponsor);
+//   · create step    = the Gift create executor with a fork config (a915Cfg · pre-Face-ID check · gas + fee line), after the fork entry server says yes
+//                      again (a956ForkMoneyAllowed, the Journey 2 entry rule for new fork money paths). Existing screens, copy, refusals.
+// Fork Gift build config (all required; missing / malformed = fork Gift OFF): VITE_ARASO_FORK_GIFT_SPONSOR (the fork sponsor address) ·
+// VITE_ARASO_FORK_GIFT_GAS_UNITS ("install,commit,revoke,claim" = the fork sponsor server's own units) · VITE_ARASO_FORK_GIFT_GAS_BUFFER_BPS ·
+// VITE_ARASO_FORK_MON_USD (fork MON has no market: the price the existing fee line uses on the fork; a fork fixture, read nowhere else).
+import { GIFT_DEPLOYMENT as a966GiftDeployment, RPC_DEV_BUILD as a966DevBuild, resolveGiftEscrowConfig as a966EscrowConfig, rpcUrlAllowed as a966RpcAllowed } from "./chain-profile.js";
+import { FORK_CHAIN_ID as a966ForkChainId } from "./funding-context.js";
+import { createGiftSponsorClaimSubmitter as a966SponsorSubmitter, useForkGiftRecordSource as a966UseForkRecordSource } from "./gift-claim-entry.js";
+import { GIFT_SPONSOR_MAX_EXPIRY_SECONDS as a966ExpirySeconds } from "./gift-sponsor-7702.js";
+import { custom as a966Custom, defineChain as a966DefineChain } from "viem";
+const A966_FORK_GIFT_ESCROW = "0xde5e2b28ea7da624e9fdf881714bf3d615485c4d"; // the 5-arg Gift escrow deployed on the local fork (fork-local only; private receipt)
+const A966_FORK_GIFT_EXPIRY_SECONDS = 7 * 24 * 3600; // the fork Gift's deadline from now (wall clock; the escrow checks it on the fork's slower clock)
+const A966_FORK_GIFT = (() => {
+  try {
+    const env = import.meta.env || {};
+    if (!journeyFeatureOpen("forkGift", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE }) || CHAIN_PROFILE.numericChainId !== a966ForkChainId) return null;
+    const escrow = a966EscrowConfig(CHAIN_PROFILE, { chainScope: CHAIN_PROFILE.scope, contractAddress: A966_FORK_GIFT_ESCROW, deployment: a966GiftDeployment.FORK_LOCAL_TEST_ONLY }, { allowForkLocal: true });
+    const sponsor = String(env.VITE_ARASO_FORK_GIFT_SPONSOR || "").trim();
+    const units = String(env.VITE_ARASO_FORK_GIFT_GAS_UNITS || "").split(",").map((x) => x.trim());
+    const bufferText = String(env.VITE_ARASO_FORK_GIFT_GAS_BUFFER_BPS ?? "").trim();
+    const bufferBps = /^(0|[1-9][0-9]{0,3})$/.test(bufferText) ? Number(bufferText) : NaN;
+    const monUsd = String(env.VITE_ARASO_FORK_MON_USD || "").trim();
+    if (!escrow.config || !/^0x[0-9a-fA-F]{40}$/.test(sponsor) || /^0x0{40}$/i.test(sponsor) || sponsor.toLowerCase() === escrow.config.contractAddress.toLowerCase()) return null;
+    if (units.length !== 4 || units.some((u) => !/^[1-9][0-9]{0,15}$/.test(u)) || !Number.isSafeInteger(bufferBps) || !/^\d+(\.\d+)?$/.test(monUsd)) return null;
+    const rpcUrl = CHAIN_PROFILE.rpcUrl;
+    // every request asks the one RPC judge at send time (on the dev server: only after the loopback URL answered as this fork's Guard)
+    const transport = a966Custom({
+      async request({ method, params }) {
+        if (!a966RpcAllowed(rpcUrl, { profile: CHAIN_PROFILE, dev: a966DevBuild })) throw new Error("fork_rpc_not_allowed");
+        const res = await fetch(rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: params ?? [] }) });
+        const body = await res.json();
+        if (body?.error) throw Object.assign(new Error(String(body.error.message || "rpc_error")), { code: body.error.code, data: body.error.data });
+        return body?.result;
+      },
+    });
+    const chain = a966DefineChain({ id: a966ForkChainId, name: "Monad mainnet fork", nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [rpcUrl] } } });
+    const client = createPublicClient({ chain, transport });
+    const post = async (body) => {
+      const res = await fetch("/api/gift-sponsor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      let b = null; try { b = await res.json(); } catch { b = null; }
+      return { status: res.status, body: b };
+    };
+    const submitter = a966SponsorSubmitter({ config: { chainId: a966ForkChainId, escrowAddress: escrow.config.contractAddress, sponsorAddress: sponsor, expirySeconds: a966ExpirySeconds }, chain: client, sponsorClient: { submit: post }, chainScope: CHAIN_PROFILE.scope });
+    if (!submitter || !a966UseForkRecordSource({ client, contractAddress: escrow.config.contractAddress })) return null;
+    return Object.freeze({
+      escrow: escrow.config.contractAddress, sponsor, client, chain, transport, submitter, monUsd, bufferBps,
+      gasUnits: Object.freeze({ install: BigInt(units[0]), commitClaim: BigInt(units[1]), revoke: BigInt(units[2]), claim: BigInt(units[3]), fundingTransfer: 21000n }),
+    });
+  } catch { return null; }
+})();
+if (A966_FORK_GIFT) {
+  const F = A966_FORK_GIFT;
+  let feeWei = null; // fork eth_gasPrice ×2, re-read on every market refresh (no default: unread = the existing fee_unknown path)
+  const forkGas = () => (feeWei === null ? null : { gasUnits: { ...F.gasUnits }, feeInputs: { maxFeePerGasWei: feeWei, source: "fork eth_gasPrice x2" }, safety: { bufferBps: F.bufferBps } });
+  // claim: the base settle (record · signer check · claim statement) first; on the fork its "no transport" end goes to the sponsor submitter.
+  const a966BaseSettle = settleBoundGiftClaim;
+  settleBoundGiftClaim = async (binding, claim) => {
+    const out = await a966BaseSettle(binding, claim);
+    if (!out || out.valueSubmission?.status !== "claim_transport_unavailable" || !out.record) return out;
+    let submission;
+    try { submission = await F.submitter.submit({ binding, record: out.record, token: claim.token, account: activeAccount }); } catch { submission = { status: "claim_submit_failed" }; }
+    const record = submission?.record || out.record;
+    return { ...out, record, valueLabel: giftValueLabel(record), valueSubmission: { status: submission?.status || "claim_submit_failed", ...(submission?.txHashes ? { txHashes: submission.txHashes } : {}) } };
+  };
+  // create: the Gift create executor with the fork config (the a915Cfg checks, the fork's chain id instead of the mainnet id)
+  const createCfg = Object.freeze({
+    chainId: a966ForkChainId, escrowAddress: F.escrow, sponsorAddress: F.sponsor, gas: () => forkGas(),
+    giftExpiryUnix: () => Math.floor(Date.now() / 1000) + A966_FORK_GIFT_EXPIRY_SECONDS, receiptTimeoutMs: 120000,
+    makeClients: (account) => ({ walletClient: createWalletClient({ account, chain: F.chain, transport: F.transport }), publicClient: F.client }),
+  });
+  a915Cfg = () => (giftCreateConfigProblem(createCfg) ? null : createCfg);
+  // a fork money path asks the fork entry server again right before it sends (the Journey 2 entry rule: a956ForkMoneyAllowed; refused = nothing sent)
+  const a966BaseCreateExecutor = a915GiftCreateExecutor;
+  a915GiftCreateExecutor = () => {
+    const run = a966BaseCreateExecutor();
+    return run ? async (args) => ((await a956ForkMoneyAllowed()) ? run(args) : { ok: false, reason: "executor_unavailable" }) : null;
+  };
+  a915PreFaceIdRefusal = () => {
+    const problem = giftCreateConfigProblem(createCfg);
+    if (problem) return problem;
+    if (!forkGas()) return "executor_unavailable";
+    const expiry = Number(createCfg.giftExpiryUnix());
+    return !Number.isSafeInteger(expiry) || expiry <= Math.floor(Date.now() / 1000) ? "bad_expiry" : null;
+  };
+  // fee line: the existing evaluation with the fork gas inputs and the fork price (GIFT_SEND_CONFIG stays null)
+  a898Evaluate = () => {
+    const d = state.giftSend;
+    if (!d) return null;
+    const piggy = a898RegistryPiggy(d.payer.id);
+    if (!piggy) return null;
+    return giftSendEvaluate(d, { holdings: a898Holdings(piggy), market: state.a898Market || null, gas: GIFT_SEND_CONFIG.gas ?? forkGas(), nowMs: Date.now() });
+  };
+  a898RefreshMarket = async () => {
+    if (!state.giftSend) return;
+    try { feeWei = (await F.client.getGasPrice()) * 2n; } catch { feeWei = null; }
+    const at = Date.now();
+    state.a898Market = feeWei === null ? null : { monUsd: F.monUsd, receivedAtMs: at, expiresAtMs: at + 120000 };
+    if (state.giftSend) refreshHomePaperMount();
+  };
+  void a915RetryGasRegistrations(); // the create-registration boot retry ran above with the mainnet config (OFF); on the fork it runs here with the fork config
+}
+// ── [A-966] end Gift on the shared fork ──
+// ── [A-974] Fork app entry · Explore · + Piggy · MY MONEY on the shared fork. One block; the code above and below is unchanged. ────────────
+// Off the fork profile nothing here runs (A974_FORK false): testnet (root "/"), mainnet and a blocked profile keep every path exactly as before —
+// the root Second UI stays closed (journey switch), the testnet Explore guard (a legacy receipt with a txHash) and the sealed testnet client stay.
+// On the fork profile with Journey 2 open (journeyFeatureOpen "second" = release level ≥ 2 AND the fork profile):
+//   · entry fact = the fork entry server's record for this Piggy on this fork instance (the fork entry status read, a956ForkMoneyAllowed; asked
+//     when needed, never stored). The fork never reads the testnet receipts / tripClosed (main.js LEGACY_TESTNET_PATH), so this fact takes
+//     their place: boot on Home + allowed = the existing post-file quiet Home cue (what state.homeQuietForExplore does after a testnet load);
+//     the post-file cue arms only after the server said yes; openSecondJourneyExplore opens with the same body, the entry fact standing in
+//     for the legacy-receipt check. No answer / refused = the quiet Home stays (no new screen, copy or message).
+//   · + Piggy: issuance on the fork scope follows the testnet rule (chain-profile.js issuanceAuthorityRequiredForScope); mainnet still refuses.
+//   · MY MONEY: native MON is read through a read-only client on the page's fork RPC — the one RPC judge (chain-profile.js rpcUrlAllowed)
+//     on every request, eth_getBalance / eth_chainId only (anything else is refused before the network). shMON is not a fork profile
+//     asset: its amount stays null (the existing unknown amount). The sealed testnet client, every write and every signing path: unchanged.
+import { RPC_DEV_BUILD as a974DevBuild, rpcUrlAllowed as a974RpcAllowed } from "./chain-profile.js";
+import { FORK_CHAIN_ID as a974ForkChainId } from "./funding-context.js";
+import { custom as a974Custom, defineChain as a974DefineChain } from "viem";
+const A974_FORK = journeyFeatureOpen("second", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE }) && CHAIN_PROFILE.numericChainId === a974ForkChainId;
+const A974_READ_METHODS = Object.freeze(["eth_chainId", "eth_getBalance"]);
+// the fork entry server is asked on every use (boot, post-file cue, each Explore open); its answer is never kept between asks
+async function a974AskEntry() {
+  try { return (await a956ForkMoneyAllowed()) === true; } catch { return false; }
+}
+// openSecondJourneyExplore's body after its legacy-receipt check, statement for statement (comments dropped; pinned by app/test/a974-fork-app-entry.mjs).
+function a974OpenForkExplore() {
+  const sj = state.secondJourney;
+  const domainState = ensureSecondJourneyDomainState();
+  sj.selectedIds = (domainState.interests || []).map((item) => item.errandId);
+  sj.chosenDestinationId = null;
+  sj.pickedCandidateId = null;
+  sj.jitAnswer = null;
+  sj.permission = false;
+  sj.amount = "";
+  sj.interestsNote = null;
+  sj.chogSay = null;
+  sj.exploreOfferedIds = null;
+  sj.note = null;
+  sj.noteQueue = [];
+  sj.decisionEventId = null;
+  sj.returnRead = null;
+  sj.laneEventId = null;
+  sj.laneRead = null;
+  sj.laneDecisions = [];
+  sj.laneRoutes = null;
+  const resumeAtCandidates = state.secondJourneyCompletedOnce === true && sj.selectedIds.length > 0;
+  sj.step = resumeAtCandidates ? "candidates" : "interests";
+  sj.seedStage = sj.selectedIds.length ? "done" : inferSeedStage(domainState);
+  const laneMode = secondLaneMode(sj);
+  if (laneMode) sj.flow = null;
+  applySecondDraftIfAny(sj, domainState);
+  recomputeSecondJourneyFlow();
+  if (laneMode) keepSecondLaneDraftIfValid(sj);
+  sj.laneReading = laneMode;
+  setScene("explore", "", "");
+  if (laneMode) refreshSecondLaneCandidates().catch(() => {});
+}
+function a974ForkReader() {
+  const rpcUrl = CHAIN_PROFILE.rpcUrl;
+  const post = async (method, params) => {
+    const res = await fetch(rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: params ?? [] }) });
+    const body = await res.json();
+    if (body?.error) throw Object.assign(new Error(String(body.error.message || "rpc_error")), { code: body.error.code });
+    return body?.result;
+  };
+  let chainChecked = false; // this client's RPC answered eth_chainId == the fork chain id (asked once per client, before the first balance)
+  const transport = a974Custom({
+    async request({ method, params }) {
+      if (!A974_READ_METHODS.includes(method)) throw new Error("fork_read_only");
+      if (!a974RpcAllowed(rpcUrl, { profile: CHAIN_PROFILE, dev: a974DevBuild })) throw new Error("fork_rpc_not_allowed");
+      if (method === "eth_getBalance" && !chainChecked) {
+        const id = await post("eth_chainId", []);
+        if (typeof id !== "string" || !/^0x[0-9a-f]+$/i.test(id) || BigInt(id) !== BigInt(a974ForkChainId)) throw new Error("fork_chain_mismatch");
+        chainChecked = true;
+      }
+      return post(method, params);
+    },
+  });
+  const chain = a974DefineChain({ id: a974ForkChainId, name: "Monad mainnet fork", nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [rpcUrl] } } });
+  return createPublicClient({ chain, transport });
+}
+if (A974_FORK) {
+  const reader = a974ForkReader();
+  // Explore: the entry fact instead of the legacy receipt (the journey gate already holds: A974_FORK = journeyFeatureOpen "second")
+  const a974PrevOpen = openSecondJourneyExplore;
+  openSecondJourneyExplore = (...args) => {
+    const scene = state.scene;
+    a974AskEntry().then((ok) => {
+      if (state.scene !== scene) return; // the user moved on while the server answered: nothing opens
+      if (ok) a974OpenForkExplore(); else a974PrevOpen(...args);
+    }, () => {});
+  };
+  // post-file quiet Home: the cue arms only after the server said yes
+  const a974PrevArm = a891ArmPostFileQuietHome;
+  a891ArmPostFileQuietHome = (...args) => {
+    a891CueChog = null;
+    a974AskEntry().then((ok) => { if (ok && state.scene === "sendstay") a974PrevArm(...args); }, () => {});
+    return undefined;
+  };
+  // boot: the fork analogue of state.homeQuietForExplore at load (First done = the server's entry record)
+  if (state.address) {
+    a974AskEntry().then((ok) => {
+      if (!ok || state.scene !== "sendstay" || state.secondJourneyCompletedOnce) return;
+      if (homeChog && !state.appLock) a974PrevArm(); else state.homeQuietForExplore = true;
+    }, () => {});
+  }
+  // MY MONEY: the same states and copy as fetchHomeMoneyData, the native balance read on the fork
+  fetchHomeMoneyData = async () => {
+    const requestId = ++homeMoneyRequestSeq;
+    if (!state.address) {
+      state.homeMoneyStatus = "error";
+      state.homeMoneyErrorText = "no saved account to read from yet.";
+      refreshHomePaperMount();
+      return;
+    }
+    state.homeMoneyStatus = "loading";
+    refreshHomePaperMount();
+    let nativeWei = null;
+    let readFailed = false;
+    try {
+      nativeWei = await reader.getBalance({ address: state.address });
+    } catch (error) {
+      recordSafeError("home-money", error);
+      readFailed = true;
+    }
+    if (requestId !== homeMoneyRequestSeq) return;
+    if (readFailed) {
+      state.homeMoneyStatus = "error";
+      state.homeMoneyErrorText = null;
+    } else {
+      state.homeMoneyStatus = "ready";
+      state.homeMoneyErrorText = null;
+      state.homeMoneyNativeWei = nativeWei;
+      state.homeMoneyShmonWei = null;
+    }
+    refreshHomePaperMount();
+  };
+}
+// ── [A-974] end fork app entry ──
 // ── [A-912] small fixes (comments only; behaviour lives in chog-home.js · second-journey-view.js · style.css [A-912]) ─────────────────
 // 1 Chog speech: chog-home.js settleChogOneLine() keeps one speech line on screen (a newer line makes the older one leave, "tap me!" included).
 // 2 Readiness: amount = underline only, unknown values "—" (second-journey-view.js, style.css).
@@ -14518,8 +14878,10 @@ function a897LocalFirstHashes() {
   }
 }
 
+const A897_TARGET_SCOPE = PROMOTION_TARGET_SCOPE; // [A-946] (boot-profile.js; main.js keeps no mainnet literal)
 function a897TargetScopeActive() {
-  return typeof RUNTIME_CHAIN_SCOPE === "string" && RUNTIME_CHAIN_SCOPE !== "" && RUNTIME_CHAIN_SCOPE !== A897_SOURCE_SCOPE;
+  // [A-946] the Release-2 promotion targets Monad mainnet ONLY (a fork or any other scope never runs it). pre-A-946: any non-empty scope other than the source.
+  return RUNTIME_CHAIN_SCOPE === A897_TARGET_SCOPE;
 }
 
 // The chain-scoped index row of the current #1 (state.address) in THIS build's scope. Functions only (no block-level consts): computeInitialScene runs
@@ -14799,8 +15161,9 @@ if (typeof location !== "undefined") {
 // [A-943] Second-entry block right after the [/A-891] block. Level 1 = First Journey only. Runs before offerGiftPaperAtBoot() and the first render.
 //   afterSecond: a stored "Second done" mark is not honoured → honey jar · Money · Gift send · + Piggy stay closed
 //   gift:        a Gift link is not held (no Gift Open paper · no A-897 promotion); its token already left the address bar above (A-563)
-if (!releaseAllows("afterSecond")) state.secondJourneyCompletedOnce = false;
-if (!releaseAllows("gift")) pendingGiftClaim = null;
+if (!journeyFeatureOpen("afterSecond", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE })) state.secondJourneyCompletedOnce = false; // [A-948] level AND fork profile
+if (!journeyFeatureOpen("gift", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE })) pendingGiftClaim = null; // [A-948] existing Gift paths: level only, as before
+registerJourneySessionDisposer(endActiveSession); // [A-948] switchJourney drops the live signer before the reload
 // ── [A-943] end boot ──
 
 // [A-733] TESTER INVITE INTRO — `/?i=<code>` 첫 기기 한정 오버레이. 코드는 표시/라벨 신호일 뿐이다:

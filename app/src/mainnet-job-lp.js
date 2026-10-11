@@ -32,7 +32,7 @@
 
 import { encodeFunctionData } from "viem";
 import { EVIDENCE_LABEL } from "./second-job-readiness.js";
-import { bindRecordToProfile, isProfileActive } from "./chain-profile.js";
+import { bindRecordToProfile, chainMatchesExecutor, isProfileActive } from "./chain-profile.js";
 import { permissionNonce } from "./permission-envelope.js";
 import { ADDR, executorRefusal, formatUnits, isDigits, lower } from "./mainnet-job-common.js";
 
@@ -240,7 +240,7 @@ export function lpPermissionRequest(input) {
   const { profile, piggy, amountRaw, eventId } = input && typeof input === "object" ? input : {};
   const p = snapshotPiggy(piggy);
   if (!isProfileActive(profile)) return { request: null, error: "profile_blocked" };
-  if (profile.numericChainId !== LP_FORK_EVIDENCE.chainId) return { request: null, error: "profile_chain_not_lp_evidence" };
+  if (!chainMatchesExecutor(profile, LP_FORK_EVIDENCE.chainId)) return { request: null, error: "profile_chain_not_lp_evidence" }; // [fork-parent]
   const { binding, error } = bindRecordToProfile(profile, { piggyId: p.id, piggyAddress: p.address, asset: "USDC" });
   if (error) return { request: null, error };
   const usdc = LP_FORK_EVIDENCE.coins[LP_FORK_EVIDENCE.usdcIndex];

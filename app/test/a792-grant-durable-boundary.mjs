@@ -289,7 +289,7 @@ await check("F production default export, enabled, no store configured → 503 g
 });
 await check("F production registry is empty and frozen; any ARASO_GRANT_STORE value (incl. memory/local-test names) → 503, zero RPC", async () => {
   assert.equal(Object.isFrozen(DURABLE_GRANT_STORE_BACKENDS), true);
-  assert.deepEqual(Object.keys(DURABLE_GRANT_STORE_BACKENDS), []);
+  assert.deepEqual(Object.keys(DURABLE_GRANT_STORE_BACKENDS), ["upstash"]); // [A-960 re-pin] pre-A-960: [] — one backend (Upstash), still 503 without its env pair
   assert.equal(GRANT_STORE_ENV.startsWith("VITE_"), false);
   for (const v of ["memory", "local-test-memory", "local-test", "redis", "kv", "toString", "__proto__", "constructor", " "]) {
     process.env[GRANT_STORE_ENV] = v;

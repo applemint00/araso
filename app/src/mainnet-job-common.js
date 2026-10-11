@@ -10,6 +10,7 @@
 // network, builds no transaction and has no send.
 
 import { RESULT } from "./rule-decision.js";
+import { chainMatchesExecutor } from "./chain-profile.js"; // [fork-parent]
 
 export const ADDR = /^0x[0-9a-fA-F]{40}$/;
 export const TX = /^0x[0-9a-fA-F]{64}$/;
@@ -60,11 +61,12 @@ export function saveRecordVerified(storage, key, record) {
 
 /**
  * Live execution has no path: only an injected executor of kind "local_fork" on the profile's own
- * chain id, pinned to an integer fork block, is accepted. Returns a refusal reason or null.
+ * chain id (or, [fork-parent], on the parent chain the profile's table says it forks: chainMatchesExecutor),
+ * pinned to an integer fork block, is accepted. Returns a refusal reason or null.
  */
 export function executorRefusal(profile, executor) {
   if (!executor || typeof executor.send !== "function" || typeof executor.receipt !== "function") return "no_executor";
   if (executor.kind !== "local_fork") return "live_execution_disabled";
-  if (executor.chainId !== profile.numericChainId || !Number.isInteger(executor.forkBlock)) return "executor_chain_mismatch";
+  if (!chainMatchesExecutor(profile, executor.chainId) || !Number.isInteger(executor.forkBlock)) return "executor_chain_mismatch"; // [fork-parent]
   return null;
 }

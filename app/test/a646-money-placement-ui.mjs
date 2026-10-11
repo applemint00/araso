@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -168,7 +169,7 @@ async function runBrowser() {
   let BASE = process.env.A646_BASE_URL || "";
   if (!BASE) {
     server = spawn("npx", ["vite", "app", "--mode", "a172-local", "--port", "5667", "--host", "127.0.0.1", "--strictPort"], {
-      cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost" }, stdio: ["ignore", "pipe", "pipe"],
+      cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", ...FORK_MODE_ENV /* [A-950] */ }, stdio: ["ignore", "pipe", "pipe"],
     });
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("vite start timeout")), 20000);
@@ -193,6 +194,7 @@ async function browserWidth(browser, BASE, w, shots) {
   const T = `[${w}]`;
   const net = { tx: 0 };
   const context = await browser.newContext({ viewport: { width: w, height: HEIGHT[w] || 900 } });
+  await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
   await context.addInitScript(INIT);
   await context.route("**/*", async (route) => {
     const req = route.request(); const u = new URL(req.url()); const body = req.postData() || "";
@@ -200,6 +202,7 @@ async function browserWidth(browser, BASE, w, shots) {
     if ((u.hostname === "localhost" || u.hostname === "127.0.0.1") && req.method() === "POST" && /grant/i.test(u.pathname)) { net.tx += 1; return route.abort(); }
     return route.continue();
   });
+  await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
   const p = await context.newPage();
   const errors = [];
   p.on("pageerror", (e) => errors.push(String((e && e.message) || e).slice(0, 200)));
@@ -269,7 +272,7 @@ async function browserWidth(browser, BASE, w, shots) {
   const counters = async () => ({ wa: await p.evaluate(() => ({ ...window.__wa })), tx: net.tx });
   const delta = (a, b) => ({ webauthn: b.wa.get - a.wa.get + b.wa.create - a.wa.create, tx: b.tx - a.tx });
   const addr = () => p.evaluate(() => localStorage.getItem("araso.address"));
-  const splitKey = async () => `araso.lastSplit.monad-testnet.${await addr()}`;
+  const splitKey = async () => `araso.lastSplit.${RUN_SCOPE}.${await addr()}`; // [A-950] fork-scope key (pre-A-950: the testnet key)
 
   try {
     // ── birth + closed First (same harness as A-644 Part B) ──────────────────────────────────
@@ -301,7 +304,7 @@ async function browserWidth(browser, BASE, w, shots) {
     await realClick("#stayButton"); await waitScene(["sendstay"], 4000); await sleep(3000);
 
     await check(`B1 ${T} T1 pre-Second: MY MONEY shows no Add money entry`, async () => {
-      assert.equal(await p.evaluate(() => localStorage.getItem("araso.secondJourneyClosed")), null);
+      assert.equal(await p.evaluate((k) => localStorage.getItem(k), forkKey("araso.secondJourneyClosed")), null); // [A-950] fork-scope key (pre-A-950: the testnet key)
       // [A-905 follow-up] Pre-Second the paper can stay closed (the Send card owns the shared slot, or the collapsed stamp is a 2x2 target under Chog's own hit area: this
       // predates A-905, it showed in the A-898 runs before the jar existed). A closed paper has no MY MONEY face at all, so there is no entry to find: assert exactly that.
       // pre-A-905 baseline: await toMoney(); assert.equal(await paperMode(), "money");
@@ -343,7 +346,7 @@ async function browserWidth(browser, BASE, w, shots) {
         if (v.tap) { if ((await realClick("#returnTap")) !== "pointer") await p.evaluate(() => document.getElementById("returnTap").click()); await sleep(1200); continue; }
         await sleep(250);
       }
-      assert.equal(await p.evaluate(() => localStorage.getItem("araso.secondJourneyClosed")), "1");
+      assert.equal(await p.evaluate((k) => localStorage.getItem(k), forkKey("araso.secondJourneyClosed")), "1"); // [A-950] fork-scope key (pre-A-950: the testnet key)
       await sleep(4500);
       assert.equal(await scene(), "sendstay");
     });

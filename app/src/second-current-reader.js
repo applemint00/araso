@@ -14,6 +14,7 @@
 import { decodeFunctionResult, encodeFunctionData, toFunctionSelector } from "viem";
 import { LANE_RECEIPT_TOKEN, LANE_SELECTORS, readLanePreAction } from "./mainnet-job-lane.js";
 import { RETURN_READ_METHODS, buildExecutionPlan, readReturnObservation } from "./second-job-readiness.js";
+import { RPC_DEV_BUILD, rpcUrlAllowed } from "./chain-profile.js"; // [A-954]
 import { ABIL_POOL_VIEW_ABI, ABIL_ROUTER_VIEW_ABI, ERC20_DECIMALS_VIEW_ABI, ERC20_VIEW_ABI, ERC4626_VIEW_ABI, POOL_VIEW_ABI } from "./abi/second-reader-abi.js";
 
 export const CURRENT_READER_STATUS = Object.freeze({
@@ -78,7 +79,7 @@ class ReadError extends Error {
 }
 
 function makeReader({ rpcUrl, fetchImpl, now }) {
-  if (typeof rpcUrl !== "string" || !/^https:\/\/[^\s]+$/.test(rpcUrl)) return { fail: "no_rpc" };
+  if (!rpcUrlAllowed(rpcUrl, { dev: RPC_DEV_BUILD })) return { fail: "no_rpc" }; // [A-954] one judge (chain-profile.js); pre-A-954: typeof rpcUrl !== "string" || !/^https:\/\/[^\s]+$/.test(rpcUrl)
   if (typeof fetchImpl !== "function" || typeof now !== "function") return { fail: "no_transport" };
   let id = 0;
   const rpc = async (method, params) => {

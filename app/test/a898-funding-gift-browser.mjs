@@ -25,7 +25,7 @@ const SIZES = [[390, 844], [1440, 900]];
 const frames = {};
 const note = (id, size, facts) => { (frames[id] ||= {})[`${size[0]}x${size[1]}`] = facts; };
 
-const H = await launch();
+const H = await launch({ forkMode: true }); // [A-950] fork-profile mode (STALE_TESTS class (a)): Second / "Second done" features open only on the fork profile since A-948
 const { p } = H;
 // real assertions (security R2 N-1): WebAuthn / tx counters. credentials.get/create are wrapped at document start; txs are counted when the RPC stub sees eth_send*.
 const failures = [];
@@ -66,7 +66,7 @@ async function toMoney(size) {
 }
 // Seed the registry Piggy (the one the index already knows) with home balances. Local storage only; the app reads it as it would any registry row.
 async function seedBalances({ usdc, mon = null }) {
-  await p.evaluate(({ usdc: u, mon: m }) => {
+  await p.evaluate(({ usdc: u, mon: m, chain }) => {
     const addr = localStorage.getItem("araso.address");
     const key = Object.keys(localStorage).find((k) => /^araso\.myPiggies/.test(k));
     const idx = key ? JSON.parse(localStorage.getItem(key)) : null;
@@ -74,9 +74,8 @@ async function seedBalances({ usdc, mon = null }) {
     const at = new Date().toISOString();
     const assets = [{ symbol: "USDC", quantity: u, decimals: 6, sourceTimestamp: at }];
     if (m) assets.push({ symbol: "MON", quantity: m, decimals: 18, sourceTimestamp: at });
-    const chain = "monad-testnet";
     localStorage.setItem(`araso.piggyRegistry.${chain}.${addr}`, JSON.stringify({ version: 1, accountId: addr, chainId: chain, piggies: [{ id: row.id, name: row.name, address: row.address || addr, location: "home", assets, valuation: null, createdAt: at, historyKey: `araso.piggyRegistry.history.${row.id}` }] }));
-  }, { usdc, mon });
+  }, { usdc, mon, chain: H.scope }); // [A-950] registry in the booted chain scope (pre-A-950: const chain = "monad-testnet")
 }
 const opened = () => p.evaluate(() => !!document.querySelector(".a911-screen")); // pre-A-911 baseline: [data-a898-root]
 // [A-905] pre-A-905 baseline: MY MONEY carried `> Add money` (#homeAddMoney) and the Send a Piggy entry was on HOLD, so the harness appended a plain
@@ -103,7 +102,7 @@ async function tap(sel, label) { await reach(sel, label); await sleep(700); }
 
 try {
   await H.seedSolo("Honeybun");
-  await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1")); // Second complete (the entry gate)
+  await p.evaluate((k) => localStorage.setItem(k, "1"), H.secondKey("araso.secondJourneyClosed")); // Second complete (the entry gate)
   for (const size of SIZES) {
     const S = size;
     // F1 entry
@@ -182,7 +181,7 @@ try {
   // M1 multi-Piggy Add money: the old A-646 allocation flow (unchanged this pass)
   // seedMulti walks the real First -> "tap me!" -> Second path. The flag set at the top ("Second complete") makes a891ArmPostFileQuietHome return before
   // it arms the cue (state.secondJourneyCompletedOnce), so clear it here: this is the cause of `no "tap me!" cue (scene=sendstay)`.
-  await p.evaluate(() => { localStorage.removeItem("araso.secondJourneyClosed"); localStorage.removeItem("araso.secondIntroSeen"); });
+  await p.evaluate(([c, s]) => { localStorage.removeItem(c); localStorage.removeItem(s); }, [H.secondKey("araso.secondJourneyClosed"), H.secondKey("araso.secondIntroSeen")]);
   try { await H.seedMulti?.(); } catch (e) {
     // diagnostic: why did the quiet-Home "tap me!" cue not arm (see main.js a891ArmPostFileQuietHome guards)
     const d = await p.evaluate(() => JSON.stringify({ scene: document.querySelector("[data-scene]")?.dataset.scene, introSeen: localStorage.getItem("araso.secondIntroSeen"), tripClosed: localStorage.getItem("araso.tripClosed"), sendCard: !!document.querySelector("#sendCardAnchor"), records: !!document.querySelector("#recordsCardAnchor:not([hidden])"), paper: document.querySelector("#homePaper")?.dataset.paperMode, cue: !!document.querySelector(".chogHome__tapCue"), keys: Object.keys(localStorage).filter((k) => /second|trip|intro|araso\.(receipt|tx)/i.test(k)) }));

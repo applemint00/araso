@@ -18,12 +18,16 @@
   "crons": [
     {
       "path": "/api/gift-sponsor-reconcile",
-      "schedule": "* * * * *"
+      "schedule": "0 18 * * *"
     }
   ],
   "rewrites": [
     {
       "source": "/claim",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/j2",
       "destination": "/index.html"
     }
   ],

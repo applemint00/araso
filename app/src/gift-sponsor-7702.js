@@ -3,8 +3,8 @@
 // The receiving Gift Piggy only SIGNS (one Face ID step): (1) a 7702 authorization to the verified MetaMask
 // EIP7702StatelessDeleGator and (2) ONE single-use delegation for the Gift escrow's commitClaim. Our sponsor submits
 // DelegationManager.redeemDelegations and pays gas; claim() is a plain sponsor tx (permissionless in msg.sender, A-814
-// REVIEW_SECURITY finding 8). The Piggy needs 0 MON. Ported from the A-814 harness (<private>
-// a814-mera-metamask-7702-testnet/{lib,partf}.mjs): guardedSignAuthorization, caveat encodings, EIP-712 types.
+// REVIEW_SECURITY finding 8). The Piggy needs 0 MON. Ported from the A-814 harness
+// (a814-mera-metamask-7702-testnet {lib,partf}.mjs): guardedSignAuthorization, caveat encodings, EIP-712 types.
 //
 // Everything here is FAIL-CLOSED: any unknown, missing, extra, or mismatched field refuses. Pure functions return
 // { ok:false, reason } and never throw. Nothing here touches the network except the injected `readCode`.
@@ -13,7 +13,7 @@
 // UNKNOWN: TimestampEnforcer runtime code hash (address from the official v1.3.0 Deployments.md only; see receipt).
 //
 // The relayer mirrors these guard functions server-side (relayer must import or copy this exact logic): see
-// <private>
+// the A-906 gift sponsor adopt receipt (INTERFACE.md).
 
 import {
   decodeAbiParameters, encodeAbiParameters, encodeFunctionData, encodePacked, getAddress, hexToBigInt,
@@ -56,6 +56,15 @@ export const GIFT_SPONSOR_PINS = Object.freeze({
       // for the four pinned contracts; the Timestamp enforcer code on 10143 is therefore NOT hash-verified by the app (residual).
       timestampEnforcer: "0x1da353833766081398664c131a50988f6f7190d6a1a974f497607b974705900c",
     }),
+    // [gift-fork] the shared mainnet fork (31337143) copies 143's state, so its row = the 143 row value for value (the fork's code was read
+    // against the 143 row in the local fork run: ok). A row of its own, so 143 / 10143 lookups are unchanged and the fork never answers as 143.
+    31337143: Object.freeze({
+      delegationManager: "0x85674a6f4a65e3b61df3b6d45a89f2bf6165efda91a83610b797ff917f64866f",
+      statelessDelegate: "0xd4dee59ae6be4a997964e8f19ae6905f0a233c6ae88d9bc5d945bc60738376c1",
+      exactExecutionEnforcer: "0xd695eefffb5a4da6d7db7dbae12d3a85dff43d9b274b1217ad1498d73539dc5e",
+      limitedCallsEnforcer: "0x3a07a1b31d8f8f29cde4260f88fc5011e003e4bdbd519c8274fc7092d2356468",
+      timestampEnforcer: "0x1da353833766081398664c131a50988f6f7190d6a1a974f497607b974705900c",
+    }),
   }),
 });
 // [A-913 C] Delegation expiry cap = the A-556 Piggy signer 5-minute session cap, reused (not a new number). Internal security value, never shown in UI.
@@ -96,7 +105,7 @@ export function giftSponsorNextStep(truth) {
   return t.expired ? S.REVOKE_THEN_WAIT_FACE_ID : S.CONTINUE_COMMIT;
 }
 
-export const GIFT_SPONSOR_CHAINS = Object.freeze([10143, 143]); // Monad testnet, Monad mainnet. Never 0, never other.
+export const GIFT_SPONSOR_CHAINS = Object.freeze([10143, 143, 31337143]); // Monad testnet, Monad mainnet, [A-946] the shared mainnet fork (own id = funding-context FORK_CHAIN_ID, pinned by the a946 test; never 143). Never 0, never other.
 
 export const GIFT_SPONSOR_REFUSAL = Object.freeze({
   CONFIG_INVALID: "config_invalid",

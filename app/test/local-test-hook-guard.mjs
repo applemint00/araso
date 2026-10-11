@@ -60,8 +60,11 @@ if (!existsSync(distDir)) {
   // [A-859] exactly one mainnet RPC literal, and it is the RETURN_EVIDENCE_READ_CONFIG value (rpcUrl + finalized).
   const RPC_LIT = "https://rpc.monad.xyz";
   const rpcCount = text.split(RPC_LIT).length - 1;
-  ok(`dist 에 "${RPC_LIT}" 정확히 1건 (A-859 RETURN_EVIDENCE_READ_CONFIG)`, rpcCount === 1);
-  ok("그 1건은 RETURN_EVIDENCE_READ_CONFIG 값({rpcUrl, finality:\"finalized\"})", /\{rpcUrl:"https:\/\/rpc\.monad\.xyz",finality:"finalized"\}/.test(text));
+  // [A-983 F1 (a) · Cowork 2026-10-11 05:0x] exactly two: ① A-859 RETURN_EVIDENCE_READ_CONFIG + ② chain-profile.js MAINNET profile rpcUrl
+  // (A-938 Owner 08:4x 승인 제품 읽기 · OUTBOX:21215 — 릴리즈 레벨 1 에서 reader 호출 0). pre-A-983: rpcCount === 1.
+  ok(`dist 에 "${RPC_LIT}" 정확히 2건 (A-859 RETURN_EVIDENCE_READ_CONFIG + A-938 MAINNET profile)`, rpcCount === 2);
+  ok("① RETURN_EVIDENCE_READ_CONFIG 값({rpcUrl, finality:\"finalized\"})", /\{rpcUrl:"https:\/\/rpc\.monad\.xyz",finality:"finalized"\}/.test(text));
+  ok("② MAINNET profile 값(jobId aave-usdc · rpcUrl · liveExecution false)", /jobId:"aave-usdc",rpcUrl:"https:\/\/rpc\.monad\.xyz",liveExecution:!1/.test(text));
 }
 
 console.log(`\n${pass}/${pass + fail_} PASS`);

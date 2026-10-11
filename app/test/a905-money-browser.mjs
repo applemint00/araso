@@ -37,7 +37,7 @@ const tapRows = []; // { frame, size, kind, sel, w, h }
 const note = (id, size, facts) => { (frames[id] ||= {})[`${size[0]}x${size[1]}`] = facts; };
 const must = (cond, msg) => { if (!cond) { failures.push(msg); console.log(`ASSERT FAIL  ${msg}`); } };
 
-const H = await launch();
+const H = await launch({ forkMode: true }); // [A-950] fork-profile mode (STALE_TESTS class (a)): Second / "Second done" features open only on the fork profile since A-948
 const { p } = H;
 
 // ── counters: WebAuthn (wrapped at document start) and tx (eth_send* seen by the RPC stub) ──────────────────────────
@@ -91,7 +91,7 @@ async function typeInto(sel, value) {
   await sleep(250);
 }
 const addr = () => p.evaluate(() => localStorage.getItem("araso.address"));
-const regKey = async () => `araso.piggyRegistry.monad-testnet.${await addr()}`;
+const regKey = async () => `araso.piggyRegistry.${H.scope}.${await addr()}`;
 /** Patch the persisted registry: fn(piggies) -> piggies. Local storage only, the app reads it as it reads any registry. */
 async function patchRegistry(spec, { seedIfEmpty = true } = {}) {
   // spec = { usdc, mode: "home" | "away" | "lastAway" } is plain data, passed into the page as an argument (no closures cross into evaluate)
@@ -107,7 +107,7 @@ async function patchRegistry(spec, { seedIfEmpty = true } = {}) {
       piggies = (idx?.piggies || [{ id: "solo", name: "Honeybun", address: a }]).map((r) => ({ id: r.id, name: r.name, address: r.address || a, location: "home", assets: [], valuation: null, createdAt: at, historyKey: `araso.piggyRegistry.history.${r.id}` }));
     }
     const next = piggies.map((x, i) => ({ ...x, location: spec.mode === "away" ? "away" : spec.mode === "lastAway" && i === piggies.length - 1 ? "away" : "home", assets: [{ symbol: "USDC", quantity: spec.usdc, decimals: 6, sourceTimestamp: at }] }));
-    localStorage.setItem(key, JSON.stringify({ version: 1, accountId: a, chainId: "monad-testnet", piggies: next }));
+    localStorage.setItem(key, JSON.stringify({ version: 1, accountId: a, chainId: key.split(".")[2] /* [A-950] the scope in regKey() (pre-A-950: "monad-testnet") */, piggies: next }));
     return next.map((x) => ({ id: x.id, name: x.name, location: x.location, address: x.address }));
   }, { key, spec, seedIfEmpty });
 }
@@ -218,14 +218,14 @@ async function framePressed(size) {
   await waCheckpoint(`J5 ${size[0]}`, m0);
 }
 async function frameNoJar(size) {
-  await p.evaluate(() => localStorage.removeItem("araso.secondJourneyClosed"));
+  await p.evaluate((k) => localStorage.removeItem(k), H.secondKey("araso.secondJourneyClosed"));
   await fresh(size);
   const m0 = await mark();
   const f = await snap("J4", size, {});
   must(!f.jar, `[J4 ${size[0]}] no jar before Second`);
   note("J4-flags", size, { jarCount: await p.locator("#a905Jar").count(), addMoneyCount: await p.locator("#homeAddMoney").count() });
   await waCheckpoint(`J4 ${size[0]}`, m0);
-  await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1"));
+  await p.evaluate((k) => localStorage.setItem(k, "1"), H.secondKey("araso.secondJourneyClosed"));
 }
 async function frameAway(size) {
   await awayAll();
@@ -413,7 +413,7 @@ try {
 
   // before Second: no jar
   for (const size of SIZES) await step(`J4 ${size[0]}`, () => frameNoJar(size));
-  await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1")); // Second complete (the gate)
+  await p.evaluate((k) => localStorage.setItem(k, "1"), H.secondKey("araso.secondJourneyClosed")); // Second complete (the gate)
 
   // one Piggy at home, USDC held
   await homeAll("38");
@@ -437,9 +437,9 @@ try {
 
   // two Piggies (real second Piggy through the Second path; needs the "Second not yet closed" state to arm the quiet-Home cue)
   await step("seedMulti", async () => {
-    await p.evaluate(() => { localStorage.removeItem("araso.secondJourneyClosed"); localStorage.removeItem("araso.secondIntroSeen"); });
+    await p.evaluate(([c, s]) => { localStorage.removeItem(c); localStorage.removeItem(s); }, [H.secondKey("araso.secondJourneyClosed"), H.secondKey("araso.secondIntroSeen")]);
     await H.seedMulti("Mochi");
-    await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1"));
+    await p.evaluate((k) => localStorage.setItem(k, "1"), H.secondKey("araso.secondJourneyClosed"));
     note("multi", [0, 0], { piggies: await homeAll("20") });
   });
   for (const size of SIZES) {

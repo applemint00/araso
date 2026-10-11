@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { admitSequencedPiggy, registerControlledPiggy, renameIndexedPiggy } from "../src/piggy-index.js";
 import { migrateSinglePiggy, createPiggy, saveRegistry, piggyRegistryKey } from "../src/piggy-registry.js";
 import { tapCueFrame, TAP_CUE_TIMING } from "../src/chog-home.js";
+import { FORK_MODE_ENV, FORK_MODE_SEED, RUN_SCOPE, forkKey } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): + Piggy / "Second done" open only on the fork profile since A-948
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
@@ -132,7 +133,7 @@ function stagingStorage() {
   const m = new Map();
   return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) };
 }
-const CHAIN = "monad-testnet";
+const CHAIN = RUN_SCOPE; // [A-950] the booted chain scope: "monad-fork" (pre-A-950: "monad-testnet")
 const AT = "2026-09-23T06:00:00.000Z";
 const AT_MS = Date.parse(AT);
 const makeAddr = (seed) => "0x" + seed.toString(16).padStart(40, "0");
@@ -171,8 +172,8 @@ async function buildFixture() {
     "araso.piggyName": "Honeybun",
     "araso.birthPlayed": "1",
     "araso.piggyReceived": "1",
-    "araso.secondJourneyClosed": "1",
-    "araso.receipts": JSON.stringify([mk({ piggyId: honeybunId, at: AT_MS + 60_000, txHash: "0xhoneybun1" }), mk({ piggyId: mochiId, at: AT_MS + 120_000, txHash: "0xmochi1" })]),
+    [forkKey("araso.secondJourneyClosed")]: "1", ...FORK_MODE_SEED, // [A-950] fork-scope key + journey "2" (pre-A-950: "araso.secondJourneyClosed": "1")
+ "araso.receipts": JSON.stringify([mk({ piggyId: honeybunId, at: AT_MS + 60_000, txHash: "0xhoneybun1" }), mk({ piggyId: mochiId, at: AT_MS + 120_000, txHash: "0xmochi1" })]),
     [indexKey]: idx.getItem(indexKey),
     [piggyRegistryKey(scope)]: reg.getItem(piggyRegistryKey(scope)),
   };
@@ -287,7 +288,7 @@ function cleanup() {
 
 async function live() {
   const fx = await buildFixture();
-  viteProc = spawn(path.join(REPO_ROOT, "node_modules/.bin/vite"), ["--port", String(VITE_PORT), "--strictPort", "--host", "127.0.0.1"], { cwd: APP_DIR, stdio: ["ignore", "pipe", "pipe"] });
+  viteProc = spawn(path.join(REPO_ROOT, "node_modules/.bin/vite"), ["--port", String(VITE_PORT), "--strictPort", "--host", "127.0.0.1"], { cwd: APP_DIR, env: { ...process.env, ...FORK_MODE_ENV } /* [A-950] fork env */, stdio: ["ignore", "pipe", "pipe"] });
   await waitForHttp(APP_URL, 20_000);
   profileDir = mkdtempSync(path.join(process.env.TMPDIR || tmpdir(), "a624-chrome-"));
   chromeProc = spawn("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -400,17 +401,17 @@ async function live() {
   await waitFor(`window.__a624.snap().open`);
   await wait(700);
   const open0 = await snap();
-  check("history open: Chog hit inert with HOME (close-only background)", [open0.hitInert, open0.anchorH], [true, 420]);
+  check("history open: Chog hit inert with HOME (close-only background)", [open0.hitInert, open0.anchorH], [true, 474]); // stale-pin: A-666+A-786 HISTORY = HOME paper height (main.js anchor = paperRect.height); 420→431 = A-666 mobile type (A-980 E1: A-666 .homePaper lines reverted → 420), 431→474 = A-786 --homePaperK 1.1 (A-980 E3: k=1 → 431). pre-A-980 baseline: [true, 420]
   await c.key("Escape", "Escape", 27);
   await wait(600);
   s = await snap();
-  check("history + Escape: background resident list NOT folded, HISTORY height unchanged", [s.resOpen, s.anchorH, s.open], [true, 420, true]);
+  check("history + Escape: background resident list NOT folded, HISTORY height unchanged", [s.resOpen, s.anchorH, s.open], [true, 474, true]); // stale-pin: A-666+A-786 same HISTORY = HOME paper height as :404 (A-980 E1/E3). pre-A-980 baseline: [true, 420, true]
   const cc2 = await ev("window.__a624.chogCenter()");
   check("history: Chog not a pointer target while open", await ev(`document.elementFromPoint(${cc2.x}, ${cc2.y})?.closest("#chogHomeHit") != null`), false);
   await c.tapAt(cc2.x, cc2.y);
   await wait(900);
   s = await snap();
-  check("history + Chog tap: HOME stays open (256px), HISTORY stays full size (no 4.8px strand)", [s.paperW, s.anchorH, s.open], [282, 420, true]);
+  check("history + Chog tap: HOME stays open (256px), HISTORY stays full size (no 4.8px strand)", [s.paperW, s.anchorH, s.open], [282, 474, true]); // stale-pin: A-666+A-786 same as :404; A-786 re-pinned paperW 256→282 but not this height (A-980 E1/E3). pre-A-980 baseline: [282, 420, true]
   check("history: close reachable", await tap("#recordsCardClose"), true);
   await wait(600);
   s = await snap();
@@ -424,12 +425,12 @@ async function live() {
   await c.viewport(1440, 900);
   await wait(900);
   s = await snap();
-  check("live 390→1440: resident window re-measured (101) and flap at the fresh-web top (311px)", [s.winH, s.flapTop], [101, "311px"]);
+  check("live 390→1440: resident window re-measured (101) and flap at the fresh-web top (311px)", [s.winH, s.flapTop], [106, "316px"]); // stale-pin: A-744 >=641 Home-paper font-size (.homePaper__time/__state/__records…) grows the measured resident card 101→106; flap = HOME_TOP 214 + H − 4 (home-paper-multi.js:45/:55) (A-980 E2: those A-744 lines reverted → 101). pre-A-980 baseline: [101, "311px"]
   check("live 390→1440: one window, one flap, one peek", [s.residents, s.flaps, s.peeks], [1, 1, 1]);
   await c.viewport(390, 844);
   await wait(900);
   s = await snap();
-  check("live 1440→390: back to the mobile card height (108 / 318px)", [s.winH, s.flapTop, s.residents, s.peeks], [108, "318px", 1, 1]);
+  check("live 1440→390: back to the mobile card height (108 / 318px)", [s.winH, s.flapTop, s.residents, s.peeks], [118, "328px", 1, 1]); // stale-pin: A-666 <=640 mobile type ×1.15 (Owner decision "increase all existing user-visible app text on mobile") grows the card 108→118; flap = 214 + H − 4 (A-980 E1: A-666 .homePaper lines reverted → 108). pre-A-980 baseline: [108, "318px", 1, 1]
 
   // F — web: flap + +Piggy pointer-reachable (hit-tested only; +Piggy never activated)
   await c.viewport(1440, 900);

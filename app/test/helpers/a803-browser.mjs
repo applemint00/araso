@@ -7,6 +7,8 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import { FORK_MODE_ENV, FORK_MODE_INIT, FORK_MODE_OFF, FORK_SCOPE, forkKey, forkRpcStub } from "./fork-mode.mjs"; // [A-974] + forkRpcStub
+export { FORK_MODE_ENV, FORK_MODE_INIT };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const REPO = path.resolve(HERE, "..", "..", "..");
@@ -14,18 +16,26 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const freePort = () => new Promise((res, rej) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); s.on("error", rej); });
 export const harnessPresent = () => existsSync(path.join(REPO, "_private/ops/harness/package.json"));
 
-export async function launch() {
+// [A-950] fork-profile mode (STALE_TESTS.md class (a)): launch({ forkMode: true }) boots the local dev server with the dummy fork config and stores
+// journey "2" before the app loads (helpers/fork-mode.mjs), so the Second UI can open (A-948: level >= 2 AND fork profile). Default off = the
+// unchanged testnet dev server. On the fork profile the storage scope is "monad-fork" and the testnet legacy receipts are not read.
+export async function launch({ forkMode = false } = {}) {
+  if (FORK_MODE_OFF) forkMode = false; // A950_FORK_MODE=0: the forkMode-off regression run (helpers/fork-mode.mjs)
   const { chromium } = createRequire(path.join(REPO, "_private/ops/harness/package.json"))("playwright");
   let server = null, BASE = process.env.A803_BASE_URL || "";
+  // A reused server (A803_BASE_URL) must say it carries the fork env (A803_BASE_FORK=1, set by the suite that spawned it with FORK_MODE_ENV).
+  if (forkMode && BASE && process.env.A803_BASE_FORK !== "1") throw new Error("launch({forkMode:true}) cannot reuse A803_BASE_URL without A803_BASE_FORK=1: the fork env must be on the server that serves the page");
   if (!BASE) {
     const port = await freePort();
-    server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", VITE_RELAYER_URL: "__HARNESS_NO_GRANT__" }, stdio: ["ignore", "pipe", "pipe"] });
+    server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", VITE_RELAYER_URL: "__HARNESS_NO_GRANT__", ...(forkMode ? FORK_MODE_ENV : {}) }, stdio: ["ignore", "pipe", "pipe"] });
     await new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("vite start timeout")), 30000); server.stdout.on("data", (d) => { if (/ready in/.test(String(d))) { clearTimeout(t); resolve(); } }); server.on("exit", (c) => { clearTimeout(t); reject(new Error(`vite exited ${c}`)); }); });
     BASE = `http://localhost:${port}/`;
   }
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  if (forkMode) await context.addInitScript(FORK_MODE_INIT);
   await context.route("**/*", (route) => { const u = new URL(route.request().url()); if (u.hostname !== "127.0.0.1" && u.hostname !== "localhost") return route.abort(); return route.continue(); });
+  if (forkMode) await forkRpcStub(context); // [A-974] fork RPC reads + the fork entry status answered locally (registered after the catch-all: the later route wins). pre-A-974: none
   const p = await context.newPage();
   const errors = []; p.on("pageerror", (e) => errors.push(String((e && e.message) || e).slice(0, 160)));
   const cdp = await context.newCDPSession(p);
@@ -75,8 +85,22 @@ export async function launch() {
   };
   // closed First + confirmed Second so "+ Piggy" is offered, then a second Piggy -> 2 real Piggies
   const seedMulti = async (second = "Mochi") => {
+    // [A-950] fork profile: the legacy testnet receipt / tripClosed seed below is not read there (main.js LEGACY_TESTNET_PATH), so "First done"
+    // is reached the way a943's level-2 control does: the DEV return jump → tap through → filed → Home (goHomeFromFilebox) → quiet Home → cue.
+    if (forkMode) {
+      await p.reload({ waitUntil: "networkidle" }); await sleep(600); await unlock(); await waitScene(["sendstay"], 9000);
+      await p.evaluate(() => window.__arasoScene("return", { arrival: true }));
+      for (let t0 = Date.now(); Date.now() - t0 < 30000;) {
+        const v = await p.evaluate(() => ({ home: document.querySelector("[data-scene]")?.dataset.scene === "sendstay", tap: (() => { const e = document.getElementById("returnTap"); return !!e && !e.hidden && !e.disabled && e.getBoundingClientRect().width > 0; })(), open: (() => { const e = document.getElementById("returnOpen"); return !!e && !e.hidden && !e.disabled && e.getBoundingClientRect().width > 0; })() }));
+        if (v.home) break;
+        if (v.tap) { await realClick("#returnTap"); await sleep(1200); continue; }
+        await sleep(150);
+      }
+      await waitScene(["sendstay"], 9000);
+    } else {
     await p.evaluate(() => { const a = localStorage.getItem("araso.address"); const rec = { before: "1000000000000000000", after: "900000000000000000", gas: "21000", sent: "100000000000000000", txHash: "0x" + "a803f1f5eed".padEnd(64, "0") + "1", depositTxHash: "0xa803-dep", redeemTxHash: "0xa803-red", grantTxHash: "0xa803-grant", status: "success", at: Date.parse("2026-09-29T00:00:00Z"), piggyId: `legacy-${String(a).toLowerCase()}` }; localStorage.setItem("araso.receipts", JSON.stringify([rec])); localStorage.setItem("araso.txHash", rec.txHash); localStorage.setItem("araso.tripClosed", "1"); });
     await p.reload({ waitUntil: "networkidle" }); await sleep(600); await unlock();
+    }
     // [A-891 CG-04/05] pre-A-891 baseline: await waitScene(["explore"], 9000) (Explore opened by itself after First). Now: quiet Home ~8 s →
     // "tap me!" → Chog tap → intro → Explore (Owner 2026-10-08).
     // [A-895 P-D] pre-A-895 baseline: the loop ended silently when Explore had already opened (or no cue ever came) and waitScene's TIMEOUT string was ignored,
@@ -118,7 +142,10 @@ export async function launch() {
     await addPiggy(second);
   };
   const close = async () => { await browser.close().catch(() => {}); if (server) { try { server.kill("SIGTERM"); } catch {} await sleep(300); try { server.kill("SIGKILL"); } catch {} } };
-  return { p, context, BASE, errors, scene, waitScene, realClick, mustTap, atWidth, unlock, seedSolo, seedMulti, openHomePaper, paperOpen, closeRecords, close };
+  // [A-950] the chain scope this page boots on, and the storage name of a Second key there (boot-profile.js scopedSecondKey: testnet = the bare key).
+  const scope = forkMode ? FORK_SCOPE : "monad-testnet";
+  const secondKey = (base) => (forkMode ? forkKey(base) : base);
+  return { p, context, BASE, errors, forkMode, scope, secondKey, scene, waitScene, realClick, mustTap, atWidth, unlock, seedSolo, seedMulti, openHomePaper, paperOpen, closeRecords, close };
 }
 
 // Per-Piggy sleep observation (observable attributes only; no visual).

@@ -26,7 +26,7 @@
 
 import { ABIL_RECORDED, ABIL_UNKNOWN_CLASS, CURRENT_READER_STATUS } from "./second-current-reader.js";
 import { EVIDENCE_LABEL, buildExecutionPlan } from "./second-job-readiness.js";
-import { bindRecordToProfile, isProfileActive } from "./chain-profile.js";
+import { bindRecordToProfile, chainMatchesExecutor, isProfileActive } from "./chain-profile.js";
 import { permissionNonce } from "./permission-envelope.js";
 import { ADDR, executorRefusal, formatUnits, isDigits, lower } from "./mainnet-job-common.js";
 
@@ -220,7 +220,7 @@ export function abilPermissionRequest(input) {
   const { profile, piggy, amountRaw, eventId } = input && typeof input === "object" ? input : {};
   const p = snapshotPiggy(piggy);
   if (!isProfileActive(profile)) return { request: null, error: "profile_blocked" };
-  if (profile.numericChainId !== ABIL_RECORDED.chainId) return { request: null, error: "profile_chain_not_abil_evidence" };
+  if (!chainMatchesExecutor(profile, ABIL_RECORDED.chainId)) return { request: null, error: "profile_chain_not_abil_evidence" }; // [fork-parent]
   const { binding, error } = bindRecordToProfile(profile, { piggyId: p.id, piggyAddress: p.address, asset: "USDC" });
   if (error) return { request: null, error };
   if (lower(binding.token) !== lower(ABIL_RECORDED.usdc)) return { request: null, error: "profile_asset_not_abil_evidence" };

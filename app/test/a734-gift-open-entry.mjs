@@ -80,16 +80,18 @@ const EXPECTED_HEADER_RULE = {
 // catch-all `/(.*)` — and S1/S2 fail if any other form appears.
 const vercelMatch = (source, p) => {
   if (source === "/(.*)") return /^\/(.*)$/.test(p);
-  if (/^\/[a-z]+$/.test(source)) return source === p;
+  if (/^\/[a-z][a-z0-9]*$/.test(source)) return source === p; // [A-946 RE-PIN] digits allowed after the first letter ("/j2"). pre-A-946: /^\/[a-z]+$/
   throw new Error(`unexpected vercel source form: ${source}`);
 };
 
-await check("S1 vercel.json: exactly one rewrite /claim → /index.html (SPA); nothing rewrites /api/*; root and /?i= stay unrewritten", () => {
-  deq(VERCEL.rewrites, [{ source: "/claim", destination: "/index.html" }]);
+await check("S1 vercel.json: rewrites /claim and /j2 → /index.html (SPA); nothing rewrites /api/*; root and /?i= stay unrewritten", () => {
+  // [A-946 RE-PIN] + /j2 (the shared-fork boot path). pre-A-946: exactly [{ source: "/claim", destination: "/index.html" }]
+  deq(VERCEL.rewrites, [{ source: "/claim", destination: "/index.html" }, { source: "/j2", destination: "/index.html" }]);
   for (const p of ["/api/grant", "/api/grant/", "/api", "/", "/index.html", "/assets/x.js", "/claimx", "/claim/x"]) {
     assert.equal(VERCEL.rewrites.some((r) => vercelMatch(r.source, p)), false, `rewrite must not match ${p}`);
   }
   assert.equal(vercelMatch("/claim", "/claim"), true);
+  assert.equal(vercelMatch("/j2", "/j2"), true); assert.equal(VERCEL.rewrites.some((r) => vercelMatch(r.source, "/j2/x")), false); // [A-946]
   assert.equal(VERCEL.redirects, undefined, "no redirects (a redirect would drop/expose nothing, but none is needed)");
 });
 await check("S2 vercel.json: security headers byte-identical to pre-A-734 and the catch-all source matches /claim (headers apply to the rewritten route) and /api/grant", () => {

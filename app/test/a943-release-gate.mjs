@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { RELEASE_FEATURES, RELEASE_LEVEL, releaseAllows, resolveReleaseLevel } from "../src/release-gate.js";
+import { RELEASE_FEATURES, RELEASE_LEVEL, journeyFeatureOpen, releaseAllows, resolveReleaseLevel } from "../src/release-gate.js";
 
 let pass = 0, fail = 0;
 const check = (n, f) => { try { f(); pass += 1; console.log(`PASS  ${n}`); } catch (e) { fail += 1; console.log(`FAIL  ${n}\n      ${String(e && e.message || e).split("\n")[0]}`); } };
@@ -42,17 +42,30 @@ const span = (a, b) => { const i = main.indexOf(a), j = main.indexOf(b); assert.
 const [bootS, bootE] = span("// ── [A-943] Release gate · boot", "// ── [A-943] end boot ──");
 const [secS, secE] = span("// ── [A-943] Release gate · Second entries", "// ── [A-943] end Second entries ──");
 const boot = main.slice(bootS, bootE), sec = main.slice(secS, secE);
-const calls = [...main.matchAll(/releaseAllows\("([A-Za-z]+)"\)/g)].map((m) => m[1]);
+// [A-948 RE-PIN] main.js asks journeyFeatureOpen(feature, { level, profile }) at the same 4 places. pre-A-948: /releaseAllows\("([A-Za-z]+)"\)/g
+const calls = [...main.matchAll(/journeyFeatureOpen\("([A-Za-z]+)", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/g)].map((m) => m[1]);
 check("main.js imports releaseAllows from ./release-gate.js only", () => { assert.match(main, /^import \{ releaseAllows \} from "\.\/release-gate\.js";/m); });
-check("every releaseAllows call is inside the two [A-943] blocks", () => {
-  const outside = (main.slice(0, secS) + main.slice(secE, bootS) + main.slice(bootE)).replace(/^import \{ releaseAllows \}.*$/m, "");
-  assert.equal(/releaseAllows\(/.test(outside), false);
+check("every gate call is inside the two [A-943] blocks", () => {
+  // [A-948 RE-PIN] the gate call is journeyFeatureOpen; pre-A-948: releaseAllows(
+  // [A-966 RE-PIN] the one [A-966] fork Gift block asks journeyFeatureOpen("forkGift") (release-gate.js names it for exactly this); it is cut here and pinned below.
+  const outside = (main.slice(0, secS) + main.slice(secE, bootS) + main.slice(bootE)).replace(/^\/\/ ── \[A-966\] Gift on the shared fork[\s\S]*?^\/\/ ── \[A-966\] end Gift on the shared fork ──\n/m, "").replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "") /* [A-974 re-pin] the one [A-974] fork entry block (journeyFeatureOpen "second" ×1, pinned below); pre-A-974: no cut */.replace(/^import \{ releaseAllows \}.*$/m, "").replace(/^import \{ storedJourney \}.*$/m, "").replace(/\/\/[^\n]*/g, "");
+  assert.equal(/(releaseAllows|journeyFeatureOpen)\(/.test(outside), false);
 });
-check("gate calls = afterSecond ×1 · gift ×1 · second ×2 (nothing else)", () => { assert.deepEqual(calls.sort(), ["afterSecond", "gift", "second", "second"]); });
+// [A-966 RE-PIN] + forkGift ×1 inside the [A-966] block. pre-A-966: ["afterSecond", "gift", "second", "second"]
+check("gate calls = afterSecond ×1 · forkGift ×1 ([A-966] block) · gift ×1 · second ×2 + second ×1 ([A-974] block) (nothing else)" /* [A-974 re-pin] pre-A-974 title: … second ×2 (nothing else) */, () => {
+  assert.deepEqual(calls.sort(), ["afterSecond", "forkGift", "gift", "second", "second", "second"]); // [A-974 re-pin] + second ×1 in the [A-974] block. pre-A-974: ["afterSecond", "forkGift", "gift", "second", "second"]
+  const blk974 = main.match(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m)?.[0] || ""; // [A-974 re-pin]
+  assert.equal([...blk974.matchAll(/journeyFeatureOpen\(/g)].length, 1); // [A-974 re-pin]
+  assert.match(blk974, /journeyFeatureOpen\("second", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/); // [A-974 re-pin]
+  const blk = main.match(/^\/\/ ── \[A-966\] Gift on the shared fork[\s\S]*?^\/\/ ── \[A-966\] end Gift on the shared fork ──\n/m)?.[0] || "";
+  assert.equal([...blk.matchAll(/journeyFeatureOpen\(/g)].length, 1);
+  assert.match(blk, /journeyFeatureOpen\("forkGift", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/);
+});
 check("the build value is read only in release-gate.js", () => { assert.equal(/env\??\.VITE_ARASO_RELEASE_LEVEL/.test(main), false); });
 check("boot block: stored Second-done mark dropped and Gift link released below level 2", () => {
-  assert.match(boot, /^if \(!releaseAllows\("afterSecond"\)\) state\.secondJourneyCompletedOnce = false;$/m);
-  assert.match(boot, /^if \(!releaseAllows\("gift"\)\) pendingGiftClaim = null;$/m);
+  // [A-948 RE-PIN] pre-A-948: if (!releaseAllows("afterSecond")) … / if (!releaseAllows("gift")) …
+  assert.match(boot, /^if \(!journeyFeatureOpen\("afterSecond", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)\) state\.secondJourneyCompletedOnce = false;/m);
+  assert.match(boot, /^if \(!journeyFeatureOpen\("gift", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)\) pendingGiftClaim = null;/m);
 });
 check("boot block runs after the Gift link read and before offerGiftPaperAtBoot / the first render", () => {
   const read = main.indexOf("const pendingRead = readClaimFragment(location.href);");
@@ -61,8 +74,9 @@ check("boot block runs after the Gift link read and before offerGiftPaperAtBoot 
   assert.ok(read > 0 && read < bootS && bootE < offer && offer < first);
 });
 check("Second-entry block wraps openSecondJourneyExplore and a891ArmPostFileQuietHome behind \"second\"", () => {
-  assert.match(sec, /openSecondJourneyExplore = \(\.\.\.args\) => \(releaseAllows\("second"\) \? a943BaseOpenSecondJourneyExplore\(\.\.\.args\) : undefined\);/);
-  assert.match(sec, /a891ArmPostFileQuietHome = \(\.\.\.args\) => \{\n\s+if \(releaseAllows\("second"\)\) return a943BaseArmPostFileQuietHome\(\.\.\.args\);/);
+  // [A-948 RE-PIN] pre-A-948: releaseAllows("second") in both wrappers
+  assert.match(sec, /openSecondJourneyExplore = \(\.\.\.args\) => \(journeyFeatureOpen\("second", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\) \? a943BaseOpenSecondJourneyExplore\(\.\.\.args\) : undefined\);/);
+  assert.match(sec, /a891ArmPostFileQuietHome = \(\.\.\.args\) => \{\n\s+if \(journeyFeatureOpen\("second", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)\) return a943BaseArmPostFileQuietHome\(\.\.\.args\);/);
 });
 check("Second-entry block sits after both declarations and before the first render", () => {
   for (const n of ["openSecondJourneyExplore", "a891ArmPostFileQuietHome", "a891HomeChogTap"]) { const i = main.indexOf(`function ${n}(`); assert.ok(i > 0 && i < secS, n); }
@@ -70,10 +84,12 @@ check("Second-entry block sits after both declarations and before the first rend
 });
 
 // ── behaviour of the blocks (vm over their real text) ──
-const runBlocks = (level) => {
+// [A-948 RE-PIN] the blocks call journeyFeatureOpen(f, { level, profile }); the vm passes the level and a profile (fork unless told). pre-A-948: releaseAllows: (f) => releaseAllows(f, level)
+const runBlocks = (level, profile = { id: "monad-fork", status: "active" }) => {
   const log = [];
   const ctx = {
-    releaseAllows: (f) => releaseAllows(f, level),
+    journeyFeatureOpen: (f, o) => journeyFeatureOpen(f, { ...o, level }), RELEASE_LEVEL: level, CHAIN_PROFILE: profile,
+    registerJourneySessionDisposer: () => {}, endActiveSession: () => {},
     state: { secondJourneyCompletedOnce: true },
     pendingGiftClaim: { giftId: "g", token: "t" },
     a891CueChog: "chog",
@@ -89,7 +105,12 @@ check("vm level 1: Second-done false · Gift link null · Explore and the cue no
   assert.equal(r.ctx.state.secondJourneyCompletedOnce, false); assert.equal(r.ctx.pendingGiftClaim, null);
   assert.deepEqual(r.log, []); assert.equal(r.explore, undefined); assert.equal(r.arm, undefined); assert.equal(r.ctx.a891CueChog, null);
 });
-check("vm level 2: nothing changed · both originals called through", () => {
+check("[A-948] vm level 2 on the TESTNET profile: Second closed (root \"/\" never opens the old Second UI) · Gift link kept (level only)", () => {
+  const r = runBlocks(2, { id: "monad-testnet", status: "active" });
+  assert.equal(r.ctx.state.secondJourneyCompletedOnce, false); assert.deepEqual(r.ctx.pendingGiftClaim, { giftId: "g", token: "t" });
+  assert.deepEqual(r.log, []); assert.equal(r.explore, undefined); assert.equal(r.arm, undefined);
+});
+check("vm level 2 on the fork profile: nothing changed · both originals called through", () => {
   const r = runBlocks(2);
   assert.equal(r.ctx.state.secondJourneyCompletedOnce, true); assert.deepEqual(r.ctx.pendingGiftClaim, { giftId: "g", token: "t" });
   assert.deepEqual(r.log, ["explore", "arm"]); assert.equal(r.explore, "opened"); assert.equal(r.arm, "armed");

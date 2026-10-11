@@ -8,7 +8,7 @@
 // This file is two regions:
 //   [A-898 LOGIC]  app writer — pure state machine + view-model. No DOM, no network, no storage, no timers.
 //   [A-898 MARKUP] design writer — pure `fundingPaperMarkup(view)`; the app writer ships an unstyled placeholder.
-// Contract between the two: <private>
+// Contract between the two: the A-898 interface note (private ops record, not shipped).
 //
 // What this file never does: call a provider, read the chain, enable any *_CONFIG, or credit a balance. A balance grows
 // ONLY when a confirmed arrival result passes `applyFundingResult` (A-494): `balanceGrew === true` iff stage "confirmed".

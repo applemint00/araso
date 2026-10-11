@@ -4163,7 +4163,7 @@ html .secondJourneyCard .secondJourney__picked { margin: 0.6439em 0 0.0920em; li
 
 /* ─────────────────────────────────────────────────────────────────────────────
    [A-421] 승인 v25 readiness 카드 (선택 이후 금액/수령 카드)
-   원본: <local>
+   원본: <local design source>
          scene-card-handoff/amount-card-review/index.html (v25)
    원본의 `.review-modes` nav 는 검토 하네스 조작부라 이식하지 않았다.
    값은 원본 shorthand 를 그대로 옮긴 것이다 — 반올림·재해석 0.

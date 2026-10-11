@@ -203,6 +203,7 @@ export function kintsuExecutionGate({ profile, piggy = {}, executor, step } = {}
   // Explicit live gate: unless the profile says liveExecution === true (exactly true, not truthy), Kintsu refuses here,
   // before binding or any executor is looked at. Every profile has liveExecution:false today, so this is the refusal a real
   // Kintsu profile meets. A true value only reaches the remaining boundaries, which still end on "kintsu_lane_not_wired".
+  // [live-gate-form] live gate: `!== true` lets exactly true through (then kintsu_lane_not_wired); false / undefined / "true" / 1 refuse. A fork Kintsu executor aligns to `!== false` in its own card.
   if (profile.liveExecution !== true) return refuse("live_execution_disabled");
   const { error } = bindRecordToProfile(profile, { piggyId: piggy.id, piggyAddress: piggy.address, asset: KINTSU_FORK_EVIDENCE.entryAsset });
   if (error) return refuse(error);

@@ -37,10 +37,18 @@ import {
 } from "./gift-piggy-claim-link.js";
 import { buildGiftValueBinding, giftGasBudget, GIFT_VALUE_PRESET_ATOMIC_AMOUNTS, GIFT_GAS_POLICY, GIFT_GAS_BUDGET_STATUS, GIFT_SPONSOR_GAS_STEPS } from "./gift-value-spec.js";
 import { decodeFunctionData, encodeFunctionData, getAddress } from "viem";
-import { FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "./funding-context.js";
+import { FORK_CHAIN_ID, FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "./funding-context.js";
 import { GIFT_SPONSOR_MAX_EXPIRY_SECONDS } from "./gift-sponsor-7702.js";
 
 const ADDR = /^0x[0-9a-fA-F]{40}$/;
+// [gift-fork] the shared mainnet fork: its scope and the page path that boots it (= boot-profile.js FORK_BOOT_PATH; pinned by the a966 test).
+export const FORK_GIFT_SCOPE = "monad-fork";
+export const FORK_GIFT_LINK_PATH = "/j2";
+function forkClaimUrl(url) {
+  if (typeof url !== "string") return null;
+  const at = url.indexOf("/claim#");
+  return at > 0 && url.indexOf("/claim#", at + 1) < 0 ? `${url.slice(0, at)}${FORK_GIFT_LINK_PATH}${url.slice(at + "/claim".length)}` : null;
+}
 
 function webcrypto() {
   const c = globalThis.crypto;
@@ -155,9 +163,12 @@ export async function planGiftCreate({
     ? { ...sealed0, gasDeposit: Object.freeze({ to: gasDeposit.to, valueWei: gasDeposit.value.toString(10), data: giftId, chainId: sponsorChainId, txHash: null }) }
     : sealed0;
 
-  const claimUrl = typeof origin === "string" && origin
+  const claimUrl0 = typeof origin === "string" && origin
     ? buildClaimUrl(origin, { giftId, token: created.token })
     : null;
+  // [gift-fork] a Gift made on the shared fork opens on the fork's boot path ("/j2" = boot-profile.js FORK_BOOT_PATH), so the link boots the
+  // chain profile it was made on; "/claim" boots the build profile (testnet / 143), exactly as before for every other scope.
+  const claimUrl = chainScope === FORK_GIFT_SCOPE ? forkClaimUrl(claimUrl0) : claimUrl0;
 
   return {
     ok: true,
@@ -198,7 +209,7 @@ export function planGiftGasDeposit({ gasBudget, sponsorAddress, chainId } = {}) 
   if (!gasBudget.gasUnitsByStep || GIFT_SPONSOR_GAS_STEPS.some((st) => typeof gasBudget.gasUnitsByStep[st] !== "bigint")) return { ok: false, reason: "gas_budget_unknown" };
   const to = typeof sponsorAddress === "string" ? sponsorAddress.trim() : "";
   if (!ADDR.test(to) || /^0x0{40}$/i.test(to)) return { ok: false, reason: "sponsor_address_invalid" };
-  if (chainId !== 143 && chainId !== 10143) return { ok: false, reason: "sponsor_chain_invalid" };
+  if (chainId !== 143 && chainId !== 10143 && chainId !== FORK_CHAIN_ID) return { ok: false, reason: "sponsor_chain_invalid" }; // [A-946] + the fork's own id
   return { ok: true, deposit: Object.freeze({ to: getAddress(to), value: gasBudget.costWei, chainId }) };
 }
 
@@ -281,7 +292,11 @@ export const GIFT_CREATE_CHAIN_ID = 143;
 export const GIFT_CREATE_CHAIN_SCOPE = "monad-mainnet";
 const MAX_UINT256 = (1n << 256n) - 1n;
 const ARMED_STEPS = new Map(); // "chainId|to|value|data" (lowercase) -> { label, step, expiresAtMs }
-const stepKey = (to, value, data) => `${GIFT_CREATE_CHAIN_ID}|${String(to).toLowerCase()}|${value.toString(10)}|${String(data).toLowerCase()}`;
+// [gift-fork] the key carries the chain the step was armed for (pre: always GIFT_CREATE_CHAIN_ID). A step armed on the fork is keyed 31337143 and
+// can never match a chain-143 tx: giftCreateStepMatch asks only for 143 keys. On the fork the signing guard does not consult these steps.
+const stepKey = (to, value, data, chainId = GIFT_CREATE_CHAIN_ID) => `${chainId}|${String(to).toLowerCase()}|${value.toString(10)}|${String(data).toLowerCase()}`;
+// [gift-fork] the sender create step on the shared fork: same three exact shapes, the fork's own chain id + scope + its USDC row. 143 rules unchanged.
+const CREATE_CHAINS = Object.freeze({ [GIFT_CREATE_CHAIN_ID]: GIFT_CREATE_CHAIN_SCOPE, [FORK_CHAIN_ID]: FORK_GIFT_SCOPE });
 const sameAddr = (a, b) => typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 
 /** Refusal reason for a config {escrowAddress, sponsorAddress} before any Face ID, or null. Pure; never throws. */
@@ -307,10 +322,14 @@ export function armGiftCreateStep(plan, calls, { escrowAddress, nowMs = Date.now
   try {
     const cfgProblem = giftCreateConfigProblem({ escrowAddress, sponsorAddress: plan?.gasDeposit?.to });
     if (cfgProblem) return { ok: false, reason: cfgProblem };
-    if (!plan || plan.ok !== true || !plan.gasDeposit || plan.gasDeposit.chainId !== GIFT_CREATE_CHAIN_ID) return { ok: false, reason: "sponsor_chain_invalid" };
-    if (plan.record?.chainId !== GIFT_CREATE_CHAIN_SCOPE) return { ok: false, reason: "sponsor_chain_invalid" };
+    // [gift-fork] pre: gasDeposit.chainId === GIFT_CREATE_CHAIN_ID and record scope === GIFT_CREATE_CHAIN_SCOPE (143 only). Now: 143 exactly as before,
+    // or the fork id with the fork scope (a mixed pair is refused).
+    const armChainId = plan?.gasDeposit?.chainId;
+    if (!plan || plan.ok !== true || !plan.gasDeposit || (armChainId !== GIFT_CREATE_CHAIN_ID && armChainId !== FORK_CHAIN_ID)) return { ok: false, reason: "sponsor_chain_invalid" };
+    const armScope = CREATE_CHAINS[armChainId];
+    if (plan.record?.chainId !== armScope) return { ok: false, reason: "sponsor_chain_invalid" };
     const a = plan.escrowCreateArgs;
-    const usdc = FUNDING_CONTEXT_TOKEN_ALLOWLIST[GIFT_CREATE_CHAIN_SCOPE]?.USDC?.assetId;
+    const usdc = FUNDING_CONTEXT_TOKEN_ALLOWLIST[armScope]?.USDC?.assetId;
     if (!a || !usdc || !sameAddr(a.token, usdc)) return { ok: false, reason: "asset_id_chain_mismatch" };
     const amount = BigInt(a.amount);
     if (amount === MAX_UINT256 || amount <= 0n || !GIFT_VALUE_PRESET_ATOMIC_AMOUNTS.includes(Number(amount))) return { ok: false, reason: "unsupported_amount" };
@@ -328,7 +347,7 @@ export function armGiftCreateStep(plan, calls, { escrowAddress, nowMs = Date.now
     const step = Object.freeze({ escrow: getAddress(escrowAddress), token: getAddress(usdc), sponsor: getAddress(plan.gasDeposit.to), giftId: String(a.giftId).toLowerCase(), amount, expiry: BigInt(a.expiry), claimTokenHash: String(a.claimTokenHash).toLowerCase(), depositValue: plan.gasDeposit.value });
     const expiresAtMs = Number(nowMs) + GIFT_SPONSOR_MAX_EXPIRY_SECONDS * 1000;
     if (!Number.isFinite(expiresAtMs)) return { ok: false, reason: "create_step_mismatch" };
-    const keys = built.calls.map((w) => stepKey(w.to, w.value, w.data));
+    const keys = built.calls.map((w) => stepKey(w.to, w.value, w.data, armChainId));
     built.calls.forEach((w, i) => ARMED_STEPS.set(keys[i], Object.freeze({ label: w.label, step, expiresAtMs })));
     return { ok: true, disarm: () => { for (const k of keys) ARMED_STEPS.delete(k); } };
   } catch {

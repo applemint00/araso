@@ -19,7 +19,7 @@ const QUIET_MS = 12000; // the post-file quiet Home is ~8 s before the cue (A-89
 
 async function run(level, { storedSecondDone }) {
   process.env.VITE_ARASO_RELEASE_LEVEL = String(level); // read by vite when launch() spawns it (env: { ...process.env, ... })
-  const B = await launch();
+  const B = await launch({ forkMode: level >= 2 }); // [A-950] level-2 control on the fork profile (A-948: Second UI = level ≥2 AND fork); level 1 = testnet, unchanged
   const { p } = B;
   const seen = { scenes: [], cue: false, explore: false, jar: false, bell: false, plusPiggy: false };
   try {

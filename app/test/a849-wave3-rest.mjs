@@ -11,6 +11,7 @@ import { createRequire } from "node:module";
 import { createServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 import { secondJourneyCardMarkup, exploreCandidateDestinations } from "../src/second-journey-view.js";
 import { exploreCandidateRows } from "../src/mainnet-job-lane.js";
 import { listVisibleJobFamilies } from "../src/second-job-readiness.js";
@@ -105,7 +106,7 @@ async function runBrowser() {
   } catch (e) { await check("B0 playwright available (local harness)", () => { throw e; }); return; }
   const port = await freePort();
   const server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], {
-    cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost" }, stdio: ["ignore", "pipe", "pipe"], detached: false,
+    cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", ...FORK_MODE_ENV /* [A-950] */ }, stdio: ["ignore", "pipe", "pipe"], detached: false,
   });
   let browser = null;
   try {
@@ -128,11 +129,13 @@ async function runBrowser() {
 
 async function browserRun(browser, BASE, shots) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
   await context.route("**/*", async (route) => {
     const body = route.request().postData() || "";
     if (/eth_sendRawTransaction|eth_sendTransaction|eth_sendUserOperation/.test(body)) return route.abort();
     return route.continue();
   });
+  await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
   const p = await context.newPage();
   const errors = [];
   p.on("pageerror", (e) => errors.push(String((e && e.message) || e).slice(0, 200)));
@@ -156,8 +159,9 @@ async function browserRun(browser, BASE, shots) {
   // [A-891 CG-04/05] pre-A-891 baseline: after a reload with First done / Second not done, Explore opened by itself (~1.2 s, waitScene(["explore"])).
   // Now (Owner 2026-10-08): quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore. forgetIntro() drops the once-per-user intro fact
   // before a reload so a later reopen takes the same product path (Cowork 2026-10-08: before the intro the cue returns on every reload).
-  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const forgetIntro = () => p.evaluate((k) => localStorage.removeItem(k), forkKey("araso.secondIntroSeen")); // [A-950] fork-scope key (pre-A-950: the testnet key)
   const exploreViaTapMe = async (ms = 16000) => {
+    if ((await scene()) === "sendstay") await forkFirstDone(p); // [A-950] fork profile: the cue arms only after a filing (DEV return jump); a reload / the testnet First-done seed does not arm it there — RECEIPT (iii)-1
     const t0 = Date.now();
     while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
     if (!(await p.locator(".chogHome__tapCue").count())) return `NOCUE:${await scene()}`;

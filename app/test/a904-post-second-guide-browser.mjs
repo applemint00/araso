@@ -14,7 +14,7 @@ const failures = [];
 const facts = {};
 const must = (c, m) => { if (!c) { failures.push(m); console.log(`ASSERT FAIL  ${m}`); } };
 
-const H = await launch();
+const H = await launch({ forkMode: true }); // [A-950] fork-profile mode (STALE_TESTS class (a)): Second / "Second done" features open only on the fork profile since A-948
 const { p } = H;
 const read = () => p.evaluate((k) => {
   const j = document.querySelector("#a905Jar");
@@ -26,14 +26,14 @@ async function enter(size) { await H.atWidth(size[0], size[1]); await waitJar();
 
 try {
   await H.seedSolo("Honeybun");
-  await p.evaluate((k) => { localStorage.removeItem(k); localStorage.removeItem("araso.secondJourneyClosed"); }, KEY);
+  await p.evaluate(([k, c]) => { localStorage.removeItem(k); localStorage.removeItem(c); }, [KEY, H.secondKey("araso.secondJourneyClosed")]);
   await enter([390, 844]);
   let r = await read();
   facts.beforeSecond = r;
   must(!r.jar && r.attr === null && r.key === null, "before Second: no jar, no guide, nothing stored");
 
   // Second complete: first Home entry -> drop, then twinkle after the quiet beat (8 s)
-  await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1"));
+  await p.evaluate((k) => localStorage.setItem(k, "1"), H.secondKey("araso.secondJourneyClosed"));
   await enter([390, 844]);
   r = await read();
   facts.entry1 = r;

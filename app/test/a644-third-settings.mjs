@@ -19,6 +19,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkFirstDone, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): the Second UI opens only on the fork profile since A-948
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -221,7 +222,7 @@ async function runBrowser() {
   let BASE = process.env.A644_BASE_URL || "";
   if (!BASE) {
     server = spawn("npx", ["vite", "app", "--mode", "a172-local", "--port", "5665", "--host", "127.0.0.1", "--strictPort"], {
-      cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost" }, stdio: ["ignore", "pipe", "pipe"],
+      cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", ...FORK_MODE_ENV /* [A-950] */ }, stdio: ["ignore", "pipe", "pipe"],
     });
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("vite start timeout")), 20000);
@@ -246,6 +247,7 @@ async function browserWidth(browser, BASE, w, shots) {
   const T = `[${w}]`;
   const net = { tx: 0 };
   const context = await browser.newContext({ viewport: { width: w, height: HEIGHT[w] || 900 } });
+  await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
   await context.addInitScript(INIT);
   await context.route("**/*", async (route) => {
     const req = route.request(); const u = new URL(req.url()); const body = req.postData() || "";
@@ -253,6 +255,7 @@ async function browserWidth(browser, BASE, w, shots) {
     if ((u.hostname === "localhost" || u.hostname === "127.0.0.1") && req.method() === "POST" && /grant/i.test(u.pathname)) { net.tx += 1; return route.abort(); }
     return route.continue();
   });
+  await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
   const p = await context.newPage();
   const errors = [];
   p.on("pageerror", (e) => errors.push(String((e && e.message) || e).slice(0, 200)));
@@ -303,8 +306,9 @@ async function browserWidth(browser, BASE, w, shots) {
   // [A-891 CG-04/05] pre-A-891 baseline: after a reload with First done / Second not done, Explore opened by itself (~1.2 s, waitScene(["explore"])).
   // Now (Owner 2026-10-08): quiet Home ~8 s → "tap me!" → the user taps Chog → intro → Explore. forgetIntro() drops the once-per-user intro fact
   // before a reload so a later reopen takes the same product path (Cowork 2026-10-08: before the intro the cue returns on every reload).
-  const forgetIntro = () => p.evaluate(() => localStorage.removeItem("araso.secondIntroSeen"));
+  const forgetIntro = () => p.evaluate((k) => localStorage.removeItem(k), forkKey("araso.secondIntroSeen")); // [A-950] fork-scope key (pre-A-950: the testnet key)
   const exploreViaTapMe = async (ms = 16000) => {
+    if ((await scene()) === "sendstay") await forkFirstDone(p); // [A-950] fork profile: the cue arms only after a filing (DEV return jump); a reload / the testnet First-done seed does not arm it there — RECEIPT (iii)-1
     const t0 = Date.now();
     while (Date.now() - t0 < ms && !(await p.locator(".chogHome__tapCue").count())) { if ((await scene()) === "explore") return "explore"; await sleep(200); }
     if (!(await p.locator(".chogHome__tapCue").count())) return `NOCUE:${await scene()}`;
@@ -357,7 +361,7 @@ async function browserWidth(browser, BASE, w, shots) {
 
     // ── S1 Second incomplete ─────────────────────────────────────────────────────────────────
     await check(`B1 ${T} S1 Second incomplete: MY MONEY row REAL tap → Piggy detail, no control-depth selector; +Piggy absent`, async () => {
-      assert.equal(await p.evaluate(() => localStorage.getItem("araso.secondJourneyClosed")), null);
+      assert.equal(await p.evaluate((k) => localStorage.getItem(k), forkKey("araso.secondJourneyClosed")), null); // [A-950] fork-scope key (pre-A-950: the testnet key)
       await openHomePaper(); await sleep(800);
       assert.equal(await p.locator(".homePlusPiggyTab").count(), 0, "+Piggy gate unchanged (absent pre-Second)");
       await toMoney();
@@ -374,7 +378,7 @@ async function browserWidth(browser, BASE, w, shots) {
 
     // ── S4 unconfirmed / garbage gate never unlocks ────────────────────────────────────────────
     await check(`B2 ${T} S4 unconfirmed Second (closed key garbage "true") + reload → still no selector, no +Piggy`, async () => {
-      await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "true"));
+      await p.evaluate((k) => localStorage.setItem(k, "true"), forkKey("araso.secondJourneyClosed")); // [A-950] fork-scope key (pre-A-950: the testnet key)
       await forgetIntro(); // [A-891] the Second entry is offered again only through the cue; a completed Second never arms it
       await p.reload({ waitUntil: "networkidle" }); await sleep(600); await unlockIfLocked();
       // [A-895 P-D] pre-A-895 text: "Explore auto-opens again". Since A-891 Explore never auto-opens; it opens only after the Chog tap (exploreViaTapMe).
@@ -386,7 +390,7 @@ async function browserWidth(browser, BASE, w, shots) {
       await toMoney(); await mustTap("#homePaperMoneyRow", "single row"); await sleep(900);
       assert.equal(await paperMode(), "piggyDetail");
       assert.equal((await selector()).present, false);
-      await p.evaluate(() => localStorage.removeItem("araso.secondJourneyClosed"));
+      await p.evaluate((k) => localStorage.removeItem(k), forkKey("araso.secondJourneyClosed")); // [A-950] fork-scope key (pre-A-950: the testnet key)
       await mustTap("#homePiggyDetailBack", "detail back"); await sleep(600);
       await toHomeFace();
     });
@@ -414,7 +418,7 @@ async function browserWidth(browser, BASE, w, shots) {
         if (v.tap) { if ((await realClick("#returnTap")) !== "pointer") await p.evaluate(() => document.getElementById("returnTap").click()); await sleep(1200); continue; }
         await sleep(250);
       }
-      assert.equal(await p.evaluate(() => localStorage.getItem("araso.secondJourneyClosed")), "1");
+      assert.equal(await p.evaluate((k) => localStorage.getItem(k), forkKey("araso.secondJourneyClosed")), "1"); // [A-950] fork-scope key (pre-A-950: the testnet key)
       await sleep(4500);
       assert.equal(await scene(), "sendstay", "quiet Home holds, no Explore auto-reopen");
     });
@@ -433,7 +437,7 @@ async function browserWidth(browser, BASE, w, shots) {
       await shot("S5_1piggy_detail_default");
       const m = await measuredModeTap("ill_manage");
       const addr = await p.evaluate(() => localStorage.getItem("araso.address"));
-      assert.deepEqual(m.changed, [`araso.piggyControlMode.monad-testnet.${addr}.${honeyId}`], "only this Piggy's preference key changed");
+      assert.deepEqual(m.changed, [`araso.piggyControlMode.${RUN_SCOPE}.${addr}.${honeyId}`], "only this Piggy's preference key changed"); // [A-950] fork-scope key (pre-A-950: the testnet key)
       assert.equal(m.webauthn, 0, "credentials.get/create 0"); assert.equal(m.tx, 0, "tx 0"); assert.equal(m.scene, "sendstay");
       assert.deepEqual((await selector()).on, ["ill_manage"]);
       const rec = (await storeModes())[honeyId];

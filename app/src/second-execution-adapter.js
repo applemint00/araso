@@ -1,6 +1,6 @@
 // [A-663] Second-owned testnet execution PLUMBING PROOF.
 //
-// Per the A-663 Owner correction (<private>, "A-663 OWNER CORRECTION — TESTNET
+// Per the A-663 Owner correction (private ops inbox, "A-663 OWNER CORRECTION — TESTNET
 // shMON IS PLUMBING PROOF, NOT THE SECOND JOB", 2026-10-01): the Monad testnet shMON
 // deposit/redeem roundtrip belongs to the First Journey lineage
 // (second-job-readiness.js FIRST_JOURNEY_LINEAGE, id "fastlane-shmon",
@@ -845,6 +845,7 @@ export function aaveEvidenceProblem({ read, profile, intent, step, expectedPool,
   if (!r) return "evidence_missing";
   if (!intent || !AAVE_STEPS.includes(step)) return "no_step";
   if (r.stale === true || r.conflict === true) return "stale_evidence";
+  // [fork-parent] evidence chain = the chain the read / tx actually ran on = profile.numericChainId (fork 31337143). Not chainMatchesExecutor: a fork tx is never 143 evidence.
   if (r.chainId !== profile?.numericChainId) return "evidence_chain_mismatch";
   if (!Number.isSafeInteger(r.block) || r.block < 0) return "evidence_block_missing";
   if (typeof r.source !== "string" || !r.source.endsWith(`@${r.block}`)) return "evidence_block_untagged";

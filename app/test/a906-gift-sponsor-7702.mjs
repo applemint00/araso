@@ -390,7 +390,8 @@ await check("path switch: no sponsor config -> current /gift-gas path; foreign o
   assert.equal(selectGiftClaimPath({ sponsorSubmitter: ok, legacySubmitter: legacy }).path, "sponsor_7702");
 });
 await check("default OFF: main.js passes no sponsor config; the old /gift-gas code is still present", () => {
-  const main = readFileSync(path.resolve(HERE, "../src/main.js"), "utf8");
+  // [A-966 re-pin] the one [A-966] block builds a sponsor submitter on the shared-fork profile only (its own tests: a966-*). pre-A-966: the whole main.js
+  const main = readFileSync(path.resolve(HERE, "../src/main.js"), "utf8").replace(/^\/\/ ── \[A-966\] Gift on the shared fork[\s\S]*?^\/\/ ── \[A-966\] end Gift on the shared fork ──\n/m, "");
   assert.doesNotMatch(main, /gift-sponsor-7702|createGiftSponsorClaimSubmitter|GIFT_SPONSOR/);
   const entry = readFileSync(path.resolve(HERE, "../src/gift-claim-entry.js"), "utf8");
   assert.match(entry, /export function createGiftClaimSubmitter/);
@@ -516,14 +517,29 @@ if (M && X) {
     const record = { giftId: GIFT, senderAddress: OTHER, claimTokenHash: await CL.hashClaimToken("token-1"), // pre-A-913 baseline: expiresAt "2027-01-01T00:00:00Z" (already passed vs NOW=1.8e9); A-913 refuses a passed deadline before Face ID, so the fixture is a future date.
     expiresAt: "2030-01-01T00:00:00Z" };
     const H1 = `0x${"c1".repeat(32)}`; const H2 = `0x${"c2".repeat(32)}`;
+    // [A-966 O1] the mock now behaves like the real escrow (GiftPiggyUSDC.sol:202): claim() DELETES commits[giftId][committer], so after a
+    // claim commits() reads zero; the commit tx's receipt carries the escrow's Committed(giftId, committer, commitHash) log, as a real chain does.
+    // pre-A-966 mock: commits() kept returning the commit after the claim, and the receipt had no logs:
+    //   waitForTransactionReceipt: async () => ({ status: receiptStatus, blockNumber: 5n }),
+    //   readContract: ... functionName === "commits" ? [storedHashOverride ?? client.lastCommit, 4n] : ...
+    const ZERO32 = `0x${"0".repeat(64)}`;
+    const COMMITTED_TOPIC = keccak256(new TextEncoder().encode("Committed(bytes32,address,bytes32)"));
+    const CLAIMED_TOPIC = keccak256(new TextEncoder().encode("Claimed(bytes32,address,address,uint256)")); // [A-979 ① r2] GiftPiggyUSDC.sol:141
     const run = async ({ client, claimed = true, storedHashOverride = null, receiptStatus = "success", txFrom = SPONSOR }) => {
       const calls = [];
+      const committed = () => storedHashOverride ?? client.lastCommit ?? ZERO32;
+      const claimedLog = () => ({ address: ESCROW, topics: [CLAIMED_TOPIC, GIFT, `0x${"0".repeat(24)}${piggy.address.slice(2).toLowerCase()}`], data: "0x", blockNumber: 5n, transactionHash: H2 }); // [A-979 ① r2]
       const chain = {
         chain: { id: CHAIN },
         getTransactionCount: async () => 0n, getCode: async () => FAKE_CODE,
-        waitForTransactionReceipt: async () => ({ status: receiptStatus, blockNumber: 5n }),
+        // [A-979 ① r2] pre-A-979 r2: the H2 (claim) receipt had no logs. A real claim receipt carries the escrow's Claimed(giftId, recipient) log.
+        waitForTransactionReceipt: async ({ hash }) => ({ status: receiptStatus, blockNumber: 5n, logs: hash === H1 ? [{ address: ESCROW, topics: [COMMITTED_TOPIC, GIFT, `0x${"0".repeat(24)}${piggy.address.slice(2).toLowerCase()}`], data: committed() }] : hash === H2 && claimed ? [claimedLog()] : [] }),
         getTransaction: async () => ({ to: ESCROW, from: txFrom }),
-        readContract: async ({ functionName }) => { calls.push(functionName); return functionName === "commits" ? [storedHashOverride ?? client.lastCommit, 4n] : [OTHER, ESCROW, 1n, 0n, claimed, "0x"]; },
+        readContract: async ({ functionName }) => { calls.push(functionName); return functionName === "commits" ? (claimed ? [ZERO32, 0n] : [committed(), 4n]) : [OTHER, ESCROW, 1n, 0n, claimed, "0x"]; },
+        // [A-979 ①] pre-A-979: no getLogs / getBlockNumber. A real RPC node offers both; the 409 replay finds the commit tx (H1) by the escrow's
+        // Committed log and then checks that receipt (same rule as the 200 path). The log exists once a commit was made (committed() != 0).
+        getBlockNumber: async () => 5n,
+        getLogs: async ({ event }) => { calls.push("getLogs"); if (event?.name === "Claimed") return claimed ? [claimedLog()] : []; return committed() === ZERO32 ? [] : [{ address: ESCROW, topics: [COMMITTED_TOPIC, GIFT, `0x${"0".repeat(24)}${piggy.address.slice(2).toLowerCase()}`], data: committed(), blockNumber: 5n, transactionHash: H1 }]; },
       };
       const sub = E.createGiftSponsorClaimSubmitter({ config: CFG, chain, sponsorClient: client, chainScope: "monad-testnet", now: () => NOW, randomBytes: () => new Uint8Array(32).fill(7) });
       assert.ok(sub);
@@ -553,6 +569,8 @@ if (M && X) {
     // 409 after an on-chain claim: the chain decides (our commit + claimed) -> verified, NOT commit_failed
     const conflict = { async submit(req) { conflict.lastCommit = M.sponsorCommitHash(req.claim); return { status: 409, body: { ok: false, error: "not_available" } }; } };
     const r409 = await run({ client: conflict });
+    // [A-979 ①] restored to the pre-A-966 value: the replay now proves "our commit" by the Committed log in the commit receipt (found via getLogs).
+    // A-966 interim (pre-A-979): assert.equal(r409.out.status, "commit_failed") — the replay still read commits() at latest, which claim() deletes.
     assert.equal(r409.out.status, "already_claimed_verified");
     assert.ok(r409.calls.includes("gifts"));
     const r409b = await run({ client: conflict, claimed: false });
@@ -625,11 +643,20 @@ if (M && X) {
     const service = SV.createGiftSponsorService({ ledger: contractLedger, policy, chain: relayerChain, sponsor: sponsorStub, preflight: async () => true }); // pre-A-913 baseline: no preflight
     const outputs = [];
     const client = { submit: async (req) => { const r = await service.handle(JSON.parse(JSON.stringify(req))); outputs.push(r); return r; } };
+    // [A-966 O1] real-escrow mock: claim() deletes the commit (commits() = 0 once claimed); the commit (redeem) receipt carries the Committed log.
+    // pre-A-966: waitForTransactionReceipt: async () => ({ status: "success", blockNumber: 7n }) · commits() = [client.lastCommit, 7n] even after the claim
+    const Z32 = `0x${"0".repeat(64)}`;
+    const COMMITTED_T0 = k256(stringToHex("Committed(bytes32,address,bytes32)"));
+    const claimedL = () => ({ address: ESCROW, topics: [k256(stringToHex("Claimed(bytes32,address,address,uint256)")), GIFT, `0x${"0".repeat(24)}${piggy.address.slice(2).toLowerCase()}`], data: "0x", blockNumber: 7n, transactionHash: hashFor("claim") }); // [A-979 ① r2]
     const chain = {
       chain: { id: CHAIN }, getTransactionCount: async () => 0n, getCode: async () => FAKE_CODE,
-      waitForTransactionReceipt: async () => ({ status: "success", blockNumber: 7n }),
+      // [A-979 ① r2] pre-A-979 r2: the claim receipt had no logs; a real one carries Claimed(giftId, recipient)
+      waitForTransactionReceipt: async ({ hash }) => ({ status: "success", blockNumber: 7n, logs: hash === hashFor("redeem") ? [{ address: ESCROW, topics: [COMMITTED_T0, GIFT, `0x${"0".repeat(24)}${piggy.address.slice(2).toLowerCase()}`], data: client.lastCommit }] : hash === hashFor("claim") && gift.claimed ? [claimedL()] : [] }),
       getTransaction: async () => ({ to: ESCROW, from: SPONSOR }),
-      readContract: async ({ functionName, args }) => (functionName === "commits" ? [client.lastCommit, 7n] : [OTHER, ESCROW, 1n, deadlineSec, gift.claimed, "0x"]),
+      readContract: async ({ functionName, args }) => (functionName === "commits" ? (gift.claimed ? [Z32, 0n] : [client.lastCommit, 7n]) : [OTHER, ESCROW, 1n, deadlineSec, gift.claimed, "0x"]),
+      // [A-979 ①] pre-A-979: no getLogs / getBlockNumber. Once the redeem (commit) tx was sent, the escrow's Committed log is findable by getLogs.
+      getBlockNumber: async () => 7n,
+      getLogs: async ({ event }) => (event?.name === "Claimed" ? (gift.claimed ? [claimedL()] : []) : sent.includes("redeem") ? [{ address: ESCROW, topics: [COMMITTED_T0, GIFT, `0x${"0".repeat(24)}${piggy.address.slice(2).toLowerCase()}`], data: client.lastCommit, blockNumber: 7n, transactionHash: hashFor("redeem") }] : []),
     };
     const origSubmit = client.submit;
     client.submit = async (req) => { client.lastCommit = M.sponsorCommitHash(req.claim); return origSubmit(req); };
@@ -644,6 +671,8 @@ if (M && X) {
     assert.equal(out.txHashes.claim, outputs[0].body.claimTxHash);
     // replay: the relayer answers 409; the gift is claimed on chain with our commit -> verified, not commit_failed
     const again = await sub.submit({ binding, record, token: TOKEN, account: acct });
+    // [A-979 ①] restored to the pre-A-966 value (already_claimed_verified | guard_refused).
+    // A-966 interim (pre-A-979): assert.equal(again.status, "commit_failed", JSON.stringify(again)) — the replay read commits() at latest.
     assert.equal(again.status === "already_claimed_verified" || again.status === "guard_refused", true, JSON.stringify(again));
   });
 }

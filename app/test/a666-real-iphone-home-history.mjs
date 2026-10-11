@@ -31,6 +31,7 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { FORK_MODE_ENV, FORK_MODE_INIT, RUN_SCOPE, forkKey, forkRpcStub } from "./helpers/fork-mode.mjs"; // [A-950] fork-profile mode (STALE_TESTS class (a)): "Second done" opens only on the fork profile since A-948
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -302,7 +303,7 @@ async function runBrowser() {
     // geometry/HISTORY-nav, not the reentry-lock flow a665's own harness (which DOES use
     // "localhost" + LOCAL_DEV_ENTRY on purpose) already covers.
     server = spawn("npx", ["vite", "app", "--port", "5669", "--host", "127.0.0.1", "--strictPort"], {
-      cwd: REPO, stdio: ["ignore", "pipe", "pipe"],
+      cwd: REPO, env: { ...process.env, ...FORK_MODE_ENV }, stdio: ["ignore", "pipe", "pipe"], // [A-950] fork env
     });
     await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error("vite start timeout")), 20000);
@@ -332,13 +333,13 @@ async function runBrowser() {
 // already use for a single Piggy.
 async function gotoHome(p, BASE) {
   await p.goto(BASE, { waitUntil: "networkidle" });
-  await p.evaluate(() => {
+  await p.evaluate((closedKey) => {
     localStorage.setItem("araso.address", "0x2222222222222222222222222222222222222222");
     localStorage.setItem("araso.passkey", JSON.stringify({ credentialId: "a666-test-cred" }));
     localStorage.setItem("araso.piggyName", "Test Piggy");
     localStorage.setItem("araso.birthPlayed", "1");
-    localStorage.setItem("araso.secondJourneyClosed", "1");
-  });
+    localStorage.setItem(closedKey, "1"); // [A-950] fork-scope key (pre-A-950: the testnet key "araso.secondJourneyClosed")
+  }, forkKey("araso.secondJourneyClosed"));
   await p.reload({ waitUntil: "networkidle" });
   await p.waitForSelector('.stage[data-scene="sendstay"]', { timeout: 15000 }).catch(() => {});
   // Hard assertion here (not left to each caller's own soft/guarded checks) — if the fixture
@@ -351,6 +352,8 @@ async function mobileWidth(browser, BASE, w, shots) {
   const T = `[${w}]`;
   const h = HEIGHT[w];
   const context = await browser.newContext({ viewport: { width: w, height: h } });
+  await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
+  await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
   const p = await context.newPage();
   const shot = async (name) => { if (shots) await p.screenshot({ path: path.join(shots, `a666_w${w}_${name}.png`) }); };
 
@@ -433,6 +436,8 @@ async function desktopWidth(browser, BASE, w, shots) {
   const T = `[${w}]`;
   const h = HEIGHT[w];
   const context = await browser.newContext({ viewport: { width: w, height: h } });
+  await context.addInitScript(FORK_MODE_INIT); // [A-950] araso.journey.v1 = "2" before the app loads (fork boot)
+  await forkRpcStub(context); // [A-950] the dummy fork RPC host is answered locally (after the suite's own routes: the later route wins) — no real network
   const p = await context.newPage();
   await checkAsync(`B4 ${T} desktop Home rect unchanged (1440 canon untouched by the debounce/scroll repair)`, async () => {
     await gotoHome(p, BASE);

@@ -34,6 +34,15 @@
 //     (운영자 전용 별도 경로의 몫, 인증 인자 없음 — A-870 TERMINAL). 등록부 백엔드는 A-870 전체 모양(reserve/settle/release/reconcile)을 요구한다.
 //   - settle 은 송금 시도 뒤 결과(send_failed/reverted/unconfirmed/confirmed)에 broadcast:true 증거를 싣는다 → A-870 decideRelease 가 release 를 거부.
 //   - duplicate → 기존 403 "already funded" 그대로 · cap_reached → 503 "grant cap reached" 그대로. 지급액(0.1 MON) 무변경.
+//
+// [A-960] Upstash 하나(Owner 2026-10-10) — 등록부에 백엔드 하나: DURABLE_GRANT_STORE_BACKENDS.upstash (api/_lib/grant-redis-store.js).
+//   - 켜는 조건(전부 Owner 손, 이 카드는 설정 0): ARASO_GRANT_ENABLED=1 · ARASO_GRANT_STORE=upstash · KV_REST_API_URL/TOKEN 또는
+//     UPSTASH_REDIS_REST_URL/TOKEN(완전한 한 쌍). 하나라도 없으면 지금처럼 503(fail-closed).
+//   - reserve = EVAL 하나: 초대 결속 주소(allowlist) + 주소 1회 + 전체 상한(기본 20, Owner 확정 대기) + 삽입. 결속 안 된 주소 → 403 "not allowlisted".
+//   - 초대 결속(보충 7): 같은 /api/grant 에 body.action 두 개 — invite_challenge { piggyAddress } · invite_bind { nonce, signature, piggyAddress }.
+//     토큰은 `x-araso-invite` 헤더로만(본문·로그 0). A-956 challenge(fork-auth.js, purpose "invite-bind", 2분·1회) → Piggy 서명 검증 →
+//     invite-redis-store bind(첫 Piggy 1회, SET NX). action 이 없는 body 는 기존 grant 경로 그대로({ address } 외 400).
+//     같은 게이트: launch gate(503) · JSON 415 · Origin/Sec-Fetch-Site 403(checkRequestOrigin).
 
 import { createPublicClient, createWalletClient, defineChain, isAddress, http as viemHttp, zeroAddress } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
@@ -53,6 +62,9 @@ import {
   isValidEpoch,
   isGrantStore as isFullContractGrantStore,
 } from "./_lib/grant-store-contract.js";
+import { createUpstashRest, readUpstashEnv, upstashGrantBackendFromEnv } from "./_lib/grant-redis-store.js"; // [A-960]
+import { createUpstashInviteStore } from "./_lib/invite-redis-store.js"; // [A-960]
+import { CHALLENGE_PURPOSE, createRedisChallengeStore, issueChallengeAsync, verifyChallenge } from "./_lib/fork-auth.js"; // [A-960]
 
 /** Launch gate — 기본값은 **꺼짐**.
  *  durable ledger 가 없는 한 exact-once 는 만들 수 없으므로, 대신 "명시적으로 켜지 않으면 tx 자체가 없다" 로 막는다.
@@ -120,7 +132,9 @@ export const GRANT_SETTLE_OUTCOMES = Object.freeze([
 /** production 이 고를 수 있는 durable 백엔드 등록부 — **비어 있다.** 벤더/백엔드 선택은 OPS/Owner 결정이고 이 카드 밖이다.
  *  항목을 넣으려면 코드 수정 + 리뷰가 필요하다. 메모리·파일·프로세스 로컬 store 는 여기 들어올 수 없다
  *  (서버리스 인스턴스는 상태를 공유하지 않으므로 exactly-once 를 거짓으로 주장하게 된다). */
-export const DURABLE_GRANT_STORE_BACKENDS = Object.freeze({});
+export const DURABLE_GRANT_STORE_BACKENDS = Object.freeze({
+  upstash: (env) => upstashGrantBackendFromEnv(env), // [A-960] Upstash Redis REST — env 없으면 throw → "grant store init failed" → 503
+});
 
 /** 서버 전용 env — 등록부의 백엔드 이름을 고른다. 등록부가 비어 있으므로 어떤 값이든 오늘은 "unknown" → 503. */
 export const GRANT_STORE_ENV = "ARASO_GRANT_STORE";
@@ -309,12 +323,102 @@ async function readBody(req) {
   }
 }
 
+// ---- [A-960] 초대 결속 (invite → first grant) ---------------------------------------------------------
+export const GRANT_INVITE_HEADER = "x-araso-invite";
+export const GRANT_INVITE_ACTIONS = Object.freeze({
+  invite_challenge: Object.freeze(["action", "piggyAddress"]),
+  invite_bind: Object.freeze(["action", "nonce", "signature", "piggyAddress"]),
+});
+const PIGGY_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/** body 가 초대 action 이면 그 이름, 아니면 null(→ 기존 grant 경로). 자기 속성만 본다. */
+export function inviteActionOf(body) {
+  if (!body || typeof body !== "object" || Array.isArray(body) || !Object.hasOwn(body, "action")) return null;
+  const a = body.action;
+  return typeof a === "string" && Object.hasOwn(GRANT_INVITE_ACTIONS, a) ? a : null;
+}
+
+/** production 초대 부품: ARASO_GRANT_STORE=upstash + Upstash env 한 쌍일 때만. 그 외 ok:false(503). 네트워크 0(만들기만). */
+export function resolveProductionInvite(env = process.env, { fetchImpl = globalThis.fetch } = {}) {
+  const name = ownEnv(env, GRANT_STORE_ENV);
+  if (typeof name !== "string" || name.trim() !== "upstash") return { ok: false, reason: "invite store not configured" };
+  const cfg = readUpstashEnv(env);
+  const cmd = cfg ? createUpstashRest({ url: cfg.url, token: cfg.token, fetchImpl }) : null;
+  const invites = cmd ? createUpstashInviteStore({ cmd }) : null;
+  const challenges = cmd ? createRedisChallengeStore({ cmd }) : null;
+  if (!invites || !challenges) return { ok: false, reason: "invite store not configured" };
+  return { ok: true, invites, challenges, appOrigin: GRANT_ALLOWED_ORIGINS[0], now: () => Date.now() };
+}
+
 /** [A-792] 핸들러 공장. 인자 없이 부르면 production 경로(resolveProductionGrantStore) — 오늘은 켜도 503.
  *  `store`/`policy` 주입은 **코드에서만** 가능하다(테스트 전용). env·config 로는 주입 경로가 없다. */
 export function createGrantHandler(options = {}) {
   const injected = options.store !== undefined;
   const injectedStore = options.store;
   const injectedPolicy = options.policy;
+  const injectedInvite = options.invite; // [A-960] 테스트 전용 주입 { invites, challenges, appOrigin, now? } — env 로는 닿지 않는다
+
+  function resolveInvite(env) {
+    if (injectedInvite !== undefined) {
+      const i = injectedInvite;
+      const ok = !!i && typeof i.invites?.testerFor === "function" && typeof i.invites?.bind === "function"
+        && typeof i.challenges?.put === "function" && typeof i.challenges?.consume === "function" && typeof i.appOrigin === "string";
+      return ok ? { ok: true, invites: i.invites, challenges: i.challenges, appOrigin: i.appOrigin, now: typeof i.now === "function" ? i.now : () => Date.now() } : { ok: false, reason: "invite store invalid" };
+    }
+    if (injected) return { ok: false, reason: "invite store not injected" }; // 테스트 store 주입 시 production 초대 경로로 새지 않는다
+    return resolveProductionInvite(env);
+  }
+
+  // [A-960] 초대 결속. 토큰 원문은 헤더에서만 읽고 어디에도 쓰지 않는다(로그는 사유 코드 + 주소 앞부분만).
+  async function handleInvite(req, res, action, b) {
+    const headers = req.headers ?? {};
+    if (!isJsonContentType(headers["content-type"])) return respond(res, 415, { ok: false, error: "content-type must be application/json" });
+    const originError = checkRequestOrigin(headers);
+    if (originError) {
+      console.log(`invite rejected(${originError})`);
+      return respond(res, 403, { ok: false, error: originError });
+    }
+    if (Object.keys(b).some((k) => !GRANT_INVITE_ACTIONS[action].includes(k))) return respond(res, 400, { ok: false, error: "unexpected fields" });
+    if (typeof b.piggyAddress !== "string" || !PIGGY_RE.test(b.piggyAddress) || b.piggyAddress.toLowerCase() === zeroAddress) {
+      return respond(res, 400, { ok: false, error: "invalid address" });
+    }
+    const piggy = b.piggyAddress.toLowerCase();
+    const short = `${piggy.slice(0, 10)}…`;
+    const inv = resolveInvite(process.env);
+    if (!inv.ok) {
+      console.log(`invite rejected(${inv.reason}) address=${short}`);
+      return respond(res, 503, { ok: false, error: "invite store unavailable" });
+    }
+    const raw = headers[GRANT_INVITE_HEADER];
+    const token = typeof raw === "string" ? raw : null;
+    try {
+      const testerId = token ? await inv.invites.testerFor(token) : null;
+      if (!testerId) {
+        console.log(`invite rejected(not invited) address=${short}`);
+        return respond(res, 401, { ok: false, error: "not invited" });
+      }
+      if (action === "invite_challenge") {
+        const c = await issueChallengeAsync({ store: inv.challenges, purpose: CHALLENGE_PURPOSE.inviteBind, uri: inv.appOrigin, chainId: CHAIN_ID, testerId, piggyAddress: piggy, now: inv.now() });
+        if (!c.ok) return respond(res, 400, { ok: false, error: c.reason });
+        return respond(res, 200, { ok: true, nonce: c.nonce, message: c.message, expiresAt: c.expiresAt });
+      }
+      const proof = await verifyChallenge({ store: inv.challenges, nonce: b.nonce, signature: b.signature, testerId, piggyAddress: piggy, purpose: CHALLENGE_PURPOSE.inviteBind, now: inv.now() });
+      if (!proof.ok) {
+        console.log(`invite rejected(${proof.reason}) address=${short}`);
+        return respond(res, 403, { ok: false, error: proof.reason });
+      }
+      const bound = await inv.invites.bind({ token, piggyAddress: proof.record.piggyAddress });
+      if (!bound.ok) {
+        console.log(`invite rejected(${bound.status}) address=${short}`);
+        return respond(res, 403, { ok: false, error: bound.status });
+      }
+      console.log(`invite bound(${bound.status}) address=${short}`);
+      return respond(res, 200, { ok: true, bound: true });
+    } catch {
+      console.log(`invite rejected(store failed) address=${short}`);
+      return respond(res, 503, { ok: false, error: "invite store unavailable" });
+    }
+  }
 
   function resolveStore(env) {
     if (!injected) return resolveProductionGrantStore(env);
@@ -335,6 +439,10 @@ export function createGrantHandler(options = {}) {
 
     const body = await readBody(req);
     if (!body.ok) return respond(res, body.status, { ok: false, error: body.error });
+
+    // [A-960] 초대 action 이면 결속 경로(키 로드·RPC·tx 0). 아니면 아래 기존 grant 경로 그대로.
+    const inviteAction = inviteActionOf(body.value);
+    if (inviteAction) return handleInvite(req, res, inviteAction, body.value);
 
     // 검증 규칙은 로컬 relayer 와 같은 policy.mjs 를 그대로 쓴다 — 두 경로가 갈라지지 않게.
     const valid = validateGrantRequest(body.value);
@@ -402,6 +510,11 @@ export function createGrantHandler(options = {}) {
         // 앱(main.js requestGrant)은 403 "already funded" 를 "줄 필요 없음"으로 처리한다 — 같은 본문을 유지한다.
         console.log(`grant rejected(already reserved) address=${short}`);
         return respond(res, 403, { ok: false, error: "already funded" });
+      }
+      if (reason === "not_allowlisted") {
+        // [A-960] Upstash store: 초대 결속 안 된 주소. 슬롯·상한 소모 0(같은 EVAL 안 첫 판정). 기존 allowlist 거부와 같은 본문.
+        console.log(`grant rejected(not allowlisted) address=${short}`);
+        return respond(res, 403, { ok: false, error: "not allowlisted" });
       }
       if (reason === "cap_reached") {
         console.log(`grant rejected(global cap reached) address=${short}`);

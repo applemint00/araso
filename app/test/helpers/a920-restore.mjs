@@ -17,6 +17,12 @@ const A920_AWAY_ARASO = /(<section class="stage" data-scene="away">\n)      \$\{
 export function restorePreA920(src) {
   const pre = readFileSync(A920_PRE, "utf8");
   let out = src;
+  out = out.replace(/^\/\/ ── \[A-956\] Journey 2 entry[\s\S]*?^\/\/ ── \[A-956\] end Journey 2 entry ──\n/m, ""); // [A-956] the one Journey 2 entry block: removed so the older pins keep their meaning.
+  // [A-948] journey switch: the extra import line, the disposer line, the journey arg on the boot line and the 4 journeyFeatureOpen calls → the pre-A-948 text.
+  out = out.replace(/^import \{ storedJourney \} from "\.\/boot-profile\.js";[^\n]*\n/m, "").replace(/^registerJourneySessionDisposer\(endActiveSession\);[^\n]*\n/m, "")
+    .replace(/, journey: storedJourney\(\) \}\); \/\/ \[A-948\][^\n]*/, " });")
+    .replace(/journeyFeatureOpen\("([A-Za-z]+)", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/g, 'releaseAllows("$1")')
+    .replace(/(releaseAllows\("(?:second|afterSecond|gift)"\)[^\n]*?) \/\/ \[A-948\][^\n]*/g, "$1");
   for (const n of A920_FUNCS) { const [a, b] = span(out, n); const [pa, pb] = span(pre, n); out = out.slice(0, a) + pre.slice(pa, pb) + out.slice(b); }
   for (const k of A920_CONSTS) out = out.replace(new RegExp(`^const ${k} = [^\\n]*\\n`, "m"), "");
   // [A-924 · A-920 Part 2 item 9] the two renderAway lines (marker comment + ARASO) are A-920 too: removed here so the older pins keep their meaning.
@@ -29,5 +35,10 @@ export function restorePreA920(src) {
   out = out.replace(/^import \{ releaseAllows \} from "\.\/release-gate\.js";[^\n]*\n/m, "").replace(/\n\n\/\/ ── \[A-943\] Release gate · boot[\s\S]*?\/\/ ── \[A-943\] end boot ──\n/, "\n").replace(/^\/\/ ── \[A-943\] Release gate · Second entries[\s\S]*?\/\/ ── \[A-943\] end Second entries ──\n/m, "");
   // [A-938] the two readSecondCurrent calls get rpcUrl + fetch + clock: the pre-A-938 call text is put back so the older pins keep their meaning.
   out = out.split(', rpcUrl: CHAIN_PROFILE.rpcUrl, fetchImpl: fetch, now: () => new Date().toISOString() }); // [A-938] read-only; no rpcUrl on testnet/blocked = no_rpc (pre-A-938: profile + piggyAddress only)').join(" });").split(', rpcUrl: CHAIN_PROFILE.rpcUrl, fetchImpl: fetch, now: () => new Date().toISOString() }), agreedRules: {} }; // [A-938] same as above').join(" }), agreedRules: {} };");
+  // [A-946] boot-profile import line · the CHAIN_PROFILE boot line (+2 comment lines) · the three chain-scoped Second keys · the A-897 target check: pre-A-946 text put back.
+  out = out.replace(/^import \{ PROMOTION_TARGET_SCOPE, scopedSecondKey, selectBootProfile \} from "\.\/boot-profile\.js";[^\n]*\n/m, "")
+    .replace(/^\/\/ \[A-946\] chosen once at boot[^\n]*\n\/\/ pre-A-946: [^\n]*\nconst CHAIN_PROFILE = selectBootProfile\([^\n]*\n/m, "const CHAIN_PROFILE = resolveChainProfile(import.meta.env.VITE_ARASO_CHAIN_PROFILE);\n")
+    .replace(/= scopedSecondKey\("(araso\.[A-Za-z]+)", RUNTIME_CHAIN_SCOPE\); \/\/ \[A-946\][^\n]*/g, '= "$1";')
+    .replace(/const A897_TARGET_SCOPE = PROMOTION_TARGET_SCOPE;[^\n]*\nfunction a897TargetScopeActive\(\) \{\n[^\n]*\n  return RUNTIME_CHAIN_SCOPE === A897_TARGET_SCOPE;\n\}/, 'function a897TargetScopeActive() {\n  return typeof RUNTIME_CHAIN_SCOPE === "string" && RUNTIME_CHAIN_SCOPE !== "" && RUNTIME_CHAIN_SCOPE !== A897_SOURCE_SCOPE;\n}');
   return out;
 }

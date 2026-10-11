@@ -10,7 +10,7 @@ import { GRANT_STORE_CONTRACT, GRANT_SETTLE_OUTCOMES as G_OUT, DURABLE_GRANT_STO
 // A-792 compatibility (read-only look at api/grant.js exports)
 assert.equal(GRANT_STORE_CONTRACT_V1, GRANT_STORE_CONTRACT);
 assert.deepEqual([...GRANT_SETTLE_OUTCOMES], [...G_OUT]);
-assert.equal(Object.keys(DURABLE_GRANT_STORE_BACKENDS).length, 0, "no provider selected");
+assert.equal(Object.keys(DURABLE_GRANT_STORE_BACKENDS).length, 1, "one provider registered (upstash)"); // [A-960 re-pin] pre-A-960: 0
 assert.equal(DEFAULT_EPOCH, "default");
 assert.equal(decideSettle({ outcome: "send_failed" }, { kind: "reconcile", outcome: "aborted_before_send", broadcast: true }).reason, "never_to_aborted");
 assert.equal(decideSettle({ outcome: "send_failed" }, { kind: "settle", outcome: "confirmed" }).reason, "write_once");

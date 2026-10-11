@@ -82,8 +82,11 @@ if (M && E) {
   const record = { giftId: GIFT, senderAddress: OTHER, claimTokenHash: await hashClaimToken(TOKEN), expiresAt: new Date((NOW + 86400) * 1000).toISOString(), gasDeposit: { txHash: `0x${"ee".repeat(32)}` } };
   const run = async (body, { claimed = true } = {}) => {
     const client = { posts: 0, reqs: [], async submit(req) { client.posts += 1; client.reqs.push(req); client.lastCommit = M.sponsorCommitHash(req.claim); return { status: 200, body: typeof body === "function" ? body(req) : body }; } };
-    const chain = { chain: { id: CHAIN }, getTransactionCount: async () => 0n, getCode: async () => FAKE, waitForTransactionReceipt: async () => ({ status: "success", blockNumber: 5n }),
-      getTransaction: async () => ({ to: ESCROW, from: SPONSOR }), readContract: async ({ functionName }) => (functionName === "commits" ? [client.lastCommit, 4n] : [OTHER, ESCROW, 1n, 0n, claimed, "0x"]) };
+    // pre-A-966: waitForTransactionReceipt: async () => ({ status: "success", blockNumber: 5n }) (no logs) · commits() = [client.lastCommit, 4n] after the claim too.
+    // [A-966 O1 re-pin] the app proves the commit by the escrow's Committed log in the commit receipt (claim() deletes the stored commit).
+    const committedLog = () => ({ address: ESCROW, topics: [keccak256(new TextEncoder().encode("Committed(bytes32,address,bytes32)")), GIFT, `0x${"0".repeat(24)}${piggy.address.slice(2).toLowerCase()}`], data: client.lastCommit });
+    const chain = { chain: { id: CHAIN }, getTransactionCount: async () => 0n, getCode: async () => FAKE, waitForTransactionReceipt: async ({ hash }) => ({ status: "success", blockNumber: 5n, logs: hash === H("c1") ? [committedLog()] : [] }),
+      getTransaction: async () => ({ to: ESCROW, from: SPONSOR }), readContract: async ({ functionName }) => (functionName === "commits" ? (claimed ? [`0x${"0".repeat(64)}`, 0n] : [client.lastCommit, 4n]) : [OTHER, ESCROW, 1n, 0n, claimed, "0x"]) };
     const sub = E.createGiftSponsorClaimSubmitter({ config: { chainId: CHAIN, escrowAddress: ESCROW, sponsorAddress: SPONSOR, expirySeconds: 600 }, chain, sponsorClient: client, chainScope: "monad-testnet", now: () => NOW, randomBytes: () => new Uint8Array(32).fill(7) });
     const out = await sub.submit({ binding, record, token: TOKEN, account: { address: piggy.address, signAuthorization: (a) => piggy.signAuthorization(a), signTypedData: (t) => piggy.signTypedData(t) } });
     return { out, client };
@@ -216,7 +219,8 @@ if (M && E) {
   });
   await check("not shown in UI: neither main.js nor the Gift paper renders the expiry/300/revoke", () => {
     for (const f of ["../src/gift-send-paper.js", "../src/main.js"]) {
-      const src = readFileSync(path.resolve(HERE, f), "utf8");
+      // [A-966 re-pin] main.js's one [A-966] fork Gift block passes the cap as the submitter's config (never rendered; a966 tests). pre-A-966: the whole file
+      const src = readFileSync(path.resolve(HERE, f), "utf8").replace(/^\/\/ ── \[A-966\] Gift on the shared fork[\s\S]*?^\/\/ ── \[A-966\] end Gift on the shared fork ──\n/m, "");
       assert.ok(!src.includes("GIFT_SPONSOR_MAX_EXPIRY_SECONDS") && !src.includes("giftSponsorExpiryBefore"), f);
     }
   });

@@ -57,6 +57,9 @@ export const SIGN_GUARD = Object.freeze({
 });
 // [A-913 B] Monad mainnet is signable ONLY for the A-906 brand type-4 tx (see preparedSignProblem). SIGN_GUARD itself stays 10143.
 export const SIGN_GUARD_SPONSOR_CHAIN_ID = 143;
+// [A-946] The shared mainnet fork (Journey 2) is signable on the SAME terms as testnet 10143 (same type, fee caps, forbidden fields, the same
+// Gift brand check). Its own numeric id (funding-context.js FORK_CHAIN_ID), never 143: the 143 Gift exceptions above are not widened.
+export const SIGN_GUARD_FORK_CHAIN_ID = 31337143; // literal (this module is copied alone by older suites); = FORK_CHAIN_ID, pinned by the a946 test
 const SIGN_FORBIDDEN_FIELDS = Object.freeze([
   "authorizationList", "blobs", "blobVersionedHashes", "sidecars", "maxFeePerBlobGas", "kzg",
   "gasPrice", "feePayerSignature", "feeToken", "keyAuthorization", "nonceKey",
@@ -70,7 +73,7 @@ export function preparedSignProblem(prepared) {
     const sponsorList = isGiftSponsorAuthorizationList(prepared.authorizationList);
     // [A-915] ...or a non-brand tx that is EXACTLY one of the three armed Gift create-step calls (approve / create / gas deposit; plain eip1559, forbidden fields still refused below).
     const createStep = !sponsorList && prepared.chainId === SIGN_GUARD_SPONSOR_CHAIN_ID ? giftCreateStepMatch(prepared) : null;
-    if (prepared.chainId !== SIGN_GUARD.chainId && !(sponsorList && prepared.chainId === SIGN_GUARD_SPONSOR_CHAIN_ID) && !createStep) return "chain_id_mismatch";
+    if (prepared.chainId !== SIGN_GUARD.chainId && prepared.chainId !== SIGN_GUARD_FORK_CHAIN_ID && !(sponsorList && prepared.chainId === SIGN_GUARD_SPONSOR_CHAIN_ID) && !createStep) return "chain_id_mismatch"; // [A-946] + fork id
     // [A-906] Exception, ONLY for an authorizationList minted by gift-sponsor-7702.js (pinned StatelessDeleGator, gift Monad chain, brand check)
     // on a type-4 tx whose `to` is the pinned DelegationManager with no native value. Everything else (any other list, empty list,
     // eip7702 without the brand) keeps the A-768 refusals below, unchanged.

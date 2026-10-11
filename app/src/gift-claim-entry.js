@@ -30,6 +30,8 @@ import {
 } from "./gift-piggy-claim-link.js";
 import { GIFT_GAS_BUDGET_STATUS, GIFT_GAS_POLICY, giftGasBudget } from "./gift-value-spec.js";
 import { scopeForChainId } from "./funding-context.js";
+import { FORK_CHAIN_ID } from "./funding-context.js"; // [gift-fork] the shared fork's own chain id (its record source + delegation clock below)
+import { createGiftRecordSource } from "./gift-record-source.js"; // [gift-fork] the fork page's record source (useForkGiftRecordSource)
 import { GIFT_GAS_LEDGER_REASON, createGiftGasLedger, createMemoryGiftGasStore } from "./gift-gas-ledger.js";
 // [A-883] Receipt evidence sidecar: mapping only. Never a substitute for the giftId gas ledger above.
 import { isGiftGasClient } from "./gift-gas-client.js";
@@ -68,10 +70,23 @@ export function readClaimFragment(href) {
  * 가져와 `openClaimLink`(A-495)에 그대로 맡긴다 — 만료/폐기/토큰불일치/이미claim됨 판정은 여기서
  * 다시 만들지 않는다.
  */
+// [gift-fork] The shared-fork page's Gift record source. main.js sets it once, on the fork profile only (its fork Gift block); beginGiftClaim uses it
+// ONLY when its caller passes no source (main.js GIFT_RECORD_SOURCE stays the null literal). It is built here, from a client whose chain is the
+// fork's own id (31337143), so a 143 / testnet page has none: nothing set = record_source_unavailable exactly as before.
+let forkGiftRecordSource = null;
+export function useForkGiftRecordSource({ client, contractAddress } = {}) {
+  if (forkGiftRecordSource !== null || !client || client.chain?.id !== FORK_CHAIN_ID) return false;
+  const source = createGiftRecordSource({ client, chainScope: scopeForChainId(FORK_CHAIN_ID), contractAddress });
+  if (!source) return false;
+  forkGiftRecordSource = source;
+  return true;
+}
+
 export async function beginGiftClaim({ pending, recordSource, now } = {}) {
   if (!pending || pending.status !== GIFT_ENTRY_STATUS.READY) {
     return { status: GIFT_ENTRY_STATUS.NO_FRAGMENT };
   }
+  if ((recordSource === null || recordSource === undefined) && forkGiftRecordSource !== null) recordSource = forkGiftRecordSource; // [gift-fork] fork page only
   if (!recordSource || typeof recordSource.getRecordByGiftId !== "function") {
     return { status: GIFT_ENTRY_STATUS.RECORD_SOURCE_UNAVAILABLE, giftId: pending.giftId };
   }
@@ -988,6 +1003,9 @@ export function createGiftSponsorClaimSubmitter(cfg = {}) {
   const scope = typeof chainScope === "string" ? chainScope.trim() : "";
   if (!scope || scopeForChainId(C.chainId) !== scope) return null;
   if (typeof now !== "function" || typeof randomBytes !== "function") return null;
+  // [gift-fork] the fork reads its own clock (below), so its chain must offer getBlock. 143 / 10143: unchanged (getBlock not needed).
+  const forkClock = C.chainId === FORK_CHAIN_ID;
+  if (forkClock && typeof chain.getBlock !== "function") return null;
   const S = GIFT_SPONSOR_SUBMIT_STATUS;
 
   const submitter = Object.freeze({
@@ -1006,6 +1024,7 @@ export function createGiftSponsorClaimSubmitter(cfg = {}) {
       const refused = (reason, txHashes = {}) => ({ status: S.GUARD_REFUSED, reason, txHashes: { ...txHashes } });
 
       let salt; let preimage; let commitHash; let authNonce;
+      let clock = now;
       try {
         const saltBytes = randomBytes(32);
         if (!(saltBytes instanceof Uint8Array) || saltBytes.length !== 32) return { status: S.COMMIT_FAILED };
@@ -1013,6 +1032,14 @@ export function createGiftSponsorClaimSubmitter(cfg = {}) {
         preimage = stringToHex(token);
         commitHash = giftCommitHash({ recipient, preimage, salt });
         authNonce = Number(await chain.getTransactionCount({ address: recipient, blockTag: "latest" }));
+        // [gift-fork] fork only: the delegation window is measured on the fork's own clock = the latest block time, the same base the fork
+        // sponsor server checks against (its runtime reads the latest block). The fork clock runs days behind the wall clock, so a
+        // wall-clock window would be refused there as expired. 143 / 10143 keep the injected `now` (wall clock), unchanged.
+        if (forkClock) {
+          const t = Number((await chain.getBlock({ blockTag: "latest" }))?.timestamp);
+          if (!Number.isSafeInteger(t) || t <= 0) return { status: S.COMMIT_FAILED };
+          clock = () => t;
+        }
       } catch {
         return { status: S.COMMIT_FAILED };
       }
@@ -1020,9 +1047,9 @@ export function createGiftSponsorClaimSubmitter(cfg = {}) {
       // [A-913 C] Timestamp before = min(now + 300, this Gift's own deadline); after = 0. Internal only, never shown.
       // [A-913] An already-passed Gift deadline is refused BEFORE Face ID on the existing guard_refused path (no new copy).
       const deadlineSec = Number(deadline);
-      const nowSec = Math.floor(Number(now()));
+      const nowSec = Math.floor(Number(clock())); // [gift-fork] clock = now except on the fork (latest block time)
       if (!Number.isSafeInteger(deadlineSec) || !Number.isSafeInteger(nowSec) || deadlineSec <= nowSec) return refused(GIFT_SPONSOR_REFUSAL.GIFT_DEADLINE_INVALID);
-      const session = createGiftSponsorSession({ config: C, giftId, commitHash, account, authNonce, now, readCode: async (address) => chain.getCode({ address }), giftDeadlineSeconds: deadlineSec });
+      const session = createGiftSponsorSession({ config: C, giftId, commitHash, account, authNonce, now: clock, readCode: async (address) => chain.getCode({ address }), giftDeadlineSeconds: deadlineSec });
       if (!session) return refused(GIFT_SPONSOR_REFUSAL.CONFIG_INVALID);
       const a = await session.signAuthorization();
       if (!a.ok) return refused(a.reason);
@@ -1039,11 +1066,38 @@ export function createGiftSponsorClaimSubmitter(cfg = {}) {
       const txHashes = {};
       let res;
       try { res = await sponsorClient.submit(built.request); } catch { res = null; }
+      // [claim-verify] replay (409 / 503) uses the 200 path's rule: claimed = gifts(giftId).claimed; ours = the escrow's Committed(giftId, us,
+      // our commitHash) log IN the commit tx receipt (status success). A 409 carries no tx hash, so the commit tx is found by the escrow's
+      // Committed logs for this gift + committer over the last GIFT_REPLAY_LOG_WINDOW blocks; only a receipt that itself carries the log counts.
+      // And the payout must be ours: the escrow's Claimed(giftId, recipient = us) log in a successful claim receipt, same window.
+      // No getLogs / getBlockNumber, an older commit, or any read error => not proved => commit_failed (fail closed). Same on every Gift chain.
+      // previous rule: commits(giftId, recipient) read at latest must equal built.commitHash (claim() deletes it, so a real claimed gift never matched)
       const readGift = async () => {
         try {
-          const [storedHash] = await chain.readContract({ address: C.escrowAddress, abi: GIFT_ESCROW_CLAIM_ABI, functionName: "commits", args: [giftId, recipient] });
           const g = await chain.readContract({ address: C.escrowAddress, abi: GIFT_ESCROW_CLAIM_ABI, functionName: "gifts", args: [giftId] });
-          return { committedByUs: String(storedHash).toLowerCase() === built.commitHash.toLowerCase(), claimed: (Array.isArray(g) ? g[4] : g?.claimed) === true };
+          const claimed = (Array.isArray(g) ? g[4] : g?.claimed) === true;
+          if (!claimed || typeof chain.getLogs !== "function" || typeof chain.getBlockNumber !== "function") return { committedByUs: false, claimed };
+          const head = toBig(await chain.getBlockNumber());
+          const fromBlock = head >= GIFT_REPLAY_LOG_WINDOW ? head - GIFT_REPLAY_LOG_WINDOW + 1n : 0n;
+          const logs = await chain.getLogs({ address: C.escrowAddress, event: GIFT_ESCROW_COMMITTED_EVENT, args: { giftId, committer: recipient }, fromBlock, toBlock: head });
+          const q = { escrow: C.escrowAddress, giftId, committer: recipient, commitHash: built.commitHash };
+          let ours = false;
+          for (const l of Array.isArray(logs) ? logs : []) {
+            if (!receiptHasGiftCommit({ logs: [l] }, q) || !BYTES32_RE.test(String(l.transactionHash))) continue;
+            const cr = await chain.waitForTransactionReceipt({ hash: l.transactionHash });
+            if (cr && cr.status === "success" && receiptHasGiftCommit(cr, q)) { ours = true; break; }
+          }
+          if (!ours) return { committedByUs: false, claimed };
+          // [claim-verify] WHO was paid: a stranger holding the same link can commit + claim to himself first (our commit is then real but unpaid).
+          // Required: the escrow's Claimed(giftId, recipient = us) log in a successful claim receipt, same window. Otherwise not ours => commit_failed.
+          const paid = await chain.getLogs({ address: C.escrowAddress, event: GIFT_ESCROW_CLAIMED_EVENT, args: { giftId, recipient }, fromBlock, toBlock: head });
+          const pq = { escrow: C.escrowAddress, giftId, recipient };
+          for (const l of Array.isArray(paid) ? paid : []) {
+            if (!receiptHasGiftClaimed({ logs: [l] }, pq) || !BYTES32_RE.test(String(l.transactionHash))) continue;
+            const pr = await chain.waitForTransactionReceipt({ hash: l.transactionHash });
+            if (pr && pr.status === "success" && receiptHasGiftClaimed(pr, pq)) return { committedByUs: true, claimed };
+          }
+          return { committedByUs: false, claimed };
         } catch { return null; }
       };
       const body = res && typeof res === "object" ? res.body : null;
@@ -1070,8 +1124,11 @@ export function createGiftSponsorClaimSubmitter(cfg = {}) {
       try {
         const cr = await chain.waitForTransactionReceipt({ hash: txHashes.commit });
         if (!cr || cr.status !== "success") return { status: S.COMMIT_FAILED, txHashes };
-        const [storedHash] = await chain.readContract({ address: C.escrowAddress, abi: GIFT_ESCROW_CLAIM_ABI, functionName: "commits", args: [giftId, recipient] });
-        if (String(storedHash).toLowerCase() !== built.commitHash.toLowerCase()) return { status: S.COMMIT_UNVERIFIED, txHashes };
+        // [claim-verify] the commit is proved by the escrow's own Committed(giftId, committer, commitHash) log IN THIS commit receipt, not by
+        // reading commits() at latest: claim() deletes commits[giftId][committer] (escrow GiftPiggyUSDC.sol claim), so after a successful
+        // claim the latest read is zero and a good claim looked unverified. Same rule on every Gift chain (143 · 10143 · the fork).
+        // previous rule: commits(giftId, recipient) read at latest must equal built.commitHash
+        if (!receiptHasGiftCommit(cr, { escrow: C.escrowAddress, giftId, committer: recipient, commitHash: built.commitHash })) return { status: S.COMMIT_UNVERIFIED, txHashes };
       } catch {
         return { status: S.COMMIT_UNVERIFIED, txHashes };
       }
@@ -1092,6 +1149,41 @@ export function createGiftSponsorClaimSubmitter(cfg = {}) {
   });
   SPONSOR_SUBMITTERS.add(submitter);
   return submitter;
+}
+
+// [claim-verify] Committed(bytes32 indexed giftId, address indexed committer, bytes32 commitHash) — the escrow's event (GiftPiggyUSDC.sol).
+export const GIFT_ESCROW_COMMITTED_TOPIC0 = keccak256(stringToHex("Committed(bytes32,address,bytes32)"));
+export const GIFT_ESCROW_COMMITTED_EVENT = Object.freeze({ type: "event", name: "Committed", inputs: [{ name: "giftId", type: "bytes32", indexed: true }, { name: "committer", type: "address", indexed: true }, { name: "commitHash", type: "bytes32", indexed: false }] });
+// [claim-verify] Claimed(bytes32 indexed giftId, address indexed recipient, address token, uint256 amount) — the escrow's event (GiftPiggyUSDC.sol:141).
+export const GIFT_ESCROW_CLAIMED_TOPIC0 = keccak256(stringToHex("Claimed(bytes32,address,address,uint256)"));
+export const GIFT_ESCROW_CLAIMED_EVENT = Object.freeze({ type: "event", name: "Claimed", inputs: [{ name: "giftId", type: "bytes32", indexed: true }, { name: "recipient", type: "address", indexed: true }, { name: "token", type: "address", indexed: false }, { name: "amount", type: "uint256", indexed: false }] });
+/** true when `receipt.logs` holds the escrow's Claimed log for exactly this gift paid to this recipient. Pure; never throws. Amount/token are not judged here. */
+export function receiptHasGiftClaimed(receipt, { escrow, giftId, recipient } = {}) {
+  try {
+    const lc = (v) => String(v || "").toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(lc(escrow)) || !BYTES32_RE.test(String(giftId)) || !/^0x[0-9a-f]{40}$/.test(lc(recipient))) return false;
+    const recipientTopic = `0x${"0".repeat(24)}${lc(recipient).replace(/^0x/, "")}`;
+    const logs = Array.isArray(receipt?.logs) ? receipt.logs : [];
+    return logs.some((l) => !!l && lc(l.address) === lc(escrow) && Array.isArray(l.topics) && l.topics.length === 3
+      && lc(l.topics[0]) === GIFT_ESCROW_CLAIMED_TOPIC0 && lc(l.topics[1]) === lc(giftId) && lc(l.topics[2]) === recipientTopic);
+  } catch {
+    return false;
+  }
+}
+/** [claim-verify] replay log search window, in blocks (Monad eth_getLogs serves at most 100 blocks per call). */
+export const GIFT_REPLAY_LOG_WINDOW = 100n;
+/** true when `receipt.logs` holds the escrow's Committed log for exactly this gift, committer and commit hash. Pure; never throws. */
+export function receiptHasGiftCommit(receipt, { escrow, giftId, committer, commitHash } = {}) {
+  try {
+    const lc = (v) => String(v || "").toLowerCase();
+    const committerTopic = `0x${"0".repeat(24)}${lc(committer).replace(/^0x/, "")}`;
+    if (!/^0x[0-9a-f]{40}$/.test(lc(escrow)) || !BYTES32_RE.test(String(giftId)) || !/^0x[0-9a-f]{40}$/.test(lc(committer)) || !BYTES32_RE.test(String(commitHash))) return false;
+    const logs = Array.isArray(receipt?.logs) ? receipt.logs : [];
+    return logs.some((l) => !!l && lc(l.address) === lc(escrow) && Array.isArray(l.topics) && l.topics.length === 3
+      && lc(l.topics[0]) === GIFT_ESCROW_COMMITTED_TOPIC0 && lc(l.topics[1]) === lc(giftId) && lc(l.topics[2]) === committerTopic && lc(l.data) === lc(commitHash));
+  } catch {
+    return false;
+  }
 }
 
 export const isGiftSponsorClaimSubmitter = (x) => !!x && typeof x === "object" && SPONSOR_SUBMITTERS.has(x);

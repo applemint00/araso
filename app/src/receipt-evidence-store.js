@@ -12,7 +12,7 @@
 //   cross-tab [A-895 P-C / A-868] compare-and-set: immediately before setItem the stored text is re-read and must still equal the
 //             text this call loaded; a write by another tab in between => store_unsound, nothing written (fail closed).
 //             localStorage has no atomic CAS, so the only window left is the few synchronous instructions between that re-read
-//             and setItem (RES-2 in <private>: ACCEPTED); the after-write re-read still catches later writers.
+//             and setItem (RES-2 in the A-895 P-C review, a private ops record: ACCEPTED); the after-write re-read still catches later writers.
 // Storage is injected (getItem/setItem). This module imports nothing.
 
 export const EVIDENCE_SCHEMA = "araso_tx_evidence_v1";

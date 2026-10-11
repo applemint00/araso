@@ -18,6 +18,6 @@ check("pre-A-920 copy = the BASE main.js (sha 94726fcc...)", () => assert.equal(
 const POST918 = path.join(REPO, "_private/ops/receipts/A923_closeout_plan/pre/app_src_main.post-A918.js");
 const post918 = readFileSync(POST918, "utf8");
 check("post-A-918 copy = BASE + A-918 (sha 47d062ac...)", () => assert.equal(createHash("sha256").update(post918).digest("hex"), "47d062ac16fa6c28de2850d97aa0a5797ef108542f9c4272b13cd7334ef06ecf"));
-check("main.js outside the four A-920 functions and eight const lines == pre-A-920 + A-918 (0 other lines)", () => assert.equal(restorePreA920(MAIN), post918));
+check("main.js outside the four A-920 functions and eight const lines == pre-A-920 + A-918 (0 other lines)", () => assert.equal(restorePreA920(MAIN.replace(/^\/\/ ── \[A-960\] invite link → first grant\.[\s\S]*?^\/\/ ── \[A-960\] end invite link → first grant ──\n\n?/m, "").replace(/^\/\/ ── \[A-966\] Gift on the shared fork[\s\S]*?^\/\/ ── \[A-966\] end Gift on the shared fork ──\n/m, "").replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "") /* [A-974 re-pin] the one [A-974] fork entry block is cut too; pre-A-974: no third cut */ /* [A-960 re-pin] cut the one [A-960] invite block first; pre-A-960: MAIN · [A-966 re-pin] the one [A-966] fork Gift block is cut too; pre-A-966: no second cut */), post918));
 check("every changed function carries an [A-920] marker comment", () => { assert.ok((MAIN.match(/\[A-920/g) || []).length >= 8); });
 process.exit(fail ? 1 : 0);

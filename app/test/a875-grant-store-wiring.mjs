@@ -166,7 +166,7 @@ await check("D production default export, enabled, no backend → 503 grant stor
   assert.equal(rpcLog.length, m);
 });
 await check("D backend registry empty + frozen; every ARASO_GRANT_STORE value (incl. synthetic/memory/__proto__) → 503, 0 RPC", async () => {
-  assert.equal(Object.keys(DURABLE_GRANT_STORE_BACKENDS).length, 0);
+  assert.equal(Object.keys(DURABLE_GRANT_STORE_BACKENDS).length, 1); // [A-960 re-pin] pre-A-960: 0 — "upstash" only, 503 without its env pair
   assert.equal(Object.isFrozen(DURABLE_GRANT_STORE_BACKENDS), true);
   const m = rpcLog.length;
   try {

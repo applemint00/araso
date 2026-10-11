@@ -27,3 +27,18 @@ export function releaseAllows(feature, level = RELEASE_LEVEL) {
   const need = Object.prototype.hasOwnProperty.call(RELEASE_FEATURES, feature) ? RELEASE_FEATURES[feature] : null;
   return Number.isInteger(need) && Number.isInteger(level) && level >= need;
 }
+
+// [A-948] One judge for what a page may open: the release level AND, for Journey 2, the chain profile this page booted with.
+//   second · afterSecond → level ≥ 2 AND the page runs on the shared-fork profile (root "/" on testnet never opens the old Second UI)
+//   gift                 → level only, exactly as before (the existing Gift paths: /claim · A-897 promotion · mainnet Gift)
+//   forkGift             → level ≥ 2 AND the fork profile (Gift Open / Send inside the fork scope; nothing calls it yet)
+// The stored journey choice is NOT an input here: it only picks the boot profile (boot-profile.js), never a permission.
+const FORK_PROFILE_ID = "monad-fork"; // = chain-profile.js CHAIN_PROFILE_ID.FORK (pinned by the a948 test; no import keeps this module a leaf)
+const onFork = (profile) => !!profile && profile.id === FORK_PROFILE_ID && profile.status === "active";
+
+export function journeyFeatureOpen(feature, { level = RELEASE_LEVEL, profile = null } = {}) {
+  if (feature === "gift") return releaseAllows("gift", level);
+  if (feature === "second" || feature === "afterSecond") return releaseAllows(feature, level) && onFork(profile);
+  if (feature === "forkGift") return releaseAllows("gift", level) && onFork(profile);
+  return false;
+}

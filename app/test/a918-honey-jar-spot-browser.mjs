@@ -23,15 +23,17 @@ mkdirSync(FR, { recursive: true });
 const FREEZE = process.env.ARASO_SWEEP === "freeze"; // [A-926] ARASO_SWEEP=freeze → full sweep; otherwise 390/390i/810/1440 only (A-923 rule 2: 1px sweep once, at freeze)
 const STEP = process.env.A918_SWEEP_STEP ? Number(process.env.A918_SWEEP_STEP) : 1;
 const J = await import(pathToFileURL(path.join(APP, "src/honey-jar.js")).href);
+const { FORK_MODE_ENV } = await import(pathToFileURL(path.join(REPO, "app/test/helpers/fork-mode.mjs")).href); // [A-950]
 const MOCK_HTML = path.join(REPO, "_private/design/gift_card_20261004/honey_jar_mock.html");
 
 const freePort = () => new Promise((res, rej) => { const s = createServer(); s.listen(0, "127.0.0.1", () => { const p = s.address().port; s.close(() => res(p)); }); s.on("error", rej); });
 const port = await freePort();
-const vite = spawn(path.join(REPO, "node_modules/.bin/vite"), [APP, "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", VITE_RELAYER_URL: "__HARNESS_NO_GRANT__" }, stdio: ["ignore", "pipe", "pipe"] });
+const vite = spawn(path.join(REPO, "node_modules/.bin/vite"), [APP, "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", VITE_RELAYER_URL: "__HARNESS_NO_GRANT__", ...FORK_MODE_ENV }, stdio: ["ignore", "pipe", "pipe"] }); // [A-950] fork env (helpers/fork-mode.mjs)
 await new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("vite start timeout")), 30000); vite.stdout.on("data", (d) => { if (/ready in/.test(String(d))) { clearTimeout(t); resolve(); } }); vite.on("exit", (c) => { clearTimeout(t); reject(new Error(`vite exited ${c}`)); }); });
 process.env.A803_BASE_URL = `http://localhost:${port}/`;
+process.env.A803_BASE_FORK = "1"; // [A-950] this server carries the fork env → launch({ forkMode: true }) may reuse it
 const { launch, sleep } = await import(pathToFileURL(path.join(REPO, "app/test/helpers/a803-browser.mjs")).href);
-const H = await launch();
+const H = await launch({ forkMode: true }); // [A-950] fork-profile mode (STALE_TESTS class (a)): Second / "Second done" features open only on the fork profile since A-948
 const { p } = H;
 const failures = [];
 const must = (c, m) => { if (!c) { failures.push(m); console.log(`ASSERT FAIL  ${m}`); } };
@@ -124,7 +126,7 @@ async function sideBySide(vp, m, name) {
 const frameRows = [];
 try {
   await H.seedSolo("Honeybun");
-  await p.evaluate(() => localStorage.setItem("araso.secondJourneyClosed", "1"));
+  await p.evaluate((k) => localStorage.setItem(k, "1"), H.secondKey("araso.secondJourneyClosed"));
   for (const vp of VPS) {
     await settle(vp);
     const m = await p.evaluate(PAGE_MEASURE);

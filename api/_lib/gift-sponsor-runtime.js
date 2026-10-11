@@ -177,3 +177,93 @@ export function getGiftSponsorRuntime(env = process.env, deps = {}) {
   return rt;
 }
 export function resetGiftSponsorRuntimeCache() { cached = null; }
+
+// ── [A-946] Shared mainnet fork (Journey 2) — its own chain definition and policy, separate objects from the 143 runtime above ──
+// The 143 code path above is unchanged. The fork copies mainnet state, so the same delegation contracts (addresses + code hashes) exist
+// there: the fork pins are the 143 pins re-keyed to the fork id, passed as the policy's own `pins` table (relayer allowlist untouched).
+// Not wired to any route yet (Gift on the fork = a later card). Its RPC is server config (an admin URL never reaches the browser bundle).
+export const GIFT_SPONSOR_FORK_CHAIN_ID = 31337143; // = app/src/funding-context.js FORK_CHAIN_ID (pinned by app/test/a946 test)
+export const GIFT_SPONSOR_FORK_PINS = Object.freeze({
+  addresses: GIFT_SPONSOR_PIN_TABLE.addresses,
+  hashes: Object.freeze({ [GIFT_SPONSOR_FORK_CHAIN_ID]: GIFT_SPONSOR_PIN_TABLE.hashes[143] }),
+});
+
+/** The fork's viem chain definition (never id 143). */
+export function giftSponsorForkChainDef(rpcUrl) {
+  return defineChain({ id: GIFT_SPONSOR_FORK_CHAIN_ID, name: "Monad mainnet fork", nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [rpcUrl] } } });
+}
+
+/** The fork policy: same checks as 143, fork id, fork pins table. null when anything is missing (same contract as createGiftSponsorPolicy). */
+export function buildGiftSponsorForkPolicy({ escrow, sponsorAddress, gasUnits, gasBufferBps } = {}) {
+  const T = GIFT_SPONSOR_FORK_PINS;
+  return createGiftSponsorPolicy({
+    chainId: GIFT_SPONSOR_FORK_CHAIN_ID, escrow, sponsorAddress, ...T.addresses, ...T.hashes[GIFT_SPONSOR_FORK_CHAIN_ID],
+    maxExpirySeconds: GIFT_SPONSOR_MAX_EXPIRY_SECONDS, gasUnits, gasBufferBps,
+  }, T);
+}
+
+// ── [A-961] Fork sponsor RUNTIME (local fork only) — its own env names, chain-id check and escrow-code pin; the 143 runtime above is unchanged ──
+// Server env only (never VITE_; the fork escrow address enters through server config, never the build):
+//   GIFT_SPONSOR_FORK_PRIVATE_KEY (unset => OFF) · GIFT_SPONSOR_FORK_RPC_URL · GIFT_SPONSOR_FORK_ESCROW_ADDRESS · GIFT_SPONSOR_FORK_GAS_UNITS ·
+//   GIFT_SPONSOR_FORK_GAS_BUFFER_BPS · GIFT_SPONSOR_FORK_LEASE_SECONDS · GIFT_SPONSOR_FORK_LEDGER_DIR (+ the optional FORK_ revoke / grace names). No rate limiter on the fork (local only).
+// The 143 names (GIFT_SPONSOR_PRIVATE_KEY, MONAD_RPC_URL, ...) are never read here, and the fork names are never read by the 143 runtime.
+// No KV on the fork (file or injected store). Every send is preceded by: eth_chainId == 31337143 · escrow runtime keccak == the A-935 5-arg escrow · the five pins.
+import { keccak256 } from "viem"; // (ESM imports are hoisted; kept inside this block so every line above stays byte-identical)
+/** keccak256 of the A-935 5-arg escrow RUNTIME code (DEPLOY_PACKET: 5,301 bytes; no constructor, no immutables). */
+export const GIFT_SPONSOR_FORK_ESCROW_RUNTIME_KECCAK = "0x17dd2f39734a57dc27ade3adbf463b61cabfcb5b108c7a6ece980e900b89c033";
+const FORK_ENV_NAMES = Object.freeze({
+  GIFT_SPONSOR_PRIVATE_KEY: "GIFT_SPONSOR_FORK_PRIVATE_KEY", MONAD_RPC_URL: "GIFT_SPONSOR_FORK_RPC_URL", GIFT_SPONSOR_ESCROW_ADDRESS: "GIFT_SPONSOR_FORK_ESCROW_ADDRESS",
+  GIFT_SPONSOR_GAS_UNITS: "GIFT_SPONSOR_FORK_GAS_UNITS", GIFT_SPONSOR_GAS_BUFFER_BPS: "GIFT_SPONSOR_FORK_GAS_BUFFER_BPS", GIFT_SPONSOR_LEASE_SECONDS: "GIFT_SPONSOR_FORK_LEASE_SECONDS",
+  GIFT_SPONSOR_LEDGER_DIR: "GIFT_SPONSOR_FORK_LEDGER_DIR", GIFT_SPONSOR_REVOKE_MAX_FAILURES: "GIFT_SPONSOR_FORK_REVOKE_MAX_FAILURES",
+  GIFT_SPONSOR_REVOKE_BACKOFF_SECONDS: "GIFT_SPONSOR_FORK_REVOKE_BACKOFF_SECONDS", GIFT_SPONSOR_INFLIGHT_GRACE_SECONDS: "GIFT_SPONSOR_FORK_INFLIGHT_GRACE_SECONDS",
+});
+
+/** Fork env -> the same config shape as readGiftSponsorEnv (same parser, same fail-closed rules). null when GIFT_SPONSOR_FORK_PRIVATE_KEY is unset. */
+export function readGiftSponsorForkEnv(env = process.env) {
+  if (!env.GIFT_SPONSOR_FORK_PRIVATE_KEY) return null;
+  const mapped = {};
+  for (const [name, forkName] of Object.entries(FORK_ENV_NAMES)) if (env[forkName] !== undefined) mapped[name] = env[forkName];
+  let cfg;
+  try { cfg = readGiftSponsorEnv(mapped); } catch (e) { const m = String(e?.message || e); const name = Object.keys(FORK_ENV_NAMES).find((n) => m.endsWith(`_${n}`)); throw new Error(name ? `${m.slice(0, -name.length)}${FORK_ENV_NAMES[name]}` : m); }
+  // [gift-fork] compared as the sponsor ADDRESS each key controls (a "0x" prefix, case or whitespace cannot hide the same key).
+  // previous rule: String(env.GIFT_SPONSOR_PRIVATE_KEY).toLowerCase() === String(cfg.privateKey).toLowerCase()
+  if (env.GIFT_SPONSOR_PRIVATE_KEY && sameSponsorKey(env.GIFT_SPONSOR_PRIVATE_KEY, cfg.privateKey)) throw new Error("GIFT_SPONSOR_FORK_KEY_IS_143_KEY");
+  return { ...cfg, kvUrl: null, kvToken: null };
+}
+
+// [gift-fork] true when both values name the same key: same derived address, or (either one unparseable) the same 64 hex digits after "0x"/case/space
+// normalisation. Fail closed: an unreadable pair that normalises equal is treated as the same key.
+function sameSponsorKey(a, b) {
+  const hex = (k) => String(k ?? "").trim().toLowerCase().replace(/^0x/, "");
+  const addr = (k) => { try { return /^[0-9a-f]{64}$/.test(hex(k)) ? privateKeyToAccount(`0x${hex(k)}`).address.toLowerCase() : null; } catch { return null; } };
+  const x = addr(a); const y = addr(b);
+  if (x && y) return x === y;
+  return hex(a) !== "" && hex(a) === hex(b);
+}
+
+/** Assemble the fork runtime: same service / steps / reconciler / route contract as the 143 runtime, fork chain + fork policy + fork-only preflight. */
+export function buildGiftSponsorForkRuntime(cfg, deps = {}) {
+  const account = deps.account ?? privateKeyToAccount(cfg.privateKey);
+  const publicClient = deps.publicClient ?? createPublicClient({ chain: giftSponsorForkChainDef(cfg.rpcUrl), transport: viemHttp(cfg.rpcUrl) });
+  const policy = buildGiftSponsorForkPolicy({ escrow: cfg.escrow, sponsorAddress: account.address, gasUnits: cfg.gasUnits, gasBufferBps: cfg.gasBufferBps });
+  if (!policy) throw new Error("GIFT_SPONSOR_FORK_POLICY_INVALID");
+  const store = deps.store ?? (cfg.ledgerDir ? openGiftSponsorLedger(`${cfg.ledgerDir.replace(/\/+$/, "")}/gift-sponsor-fork-ledger.json`) : null);
+  if (!store) throw new Error("MISSING_GIFT_SPONSOR_FORK_STORE");
+  const log = deps.log ?? (() => {});
+  const chain = deps.chain ?? createViemGiftSponsorChain({ publicClient, policy });
+  const sponsor = deps.sponsor ?? createViemGiftSponsorSender({ publicClient, account, policy });
+  const readChainId = deps.readChainId ?? (() => publicClient.getChainId());
+  const pins = createPreflightGate({ policy, getCode: chain.getCode, log });
+  const say = (m) => { try { log(`gift-sponsor fork ${m}`); } catch { /* logger must not break flow */ } };
+  const preflight = async () => {
+    let id = null; try { id = Number(await readChainId()); } catch { id = null; }
+    if (id !== GIFT_SPONSOR_FORK_CHAIN_ID) { say(`preflight FAILED chain_id ${id === null ? "unreadable" : id}`); return false; }
+    let code = null; try { code = await chain.getCode(policy.escrow); } catch { code = null; }
+    if (typeof code !== "string" || code.length <= 2 || keccak256(code) !== GIFT_SPONSOR_FORK_ESCROW_RUNTIME_KECCAK) { say("preflight FAILED escrow_code"); return false; }
+    return pins();
+  };
+  preflight.status = pins.status;
+  const service = createGiftSponsorService({ ledger: store, policy, chain, sponsor, preflight, log, leaseSeconds: cfg.leaseSeconds, revokeMaxFailures: cfg.revokeMaxFailures, revokeBackoffSeconds: cfg.revokeBackoffSeconds });
+  const reconciler = createGiftSponsorReconciler({ ledger: store, policy, chain, steps: service.steps, runExclusive: service.runExclusive, log, inflightGraceSeconds: cfg.inflightGraceSeconds, revokeBackoffSeconds: cfg.revokeBackoffSeconds });
+  return { policy, chain, sponsor, store, preflight, service, reconciler, rateLimit: null };
+}

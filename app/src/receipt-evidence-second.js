@@ -73,7 +73,7 @@ function txItem({ chainId, chainLabel, lane, step, source, hash, recordClaim, ex
 
 // [A-878 F1] Known chain scope labels -> numeric id (same pairs as funding-context.js CHAIN_SCOPE_BY_NUMERIC_ID; pinned in
 // the test). An unknown label stays label-only (never turned into a number).
-const SCOPE_NUMERIC = Object.freeze({ "monad-testnet": "10143", "monad-mainnet": "143" });
+const SCOPE_NUMERIC = Object.freeze({ "monad-testnet": "10143", "monad-mainnet": "143", "monad-fork": "31337143" }); // [A-946] + the fork (= funding-context FORK_CHAIN_ID)
 // [A-895 P-C / A-878 R-2] normalised: trim, lower-case, "_"/space -> "-" ("Monad-Testnet", "monad_testnet" resolve to the same scope).
 const scopeNumeric = (s) => {
   if (typeof s !== "string") return null;
@@ -223,15 +223,78 @@ export function mapSecondStateObservation(receipt, opts) {
   } catch { return { ok: false, reason: "record_invalid" }; }
 }
 
+// ── Fork money split (new fields only; no existing field changes meaning) ─────────────────────────────────────────────────────
+// On the shared fork three amounts appear around one errand and are never one number:
+//   · virtualGrant — what the fork's grant ledger put on the Piggy (a fork-state write, not money anyone sent; never "earned")
+//   · jobInput     — what the Job step itself took in (the asset the record binding names, e.g. 1 MON into shMON, 1 WETH into Euler)
+//   · gas          — the native MON the fork charged for the step's transactions (always MON, never the Job's input asset)
+// They stay three separate fields, are never summed or netted (`summed: false`), and are labelled fork-only: readEligible false, no
+// readRequest, no seed. A record on any other chain is refused (a virtual grant exists only on the fork).
+export const FORK_MONEY_SPLIT_SCHEMA = "araso_fork_money_split_v1";
+const FORK_NUMERIC = SCOPE_NUMERIC["monad-fork"];
+const RAW = /^(0|[1-9][0-9]{0,77})$/;
+const SYMBOL = /^[A-Za-z][A-Za-z0-9]{0,15}$/;
+
+function splitPart(part, name) {
+  if (part === undefined || part === null) return { value: null };
+  if (!isObj(part)) return { error: `${name}_invalid` };
+  if (name === "gas") {
+    if (part.asset !== undefined && part.asset !== "MON") return { error: "gas_not_native_mon" };
+    if (!RAW.test(part.feeWei ?? "")) return { error: "gas_fee_not_raw" };
+    if (part.gasUsed !== undefined && !RAW.test(part.gasUsed)) return { error: "gas_used_not_raw" };
+    return { value: { asset: "MON", native: true, feeWei: part.feeWei, gasUsed: part.gasUsed ?? null } };
+  }
+  if (typeof part.asset !== "string" || !SYMBOL.test(part.asset)) return { error: `${name}_asset_invalid` };
+  if (!RAW.test(part.amountRaw ?? "")) return { error: `${name}_amount_not_raw` };
+  const out = { asset: part.asset, amountRaw: part.amountRaw, native: part.native === true };
+  if (name === "virtualGrant") return { value: { ...out, virtual: true, grantVersion: str(part.grantVersion, 32) } };
+  return { value: { ...out, jobId: str(part.jobId, 64), step: str(part.step, 32) } };
+}
+
+/** Fork errand money record {chainId, piggyAddress, virtualGrant, jobInput, gas} -> one split observation (three separate fields). */
+export function mapForkMoneySplit(record, opts) {
+  try {
+    const { chainId } = isObj(opts) ? opts : {};
+    if (!isObj(record)) return { ok: false, reason: "record_invalid" };
+    const c = resolveChain(chainId, record.chainId, record.chain);
+    if (c.error) return { ok: false, reason: c.error };
+    if (c.chainId !== FORK_NUMERIC) return { ok: false, reason: "not_fork_chain" };
+    const parts = {};
+    for (const name of ["virtualGrant", "jobInput", "gas"]) {
+      const r = splitPart(record[name], name);
+      if (r.error) return { ok: false, reason: r.error };
+      parts[name] = r.value;
+    }
+    if (parts.virtualGrant === null && parts.jobInput === null && parts.gas === null) return { ok: false, reason: "nothing_to_split" };
+    return deepFreeze({ ok: true, split: {
+      kind: "fork_money_split",
+      schema: FORK_MONEY_SPLIT_SCHEMA,
+      authority: "observation_only",
+      chain: { chainId: c.chainId, label: label(record.chain ?? record.chainId) },
+      journey: SECOND_EVIDENCE_JOURNEY,
+      piggyAddress: addrOf(record.piggyAddress),
+      virtualGrant: parts.virtualGrant,
+      jobInput: parts.jobInput,
+      gas: parts.gas,
+      summed: false,
+      readEligible: false,
+      readRequest: null,
+      seed: null,
+    } });
+  } catch { return { ok: false, reason: "record_invalid" }; }
+}
+
 /**
  * mapSecondEvidence({ plumbingPending, laneIntent, laneReceipt, decisionReceipts, chainId, now })
  * -> { ok:true, journey:"second", staged:[tx items], stateObservations:[...], refused:[...] }
  * Staged tx items and state observations are separate arrays and are never converted into each other.
+ * New, optional: `forkMoney` (a fork errand money record) adds `forkMoneySplit` (mapForkMoneySplit) to the result. Without it the
+ * result is exactly what it was; the split never becomes a staged item.
  */
 export function mapSecondEvidence(input) {
   try {
     if (!isObj(input)) return { ok: false, reason: "record_invalid" };
-    const { plumbingPending, laneIntent, laneReceipt, decisionReceipts, chainId, now } = input;
+    const { plumbingPending, laneIntent, laneReceipt, decisionReceipts, chainId, now, forkMoney } = input;
     const staged = [], stateObservations = [], refused = [];
     const keys = new Set();
     const take = (res, source) => {
@@ -249,6 +312,11 @@ export function mapSecondEvidence(input) {
     for (const d of Array.isArray(decisionReceipts) ? decisionReceipts : []) {
       const r = mapSecondStateObservation(d, { now });
       if (r.ok) stateObservations.push(r.observation); else refused.push({ source: SECOND_EVIDENCE_SOURCES.DECISION_RECEIPT, reason: r.reason });
+    }
+    if (forkMoney != null) {
+      const m = mapForkMoneySplit(forkMoney, { chainId });
+      if (!m.ok) refused.push({ source: "second.fork_money", reason: m.reason });
+      return deepFreeze({ ok: true, journey: SECOND_EVIDENCE_JOURNEY, staged, stateObservations, refused, forkMoneySplit: m.ok ? m.split : null });
     }
     return deepFreeze({ ok: true, journey: SECOND_EVIDENCE_JOURNEY, staged, stateObservations, refused });
   } catch { return { ok: false, reason: "record_invalid" }; }
