@@ -168,7 +168,11 @@ let reopened = null;
     !/set(Timeout|Interval)\([^)]*(handleSecondSend|sendSecond|startSecondSend)/.test(code));
   // Send 는 이름이 실제로 존재해야 위 검사가 헛돌지 않는다.
   ok("  Send 진입점이 실제로 존재한다", /function handleSecondSend\(/.test(code));
-  const refs = (code.match(/handleSecondSend/g) || []).length;
+  // [A-977 RE-PIN] the fork block wraps the Send entry (base kept + reassigned, fork profile only); its refs are counted apart. pre-A-977: all of main.js
+  // const refs = (code.match(/handleSecondSend/g) || []).length; // pre-A-977
+  const a977s = SRC.indexOf("// ── [A-977] Job 10 on the shared fork"), a977e = SRC.indexOf("// ── [A-977] end Job 10");
+  const outside977 = (a977s > 0 && a977e > a977s ? SRC.slice(0, a977s) + SRC.slice(a977e) : SRC).split("\n").map((l) => l.split("//")[0]).join("\n");
+  const refs = (outside977.match(/handleSecondSend/g) || []).length;
   ok("  Send 는 정의 1 + 사용자 click 바인딩 1 뿐 — 스스로 부르는 자리 0",
     refs === 2 && /addEventListener\("click", handleSecondSend\)/.test(code), `refs=${refs}`);
 }

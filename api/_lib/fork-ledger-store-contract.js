@@ -9,11 +9,12 @@
 //   list(collection)                    -> stored values, ordered by key
 // Collections are fixed and kept apart; a key must carry its collection's prefix, so payout rows can never land among fork evidence:
 //   evidence "fork-evidence|…" · rewards "reward|…" · payouts "payout|…" · stamps "fork-stamp|…" · [A-956] entries "fork-entry|…" · topups "fork-topup|…" · entryPiggies "fork-entry-piggy|…" · journey1Uses "fork-j1|…"
+//   [A-993] orphans "fork-orphan|…" (append-only marker per evidence row lost by a fork restore) · regrants "fork-regrant|…" (re-grant candidates, executes:false)
 // The key must also EQUAL the key the contract rebuilds from the value (evidenceRecord / rewardKey / payoutRecord / stampRecord),
 // and the value's key fields must already be canonical — so "reward|a|v1 " or "reward|a|v1|x" can never sit next to "reward|a|v1".
 // A production adapter must make putIfAbsent atomic across instances; an in-memory / no-store fallback is not allowed in production.
 
-import { KEY_PREFIX, KIND, entryPiggyRecord, entryRecord, evidenceRecord, journey1UseRecord, payoutRecord, rewardKey, stampRecord, topupRecord } from "./fork-ledger-contract.js";
+import { KEY_PREFIX, KIND, entryPiggyRecord, entryRecord, evidenceRecord, journey1UseRecord, orphanRecord, payoutRecord, regrantRecord, rewardKey, stampRecord, topupRecord } from "./fork-ledger-contract.js";
 
 export const FORK_LEDGER_STORE_CONTRACT = "araso.fork-ledger-store/v1";
 export const FORK_LEDGER_COLLECTIONS = Object.freeze({
@@ -25,6 +26,8 @@ export const FORK_LEDGER_COLLECTIONS = Object.freeze({
   topups: Object.freeze({ prefix: KEY_PREFIX.TOPUP, kind: KIND.TOPUP }), // [A-956] fork top-up outcome (one per fork + Piggy + asset + grantVersion)
   entryPiggies: Object.freeze({ prefix: KEY_PREFIX.ENTRY_PIGGY, kind: KIND.ENTRY_PIGGY }), // [A-956] one tester per Piggy per fork instance
   journey1Uses: Object.freeze({ prefix: KEY_PREFIX.JOURNEY1_USE, kind: KIND.JOURNEY1_USE }), // [A-956] one tester per Journey 1 tx
+  orphans: Object.freeze({ prefix: KEY_PREFIX.ORPHAN, kind: KIND.ORPHAN }), // [A-993] one marker per orphaned evidence row (the row is kept)
+  regrants: Object.freeze({ prefix: KEY_PREFIX.REGRANT, kind: KIND.REGRANT }), // [A-993] one candidate per fork + Piggy + asset + new grantVersion
 });
 
 const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
@@ -45,6 +48,8 @@ const REBUILD = Object.freeze({
   topups: (v) => { const r = topupRecord(v); return r.ok ? { key: r.key, fields: r.record } : null; }, // [A-956]
   entryPiggies: (v) => { const r = entryPiggyRecord(v); return r.ok ? { key: r.key, fields: r.record } : null; }, // [A-956]
   journey1Uses: (v) => { const r = journey1UseRecord(v); return r.ok ? { key: r.key, fields: r.record } : null; }, // [A-956]
+  orphans: (v) => { const r = orphanRecord({ evidenceKey: v.evidenceKey, reason: v.reason }); return r.ok ? { key: r.key, fields: r.record } : null; }, // [A-993]
+  regrants: (v) => { const r = regrantRecord({ forkInstanceId: v.forkInstanceId, piggyAddress: v.piggyAddress, asset: v.asset, previousGrantVersion: v.previousGrantVersion, grantVersion: v.grantVersion, reason: v.reason }); return r.ok ? { key: r.key, fields: r.record } : null; }, // [A-993]
 });
 
 /** Pure validation every adapter applies before touching storage. -> null when fine, else a reason. */

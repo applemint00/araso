@@ -322,7 +322,9 @@ await check("G1 aBIL eligibility / KYC / geo / rights gates stay blocking whatev
 await check("S1 product does not import the lanes; merge code has no send / sign / executor / network / live-true path", () => {
   const files = readdirSync(SRC_DIR).filter((x) => x.endsWith(".js"));
   for (const lane of ["neverland", "curvance", "abil", "kintsu"]) {
-    assert.deepEqual(files.filter((f) => f !== `mainnet-job-${lane}.js` && new RegExp(`mainnet-job-${lane}`).test(SRC(f))), [], lane);
+    // [A-977 RE-PIN] neverland / curvance: imported by the lane's fork Job section only. abil / kintsu: still nobody. pre-A-977: [] for all four
+    // assert.deepEqual(files.filter((f) => f !== `mainnet-job-${lane}.js` && new RegExp(`mainnet-job-${lane}`).test(SRC(f))), [], lane); // pre-A-977
+    assert.deepEqual(files.filter((f) => f !== `mainnet-job-${lane}.js` && new RegExp(`mainnet-job-${lane}`).test(SRC(f))), lane === "neverland" || lane === "curvance" ? ["mainnet-job-lane.js"] : [], lane);
   }
   const adapter = SRC("second-execution-adapter.js");
   const merge = strip(adapter.slice(adapter.indexOf("// ── Second mainnet merge")));

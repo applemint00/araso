@@ -207,13 +207,25 @@ async function partB() {
       assert.equal(await t.page.locator(".testerIntro").count(), 1);
       assert.equal(await t.page.locator(".testerIntro.is-closed").count(), 0);
     });
-    await sleep(2150); // ~3.1s
+    await sleep(2000); // ~2.9s
     await check("?i: blink -> eyes closed (is-closed, eye scaleY) before transition", async () => {
       assert.equal(await t.page.locator(".testerIntro.is-closed").count(), 1);
       const tf = await t.page.evaluate(() => getComputedStyle(document.querySelector(".testerIntro .eye")).transform);
       assert.notEqual(tf, "none");
     });
-    await sleep(120); // ~3.22s: leaving
+    await sleep(170); // ~3.07s: A-995 reopens before leaving, so eyes + existing mouth are visible together
+    await check("?i: after blink the existing eyes and mouth are visible together", async () => {
+      assert.equal(await t.page.locator(".testerIntro.is-closed").count(), 0);
+      assert.equal(await t.page.locator(".testerIntro__face .eye").count(), 2);
+      assert.equal(await t.page.locator(".testerIntro__face path:last-child").count(), 1);
+      const mouth = await t.page.evaluate(() => {
+        const style = getComputedStyle(document.querySelector(".testerIntro__face path:last-child"));
+        return { opacity: Number(style.opacity), visibility: style.visibility };
+      });
+      assert.ok(mouth.opacity > 0);
+      assert.equal(mouth.visibility, "visible");
+    });
+    await sleep(150); // ~3.22s: leaving
     await check("?i: leaving state = scale .92 + -8px + fade (computed, mid-transition)", async () => {
       const m = await t.page.evaluate(() => { const o = document.querySelector(".testerIntro"); return o ? { leaving: o.classList.contains("is-leaving"), tf: getComputedStyle(document.querySelector(".testerIntro__inner")).transform } : null; });
       assert.ok(m === null || m.leaving, "overlay either still pre-leave? " + JSON.stringify(m));

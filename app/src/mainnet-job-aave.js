@@ -9,7 +9,7 @@
 // of any other protocol: a non-Aave Job carries its own evidenced facts in its own module.
 
 import { EVIDENCE_LABEL } from "./second-job-readiness.js";
-import { CHAIN_PROFILE_ID, isProfileActive } from "./chain-profile.js";
+import { CHAIN_PROFILE_ID, chainMatchesExecutor, isProfileActive } from "./chain-profile.js";
 import { ADDR } from "./mainnet-job-common.js";
 
 export const LANE_JOB_ID = "aave-usdc";
@@ -74,6 +74,17 @@ export const LANE_SELECTORS = Object.freeze({
 /** The running profile is the mainnet profile and names THIS Job with a USDC token. */
 export function isAaveLaneProfile(profile) {
   return isProfileActive(profile) && profile.id === CHAIN_PROFILE_ID.MAINNET && profile.jobId === LANE_JOB_ID
+    && !!profile.usdc && ADDR.test(profile.usdc.address);
+}
+
+/**
+ * [fork-job] The shared-fork profile for the fork Aave Job ONLY (mainnet-job-lane.js runForkJob / aaveForkRequest): its own forkOf
+ * (chain-profile.js FORK_PARENT, read by the executor chain judge) is this lane's evidence chain, its numeric chain id is its own (never
+ * 143), and it names no Job or THIS Job. isAaveLaneProfile above (the mainnet lane's own gate) does not admit the fork.
+ */
+export function isAaveForkProfile(profile) {
+  return isProfileActive(profile) && profile.id === CHAIN_PROFILE_ID.FORK && profile.numericChainId !== LANE_FORK_EVIDENCE.chainId
+    && chainMatchesExecutor(profile, LANE_FORK_EVIDENCE.chainId) && (profile.jobId === null || profile.jobId === LANE_JOB_ID)
     && !!profile.usdc && ADDR.test(profile.usdc.address);
 }
 

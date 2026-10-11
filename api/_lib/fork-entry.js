@@ -249,14 +249,15 @@ export function createForkEntryService({ config, store, challenges, admin, testn
           if (low(tx.from) !== piggy || low(rc.from) !== piggy) return refuse("evidence_not_from_piggy");
           const step = reg.steps.find((s) => low(s.to) === low(tx.to) && low(s.selector) === low(tx.input).slice(0, 10));
           if (!step) return refuse("evidence_not_a_step");
-          const ev = evidenceRecord({ forkInstanceId: inst.forkInstanceId, chainId: inst.chainId, piggyAddress: piggy, txHash: h, blockNumber: rc.blockNumber, status: low(rc.status) === "0x1" ? "success" : "failed", journeyId: jid, journeyVersion: reg.journeyVersion, stepId: step.stepId });
+          const ev = evidenceRecord({ forkInstanceId: inst.forkInstanceId, chainId: inst.chainId, piggyAddress: piggy, txHash: h, blockNumber: rc.blockNumber, status: low(rc.status) === "0x1" ? "success" : "failed", journeyId: jid, journeyVersion: reg.journeyVersion, stepId: step.stepId, blockHash: rc.blockHash ?? null }); // [A-993] + blockHash (receipt's; not in the key)
           if (!ev.ok) return refuse(ev.reason === "tx_not_success" ? "evidence_tx_failed" : "evidence_invalid");
           const put = await store.putIfAbsent("evidence", ev.key, ev.record);
           if (!put.ok && put.reason !== "exists") return { ok: false, status: 503, reason: "store_failed" };
           if (!put.ok && (put.existing.journeyId !== ev.record.journeyId || put.existing.journeyVersion !== ev.record.journeyVersion || put.existing.stepId !== ev.record.stepId)) return refuse("evidence_reused");
         }
         const rows = (await store.list("evidence")).filter((r) => r.forkInstanceId === inst.forkInstanceId && r.piggyAddress === piggy);
-        const verdict = journeyVerdict({ journeyId: jid, journeyVersion: reg.journeyVersion, steps: reg.steps.map((s) => s.stepId), evidence: rows, context: { forkInstanceId: inst.forkInstanceId, chainId: inst.chainId, piggyAddress: piggy, forkStartBlock: inst.forkStartBlock, testerId } });
+        const orphaned = (await store.list("orphans")).filter((o) => o.forkInstanceId === inst.forkInstanceId && o.piggyAddress === piggy); // [A-993] restore-lost steps: skipped
+        const verdict = journeyVerdict({ journeyId: jid, journeyVersion: reg.journeyVersion, steps: reg.steps.map((s) => s.stepId), evidence: rows, orphaned, context: { forkInstanceId: inst.forkInstanceId, chainId: inst.chainId, piggyAddress: piggy, forkStartBlock: inst.forkStartBlock, testerId } });
         if (verdict.verdict !== VERDICT.COMPLETE) return { ok: true, allowed: true, verdict: verdict.verdict, missing: [...verdict.missing], reason: verdict.reason };
         const st = stampRecord({ testerId, forkInstanceId: inst.forkInstanceId, journeyId: jid });
         if (st.ok) await store.putIfAbsent("stamps", st.key, st.record);

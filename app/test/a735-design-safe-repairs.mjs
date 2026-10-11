@@ -264,9 +264,10 @@ async function walk(browser, BASE, w, h) {
     await p.reload({ waitUntil: "networkidle" }); await sleep(800); await unlock();
     assert.equal(await exploreViaTapMe(), "explore"); await sleep(2200); // [A-891] pre-A-891 baseline: await waitScene(["explore"], 12000)
     M.item0 = await m(".secondJourney__item", 0); M.item1 = await m(".secondJourney__item", 1); M.iBack = await m("#stayButton");
-    await mustTap("#exploreSaveButton", "save none"); await sleep(900);
+    // [A-977 RE-PIN] fork Explore = the fork Job rows: three rows come from round 0 (market · order · clean), no "save none".
+    // pre-A-977: save none → round 1 → grow + asset-piece (aave / abil / kintsu rows)
     const ids = await p.evaluate(() => [...document.querySelectorAll("#exploreForm input[data-errand-id]")].map((e) => e.dataset.errandId));
-    for (const want of ["grow", "asset-piece"]) { const i = ids.indexOf(want); if (i >= 0) { await mustTap(".secondJourney__item", want, i); await sleep(200); } }
+    for (const want of ["market", "order", "clean"]) { const i = ids.indexOf(want); if (i >= 0) { await mustTap(".secondJourney__item", want, i); await sleep(200); } }
     await mustTap("#exploreSaveButton", "save"); await sleep(3000);
     M.picks = []; for (let i = 0; i < 3; i += 1) M.picks.push(await m(".secondJourney__pick", i));
     M.cBack = await m("#stayButton"); M.cOk = await m("#secondOkButton");

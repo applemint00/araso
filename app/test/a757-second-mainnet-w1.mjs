@@ -61,7 +61,10 @@ const LANE_EXPORTS_BEFORE = [
 await check("C1 mainnet-job-lane.js still exports every name it had (and nothing Kintsu)", () => {
   const now = Object.keys(LANE).sort();
   for (const name of LANE_EXPORTS_BEFORE) assert.ok(now.includes(name), `missing export ${name}`);
-  assert.deepEqual(now, [...LANE_EXPORTS_BEFORE].sort(), "the public surface is exactly the same");
+  // [A-977 RE-PIN] + the fork Job section's exports (Job 10 on the shared fork). pre-A-977 baseline: exactly LANE_EXPORTS_BEFORE
+  // assert.deepEqual(now, [...LANE_EXPORTS_BEFORE].sort(), "the public surface is exactly the same"); // pre-A-977
+  const A977_FORK_JOB_EXPORTS = ["FORK_JOB_HELD", "FORK_JOB_KEYS", "FORK_JOB_PARENT_CHAIN", "forkExploreRows", "forkJobForErrand", "forkJobProfile", "forkJobReceiptCandidate", "forkJobRecordKey", "forkJobRow", "forkJobSteps", "forkJobStrictTransport", "runForkJob"];
+  assert.deepEqual(now, [...LANE_EXPORTS_BEFORE, ...A977_FORK_JOB_EXPORTS].sort(), "the public surface is the old one + the fork Job section");
   assert.equal(now.some((n) => /kintsu/i.test(n)), false);
 });
 
@@ -359,7 +362,11 @@ await check("S4 import graph: the Kintsu module is imported by no product file; 
 
 await check("S5 only mainnet-job-* modules name a local fork executor; no product file constructs one", () => {
   const files = readdirSync(SRC_DIR).filter((x) => x.endsWith(".js") && !x.startsWith("mainnet-job-"));
-  assert.deepEqual(files.filter((f) => /local_fork/.test(SRC(f))), []);
+  // [A-977 RE-PIN] main.js constructs the ONE fork-run executor inside its [A-977] block (fork profile only; strict transport). pre-A-977: []
+  // assert.deepEqual(files.filter((f) => /local_fork/.test(SRC(f))), []); // pre-A-977
+  assert.deepEqual(files.filter((f) => /local_fork/.test(SRC(f))), ["main.js"]);
+  const m = SRC("main.js"), a = m.indexOf("// ── [A-977] Job 10 on the shared fork"), z = m.indexOf("// ── [A-977] end Job 10");
+  assert.equal(/local_fork/.test(m.slice(0, a) + m.slice(z)), false, "outside the [A-977] block main.js names no local fork executor");
   for (const f of NEW_MODULES) assert.equal(/kind\s*:\s*"local_fork"/.test(SRC(f)), false, f);
 });
 

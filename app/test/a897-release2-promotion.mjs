@@ -14,6 +14,11 @@ import * as GE from "../src/gift-claim-entry.js";
 import * as PI from "../src/piggy-index.js";
 import * as PR from "../src/piggy-registry.js";
 import { modelASaltHex } from "../src/piggy-session.js";
+// [A-1023 RE-PIN] (Owner 10-11 14:1x: only the approved post-ee4fa91 hunks are cut; no whole-card exclusion) receipts/A1023_pin_attribution/ATTRIBUTION.md.
+// The delimited [A-979 ④] badge block is cut by its markers; every other approved hunk (A-979 ④ import · A-995 ①②③ · A-995-b) is restored to its
+// exact ee4fa91 text and only when it occurs exactly once — anything else stays in place, so any other main.js change still fails this pin.
+const A1023_RESTORES = [["A-995 ②③ / A-995-b imports","import { registerA995InlineFace, syncA995GiftEyes } from \"./a995-eye-look.js\";\nimport { mountA995bLoadingPiggy } from \"./a995b-loading-piggy.js\";\n",""],["A-979 ④ import","import { mountForkVirtualMoneyBadge } from \"./fork-virtual-money-badge.js\";\n",""],["A-995 ① breath comment","// [A-995 ①] persistent breath: Owner-selected Sleep strength (x .0091 / y .026) on the existing 4.4 s loop, scaled about the\n","// [A-841 UI-27] persistent subtle breath: the first-arrival values (HOME_T_BREATHE sx 1-.008, sy 1+.014) on a slow loop, scaled about the\n"],["A-995 ① breath coefficients","  el.style.transform = `scale(${(1 - 0.0091 * b).toFixed(5)}, ${(1 + 0.026 * b).toFixed(5)})`;\n","  el.style.transform = `scale(${(1 - 0.008 * b).toFixed(5)}, ${(1 + 0.014 * b).toFixed(5)})`;\n"],["A-995 ② gift eyes (unchanged render)","  if (root && s.html === html) { a911Layout(); void syncA995GiftEyes(root); return; } // nothing changed: leave the DOM (focus, scroll, running transitions) alone\n","  if (root && s.html === html) { a911Layout(); return; } // nothing changed: leave the DOM (focus, scroll, running transitions) alone\n"],["A-995 ② gift eyes (sync)","  void syncA995GiftEyes(a911Root() || document);\n",""],["A-995 ③ tester intro face","  const face = el.querySelector(\".testerIntro__face\");\n  registerA995InlineFace(face);\n",""],["A-995 ③ tester intro blink","    setTimeout(() => el.classList.remove(\"is-closed\"), TESTER_INTRO_BLINK_MS - 120),\n",""],["A-995-b loading bridge","// [A-995-b] Same-turn PWA splash -> loading bridge. The browser cannot paint the first render\n// before this module task ends, so the approved 3.6 s overlay remains the first visible surface.\nmountA995bLoadingPiggy();\n",""]];
+const A1023_CUT = (s) => { s = s.replace(/^\/\/ ── \[A-979 ④\] Fork virtual-money badge\.[\s\S]*?^\/\/ ── \[A-979 ④\] end ──\n/m, ""); for (const [, from, to] of A1023_RESTORES) if (s.split(from).length === 2) s = s.replace(from, () => to); return s; };
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -421,7 +426,7 @@ await check("S1 main.js differs from the pre-A-897 copy ONLY by the [A-897] P1/P
   if (!BEFORE && !existsSync(path.join(REPO, "_private"))) { const sk = new Error("skip"); sk.publicSkip = "pre-A-897 main.js baseline exists only in the private workspace (public checkout)"; throw sk; }
   assert.ok(BEFORE, "before/main.js missing");
   const cut = (src, a, b) => { const i = src.indexOf(a); assert.ok(i >= 0, a); let j = src.indexOf(b, i); assert.ok(j >= 0, b); j = src.indexOf("\n", j) + 1; return [src.slice(0, i), src.slice(j)]; };
-  let [h, t] = cut(restorePreA920(MAIN), "// ── [A-897] P1 Release-2", "// ── [A-897] end P1"); // [A-920 RE-PIN] pre-A-920 baseline: cut(MAIN, ...) (A-920 edits four main.js functions + eight const lines, pinned by a920-main-js-scope.mjs)
+  let [h, t] = cut(restorePreA920(A1023_CUT(MAIN)) /* [A-1023 RE-PIN] pre-A-1023: restorePreA920(MAIN) */, "// ── [A-897] P1 Release-2", "// ── [A-897] end P1"); // [A-920 RE-PIN] pre-A-920 baseline: cut(MAIN, ...) (A-920 edits four main.js functions + eight const lines, pinned by a920-main-js-scope.mjs)
   assert.equal(MAIN.indexOf("// ── [A-897] P1 Release-2", MAIN.indexOf("// ── [A-897] P1 Release-2") + 1), -1, "one P1 block");
   let rest = h + t.slice(1);
   // pre-A-912 baseline: main.js == the pre-A-897 copy plus the A-897 blocks. [A-912 re-pin, Cowork-approved] strip the A-912 additions first: the A912_PRODUCT_BUILD const, the
@@ -487,6 +492,8 @@ await check("S1 main.js differs from the pre-A-897 copy ONLY by the [A-897] P1/P
   { const [x, y] = cut(rest, "// ── [A-960] invite link → first grant.", "// ── [A-960] end invite link"); rest = x + y; }
   // [A-974 re-pin] pre-A-974 baseline: no [A-974] block. main.js minus the one delimited [A-974] fork entry block == the pre-A-974 main.js. Re-pin only.
   { const [x, y] = cut(rest, "// ── [A-974] Fork app entry", "// ── [A-974] end fork app entry"); rest = x + y; }
+  // [A-977 re-pin] pre-A-977 baseline: no [A-977] block. Cut the one delimited [A-977] Job 10 fork block too. Re-pin only.
+  { const [x, y] = cut(rest, "// ── [A-977] Job 10 on the shared fork", "// ── [A-977] end Job 10 on the shared fork"); rest = x + y; }
   assert.equal(rest.replace(/\n{2,}/g, "\n"), BEFORE.replace(/\n{2,}/g, "\n"));
 });
 await check("S2block hygiene: // comments only (the stray /* in main.js), the only fetch is inside a897FetchRpc, testnet reader default null, no storage key invented", async () => {

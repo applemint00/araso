@@ -194,14 +194,14 @@ async function browserRun(browser, BASE) {
     window.__ARASO_LOCAL_TEST_SECOND_LANE_READ__ = async (eventId) => {
       window.__a851Calls += 1;
       const failed = (id) => ({ id, status: "read_failed", reason: "rpc_unreachable", read: null });
-      if (m === "unreadable") return { currentRead: { kind: "second_current_read", piggyAddress: null, candidates: [failed("aave-usdc"), failed("abil-spot"), failed("kintsu-smon")] }, agreedRules: {} };
-      const aave = { id: "aave-usdc", status: "aave_buildable", reason: "read_via_lane_pre_action", read: {
+      if (m === "unreadable") return { currentRead: { kind: "second_current_read", piggyAddress: null, candidates: [failed("euler-k3-weth")] }, agreedRules: {} };
+      const forkJob = { id: "euler-k3-weth", status: "aave_buildable", reason: "read_via_lane_pre_action", read: { // [A-950-b] A-977 Grow row; pre-A-977: aave-usdc
         source: "read-only rpc @200000000", observedAt: nowIso, chainId: 143, block: 200000000, codePresent: true, receiptToken: { matchesRecorded: true },
         reserve: { active: true, frozen: false, paused: false }, holdings: { usdcRaw: "5000000", receiptRaw: "0", allowanceToPoolRaw: "0" } } };
-      const others = m === "mixed" ? [rd("abil-spot", "abil_quote_incomplete"), failed("kintsu-smon")] : [rd("abil-spot", "abil_quote_incomplete"), rd("kintsu-smon", "kintsu_observation")];
+      const others = m === "mixed" ? [failed("kintsu-smon")] : [];
       return {
-        currentRead: { kind: "second_current_read", piggyAddress: null, candidates: [aave, ...others] },
-        agreedRules: { "aave-usdc": { kind: "agreed_rule", agreedBy: "user", eventId, candidateId: "aave-usdc", field: "piggyUsdcRaw", comparator: "gte", expected: "1000000" } },
+        currentRead: { kind: "second_current_read", piggyAddress: null, candidates: [forkJob, ...others] },
+        agreedRules: { "euler-k3-weth": { kind: "agreed_rule", agreedBy: "user", eventId, candidateId: "euler-k3-weth", field: "piggyUsdcRaw", comparator: "gte", expected: "1000000" } },
       };
     };
   }, [mode, NOW_ISO]);
@@ -259,7 +259,7 @@ async function browserRun(browser, BASE) {
     assert.equal(await calls(), 1);
   });
 
-  await check("B3b strict fail-closed: aave is readable + go-able but another picked-lane row is unreadable -> no bell at all", async () => {
+  await check("B3b strict fail-closed: the A-977 Grow candidate is readable but another picked-lane row is unreadable -> no bell at all", async () => {
     await installHook("mixed");
     await becomeVisible();
     assert.equal(await calls(), 1);
@@ -285,7 +285,7 @@ async function browserRun(browser, BASE) {
     await sleep(2500);
     assert.equal(await step(), "candidates");
     const rows = await p.evaluate(() => [...document.querySelectorAll(".secondJourney__pick")].map((b) => ({ id: b.dataset.destinationId, picked: b.classList.contains("is-picked") })));
-    assert.ok(rows.some((r) => r.id === "aave-usdc") && rows.every((r) => !r.picked));
+    assert.ok(rows.some((r) => r.id === "euler-k3-weth") && rows.every((r) => !r.picked)); // [A-950-b] A-977 Grow row; pre-A-977: aave-usdc
     assert.equal(await p.evaluate(() => document.querySelector("#secondOkButton").disabled), true);
     assert.equal(net.tx, 0);
   });

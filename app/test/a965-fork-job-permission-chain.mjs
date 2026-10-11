@@ -137,7 +137,14 @@ await check("source shape: each file changes the chain line only (+ import); Aav
     assert.ok(!new RegExp(`numericChainId !== ${c}\\.chainId`).test(src), `${n}: no exact chain line left`);
   }
   const aave = readFileSync(join(SRC, "mainnet-job-aave.js"), "utf8");
-  assert.ok(!/chainMatchesExecutor/.test(aave)); assert.match(aave, /isAaveLaneProfile/);
+  // [A-977 RE-PIN] Aave fork lane: isAaveLaneProfile's fork branch asks chainMatchesExecutor (import + 1 use); the mainnet branch is unchanged.
+  // assert.ok(!/chainMatchesExecutor/.test(aave)); assert.match(aave, /isAaveLaneProfile/); // pre-A-977
+  // [A-977 r2] isAaveLaneProfile (the mainnet lane gate) is byte-unchanged and has no chainMatchesExecutor; the fork Aave Job has its own
+  // gate isAaveForkProfile (import + its one use). pre-A-977: no chainMatchesExecutor anywhere in the file.
+  const lanePart = aave.slice(aave.indexOf("export function isAaveLaneProfile"), aave.indexOf("export function isAaveForkProfile"));
+  assert.ok(lanePart.length > 50); assert.ok(!/chainMatchesExecutor/.test(lanePart));
+  assert.match(lanePart, /return isProfileActive\(profile\) && profile\.id === CHAIN_PROFILE_ID\.MAINNET && profile\.jobId === LANE_JOB_ID\n    && !!profile\.usdc && ADDR\.test\(profile\.usdc\.address\);/);
+  assert.equal((aave.match(/chainMatchesExecutor\(/g) || []).length, 1); assert.match(aave, /export function isAaveForkProfile/);
 });
 
 await check("no network", () => assert.equal(fetchCalls, 0));

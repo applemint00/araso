@@ -332,7 +332,9 @@ async function browserRun(browser, BASE, shots) {
     for (const [w, h] of [[390, 844], [810, 1080], [1440, 810]]) {
       await check(`B2 candidates card ${w}x${h}: same size + footer with 3 / 1 / 0 candidates (+-0.5 px); picked line; wait. + two Chog lines only for 0; no checking… without a read; never nah.`, async () => {
         const out = {};
-        for (const [name, want, rows] of [["three", ["grow", "asset-piece"], 3], ["one", ["clean"], 1], ["zero", ["market", "order", "claim"], 0]]) {
+        // [A-977 RE-PIN] fork Explore = the fork Job rows (one per errand line; claim / asset-piece have none). pre-A-977:
+        // [["three", ["grow", "asset-piece"], 3], ["one", ["clean"], 1], ["zero", ["market", "order", "claim"], 0]]
+        for (const [name, want, rows] of [["three", ["market", "order", "clean"], 3], ["one", ["clean"], 1], ["zero", ["claim", "asset-piece"], 0]]) {
           await freshExplore(w, h);
           const hits = await pickAndSave(want);
           assert.equal(await step(), "candidates", `${name}: candidates step`);

@@ -4691,15 +4691,62 @@ html .secondJourneyCard .secondJourney__picked { margin: 0.6439em 0 0.0920em; li
 .testerIntro__face .eye {
   transform-box: fill-box;
   transform-origin: center;
-  transition: transform 90ms ease-in-out;
+  transform: translate(var(--a995-eye-x, 0px), var(--a995-eye-y, 0px)) scaleY(1);
+  transition: transform 120ms ease-out;
 }
-.testerIntro.is-closed .testerIntro__face .eye { transform: scaleY(0.08); }
+.testerIntro.is-closed .testerIntro__face .eye { transform: translate(var(--a995-eye-x, 0px), var(--a995-eye-y, 0px)) scaleY(0.08); }
 .testerIntro__line { margin: 0; font-family: "Delicious Handrawn", cursive; font-size: 28px; line-height: 1.2; }
 .testerIntro__num { margin: 0; font-family: "Playfair Display", serif; font-style: italic; font-size: 14px; opacity: 0.6; }
 .testerIntro.is-leaving { opacity: 0; }
 .testerIntro.is-leaving .testerIntro__inner { transform: scale(0.92) translateY(-8px); }
 @media (prefers-reduced-motion: reduce) {
   .testerIntro { display: none; }
+}
+
+/* [A-995-b] PWA-only launch bridge. Geometry is A-897's splash generator geometry:
+   a 200/390-width square centred at 225/844 of the viewport. The approved splash image
+   supplies the exact dark field + ARASO wordmark; this square covers only its static face
+   with the byte-identical approved SVG while the eye/mouth paths move. */
+.a995bLoading {
+  position: fixed;
+  inset: 0;
+  z-index: 9100;
+  overflow: hidden;
+  pointer-events: auto;
+  background-color: rgb(21 21 21);
+  background-image: var(--a995b-loading-splash);
+  background-position: 0 0;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+.a995bLoading__face {
+  position: absolute;
+  left: 50%;
+  top: 26.6587677725%; /* 225 / 844, A-897 splash geometry */
+  width: 51.2820512821vw; /* 200 / 390, A-897 splash geometry */
+  aspect-ratio: 1;
+  overflow: hidden;
+  background: rgb(21 21 21);
+  transform: translate(-50%, -50%);
+}
+.a995bLoading__face object { display: block; width: 100%; height: 100%; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) {
+  .a995bLoading__face object { visibility: hidden; }
+}
+
+/* [A-995 ②/③] A-766 eye movement only. The current Gift geometry and intro art stay unchanged. */
+.a911-screen[data-a911="gift"] .a995-eye {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: translate(var(--a995-eye-x, 0px), var(--a995-eye-y, 0px));
+  transition: transform 120ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .a911-screen[data-a911="gift"] .a995-eye,
+  .testerIntro__face .a995-eye {
+    transform: translate(0, 0) scaleY(1);
+    transition: none;
+  }
 }
 
 /* [A-744 TYPOGRAPHY — >=641 READABILITY REPAIR, EXISTING CANON ONLY, NO REDESIGN] A-732 measured the card text on web/iPad
@@ -6478,6 +6525,25 @@ html .a911-act {
 html .a911-act__icon { width: 1.4em; height: 1.4em; flex: none; }
 html .a911-act:disabled { opacity: 0.35; cursor: default; }
 html .a911-screen[data-typing="1"] .a911-act { opacity: 0; pointer-events: none; }
+
+/* [A-979 ④] Fork-only context badge. Existing type/color/safe-area tokens only; fixed overlay never shifts or catches the underlying tap. */
+html .a979-forkBadge {
+  position: fixed;
+  z-index: 90;
+  top: var(--mobile-top-safe);
+  left: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  padding: 0.35em 0.75em;
+  border: 1px solid var(--ink);
+  border-radius: 999px;
+  color: var(--ink);
+  background: var(--paper);
+  font: 400 var(--ts-detail) / 1 var(--font-hand);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+}
 
 /* ── GIFT ── */
 html .a911-giftGroup { width: 100%; display: flex; flex-direction: column; align-items: center; gap: calc(20px * var(--a911-z)); flex: none; }

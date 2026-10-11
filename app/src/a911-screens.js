@@ -59,7 +59,7 @@ const FRONT_ART = Object.freeze({
 
 function frontFace(id, view) {
   const art = FRONT_ART[id];
-  const img = `<img class="a911-pig" src="${art.src}" alt="" style="${art.style}" />`;
+  const img = `<img class="a911-pig" src="${art.src}" alt="" style="${art.style}" data-a995-gift-eye="front" />`;
   const amount = view.amountUsd ? String(view.amountUsd) : "";
   const n = `${amount ? esc(amount) : "—"}`; // [A-911] amounts come from the $20 / $50 / $100 chips only; no typed-amount input (typing your own = follow-up card)
   return `<span class="a911-face a911-face--front">${art.clip ? `<span class="a911-pig a911-pig--clip" style="${art.clip}">${img}</span>` : img}
@@ -72,7 +72,7 @@ function letterFace(view, interactive) {
   return `<span class="a911-face a911-face--back">
     <span class="a911-letter__to"><span class="a911-letter__small">TO</span><input class="a911-letter__in a911-letter__in--to" type="text" autocomplete="off" maxlength="80" aria-label="TO" data-a898-field="to" value="${esc(f.to)}" placeholder="name"${dis} /></span>
     <span class="a911-letter__msgBox"><textarea class="a911-letter__in a911-letter__msg" rows="4" maxlength="140" autocomplete="off" aria-label="message" data-a898-field="message" placeholder="a few words…"${dis}>${esc(f.message)}</textarea></span>
-    <img class="a911-letter__peek" src="/card/gift/piggy_face.svg" alt="" />
+    <img class="a911-letter__peek" src="/card/gift/piggy_face.svg" alt="" data-a995-gift-eye="back" />
     <span class="a911-letter__from"><span class="a911-letter__small">FROM</span><input class="a911-letter__in a911-letter__in--from" type="text" autocomplete="off" maxlength="40" aria-label="FROM" data-a898-field="from" value="${esc(f.from)}"${dis} /></span>
   </span>`;
 }

@@ -30,7 +30,7 @@ import {
 } from "./second-job-readiness.js";
 import { DECISION_RECEIPT_SCHEMA, validateDecisionReceipt } from "./second-journey-state.js";
 import { authorize, consume, onUnknownOutcome, permissionNonce } from "./permission-envelope.js";
-import { bindRecordToProfile, checkRecordBinding } from "./chain-profile.js";
+import { CHAIN_PROFILE_ID, bindRecordToProfile, checkRecordBinding } from "./chain-profile.js";
 import { RPC_DEV_BUILD, rpcUrlAllowed } from "./chain-profile.js"; // [fork-link]
 import { executeMoneyStep, TRANSPORT_KIND } from "./money-executor.js";
 import { mapSecondStateObservation } from "./receipt-evidence-second.js";
@@ -41,7 +41,7 @@ import {
 } from "./mainnet-job-common.js";
 import {
   ERC20_ABI, LANE_ACTION, LANE_AMOUNT_CAP_RAW, LANE_DESTINATION_ID, LANE_ERRAND_IDS, LANE_FORK_EVIDENCE, LANE_JIT_QUESTION_ID,
-  LANE_JOB_ID, LANE_RECEIPT_TOKEN, LANE_SELECTORS, POOL_ABI, decodeReserveConfiguration, isAaveLaneProfile,
+  LANE_JOB_ID, LANE_RECEIPT_TOKEN, LANE_SELECTORS, POOL_ABI, decodeReserveConfiguration, isAaveForkProfile, isAaveLaneProfile,
 } from "./mainnet-job-aave.js";
 
 export {
@@ -78,11 +78,12 @@ function reportDecisionObservation(evidenceSink, receipt) {
     if (p && typeof p.then === "function") p.then(undefined, () => {});
   } catch { /* evidence layer only */ }
 }
-
 const isLaneProfile = isAaveLaneProfile;
 
 function lanePlan(profile, piggyAddress) {
-  const out = buildExecutionPlan(LANE_JOB_ID, { context: { address: piggyAddress, chain: profile.scope }, executionMode: EXECUTION_MODE.LIVE });
+  // [fork-job] the fork copies the mainnet destination: its plan is read under the parent chain's name (mainnet: profile.scope, unchanged)
+  const chain = profile.id === CHAIN_PROFILE_ID.FORK ? CURRENT_READ_JOB_CHAIN.chain : profile.scope;
+  const out = buildExecutionPlan(LANE_JOB_ID, { context: { address: piggyAddress, chain }, executionMode: EXECUTION_MODE.LIVE });
   return out.plan && ADDR.test(out.plan.destination || "") ? out.plan : null;
 }
 
@@ -494,7 +495,7 @@ export function startLaneIntent({ profile, piggy = {}, preview, envelope, signer
 }
 
 // Live execution has no path here: only a local fork executor on the same chain id is accepted.
-// [fork-parent] executorRefusal now asks chainMatchesExecutor (same chain, or the profile table's forkOf); this lane stays 143-only (isAaveLaneProfile).
+// [fork-parent] executorRefusal now asks chainMatchesExecutor (same chain, or the profile table's forkOf); this lane stays 143-only (isAaveLaneProfile). [fork-job] the fork Aave Job runs only through runForkJob (isAaveForkProfile).
 const executorAllowed = executorRefusal;
 
 function stepTx(intent, step, preview) {
@@ -701,6 +702,593 @@ export function laneReceiptCandidate(receipt) {
     measuredDelta: `${receipt.asset} ${receipt.deltaRaw} raw (decimals ${receipt.decimals})`,
     ...(receipt.outcome === "failed" ? { failureReason: `${receipt.failedStep || "unknown"}_reverted` } : {}),
     evidencePointer: { ...receipt, gasUsed: { ...receipt.gasUsed }, unmeasured: [...receipt.unmeasured] },
+  };
+}
+
+// ── [fork-job] Job 10 on the shared fork: Explore errand line → Job → executor → Receipt ───────────────────────────────────────────
+// The family table (second-job-readiness.js FORK_JOB_ROWS: errand line → Jobs) joined with each Job module's own calldata builder,
+// permission request and fork-proven size. Runs ONLY under the shared-fork profile (forkOf 143, chain-profile.js chainMatchesExecutor):
+//   · forkJobProfile() names the chosen Job on a frozen copy of the ACTIVE fork profile (the fork itself carries jobId null); the
+//     testnet / mainnet profiles get null, so nothing here runs there. liveExecution stays false (the copy keeps the fork's false);
+//   · every step's calldata comes from the Job module's encode<Job>Step (the fork-proven shape, never re-aimed); arguments that a step
+//     needs from the chain (held shares, previews, quotes, best bid, margin balance, the order this Piggy created) are read through an
+//     injected reader at the moment the step is built — nothing is invented, a missing read stops the run before that step;
+//   · the one send is money-executor.js executeMoneyStep (transport injected by the caller; the app passes the strict sign-before-send
+//     transport on the fork chain id), after executorRefusal (kind local_fork, same chain or the profile's own forkOf, integer block);
+//   · the record (about to send / hash) is written and read back before and after every send; a run with an unknown outcome blocks the
+//     next one (no automatic retry, no re-send);
+//   · the Receipt carries measured balances only, labelled PASS_APP_FORK_E2E / fork_simulation (never a live class).
+// The <Job>ExecutionGate functions in the Job modules are unchanged and still refuse (they answer the live question, not this one).
+import { parseAbi, parseTransaction, recoverTransactionAddress } from "viem";
+import { SIGN_GUARD_FORK_CHAIN_ID } from "./money-executor.js";
+import { FORK_JOB_ROWS } from "./second-job-readiness.js";
+import { isProfileActive, chainMatchesExecutor } from "./chain-profile.js";
+import { NEVERLAND_FORK_SIZE_RAW, NEVERLAND_JOB_ID, encodeNeverlandStep, neverlandPermissionRequest } from "./mainnet-job-neverland.js";
+import { CURVANCE_FORK_EVIDENCE, CURVANCE_FORK_SIZE_RAW, CURVANCE_JOB_ID, curvancePermissionRequest, encodeCurvanceStep } from "./mainnet-job-curvance.js";
+import { LP_FORK_EVIDENCE, LP_FORK_SIZE_RAW, LP_JOB_ID, encodeLpStep, lpPermissionRequest } from "./mainnet-job-lp.js";
+import { EULER_FORK_EVIDENCE, EULER_FORK_SIZE_RAW, EULER_JOB_ID, encodeEulerStep, eulerPermissionRequest } from "./mainnet-job-euler.js";
+import { UPSHIFT_FORK_EVIDENCE, UPSHIFT_FORK_SIZE_RAW, UPSHIFT_JOB_ID, encodeUpshiftStep, upshiftPermissionRequest } from "./mainnet-job-upshift.js";
+import { KURU_ACTION, KURU_FORK_CAPS, KURU_FORK_EVIDENCE, KURU_JOB_ID, encodeKuruStep, kuruOrderFromLog, kuruPermissionRequest } from "./mainnet-job-kuru.js";
+import { SHMON_FORK_EVIDENCE, SHMON_FORK_SIZE_WEI, SHMON_JOB_ID, encodeShmonStep, shmonPermissionRequest } from "./mainnet-job-shmon.js";
+import { REVOKE_FORK_EVIDENCE, REVOKE_JOB_ID, REVOKE_SPENDER_IDS, encodeRevokeStep, revokePermissionRequest, revokeSpender } from "./mainnet-job-revoke.js";
+
+/** The chain every fork Job's evidence was run on (the fork's parent). */
+export const FORK_JOB_PARENT_CHAIN = LANE_FORK_EVIDENCE.chainId;
+// Jobs wired below but not offered on the fork Explore yet, with the open question that holds them.
+export const FORK_JOB_HELD = Object.freeze({ "fastlane-shmon": "my_money_row_shmon_on_fork_open" });
+
+const R_KURU_MARKET = parseAbi([
+  "function bestBidAsk() view returns (uint256,uint256)",
+  "function placeAndExecuteMarketBuy(uint96 _quoteSize,uint256 _minAmountOut,bool _isMargin,bool _isFillOrKill) payable returns (uint256)",
+  "function placeAndExecuteMarketSell(uint96 _size,uint256 _minAmountOut,bool _isMargin,bool _isFillOrKill) payable returns (uint256)",
+]);
+const R_KURU_MARGIN = parseAbi(["function getBalance(address,address) view returns (uint256)"]);
+const R_CURVE = parseAbi([
+  "function calc_token_amount(uint256[] _amounts,bool _is_deposit) view returns (uint256)",
+  "function calc_withdraw_one_coin(uint256 _burn_amount,int128 i) view returns (uint256)",
+]);
+
+/**
+ * The active shared-fork profile with ONE Job named on it (a frozen copy), or null. Only the fork profile (own forkOf == the table's
+ * parent == 143, its own numeric chain id) qualifies; testnet / mainnet / blocked / a forged object → null.
+ */
+export function forkJobProfile(profile, jobId) {
+  if (!isProfileActive(profile) || profile.id !== CHAIN_PROFILE_ID.FORK || profile.numericChainId === FORK_JOB_PARENT_CHAIN) return null;
+  if (!chainMatchesExecutor(profile, FORK_JOB_PARENT_CHAIN) || profile.liveExecution !== false || profile.jobId !== null) return null;
+  if (typeof jobId !== "string" || !jobId) return null;
+  return Object.freeze({ ...profile, jobId });
+}
+
+const asStr = (v) => (typeof v === "bigint" ? v.toString() : String(v));
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
+const ercBalance = (ctx, token) => ctx.read.call({ to: token, abi: ERC20_ABI, functionName: "balanceOf", args: [ctx.piggyAddress] });
+const ercAllowance = (ctx, token, spender) => ctx.read.call({ to: token, abi: ERC20_ABI, functionName: "allowance", args: [ctx.piggyAddress, spender] });
+
+// Aave on the fork: the lane's own calldata (buildLanePermissionPreview's three encodings), the pool from lanePlan (fork → the parent's plan).
+function encodeAaveForkStep(step, a) {
+  const pool = a.pool;
+  const usdc = a.usdc;
+  if (!ADDR.test(a.piggyAddress || "") || !ADDR.test(pool || "") || !ADDR.test(usdc || "")) return { call: null, error: "missing_piggy_address" };
+  if (step === "withdraw") return { call: Object.freeze({ step, to: pool, value: "0", data: encodeFunctionData({ abi: POOL_ABI, functionName: "withdraw", args: [usdc, maxUint256, a.piggyAddress] }) }), error: null };
+  if (!isDigits(a.amountRaw) || BigInt(a.amountRaw) <= 0n || BigInt(a.amountRaw) > BigInt(LANE_AMOUNT_CAP_RAW)) return { call: null, error: "amount_not_exact" };
+  const amount = BigInt(a.amountRaw);
+  if (step === "approve") return { call: Object.freeze({ step, to: usdc, value: "0", spender: pool, amountRaw: a.amountRaw, data: encodeFunctionData({ abi: ERC20_ABI, functionName: "approve", args: [pool, amount] }) }), error: null };
+  if (step === "supply") return { call: Object.freeze({ step, to: pool, value: "0", amountRaw: a.amountRaw, data: encodeFunctionData({ abi: POOL_ABI, functionName: "supply", args: [usdc, amount, a.piggyAddress, 0] }) }), error: null };
+  return { call: null, error: "unknown_step" };
+}
+function aaveForkRequest(profile, piggy) {
+  if (!isAaveForkProfile(profile)) return { request: null, error: "profile_not_fork_aave_job" };
+  const { binding, error } = bindRecordToProfile(profile, { piggyId: piggy.id, piggyAddress: piggy.address });
+  if (error) return { request: null, error };
+  const plan = lanePlan(profile, piggy.address);
+  if (!plan) return { request: null, error: "no_plan" };
+  return { request: Object.freeze({ piggyId: binding.piggyId, signerAddress: binding.piggyAddress, action: LANE_ACTION, asset: binding.asset, amount: LANE_AMOUNT_CAP_RAW, chain: binding.chain, destination: plan.destination, permission: null, createsPermission: false }), error: null, extra: { pool: plan.destination, usdc: binding.token } };
+}
+
+const USDC_OF = (profile) => profile.usdc?.address;
+const KMP = KURU_FORK_EVIDENCE.marketParams;
+const KURU_SP = BigInt(KMP.sizePrecision);
+const KURU_PP = BigInt(KMP.pricePrecision);
+const E18 = 10n ** 18n;
+
+// One Job: its module id, input asset, size, request, ordered steps (args read at build time), the encoder and the measured balance.
+// args(ctx) may read the chain (ctx.read); ctx.receipts holds the receipts of the steps already confirmed in this run.
+const FORK_JOBS = Object.freeze({
+  "aave-usdc": Object.freeze({
+    jobId: LANE_JOB_ID, asset: "USDC", sizeRaw: LANE_AMOUNT_CAP_RAW,
+    request: (profile, piggy) => aaveForkRequest(profile, piggy),
+    encode: (step, a, ctx) => encodeAaveForkStep(step, { ...a, ...ctx.extra }),
+    steps: [["approve", (c) => ({ amountRaw: c.sizeRaw })], ["supply", (c) => ({ amountRaw: c.sizeRaw })], ["withdraw", () => ({})]],
+    measure: (c) => ercBalance(c, USDC_OF(c.profile)),
+  }),
+  "neverland-usdc": Object.freeze({
+    jobId: NEVERLAND_JOB_ID, asset: "USDC", sizeRaw: NEVERLAND_FORK_SIZE_RAW,
+    request: (profile, piggy, eventId) => neverlandPermissionRequest({ profile, piggy, amountRaw: NEVERLAND_FORK_SIZE_RAW, eventId }),
+    encode: (step, a) => encodeNeverlandStep(step, a),
+    steps: [["approve", (c) => ({ amountRaw: c.sizeRaw })], ["supply", (c) => ({ amountRaw: c.sizeRaw })], ["withdraw", () => ({})]],
+    measure: (c) => ercBalance(c, USDC_OF(c.profile)),
+  }),
+  "curvance-usdc": Object.freeze({
+    jobId: CURVANCE_JOB_ID, asset: "USDC", sizeRaw: CURVANCE_FORK_SIZE_RAW,
+    request: (profile, piggy, eventId) => curvancePermissionRequest({ profile, piggy, amountRaw: CURVANCE_FORK_SIZE_RAW, eventId }),
+    encode: (step, a) => encodeCurvanceStep(step, a),
+    steps: [["approve", (c) => ({ amountRaw: c.sizeRaw })], ["deposit", (c) => ({ amountRaw: c.sizeRaw })],
+      ["redeem", async (c) => ({ heldSharesRaw: asStr(await ercBalance(c, CURVANCE_FORK_EVIDENCE.share.address)) })]],
+    measure: (c) => ercBalance(c, USDC_OF(c.profile)),
+  }),
+  "euler-k3-weth": Object.freeze({
+    jobId: EULER_JOB_ID, asset: "WETH", sizeRaw: EULER_FORK_SIZE_RAW,
+    request: (profile, piggy, eventId) => eulerPermissionRequest({ profile, piggy, amountRaw: EULER_FORK_SIZE_RAW, eventId }),
+    encode: (step, a) => encodeEulerStep(step, a),
+    steps: [["approve", (c) => ({ amountRaw: c.sizeRaw })], ["deposit", (c) => ({ amountRaw: c.sizeRaw })],
+      ["redeem", async (c) => ({ heldSharesRaw: asStr(await ercBalance(c, EULER_FORK_EVIDENCE.vault)) })]],
+    measure: (c) => ercBalance(c, EULER_FORK_EVIDENCE.asset.address),
+  }),
+  "upshift-earnausd": Object.freeze({
+    jobId: UPSHIFT_JOB_ID, asset: "AUSD", sizeRaw: UPSHIFT_FORK_SIZE_RAW,
+    request: (profile, piggy, eventId) => upshiftPermissionRequest({ profile, piggy, amountRaw: UPSHIFT_FORK_SIZE_RAW, eventId }),
+    encode: (step, a) => encodeUpshiftStep(step, a),
+    steps: [["approve", (c) => ({ amountRaw: c.sizeRaw })], ["deposit", (c) => ({ amountRaw: c.sizeRaw })],
+      ["instantRedeem", async (c) => ({ heldSharesRaw: asStr(await ercBalance(c, UPSHIFT_FORK_EVIDENCE.shareToken.address)) })]],
+    measure: (c) => ercBalance(c, UPSHIFT_FORK_EVIDENCE.asset.address),
+  }),
+  "fastlane-shmon": Object.freeze({
+    jobId: SHMON_JOB_ID, asset: "MON", sizeRaw: SHMON_FORK_SIZE_WEI,
+    request: (profile, piggy, eventId) => shmonPermissionRequest({ profile, piggy, amountWei: SHMON_FORK_SIZE_WEI, eventId }),
+    encode: (step, a) => encodeShmonStep(step, a),
+    steps: [["deposit", (c) => ({ amountWei: c.sizeRaw, valueWei: c.sizeRaw })],
+      ["redeem", async (c) => ({ heldSharesRaw: asStr(await ercBalance(c, SHMON_FORK_EVIDENCE.vault)) })]],
+    measure: (c) => c.read.native(c.piggyAddress),
+  }),
+  "kuru-swap": Object.freeze({
+    jobId: KURU_JOB_ID, asset: "USDC", sizeRaw: KURU_FORK_CAPS.buyUsdcRaw,
+    request: (profile, piggy, eventId) => kuruPermissionRequest({ profile, piggy, action: KURU_ACTION.BUY, amountRaw: KURU_FORK_CAPS.buyUsdcRaw, eventId }),
+    encode: (step, a) => encodeKuruStep(step, a),
+    steps: [
+      ["approveMarket", (c) => ({ amountRaw: c.sizeRaw })],
+      ["buyMon", async (c) => {
+        const quoteSize = (BigInt(c.sizeRaw) * KURU_PP) / 10n ** BigInt(KURU_FORK_EVIDENCE.usdc.decimals);
+        const q = await c.read.call({ to: KURU_FORK_EVIDENCE.market, abi: R_KURU_MARKET, functionName: "placeAndExecuteMarketBuy", args: [quoteSize, 0n, false, true], from: c.piggyAddress });
+        c.notes.monBeforeBuy = await c.read.native(c.piggyAddress);
+        return { amountRaw: c.sizeRaw, quoteMonWei: asStr(q) };
+      }],
+      ["revokeMarket", async (c) => { c.notes.monAfterBuy = await c.read.native(c.piggyAddress); return {}; }],
+      ["sellBack", async (c) => {
+        const gas = BigInt(c.receipts.buyMon?.gasCostWei ?? "0");
+        const got = BigInt(c.notes.monAfterBuy) - BigInt(c.notes.monBeforeBuy) + gas;
+        let size = (got * KURU_SP) / E18;
+        const capSize = (BigInt(KURU_FORK_CAPS.sellBackMonWei) * KURU_SP) / E18;
+        if (size > capSize) size = capSize;
+        const val = (size * E18) / KURU_SP;
+        const qs = await c.read.call({ to: KURU_FORK_EVIDENCE.market, abi: R_KURU_MARKET, functionName: "placeAndExecuteMarketSell", args: [size, 0n, false, true], from: c.piggyAddress, value: val });
+        return { monWei: val.toString(), quoteUsdcRaw: asStr(qs) };
+      }],
+    ],
+    measure: (c) => ercBalance(c, KURU_FORK_EVIDENCE.usdc.address),
+  }),
+  "kuru-limit": Object.freeze({
+    jobId: KURU_JOB_ID, asset: "USDC", sizeRaw: KURU_FORK_CAPS.marginDepositRaw,
+    request: (profile, piggy, eventId) => kuruPermissionRequest({ profile, piggy, action: KURU_ACTION.LIMIT, amountRaw: KURU_FORK_CAPS.marginDepositRaw, eventId }),
+    encode: (step, a) => encodeKuruStep(step, a),
+    steps: [
+      ["approveMargin", (c) => ({ amountRaw: c.sizeRaw })],
+      ["depositMargin", (c) => ({ amountRaw: c.sizeRaw })],
+      ["placeLimit", async (c) => {
+        const bb = await c.read.call({ to: KURU_FORK_EVIDENCE.market, abi: R_KURU_MARKET, functionName: "bestBidAsk", args: [] });
+        const m = await c.read.call({ to: KURU_FORK_EVIDENCE.marginAccount, abi: R_KURU_MARGIN, functionName: "getBalance", args: [c.piggyAddress, KURU_FORK_EVIDENCE.usdc.address] });
+        return { bestBidRaw: asStr(bb[0]), sizeRaw: KURU_FORK_CAPS.limitSizeRaw, marginBalanceRaw: asStr(m) };
+      }],
+      ["cancelLimit", (c) => {
+        for (const log of c.receipts.placeLimit?.logs || []) { const r = kuruOrderFromLog(log, c.piggyAddress); if (r.order) return { order: r.order }; }
+        return {};
+      }],
+      ["withdrawMargin", async (c) => ({ amountRaw: asStr(await c.read.call({ to: KURU_FORK_EVIDENCE.marginAccount, abi: R_KURU_MARGIN, functionName: "getBalance", args: [c.piggyAddress, KURU_FORK_EVIDENCE.usdc.address] })) })],
+      ["revokeMargin", () => ({})],
+    ],
+    measure: (c) => ercBalance(c, KURU_FORK_EVIDENCE.usdc.address),
+  }),
+  "usdc-allowance-revoke": Object.freeze({
+    jobId: REVOKE_JOB_ID, asset: "USDC", sizeRaw: "0",
+    // the spender = the first allowlisted spender this Piggy has a measured non-zero USDC allowance to (none = nothing to tidy, nothing sent)
+    request: async (profile, piggy, eventId, c) => {
+      for (const id of REVOKE_SPENDER_IDS) {
+        const sp = revokeSpender(id);
+        const a = await ercAllowance(c, REVOKE_FORK_EVIDENCE.token.address, sp.address);
+        if (BigInt(a) > 0n) { c.notes.spender = id; c.notes.allowanceRaw = asStr(a); return revokePermissionRequest({ profile, piggy, spender: id, eventId }); }
+      }
+      return { request: null, error: "allowance_already_zero" };
+    },
+    encode: (step, a) => encodeRevokeStep(step, a),
+    steps: [["revoke", (c) => ({ spender: c.notes.spender, allowanceRaw: c.notes.allowanceRaw, amountRaw: "0" })]],
+    measure: async (c) => (c.notes.spender ? ercAllowance(c, REVOKE_FORK_EVIDENCE.token.address, revokeSpender(c.notes.spender).address) : 0n),
+  }),
+  "curve-ausd-usdc-usdt0-lp": Object.freeze({
+    jobId: LP_JOB_ID, asset: "USDC", sizeRaw: LP_FORK_SIZE_RAW,
+    request: (profile, piggy, eventId) => lpPermissionRequest({ profile, piggy, amountRaw: LP_FORK_SIZE_RAW, eventId }),
+    encode: (step, a) => encodeLpStep(step, a),
+    steps: [
+      ["approve", (c) => ({ amountRaw: c.sizeRaw })],
+      ["addLiquidity", async (c) => {
+        const amounts = [0n, 0n, 0n];
+        amounts[LP_FORK_EVIDENCE.usdcIndex] = BigInt(c.sizeRaw);
+        return { amountRaw: c.sizeRaw, previewLpRaw: asStr(await c.read.call({ to: LP_FORK_EVIDENCE.pool, abi: R_CURVE, functionName: "calc_token_amount", args: [amounts, true] })) };
+      }],
+      ["exitHalf", async (c) => {
+        const held = BigInt(await ercBalance(c, LP_FORK_EVIDENCE.lpToken.address));
+        return { heldLpRaw: held.toString(), previewUsdcRaw: asStr(await c.read.call({ to: LP_FORK_EVIDENCE.pool, abi: R_CURVE, functionName: "calc_withdraw_one_coin", args: [held / 2n, BigInt(LP_FORK_EVIDENCE.usdcIndex)] })) };
+      }],
+      ["exitRest", async (c) => {
+        const held = BigInt(await ercBalance(c, LP_FORK_EVIDENCE.lpToken.address));
+        return { heldLpRaw: held.toString(), previewUsdcRaw: asStr(await c.read.call({ to: LP_FORK_EVIDENCE.pool, abi: R_CURVE, functionName: "calc_withdraw_one_coin", args: [held, BigInt(LP_FORK_EVIDENCE.usdcIndex)] })) };
+      }],
+      ["revoke", () => ({})],
+    ],
+    measure: (c) => ercBalance(c, USDC_OF(c.profile)),
+  }),
+});
+
+/** The strict sign-before-send transport (money-executor.js VIEM_RAW: prepare → sign guard → hash saved → broadcast) for the app's fork run. */
+export function forkJobStrictTransport({ walletClient, publicClient, account } = {}) {
+  return { kind: TRANSPORT_KIND.VIEM_RAW, walletClient, publicClient, account };
+}
+
+/** Job keys wired here, in table order. */
+export const FORK_JOB_KEYS = Object.freeze(Object.keys(FORK_JOBS));
+/** The Job steps of one fork Job, in send order (names only). */
+export function forkJobSteps(jobKey) {
+  return has(FORK_JOBS, jobKey) ? Object.freeze(FORK_JOBS[jobKey].steps.map(([s]) => s)) : null;
+}
+/** The family row (errand line) a fork Job sits behind, or null. */
+export function forkJobRow(jobKey) {
+  return FORK_JOB_ROWS.find((r) => r.jobs.includes(jobKey)) || null;
+}
+
+/**
+ * The Job one errand line runs next: the first Job of that line (table order) not held and not yet returned for this Piggy
+ * (`doneJobKeys` = the destination ids of this Piggy's done Receipts on this scope); all done → the first one again. null = no Job.
+ */
+export function forkJobForErrand(errandId, { doneJobKeys = [] } = {}) {
+  const row = FORK_JOB_ROWS.find((r) => r.errandId === errandId);
+  if (!row) return null;
+  const open = row.jobs.filter((k) => has(FORK_JOBS, k) && !has(FORK_JOB_HELD, k));
+  if (!open.length) return null;
+  const done = new Set(Array.isArray(doneJobKeys) ? doneJobKeys : []);
+  return open.find((k) => !done.has(k)) || open[0];
+}
+
+/**
+ * Explore candidate rows on the fork, in the exploreCandidateRows() row shape (candidateId · family · status): one row per errand
+ * line, its candidate = the Job that line runs next. Never runnable by itself — the run still needs runForkJob's boundaries.
+ */
+export function forkExploreRows({ doneJobKeys = [] } = {}) {
+  const rows = [];
+  for (const r of FORK_JOB_ROWS) {
+    const jobKey = forkJobForErrand(r.errandId, { doneJobKeys });
+    if (!jobKey) continue;
+    rows.push(Object.freeze({ candidateId: jobKey, family: r.family, alternatives: Object.freeze(r.jobs.filter((k) => k !== jobKey)), status: EXPLORE_CANDIDATE_STATUS.UNKNOWN, reason: "fork_job", described: false, runnable: false, executionPermission: false, liveExecution: false }));
+  }
+  return Object.freeze(rows);
+}
+
+const FORK_JOB_RECORD_SCHEMA = "araso_fork_job_record_v1";
+const FORK_JOB_TERMINAL = new Set(["returned", "reverted", "stopped"]);
+export function forkJobRecordKey(profile, piggyId) {
+  if (!isProfileActive(profile) || profile.id !== CHAIN_PROFILE_ID.FORK || typeof piggyId !== "string" || !piggyId.trim()) return null;
+  return `araso.forkJob.v1.${profile.scope}.${profile.forkInstanceId || "UNKNOWN"}.${piggyId.trim()}`;
+}
+function loadForkJobRecord(storage, key) {
+  if (!storage || !key) return { record: null, error: "no_scope" };
+  let raw;
+  try { raw = storage.getItem(key); } catch { return { record: null, error: "storage_read_failed" }; }
+  if (!raw) return { record: null, error: null };
+  try { const r = JSON.parse(raw); return r && r.schema === FORK_JOB_RECORD_SCHEMA ? { record: r, error: null } : { record: null, error: "wrong_schema" }; } catch { return { record: null, error: "corrupt" }; }
+}
+
+// The only chain a fork Job ever signs for or sends on (the money-executor sign guard's own fork id), whatever the profile object says.
+const FORK_JOB_SEND_CHAIN = SIGN_GUARD_FORK_CHAIN_ID;
+// An own DATA property or undefined: a key found only on a prototype, or behind a getter / setter, counts as missing (nothing there is trusted).
+function ownData(o, k) {
+  if (!o || (typeof o !== "object" && typeof o !== "function")) return undefined;
+  let d;
+  try { d = Object.getOwnPropertyDescriptor(o, k); } catch { return undefined; }
+  return d && has(d, "value") ? d.value : undefined;
+}
+// A deep frozen plain copy of an object's own data properties (nested plain objects / arrays too, e.g. usdc.address, assets.*), each read
+// once; any getter / setter, function, or nesting deeper than 6 → null (the caller refuses). Calldata is built only from this copy.
+function ownDataCopy(o, depth = 0) {
+  if (!o || typeof o !== "object" || depth > 6) return null;
+  const arr = Array.isArray(o);
+  const out = arr ? [] : {};
+  try {
+    for (const k of Reflect.ownKeys(o)) {
+      if (typeof k !== "string") continue;
+      const d = Object.getOwnPropertyDescriptor(o, k);
+      if (!d || !has(d, "value")) return null;
+      const v = d.value;
+      if (typeof v === "function") return null;
+      if (v && typeof v === "object") {
+        const c = ownDataCopy(v, depth + 1);
+        if (!c) return null;
+        out[k] = c;
+      } else if (!(arr && k === "length")) out[k] = v;
+    }
+  } catch { return null; }
+  return Object.freeze(out);
+}
+// The prepared request as a frozen plain snapshot, each field read once: primitive fields only (no getters, no nested objects), an empty
+// access list at most, nothing outside the eip1559 field set; it must name the fork's own chain id and the exact to / data / value asked
+// for. Only this snapshot is checked by the sign guard and signed. Returns { snap } or { problem }.
+const PREPARED_PRIMITIVE = Object.freeze(["chainId", "type", "to", "data", "value", "nonce", "gas", "maxFeePerGas", "maxPriorityFeePerGas", "gasPrice", "from"]);
+const PREPARED_DROPPED = Object.freeze(["account", "chain"]);
+function preparedSnapshot(prepared, tx) {
+  if (!prepared || typeof prepared !== "object" || Array.isArray(prepared)) return { problem: "prepared_missing" };
+  const snap = {};
+  try {
+    for (const k of Reflect.ownKeys(prepared)) {
+      const d = Object.getOwnPropertyDescriptor(prepared, k);
+      if (!d || !has(d, "value")) return { problem: "prepared_accessor" };
+      const v = d.value;
+      if (typeof k !== "string" || PREPARED_DROPPED.includes(k)) continue;
+      if (v === undefined || v === null) continue;
+      if (PREPARED_PRIMITIVE.includes(k)) {
+        if (typeof v === "object" || typeof v === "function") return { problem: "prepared_field_not_plain" };
+        snap[k] = v;
+      } else if (k === "accessList") {
+        if (!Array.isArray(v) || Object.getOwnPropertyDescriptor(v, "length").value !== 0) return { problem: "access_list_present" };
+        snap.accessList = [];
+      } else return { problem: "prepared_unexpected_field" };
+    }
+  } catch { return { problem: "prepared_unreadable" }; }
+  if (snap.chainId !== FORK_JOB_SEND_CHAIN) return { problem: "prepared_not_fork_chain" };
+  if (lower(snap.to) !== lower(tx.to) || lower(snap.data ?? "0x") !== lower(tx.data ?? "0x") || (snap.value ?? 0n) !== tx.value) return { problem: "prepared_tx_changed" };
+  if (snap.accessList) Object.freeze(snap.accessList);
+  return { snap: Object.freeze(snap) };
+}
+// The signed bytes, decoded: an eip1559 tx for the fork's own chain id carrying exactly the snapshot that was checked, with a signature.
+function signedRawProblem(raw, want) {
+  if (typeof raw !== "string" || !/^0x[0-9a-fA-F]+$/.test(raw)) return "signed_tx_unreadable";
+  let t;
+  try { t = parseTransaction(raw); } catch { return "signed_tx_unreadable"; }
+  if (!t || t.type !== "eip1559") return "signed_tx_type";
+  if (t.chainId !== FORK_JOB_SEND_CHAIN) return "signed_tx_not_fork_chain";
+  if (lower(t.to) !== lower(want.to) || lower(t.data ?? "0x") !== lower(want.data ?? "0x") || (t.value ?? 0n) !== (want.value ?? 0n)) return "signed_tx_changed";
+  if ((t.nonce ?? 0) !== want.nonce || (t.gas ?? 0n) !== want.gas || (t.maxFeePerGas ?? 0n) !== want.maxFeePerGas || (t.maxPriorityFeePerGas ?? 0n) !== want.maxPriorityFeePerGas) return "signed_tx_changed";
+  if (Array.isArray(t.accessList) && t.accessList.length) return "signed_tx_changed";
+  if (typeof t.r !== "string" || typeof t.s !== "string" || (t.yParity === undefined && t.v === undefined)) return "signed_tx_unsigned";
+  return null;
+}
+
+/**
+ * Runs ONE fork Job end to end for this Piggy. Options (all injected, read as OWN data properties only — a key on a prototype or behind a
+ * getter counts as missing): profile (the active fork profile), piggy { id, address }, jobKey, executor { kind "local_fork", chainId,
+ * forkBlock, send, receipt(hash) → { status, gasUsed, blockNumber, logs, gasCostWei } }, transport (money-executor.js VIEM_RAW transport),
+ * read { call({ to, abi, functionName, args, from?, value? }), native(address) }, storage, eventId, nowIso, entryCheck (async () => true
+ * only when the fork entry server allows money for this Piggy now).
+ * Enforced here whatever the caller passes: the transport must be the strict sign-before-send transport (money-executor VIEM_RAW: prepare →
+ * sign guard → hash saved → broadcast; requireSignBeforeSend is always true), its signer must be this Piggy, its RPC must answer the fork's
+ * own chain id (31337143), the executor's chain id must be that id (a 143 / 10143 / other executor is refused), and entryCheck is asked
+ * before the run and again before EVERY send (missing / false / throw = 0 sends). Per step: the prepared tx is taken once as a plain
+ * snapshot (getters refused) that must name 31337143 and the exact to / data / value; only that snapshot is checked and signed; the signed
+ * bytes are decoded before they are handed back and must be an eip1559 tx for 31337143 equal to the snapshot; only those exact bytes are
+ * broadcast. Any mismatch = that step is not sent.
+ * @returns {Promise<{status: string, reason: string|null, calls: object[], receipt: object|null}>}
+ *   status: "returned" (every step confirmed) · "reverted" · "unknown" (send outcome unknown; blocks the next run) · "refused" (nothing sent)
+ *   · "stopped" (a later step could not be built or was refused after earlier steps confirmed).
+ */
+export async function runForkJob(options = {}) {
+  const calls = [];
+  const refuse = (reason) => ({ status: "refused", reason, calls, receipt: null });
+  const opt = (k) => ownData(options, k);
+  const jobKey = opt("jobKey");
+  const job = typeof jobKey === "string" && has(FORK_JOBS, jobKey) ? FORK_JOBS[jobKey] : null;
+  if (!job) return refuse("unknown_fork_job");
+  const row = forkJobRow(jobKey);
+  const piggy = opt("piggy");
+  const pid = ownData(piggy, "id");
+  const paddr = ownData(piggy, "address");
+  const p = { id: typeof pid === "string" ? pid : undefined, address: typeof paddr === "string" ? paddr : undefined };
+  if (!ADDR.test(p.address || "") || !p.id) return refuse("missing_piggy");
+  const profile = ownDataCopy(opt("profile"));
+  const jp = profile ? forkJobProfile(profile, job.jobId) : null;
+  if (!jp || jp.numericChainId !== FORK_JOB_SEND_CHAIN) return refuse("profile_not_fork");
+  const ex = opt("executor");
+  const executor = Object.freeze({ kind: ownData(ex, "kind"), chainId: ownData(ex, "chainId"), forkBlock: ownData(ex, "forkBlock"), send: ownData(ex, "send"), receipt: ownData(ex, "receipt") });
+  const refused = executorRefusal(jp, executor);
+  if (refused) return refuse(refused);
+  // the fork's own chain only: an executor on the parent chain (143) or any other chain never sends here (executorRefusal alone admits forkOf)
+  if (executor.chainId !== FORK_JOB_SEND_CHAIN) return refuse("executor_not_fork_chain");
+  const tp = opt("transport");
+  const wc = ownData(tp, "walletClient");
+  const pc = ownData(tp, "publicClient");
+  const acct = ownData(tp, "account");
+  const prepareFn = ownData(wc, "prepareTransactionRequest");
+  const chainIdFn = ownData(pc, "getChainId");
+  const sendRawFn = ownData(pc, "sendRawTransaction");
+  const signFn = ownData(acct, "signTransaction");
+  const signerAddress = ownData(acct, "address");
+  if (ownData(tp, "kind") !== TRANSPORT_KIND.VIEM_RAW || typeof prepareFn !== "function" || typeof chainIdFn !== "function" || typeof sendRawFn !== "function" || typeof signFn !== "function" || typeof signerAddress !== "string") return refuse("strict_transport_required");
+  if (lower(signerAddress) !== lower(p.address)) return refuse("signer_not_piggy");
+  const entryCheck = opt("entryCheck");
+  if (typeof entryCheck !== "function") return refuse("entry_check_missing");
+  const entryOk = async () => { try { return (await entryCheck()) === true; } catch { return false; } };
+  if (!(await entryOk())) return refuse("fork_entry_refused");
+  let rpcChain;
+  try { rpcChain = await chainIdFn.call(pc); } catch { rpcChain = null; }
+  if (rpcChain !== FORK_JOB_SEND_CHAIN) return refuse("rpc_not_fork_chain");
+  // per step: stepTx = what this run encoded; snapshot = the one prepared tx checked and signed; approvedRaw = the one byte string broadcast
+  let stepTx = null;
+  let snapshot = null;
+  let approvedRaw = null;
+  let stepProblem = null;
+  const fail = (problem) => { stepProblem = problem; throw new Error(problem); };
+  const strict = Object.freeze({
+    kind: TRANSPORT_KIND.VIEM_RAW,
+    account: Object.freeze({
+      address: signerAddress,
+      signTransaction: async (toSign) => {
+        approvedRaw = null;
+        const want = snapshot;
+        if (!want || !toSign || typeof toSign !== "object") fail("sign_request_missing");
+        for (const k of ["chainId", "to", "data", "value", "nonce", "gas", "maxFeePerGas", "maxPriorityFeePerGas", "type"]) if (ownData(toSign, k) !== want[k]) fail("sign_request_changed");
+        const raw = await signFn.call(acct, toSign);
+        const problem = signedRawProblem(raw, want);
+        if (problem) fail(problem);
+        // the bytes must be signed by this Piggy's key (account.address alone is only a claim)
+        let from;
+        try { from = await recoverTransactionAddress({ serializedTransaction: raw }); } catch { from = null; }
+        if (typeof from !== "string" || lower(from) !== lower(p.address)) fail("signed_tx_not_piggy");
+        approvedRaw = raw;
+        return raw;
+      },
+    }),
+    publicClient: Object.freeze({
+      sendRawTransaction: async (a) => {
+        const raw = ownData(a, "serializedTransaction");
+        if (!approvedRaw || raw !== approvedRaw) fail("raw_not_approved");
+        approvedRaw = null;
+        return sendRawFn.call(pc, { serializedTransaction: raw });
+      },
+    }),
+    walletClient: Object.freeze({
+      prepareTransactionRequest: async () => {
+        snapshot = null;
+        approvedRaw = null;
+        if (!stepTx) fail("no_step_tx");
+        const prepared = await prepareFn.call(wc, { account: acct, to: stepTx.to, data: stepTx.data, value: stepTx.value });
+        const s = preparedSnapshot(prepared, stepTx);
+        if (s.problem) fail(s.problem);
+        snapshot = s.snap;
+        return s.snap;
+      },
+    }),
+  });
+  const read = opt("read");
+  const readCall = ownData(read, "call");
+  const readNative = ownData(read, "native");
+  const storage = opt("storage");
+  const eventId = opt("eventId");
+  const nowIso = opt("nowIso");
+  if (typeof readCall !== "function" || typeof readNative !== "function") return refuse("no_reader");
+  const rd = Object.freeze({ call: (q) => readCall.call(read, q), native: (a) => readNative.call(read, a) });
+  const id = typeof eventId === "string" && eventId ? eventId : null;
+  if (!id) return refuse("missing_event_id");
+  const at = typeof nowIso === "string" ? nowIso : "UNKNOWN_TIME";
+  const ctx = { profile: jp, piggyAddress: p.address, read: rd, receipts: {}, notes: {}, sizeRaw: job.sizeRaw, extra: {} };
+  let req;
+  try { req = await job.request(jp, p, id, ctx); } catch { req = { request: null, error: "read_failed" }; }
+  if (!req || req.error || !req.request) return refuse(req?.error || "no_request");
+  if (req.extra) ctx.extra = req.extra;
+  const key = forkJobRecordKey(jp, p.id);
+  const existing = loadForkJobRecord(storage, key);
+  if (existing.error) return refuse(existing.error === "no_scope" ? "no_scope" : "existing_record_unreadable");
+  if (existing.record && !FORK_JOB_TERMINAL.has(existing.record.stage)) return refuse("errand_in_flight");
+  let before;
+  try { before = asStr(await job.measure(ctx)); } catch { return refuse("read_failed"); }
+  let record = { schema: FORK_JOB_RECORD_SCHEMA, eventId: id, jobKey, jobId: job.jobId, piggyId: p.id, piggyAddress: p.address, chainId: jp.numericChainId, chain: jp.scope, forkBlock: executor.forkBlock, stage: "authorized", steps: {}, beforeRaw: before, createdAt: at };
+  if (!saveRecordVerified(storage, key, record)) return refuse("storage_write_failed");
+  const finish = (status, reason, failedStep = null) => ({ status, reason, failedStep });
+  let end = null;
+  for (const [step, argsOf] of job.steps) {
+    let args;
+    try { args = await argsOf(ctx); } catch { end = finish(calls.length ? "stopped" : "refused", "read_failed", step); break; }
+    const { call, error } = job.encode(step, { piggyAddress: p.address, ...args }, ctx);
+    if (error || !call) { end = finish(calls.length ? "stopped" : "refused", error || "no_call", step); break; }
+    const tx = Object.freeze({ to: call.to, data: call.data, value: BigInt(call.value || "0") });
+    const sending = { ...record, stage: `${step}_sending` };
+    stepTx = tx;
+    snapshot = null;
+    approvedRaw = null;
+    stepProblem = null;
+    const sent = await executeMoneyStep({
+      tx,
+      transport: strict,
+      requireSignBeforeSend: true,
+      authorize: async () => {
+        if (!(await entryOk())) return { ok: false, reason: "fork_entry_refused" };
+        const s = loadForkJobRecord(storage, key);
+        return s.record && s.record.eventId === id && s.record.stage === record.stage ? { ok: true } : { ok: false, reason: "stored_record_changed" };
+      },
+      reserve: () => (saveRecordVerified(storage, key, sending) ? { ok: true } : { ok: false, reason: "storage_write_failed" }),
+      persistHash: ({ hash }) => saveRecordVerified(storage, key, { ...sending, stage: `${step}_sent`, steps: { ...record.steps, [step]: { hash, status: "pending" } } }) ? { ok: true } : { ok: false, reason: "storage_write_failed" },
+    });
+    if (sent.status === "blocked") {
+      // nothing broadcast for this step; the stored record is put back to the last settled stage
+      saveRecordVerified(storage, key, record);
+      end = finish(calls.length ? "stopped" : "refused", stepProblem || sent.reason || "blocked", step);
+      break;
+    }
+    calls.push(Object.freeze({ step, to: call.to, data: call.data, value: String(call.value || "0"), hash: sent.hash || null }));
+    if (sent.status !== "broadcast") { record = { ...sending, stage: "unknown" }; saveRecordVerified(storage, key, record); end = finish("unknown", sent.reason || "send_outcome_unknown", step); break; }
+    let r;
+    try { r = await executor.receipt.call(ex, sent.hash); } catch { r = null; }
+    if (!r || (r.status !== "success" && r.status !== "reverted")) { record = { ...sending, stage: "unknown", steps: { ...record.steps, [step]: { hash: sent.hash, status: "pending" } } }; saveRecordVerified(storage, key, record); end = finish("unknown", "receipt_not_found", step); break; }
+    ctx.receipts[step] = r;
+    record = { ...record, stage: r.status === "success" ? `${step}_confirmed` : "reverted", steps: { ...record.steps, [step]: { hash: sent.hash, status: r.status, gasUsed: Number.isInteger(r.gasUsed) ? r.gasUsed : null } } };
+    saveRecordVerified(storage, key, record);
+    if (r.status === "reverted") { end = finish("reverted", `${step}_reverted`, step); break; }
+  }
+  if (!end) end = finish("returned", null);
+  if (end.status === "unknown") return { status: "unknown", reason: end.reason, calls, receipt: null };
+  record = { ...record, stage: end.status === "returned" ? "returned" : end.status === "refused" ? "stopped" : end.status };
+  if (end.status === "refused") { saveRecordVerified(storage, key, record); return { status: "refused", reason: end.reason, calls, receipt: null }; }
+  let after = null;
+  try { after = asStr(await job.measure(ctx)); } catch { after = null; }
+  saveRecordVerified(storage, key, { ...record, afterRaw: after });
+  const lastTx = calls.length ? calls[calls.length - 1].hash : null;
+  const receipt = Object.freeze({
+    schema: "araso_fork_job_receipt_v1",
+    eventId: id,
+    outcome: end.status === "returned" ? "done" : "failed",
+    evidenceClass: EVIDENCE_LABEL.APP_FORK_E2E,
+    executionMode: EXECUTION_MODE.FORK_SIMULATION,
+    chainId: jp.numericChainId,
+    chain: jp.scope,
+    forkOf: FORK_JOB_PARENT_CHAIN,
+    forkBlock: executor.forkBlock,
+    jobKey,
+    jobId: job.jobId,
+    errandId: row ? row.errandId : null,
+    family: row ? row.family : null,
+    piggyId: p.id,
+    piggyAddress: p.address,
+    asset: job.asset,
+    beforeRaw: before,
+    afterRaw: after,
+    deltaRaw: after === null ? null : (BigInt(after) - BigInt(before)).toString(),
+    txs: Object.freeze(Object.fromEntries(Object.entries(record.steps).map(([s, v]) => [s, v.hash]))),
+    gasUsed: Object.freeze(Object.fromEntries(Object.entries(record.steps).map(([s, v]) => [s, v.gasUsed ?? null]))),
+    lastTx,
+    failedStep: end.failedStep,
+    failureReason: end.reason,
+    recordedAt: at,
+  });
+  return { status: end.status, reason: end.reason, calls, receipt };
+}
+
+/**
+ * The fork Job Receipt as a Second Journey receipt candidate (second-journey-receipt-bridge.js allow-list) plus `at` for the existing
+ * common Return receipt line (receipt-paper.js receiptPaperFields: date · came back · status). `scope` = the Second Journey scope.
+ */
+export function forkJobReceiptCandidate(receipt, scope = {}) {
+  if (!receipt || receipt.schema !== "araso_fork_job_receipt_v1") return null;
+  return {
+    eventId: receipt.eventId,
+    outcome: receipt.outcome,
+    evidenceClass: receipt.evidenceClass,
+    executionMode: receipt.executionMode,
+    accountId: typeof scope.accountId === "string" ? scope.accountId : receipt.piggyAddress,
+    chainId: typeof scope.chainId === "string" ? scope.chainId : receipt.chain,
+    piggyId: receipt.piggyId,
+    destinationId: receipt.jobKey,
+    jobFamily: receipt.family,
+    ...(TX.test(receipt.lastTx || "") ? { txHash: receipt.lastTx } : {}),
+    forkBlock: receipt.forkBlock,
+    txExecuted: true,
+    ...(receipt.deltaRaw !== null ? { measuredDelta: `${receipt.deltaRaw} ${receipt.asset} raw` } : {}),
+    ...(receipt.outcome === "failed" && receipt.failureReason ? { failureReason: receipt.failureReason } : {}),
+    recordedAt: receipt.recordedAt,
+    sourceTask: "fork-job",
+    at: receipt.recordedAt,
   };
 }
 

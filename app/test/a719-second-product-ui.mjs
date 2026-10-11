@@ -537,9 +537,11 @@ async function browserRun(browser, BASE, shots) {
       assert.equal(/checking…/.test(await p.evaluate(() => document.querySelector("#secondJourneyCard h2").innerText)), false, "[A-849] no fake checking…");
       await sleep(2200);
       const rows = await picks();
-      assert.deepEqual(rows.map((r) => r.id), ["aave-usdc", "abil-spot", "kintsu-smon"]); // [A-727 re-pin: pass order]
+      // [A-977 RE-PIN] fork Explore = the fork Job rows: grow → the next Grow Job (Euler first); asset-piece (aBIL) and Kintsu have no fork row.
+      // pre-A-977: ids ["aave-usdc", "abil-spot", "kintsu-smon"] · texts ["a quick trip", "try the stock market", "stay out a little longer"]
+      assert.deepEqual(rows.map((r) => r.id), ["euler-k3-weth"]); // pre-A-977 (see above)
       assert.ok(rows.length <= 3 && rows.every((r) => !r.hidden && !r.disabled && !r.picked && r.fits));
-      assert.deepEqual(rows.map((r) => r.text), ["a quick trip", "try the stock market", "stay out a little longer"]); // [A-727 re-pin: pass order]
+      assert.deepEqual(rows.map((r) => r.text), ["a quick trip"]); // pre-A-977 (see above)
       assert.equal(new Set(rows.map((r) => r.text)).size, rows.length, "[A-723] visible candidate titles are unique in one card");
       assert.equal(await p.evaluate(() => document.querySelector("#secondOkButton").disabled), true);
       assert.equal(/Send this one\?/.test(await p.evaluate(() => document.querySelector("#secondJourneyCard").innerText)), false);
@@ -575,13 +577,13 @@ async function browserRun(browser, BASE, shots) {
     await check("B6 pick a candidate (draft keeps it across reload) at 390/430/700/1440 — no overflow, rows/ok/Home reachable", async () => {
       await mustTap("#exploreSaveButton", "save again"); await sleep(2600);
       assert.equal(await step(), "candidates");
-      await mustTap('.secondJourney__pick[data-destination-id="aave-usdc"]', "pick aave"); await sleep(500);
+      await mustTap('.secondJourney__pick[data-destination-id="euler-k3-weth"]', "pick euler"); await sleep(500); // [A-977 RE-PIN] pre-A-977: aave-usdc
       assert.equal(await p.evaluate(() => document.querySelector("#secondOkButton").disabled), false);
       for (const [w, h] of WIDTHS) {
         await reopenAt(w, h, "candidates");
         const rows = await picks();
-        assert.ok(rows.length === 3 && rows.every((r) => r.fits), `rows @${w}`);
-        assert.equal(rows.find((r) => r.picked)?.id, "aave-usdc", `pick restored @${w}`);
+        assert.ok(rows.length === 1 && rows.every((r) => r.fits), `rows @${w}`); // [A-977 RE-PIN] pre-A-977: 3 rows
+        assert.equal(rows.find((r) => r.picked)?.id, "euler-k3-weth", `pick restored @${w}`); // [A-977 RE-PIN] pre-A-977: aave-usdc
         await noOverflow(`candidates@${w}`);
         for (let i = 0; i < rows.length; i += 1) assert.ok(await pointAt(".secondJourney__pick", i), `row ${i} reachable @${w}`);
         assert.ok(await pointAt("#secondOkButton"), `ok reachable @${w}`);
@@ -598,14 +600,39 @@ async function browserRun(browser, BASE, shots) {
         send: document.querySelector("#secondSendButton").disabled, reason: document.querySelector("#secondSendReason")?.innerText, text: document.querySelector("#secondJourneyCard").innerText,
       }));
       assert.equal(v.job, "a quick trip"); assert.equal(v.amount, false); assert.equal(v.jit, false);
-      assert.equal(v.send, true); assert.equal(v.reason, "checking…");
-      assert.equal(/Send this one\?|permission|rule/i.test(v.text), false);
       const tries = (await decisionRows()).filter((r) => r.selection.source === "app_ui_candidate_ok");
-      assert.equal(tries.length, 1); assert.equal(tries[0].destinationId, "aave-usdc"); assert.equal(tries[0].decision, "unknown");
-      // force the disabled button: the Send handler's own gate still refuses (no DEV preview, nothing READY)
-      await p.evaluate(() => { const b = document.querySelector("#secondSendButton"); b.disabled = false; b.click(); });
-      await sleep(1200);
-      assert.equal(await scene(), "explore"); assert.equal(await step(), "readiness");
+      assert.equal(tries.length, 1); assert.equal(tries[0].decision, "unknown");
+      // [A-977 RE-PIN] per mode. A lane row that is not a fork Job row (the pre-A-977 lane rows; any profile without the [A-977] fork rows):
+      // the original pins and the original forced click, unchanged. A fork Job row (A-977): Send enabled (fork-proven size, no amount field),
+      // READY status line empty (this card's existing READY rule), and the forced-click equivalent below (entry server refuses → 0 sends).
+      const forkJobRow = tries[0].destinationId === "euler-k3-weth";
+      if (!forkJobRow) {
+        assert.equal(v.send, true); assert.equal(v.reason, "checking…");
+        assert.equal(/Send this one\?|permission|rule/i.test(v.text), false);
+        assert.equal(tries[0].destinationId, "aave-usdc");
+        // force the disabled button: the Send handler's own gate still refuses (no DEV preview, nothing READY)
+        await p.evaluate(() => { const b = document.querySelector("#secondSendButton"); b.disabled = false; b.click(); });
+        await sleep(1200);
+        assert.equal(await scene(), "explore"); assert.equal(await step(), "readiness");
+      } else {
+        assert.equal(v.send, false); assert.equal(v.reason, "");
+        assert.equal(/Send this one\?|permission|rule/i.test(v.text), false);
+        // forced Send while the fork entry server answers not-allowed: the handler's own gate (a956ForkMoneyAllowed) refuses before any
+        // signer / Face ID — 0 sends, the card stays (readiness), Send still usable.
+        let asks = 0;
+        const entry = (u) => u.pathname === "/api/fork-entry";
+        const refuse = (route) => { asks += 1; return route.fulfill({ status: 403, contentType: "application/json", body: JSON.stringify({ ok: false, allowed: false, reason: "a977_test_refused" }) }); };
+        await context.route(entry, refuse);
+        const tx0 = net.tx;
+        try {
+          await p.evaluate(() => { const b = document.querySelector("#secondSendButton"); b.disabled = false; b.click(); });
+          await sleep(1500);
+        } finally { await context.unroute(entry, refuse); }
+        assert.ok(asks >= 1, "the fork entry server was asked before any money step");
+        assert.equal(net.tx - tx0, 0, "0 sends");
+        assert.equal(await scene(), "explore"); assert.equal(await step(), "readiness");
+        assert.equal(await p.evaluate(() => document.querySelector("#secondSendButton").disabled), false, "Send stays usable after the refusal");
+      }
       await shot("1440_action_card");
     });
 
@@ -613,7 +640,7 @@ async function browserRun(browser, BASE, shots) {
       for (const [w, h] of WIDTHS) {
         await reopenAt(w, h, "readiness");
         assert.equal(await p.evaluate(() => document.querySelector("#secondJourneyCard h1.job")?.innerText), "a quick trip");
-        assert.equal(await p.evaluate(() => document.querySelector("#secondSendButton").disabled), true);
+        assert.equal(await p.evaluate(() => document.querySelector("#secondSendButton").disabled), false); // [A-977 RE-PIN] pre-A-977: true (Send disabled)
         await noOverflow(`action@${w}`);
         assert.ok(await pointAt("#stayButton"), `Home reachable @${w}`);
         await shot(`${w}_action_card`);

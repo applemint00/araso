@@ -355,6 +355,35 @@ await check("7 E MUST: steps from the server registry · evidence read from the 
   // no entry → nothing judged
   assert.equal((await S2.svc.complete({ inviteToken: TOKEN2, piggyAddress: PIGGY.address, journeyId: "j.aave", txHashes: [h(0xa1)] })).reason, "no_entry");
 });
+// [A-993] restart reconcile on the server path: evidence rows carry the receipt blockHash; a step the restore lost (orphan marker row,
+// as the reconciler writes it) no longer counts; the tester redoes it with a new tx; one reward per tester still holds.
+await check("7 [A-993] completion: row records blockHash · orphaned step skipped (INCOMPLETE) · redo completes · one reward · rows kept", async () => {
+  const { orphanRecord } = await import("../../api/_lib/fork-ledger-contract.js");
+  const F = forkChain();
+  const BH = `0x${"bc".repeat(32)}`;
+  F.add(h(0xc1), { from: P, input: SEL_A }); F.add(h(0xc2), { from: P, input: SEL_B, block: 110874101 }); F.add(h(0xc4), { from: P, input: SEL_A, block: 110874102 });
+  for (const k of [h(0xc1), h(0xc2), h(0xc4)]) (await F.rpc("eth_getTransactionReceipt", [k])).blockHash = BH;
+  const run = async (orphanDeposit) => {
+    const S = setup({ config: { completionOpen: true, rewardCampaignVersion: "camp-1", journeys: REGISTRY }, forkRpc: F.rpc });
+    assert.equal((await signedEnter(S, { journey1: journey1For(S.t, P, orphanDeposit ? 8700 : 8800) })).allowed, true);
+    const done = (txHashes) => S.svc.complete({ inviteToken: TOKEN, piggyAddress: PIGGY.address, journeyId: "j.aave", txHashes });
+    assert.equal((await done([h(0xc1)])).verdict, "INCOMPLETE");
+    const dep = (await S.store.list("evidence"))[0];
+    assert.equal(dep.blockHash, BH, "receipt blockHash recorded");
+    if (orphanDeposit) { const o = orphanRecord({ evidenceKey: dep.key, reason: "orphaned_by_restore" }); assert.equal((await S.store.putIfAbsent("orphans", o.key, o.record)).ok, true); }
+    return { S, done, w: await done([h(0xc2)]) };
+  };
+  const control = await run(false);
+  assert.equal(control.w.verdict, "COMPLETE", "no marker: the deposit counts (the A-981 problem when it was lost)");
+  const { S, done, w } = await run(true);
+  assert.equal(w.verdict, "INCOMPLETE", "orphaned deposit skipped"); assert.deepEqual(w.missing, ["deposit"]); assert.equal((await S.store.list("rewards")).length, 0);
+  const redo = await done([h(0xc4)]);
+  assert.equal(redo.verdict, "COMPLETE"); assert.equal(redo.rewarded, true);
+  const again = await done([h(0xc4), h(0xc2)]);
+  assert.equal(again.rewarded, false); assert.equal(again.reason, "duplicate_reward"); assert.equal((await S.store.list("rewards")).length, 1);
+  assert.equal((await S.store.list("evidence")).length, 3, "the orphaned row is kept (no delete)"); assert.equal((await S.store.list("orphans")).length, 1);
+  assert.equal((await S.store.list("payouts")).length, 0);
+});
 await check("7 E MUST (source): rewards written only with rewardLedgerApply's record; verdict + apply in the same function; no payout/send code", () => {
   const s = src("api/_lib/fork-entry.js").replace(/^\s*\/\/.*$/gm, "");
   const puts = [...s.matchAll(/putIfAbsent\("rewards", ([^)]*)\)/g)].map((m) => m[1]);

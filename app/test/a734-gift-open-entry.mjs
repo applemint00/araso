@@ -130,7 +130,8 @@ const PINNED = {
   admitAddedPiggy: "7df6b6e87ee3bffd", settleBoundGiftClaim: "2af8e4ff6f54cbc2", stripClaimFragmentFromUrl: "f6fb046b2a3e64c3",
   takePendingGiftClaim: "2c23bd8d2dc551e2", restorePendingGiftClaim: "7ebcc20ee13d1803", knownPiggyAddresses: "b6e3fc976ec22ce6",
   render: "90c49e8703c8e197", setInvitePhase: "fab5e5a04f1269ee", unlockApp: "28db2c0e98b8de1b", settleUnlock: "e61e55dd5cfae86f",
-  renderAuthCard: "f875d207380637d3", startTesterIntro: "60610368d4d0b508", readTesterInviteParam: "c721a03a8d12a206", stripTesterInviteFromUrl: "2b37487591e69107",
+  // [A-1007 RE-PIN] startTesterIntro only: A-995 ③ adds the approved eye binding; every other primitive stays pinned.
+  renderAuthCard: "f875d207380637d3", startTesterIntro: "f0e15c6020350860", readTesterInviteParam: "c721a03a8d12a206", stripTesterInviteFromUrl: "2b37487591e69107",
 };
 await check("S6 auth/recovery/Gift/A-733 primitives are byte-identical (comment-stripped) to the pre-A-734 tree — the entry only CALLS them", () => {
   const drift = Object.entries(PINNED).filter(([n, h]) => sha(stripComments(fnBody(n))) !== h).map(([n]) => n);

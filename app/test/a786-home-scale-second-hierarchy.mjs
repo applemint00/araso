@@ -177,10 +177,8 @@ async function walk(browser, BASE, w, h) {
     R.exploreChecked = await snap(); await shot("explore_checked");
     await mustTap("#exploreSaveButton", "save"); await sleep(3000);
     R.candidates = await snap(); await shot("second_candidates");
-    await mustTap(".secondJourney__pick", "pick", 1); await sleep(500);
+    await mustTap('.secondJourney__pick[data-destination-id="euler-k3-weth"]', "pick euler"); await sleep(500); // [A-950-b] A-977 Grow row; pre-A-977: candidate index 1
     R.candidatesPicked = await snap(); await shot("second_candidates_picked");
-    await mustTap(".secondJourney__pick", "pick0", 0); await sleep(500);
-    R.candidatesPicked0 = await snap(); await shot("second_candidates_picked_other");
     await mustTap("#secondOkButton", "ok"); await sleep(2500);
     R.readiness = await snap(); await shot("second_after_ok_2s");
     await sleep(6000); R.readiness8 = await snap(); await shot("second_after_ok_8s");
@@ -250,7 +248,7 @@ else {
           assert.ok(a.scroll.docH <= b.scroll.docH && a.scroll.docW <= b.scroll.docW && a.scroll.stageSH <= Math.max(b.scroll.stageSH, Math.ceil(KL4.boardTop + 772 * KL4.S) + 1), JSON.stringify(a.scroll)); // [A-831 RE-PIN] pre-A-831 baseline: a.scroll.stageSH <= b.scroll.stageSH (the keyframe board's transparent bottom margin extends below the viewport inside the clipped stage; the document itself never scrolls)
         });
         await check(`B5 [${vp}] candidates: choice css > 18px support, text lines (no shadow/radius/bg), no clip, card box unchanged`, () => {
-          const picks = R.candidates.text[".secondJourney__pick"]; assert.equal(picks.length, 3);
+          const picks = R.candidates.text[".secondJourney__pick"]; assert.equal(picks.length, 1); // [A-950-b] A-977: grow -> Euler; asset-piece has no fork Job row. pre-A-977: 3
           for (const c of picks) { assert.ok(parseFloat(c.fontSize) >= 24 && parseFloat(c.fontSize) > 18, c.fontSize); assert.equal(c.shadow, "none"); assert.equal(c.radius, "0px"); assert.equal(c.bg, "none"); assert.ok(c.sw <= c.cw + 1, "no clip"); }
           // [A-845 RE-PIN] A-843 Choice style, one local size at every width (measured 27.9548 at 390 / 430 / 1440). pre-A-845 baseline: w > 640 ? 24 : 28
           assert.equal(parseFloat(picks[0].fontSize), 27.9548);

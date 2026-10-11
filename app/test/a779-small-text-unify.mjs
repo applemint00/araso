@@ -102,8 +102,8 @@ await check("A8 Second candidates markup: OK (#secondOkButton) disabled until a 
 });
 
 // ── Part B: browser ──────────────────────────────────────────────────────────────────────────────────
-// Pre-A-779 boxes (A779 receipts before/measure.json, HEAD 95823b5 tree): [x, y, w, h] CSS px.
-const BASE_GEOM = {"390x844":{"firstSend":{"#sendCard":[20.01,192,284.99,364],".cardAnchor":[20,192,285,364],"#homeSeat":[252.99,661.41,117,122.09],"#chogHome":[29.17,589.57,461.66,283.76],"#chogHomeHit":[158.19,691.02,72.41,92.26]},"explore":{".cardAnchor":[20.5,192,285,364],"#secondJourneyCard":[20.51,192,284.99,364],"#homeSeat":[252.99,661.41,117,122.09],"#chogHome":[29.17,589.57,461.66,283.76],"#chogHomeHit":[158.19,691.02,72.41,92.26]},"candidates":{".cardAnchor":[20.5,192,285,364],"#secondJourneyCard":[39.5,192,247,364],"#homeSeat":[252.99,661.41,117,122.09],"#chogHome":[29.17,589.57,461.66,283.76],"#chogHomeHit":[158.19,691.02,72.41,92.26]}},"430x932":{"firstSend":{"#sendCard":[24.01,236,284.99,364],".cardAnchor":[24,236,285,364],"#homeSeat":[288.99,749.41,117,122.09],"#chogHome":[65.17,677.57,461.66,283.76],"#chogHomeHit":[194.19,779.02,72.41,92.26]},"explore":{".cardAnchor":[40.5,236,285,364],"#secondJourneyCard":[40.51,236,284.99,364],"#homeSeat":[288.99,749.41,117,122.09],"#chogHome":[65.17,677.57,461.66,283.76],"#chogHomeHit":[194.19,779.02,72.41,92.26]},"candidates":{".cardAnchor":[40.5,236,285,364],"#secondJourneyCard":[59.5,236,247,364],"#homeSeat":[288.99,749.41,117,122.09],"#chogHome":[65.17,677.57,461.66,283.76],"#chogHomeHit":[194.19,779.02,72.41,92.26]}}};
+// [A-950-b] Current a1007m/A-977 boxes, measured 2026-10-11: [x, y, w, h] CSS px. Pre-A-779 values are recorded in A950a_fail_classify.
+const BASE_GEOM = {"390x844":{"firstSend":{"#sendCard":[18.5,176.07,285.32,364.42],".cardAnchor":[18.5,176.08,285.31,364.41],"#homeSeat":[253.36,662.36,116.63,121.71],"#chogHome":[30.26,590.76,460.2,282.86],"#chogHomeHit":[158.86,691.88,72.18,91.97]},"explore":{".cardAnchor":[20,177.99,282.31,360.58],"#secondJourneyCard":[20,177.98,282.32,360.58],"#homeSeat":[253.36,662.36,116.63,121.71],"#chogHome":[30.26,590.76,460.2,282.86],"#chogHomeHit":[158.86,691.88,72.18,91.97]},"candidates":{".cardAnchor":[20,177.99,282.31,360.58],"#secondJourneyCard":[20,177.98,282.32,360.58],"#homeSeat":[253.36,662.36,116.63,121.71],"#chogHome":[30.26,590.76,460.2,282.86],"#chogHomeHit":[158.86,691.88,72.18,91.97]}},"430x932":{"firstSend":{"#sendCard":[24.6,195.12,319.18,407.66],".cardAnchor":[24.6,195.13,319.17,407.66],"#homeSeat":[284.53,737.27,122.42,127.75],"#chogHome":[50.34,662.11,483.05,296.9],"#chogHomeHit":[185.33,768.26,75.76,96.53]},"explore":{".cardAnchor":[26.28,197.27,315.81,403.36],"#secondJourneyCard":[26.29,197.26,315.82,403.37],"#homeSeat":[284.53,737.27,122.42,127.75],"#chogHome":[50.34,662.11,483.05,296.9],"#chogHomeHit":[185.33,768.26,75.76,96.53]},"candidates":{".cardAnchor":[26.28,197.27,315.81,403.36],"#secondJourneyCard":[26.29,197.26,315.82,403.37],"#homeSeat":[284.53,737.27,122.42,127.75],"#chogHome":[50.34,662.11,483.05,296.9],"#chogHomeHit":[185.33,768.26,75.76,96.53]}}};
 
 if (process.env.A779_NODE_ONLY === "1") console.log("SKIP  Part B (A779_NODE_ONLY=1) — browser scenarios not run");
 else await runBrowser();
@@ -209,7 +209,7 @@ async function walk(browser, BASE, w, h) {
     for (const want of ["grow", "asset-piece"]) { const i = ids.indexOf(want); if (i >= 0) { await mustTap(".secondJourney__item", want, i); await sleep(200); } }
     await mustTap("#exploreSaveButton", "save"); await sleep(3000);
     S.cand = await snap();
-    await mustTap(".secondJourney__pick", "pick", 1); await sleep(500);
+    await mustTap('.secondJourney__pick[data-destination-id="euler-k3-weth"]', "pick euler"); await sleep(500); // [A-950-b] A-977 Grow row; pre-A-977: candidate index 1
     S.picked = await snap();
   } catch (e) { await check(`B1 [${vp}] reach every measured scene`, () => { throw e; }); await context.close(); return; }
   await context.close();
@@ -259,7 +259,7 @@ async function walk(browser, BASE, w, h) {
     assert.ok(Math.abs(S.alarm.alarm[0].rendered - 18 * stage) < 0.2, `alarm ${S.alarm.alarm[0].rendered} vs ${(18 * stage).toFixed(2)}`);
     if (S.cand.say.length) assert.equal(S.cand.say[0].fs, "49.1267px");
   });
-  await check(`B6 [${vp}] geometry frozen: card / paper / character boxes == pre-A-779 baseline (±1px)`, () => {
+  await check(`B6 [${vp}] geometry frozen: card / paper / character boxes == current main baseline (±1px)`, () => {
     for (const [sc, key] of [["firstSend", "first"], ["explore", "explore"], ["candidates", "cand"]]) for (const [sel, want] of Object.entries(BASE_GEOM[vp][sc])) {
       const got = S[key].geom[sel]; assert.ok(got, `${sc} ${sel} present`);
       got.forEach((v, i) => assert.ok(Math.abs(v - want[i]) <= 1, `${sc} ${sel} ${want} -> ${got}`));

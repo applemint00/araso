@@ -295,7 +295,9 @@ await check("S2 live stays off: lane config unchanged, nothing in the product im
   assert.deepEqual({ ...MAINNET_LANE_CONFIG }, { reader: null, liveExecution: false });
   assert.equal(MAINNET.liveExecution, false);
   const files = readdirSync(SRC_DIR).filter((x) => x.endsWith(".js") && x !== MODULE);
-  assert.deepEqual(files.filter((f) => /mainnet-job-neverland/.test(SRC(f))), []);
+  // [A-977 RE-PIN] the lane's fork Job section imports the module (fork profile only). pre-A-977: []
+  // assert.deepEqual(files.filter((f) => /mainnet-job-neverland/.test(SRC(f))), []); // pre-A-977
+  assert.deepEqual(files.filter((f) => /mainnet-job-neverland/.test(SRC(f))), ["mainnet-job-lane.js"]);
   assert.equal(existsSync(path.join(SRC_DIR, "abi", MODULE)), false, "no writer ABI under abi/ (second-current-reader forbids it)");
 });
 

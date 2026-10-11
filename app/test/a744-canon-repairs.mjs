@@ -320,7 +320,7 @@ async function walk(browser, BASE, w, h, measureOnly) {
     await snap("explore_checked", ".secondJourneyCard");
     await mustTap("#exploreSaveButton", "save"); await sleep(3000);
     await snap("candidates", ".secondJourneyCard");
-    await mustTap(".secondJourney__pick", "pick", 1); await sleep(400);
+    await mustTap('.secondJourney__pick[data-destination-id="euler-k3-weth"]', "pick euler"); await sleep(400); // [A-950-b] A-977 Grow row; pre-A-977: candidate index 1
     await snap("candidates_picked", ".secondJourneyCard");
     await mustTap("#secondOkButton", "ok"); await sleep(1200);
     await snap("action", ".secondJourneyCard");

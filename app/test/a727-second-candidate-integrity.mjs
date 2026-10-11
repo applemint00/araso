@@ -411,10 +411,11 @@ async function browserRun(browser, BASE, shots) {
 
 
     await check("B1 candidates card (grow + asset-piece) shows pass order aave, abil, kintsu with 0 Receipts; Home -> 0 Receipts, quiet Home", async () => {
-      await mustTap("#exploreSaveButton", "save none"); await sleep(900);
+      // [A-977 RE-PIN] fork Explore = the fork Job rows. Three rows on the fork come from round 0 (market · order · clean), so no "save none".
+      // pre-A-977: save none → round 1 → grow + asset-piece → aave / abil / kintsu
       assert.equal(await step(), "interests");
       const ids = await p.evaluate(() => [...document.querySelectorAll("#exploreForm input[data-errand-id]")].map((e) => e.dataset.errandId));
-      for (const want of ["grow", "asset-piece"]) {
+      for (const want of ["market", "order", "clean"]) {
         const idx = ids.indexOf(want); assert.ok(idx >= 0, `${want} on round 1 (${ids})`);
         await mustTap(".secondJourney__item", want, idx); await sleep(200);
       }
@@ -422,8 +423,8 @@ async function browserRun(browser, BASE, shots) {
       assert.equal(await step(), "candidates");
       await sleep(2200);
       const rows = await picks();
-      assert.deepEqual(rows.map((r) => r.id), ["aave-usdc", "abil-spot", "kintsu-smon"]);
-      assert.deepEqual(rows.map((r) => r.text), ["a quick trip", "try the stock market", "stay out a little longer"]);
+      assert.deepEqual(rows.map((r) => r.id), ["kuru-swap", "kuru-limit", "usdc-allowance-revoke"]); // [A-977 RE-PIN] pre-A-977: aave / abil / kintsu
+      assert.deepEqual(rows.map((r) => r.text), ["go to the market", "leave an order", "tidy the wallet"]); // [A-977 RE-PIN] pre-A-977: family titles
       assert.equal((await decisionRows()).length, 0);
       await mustTap("#stayButton", "Home");
       assert.equal(await waitScene(["sendstay"], 4000), "sendstay");
@@ -437,13 +438,13 @@ async function browserRun(browser, BASE, shots) {
       await mustTap("#exploreSaveButton", "save again"); await sleep(2600);
       assert.equal(await step(), "candidates");
       // the lane draft (existing A-719 B6 semantics) is kept across reload once a row is picked; a pick records nothing
-      await mustTap('.secondJourney__pick[data-destination-id="abil-spot"]', "pick abil"); await sleep(500);
+      await mustTap('.secondJourney__pick[data-destination-id="kuru-limit"]', "pick kuru-limit"); await sleep(500); // [A-977 RE-PIN] pre-A-977: abil-spot
       for (const [w, h] of WIDTHS) {
         await reopenAt(w, h, "candidates");
         const rows = await picks();
-        assert.deepEqual(rows.map((r) => r.id), ["aave-usdc", "abil-spot", "kintsu-smon"], `order @${w}`);
+        assert.deepEqual(rows.map((r) => r.id), ["kuru-swap", "kuru-limit", "usdc-allowance-revoke"], `order @${w}`); // [A-977 RE-PIN] pre-A-977: aave / abil / kintsu
         assert.ok(rows.every((r) => r.fits), `rows fit @${w}`);
-        assert.equal(rows.find((r) => r.picked)?.id, "abil-spot", `pick restored @${w}`);
+        assert.equal(rows.find((r) => r.picked)?.id, "kuru-limit", `pick restored @${w}`); // [A-977 RE-PIN] pre-A-977: abil-spot
         for (let i = 0; i < rows.length; i += 1) assert.ok(await pointAt(".secondJourney__pick", i), `row ${i} reachable @${w}`);
         await noOverflow(`candidates@${w}`);
         assert.ok(await pointAt("#stayButton"), `Home reachable @${w}`);
@@ -457,14 +458,14 @@ async function browserRun(browser, BASE, shots) {
       assert.equal(await step(), "readiness");
       let rows = await decisionRows();
       assert.equal(rows.length, 1);
-      assert.equal(rows[0].destinationId, "abil-spot"); assert.equal(rows[0].actionCount, 0); assert.equal(rows[0].txExecuted, false);
+      assert.equal(rows[0].destinationId, "kuru-limit"); assert.equal(rows[0].actionCount, 0); assert.equal(rows[0].txExecuted, false); // [A-977 RE-PIN] pre-A-977: abil-spot
       assert.equal(rows[0].selection.source, "app_ui_candidate_ok"); assert.equal(rows[0].selection.createsPermission, false);
-      assert.equal(await p.evaluate(() => document.querySelector("#secondSendButton").disabled), true);
+      assert.equal(await p.evaluate(() => document.querySelector("#secondSendButton").disabled), false); // [A-977 RE-PIN] fork Job row: Send enabled (not clicked). pre-A-977: true
       for (const [w, h] of WIDTHS) {
         await reopenAt(w, h, "readiness");
         assert.equal((await decisionRows()).length, 1, `still exactly 1 @${w}`);
         await noOverflow(`action@${w}`);
-        assert.equal(await p.evaluate(() => document.querySelector("#secondSendButton").disabled), true);
+        assert.equal(await p.evaluate(() => document.querySelector("#secondSendButton").disabled), false); // [A-977 RE-PIN] pre-A-977: true
         await shot(`${w}_action_card`);
       }
     });

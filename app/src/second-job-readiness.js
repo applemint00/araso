@@ -444,6 +444,25 @@ export function listVisibleJobFamilies() {
   return [...byFamily.values()];
 }
 
+// ── [fork-job] the shared fork's Job rows (Explore errand line → Job) ─────────────────────────────────────────────
+// Read ONLY on the shared-fork profile (main.js fork block). listVisibleJobFamilies() above is unchanged, so the testnet / mainnet
+// Explore rows stay exactly as they were. One row per errand line (the errand's own `lane` in job-feed.js EXPLORE_ERRANDS is the
+// first word of the family, the rule second-journey-view.js exploreCandidateDestinations already uses); `jobs` = the Jobs behind that
+// line in table order (the first is the baseline). Kintsu (grow_delayed) and aBIL (own_rwa) have no row here: not exposed on the fork.
+// A row is a mapping, never a permission: every Job keeps its own permission request, size cap and executor check (mainnet-job-lane.js).
+export const FORK_JOB_ROWS = Object.freeze([
+  Object.freeze({ errandId: "market", family: "trade_swap", jobs: Object.freeze(["kuru-swap"]) }),
+  Object.freeze({ errandId: "order", family: "order_limit", jobs: Object.freeze(["kuru-limit"]) }),
+  Object.freeze({ errandId: "clean", family: JOB_FAMILY.PROTECT, jobs: Object.freeze(["usdc-allowance-revoke"]) }),
+  Object.freeze({ errandId: "grow", family: JOB_FAMILY.GROW_STABLE, jobs: Object.freeze(["euler-k3-weth", "upshift-earnausd", "fastlane-shmon", "aave-usdc", "neverland-usdc", "curvance-usdc"]) }),
+  Object.freeze({ errandId: "lp", family: "lp_trades", jobs: Object.freeze(["curve-ausd-usdc-usdt0-lp"]) }),
+]);
+
+/** The fork's family slots in the listVisibleJobFamilies() shape ({ family, baseline, alternatives }) plus the errand id. */
+export function listForkJobFamilies() {
+  return FORK_JOB_ROWS.map((r) => ({ family: r.family, errandId: r.errandId, baseline: r.jobs[0], alternatives: r.jobs.slice(1) }));
+}
+
 export function listForkProvenDestinations() {
   return FORK_PROVEN_DESTINATIONS.map((d) => ({ id: d.id, family: d.family, baseline: d.baseline, evidence: d.forkEvidence.label }));
 }

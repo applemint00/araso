@@ -78,6 +78,8 @@ import { createGiftGasClient, GIFT_GAS_TRANSPORT } from "./gift-gas-client.js";
 import { createGiftGasClientDelivery } from "./gift-claim-entry.js";
 import { mapFirstEvidence } from "./receipt-evidence-first.js";
 import { readTxEvidence } from "./receipt-evidence-reader.js";
+import { registerA995InlineFace, syncA995GiftEyes } from "./a995-eye-look.js";
+import { mountA995bLoadingPiggy } from "./a995b-loading-piggy.js";
 import { evidenceStoreKey } from "./receipt-evidence-store.js";
 // ── [A-887] end imports ──
 // ── [A-897] P2 imports (stamp scene · unnamed tap-to-fill) ──
@@ -120,6 +122,7 @@ import { runGiftCreateCalls } from "./gift-send-paper.js";
 import { releaseAllows } from "./release-gate.js"; // [A-943] used only in the two [A-943] blocks (boot · Second entries)
 import { PROMOTION_TARGET_SCOPE, scopedSecondKey, selectBootProfile } from "./boot-profile.js"; // [A-946] boot path → chain profile · chain-scoped Second keys
 import { storedJourney } from "./boot-profile.js"; import { RELEASE_LEVEL, journeyFeatureOpen } from "./release-gate.js"; import { registerJourneySessionDisposer } from "./journey-switch.js"; // [A-948]
+import { mountForkVirtualMoneyBadge } from "./fork-virtual-money-badge.js";
 import { legacyTestnetPathOpen, profileScope, resolveChainProfile } from "./chain-profile.js";
 import { reconcileConfirmedFunding } from "./funding-reconcile.js";
 import {
@@ -7418,13 +7421,13 @@ function homeActiveSleepClock() {
 // The seat's art swaps between its assigned ambient art and a flop-sleep art by clock state alone (stateless
 // per frame, so a re-mount mid-sleep resumes the same phase). After a wake the seat stays on the awake seated
 // idle frame of the same rig (A-744: the approved Idle) until its next sleep — no snap to a mid-cycle pose.
-// [A-841 UI-27] persistent subtle breath: the first-arrival values (HOME_T_BREATHE sx 1-.008, sy 1+.014) on a slow loop, scaled about the
+// [A-995 ①] persistent breath: Owner-selected Sleep strength (x .0091 / y .026) on the existing 4.4 s loop, scaled about the
 // ink foot (transform-origin set on the wrapper), so the foot line never moves. Reduced motion: no transform at all (static pose).
 const AMB_BREATH_S = 4.4;
 function ambBreath(el, t, reduced) {
   if (reduced) { if (el.style.transform) el.style.transform = ""; return; }
   const b = 0.5 - 0.5 * Math.cos((2 * Math.PI * t) / AMB_BREATH_S);
-  el.style.transform = `scale(${(1 - 0.008 * b).toFixed(5)}, ${(1 + 0.014 * b).toFixed(5)})`;
+  el.style.transform = `scale(${(1 - 0.0091 * b).toFixed(5)}, ${(1 + 0.026 * b).toFixed(5)})`;
 }
 function makeSeatSleeper(seatArt, assets, seed, normalEls, opts = null) {
   const clock = homeActiveSleepClock();
@@ -11200,7 +11203,7 @@ function a911Sync() {
   const html = a911Html();
   const s = a911S();
   const root = a911Root();
-  if (root && s.html === html) { a911Layout(); return; } // nothing changed: leave the DOM (focus, scroll, running transitions) alone
+  if (root && s.html === html) { a911Layout(); void syncA995GiftEyes(root); return; } // nothing changed: leave the DOM (focus, scroll, running transitions) alone
   s.html = html;
   if (!root) {
     const tpl = document.createElement("template");
@@ -11213,6 +11216,7 @@ function a911Sync() {
     a911Paint(root, html);
   }
   a911Layout();
+  void syncA995GiftEyes(a911Root() || document);
   requestAnimationFrame(a911Layout);
 }
 
@@ -14023,6 +14027,196 @@ if (A974_FORK) {
   };
 }
 // ── [A-974] end fork app entry ──
+// ── [A-977] Job 10 on the shared fork · Explore errand line → Job → executor → Return / Receipt. One block; the code above and below is unchanged. ──
+// Off the fork profile nothing here runs (A977_FORK false): testnet (root "/"), mainnet and a blocked profile keep the Second lane rows, the
+// disabled Send, the DEV-only away/return and every copy exactly as before. Mainnet: no Job runs (mainnet-job-lane.js forkJobProfile = null there).
+// On the fork profile with Journey 2 open (the same gate as the fork app entry block above):
+//   · candidates = the fork Job rows (second-job-readiness.js FORK_JOB_ROWS via mainnet-job-lane.js forkExploreRows): one row per picked
+//     errand line, shown through the existing exploreCandidateDestinations / candidates card / titles (no new line, copy or layout).
+//     go to the market = Kuru swap · leave an order = Kuru limit · tidy the wallet = revoke · put some money to work = the next Grow Job
+//     (Euler · Upshift · Aave · Neverland · Curvance in table order, the first this Piggy has not returned yet; shMON held) · help with
+//     trades = Curve LP. Kintsu / aBIL have no fork row.
+//   · ok → the existing action card; Send is enabled for a fork Job row (its size is the Job's fork-proven size: no amount field).
+//   · Send → the fork entry server is asked again (a956ForkMoneyAllowed) → the selected Piggy's live signer (or Face ID for it) → the existing
+//     Away → runForkJob (mainnet-job-lane.js: each step through the one send chokepoint, strict sign-before-send on the fork chain id) →
+//     done = the existing Return with the existing common Receipt line (receipt-paper.js receiptPaperFields) and the Receipt committed through
+//     the existing bridge (PASS_APP_FORK_E2E / fork_simulation) on Home; failed / refused = the Receipt (if any tx ran) is committed and
+//     the quiet Home comes back. Journey switch is refused while the run is signing / sending (the busy probe of the entry block).
+import { FORK_JOB_KEYS as a977JobKeys, forkExploreRows as a977Rows, forkJobReceiptCandidate as a977Candidate, forkJobStrictTransport as a977StrictTransport, runForkJob as a977RunJob } from "./mainnet-job-lane.js";
+import { readSecondJourneyReceipts as a977ReadReceipts } from "./second-journey-receipt-bridge.js";
+import { RPC_DEV_BUILD as a977DevBuild, rpcUrlAllowed as a977RpcAllowed } from "./chain-profile.js";
+import { custom as a977Custom, defineChain as a977DefineChain } from "viem";
+const A977_FORK = A974_FORK; // the fork app entry gate above (Journey 2 open AND the fork chain id)
+const a977Lower = (v) => String(v || "").toLowerCase();
+let a977Busy = false;
+let a977Current = null; // { sj, motionDone, finished } of the run in flight (memory only)
+// the fork Jobs this Piggy already returned on this scope (done Receipts), so a Grow line runs the next one
+function a977DoneJobKeys() {
+  const ds = state.secondJourney?.domainState;
+  if (!ds) return [];
+  return a977ReadReceipts(ds, { piggyId: state.selectedPiggy?.id || null }).filter((r) => r.outcome === "done" && a977JobKeys.includes(r.destinationId)).map((r) => r.destinationId);
+}
+// the methods a fork Job run needs (reads, fee / nonce fill, one raw send, receipts); anything else is refused before the network
+const A977_RPC_METHODS = Object.freeze(["eth_chainId", "eth_blockNumber", "eth_call", "eth_getBalance", "eth_estimateGas", "eth_gasPrice", "eth_maxPriorityFeePerGas", "eth_feeHistory", "eth_getBlockByNumber", "eth_getTransactionCount", "eth_sendRawTransaction", "eth_getTransactionReceipt", "eth_getTransactionByHash"]);
+function a977ForkClients() {
+  const rpcUrl = CHAIN_PROFILE.rpcUrl;
+  const post = async (method, params) => {
+    const res = await fetch(rpcUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: params ?? [] }) });
+    const body = await res.json();
+    if (body?.error) throw Object.assign(new Error(String(body.error.message || "rpc_error")), { code: body.error.code, data: body.error.data });
+    return body?.result;
+  };
+  let chainChecked = false; // this client's RPC answered eth_chainId == the fork chain id (asked once per client, before anything else is read or sent)
+  const transport = a977Custom({
+    async request({ method, params }) {
+      if (!A977_RPC_METHODS.includes(method)) throw new Error("fork_method_not_allowed");
+      if (!a977RpcAllowed(rpcUrl, { profile: CHAIN_PROFILE, dev: a977DevBuild })) throw new Error("fork_rpc_not_allowed");
+      if (!chainChecked) {
+        const id = await post("eth_chainId", []);
+        if (typeof id !== "string" || !/^0x[0-9a-f]+$/i.test(id) || BigInt(id) !== BigInt(a974ForkChainId)) throw new Error("fork_chain_mismatch");
+        chainChecked = true;
+      }
+      return post(method, params);
+    },
+  });
+  const chain = a977DefineChain({ id: a974ForkChainId, name: "Monad mainnet fork", nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [rpcUrl] } } });
+  const publicClient = createPublicClient({ chain, transport });
+  const read = {
+    call: ({ to, abi, functionName, args, from, value }) => (from || value
+      ? publicClient.simulateContract({ address: to, abi, functionName, args, account: from, value }).then((r) => r.result)
+      : publicClient.readContract({ address: to, abi, functionName, args })),
+    native: (address) => publicClient.getBalance({ address }),
+  };
+  return { chain, transport, publicClient, read };
+}
+if (A977_FORK) {
+  const fork = a977ForkClients();
+  const isForkJob = (id) => typeof id === "string" && a977JobKeys.includes(id);
+  secondLaneRows = () => a977Rows({ doneJobKeys: a977DoneJobKeys() });
+  secondLaneDestinations = (sj) => exploreCandidateDestinations(secondLaneRows(sj), { selectedErrandIds: sj?.selectedIds || [], max: MAX_EXPLORE_VISIBLE })
+    .map((d) => (isForkJob(d.id) ? { ...d, derivedStatus: "JOB_READY" } : d));
+  const a977BaseModel = buildSecondJourneyViewModel;
+  buildSecondJourneyViewModel = (...args) => {
+    const m = a977BaseModel(...args);
+    if (!m.chosen || m.chosen.laneCandidate !== true || !isForkJob(m.chosen.id)) return m;
+    // READY: the status line stays empty (the existing READY rule of this card); Send is open unless a run is in flight
+    return { ...m, canSend: !a977Busy && !(a977Current && a977Current.sj === state.secondJourney), sendReason: "" };
+  };
+  const a977Settle = (sj) => {
+    const run = a977Current;
+    if (!run || run.sj !== sj || !run.finished || !run.motionDone) return;
+    a977Current = null;
+    if (state.secondJourney !== sj || state.scene !== "secondAway") return;
+    if (sj.outcome === "done") {
+      state.returnArrivalAlarm = true;
+      setScene("secondReturn", "", "");
+      return;
+    }
+    commitSecondReceiptIfReal(); // a failed Receipt (some tx ran) is kept; refused = no Receipt
+    sj.executionReceipt = null;
+    state.sendCardVisible = false;
+    setScene("sendstay", "", "");
+  };
+  // Away: the motion's end waits for the run (the outcome is the run's, never the motion's)
+  const a977BaseSettleOutcome = settleSecondOutcome;
+  settleSecondOutcome = (forced = null) => {
+    const run = a977Current;
+    if (!run || run.sj !== state.secondJourney) return a977BaseSettleOutcome(forced);
+    run.motionDone = true;
+    if (run.finished && state.secondJourney.outcome === "done") { a977Current = null; return "done"; } // the Away mount advances to Return itself
+    sceneTimeout(() => a977Settle(run.sj), 0);
+    return run.finished ? state.secondJourney.outcome : "pending";
+  };
+  const a977BaseSend = handleSecondSend;
+  handleSecondSend = () => {
+    const sj = state.secondJourney;
+    const jobKey = sj.chosenDestinationId;
+    if (sj.step !== "readiness" || !isForkJob(jobKey)) return a977BaseSend();
+    if (a977Current && a977Current.sj !== sj) a977Current = null; // a run of an earlier (finished) Second card holds nothing
+    if (a977Busy || a977Current) return undefined;
+    void a977Send(sj, jobKey);
+    return undefined;
+  };
+  async function a977Send(sj, jobKey) {
+    a977Busy = true;
+    let started = false;
+    try {
+      const piggy = a898SenderPiggy();
+      if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) return;
+      if (!(await a956ForkMoneyAllowed())) return; // the fork money rule: asked again right before money moves
+      if (!activeAccount || a977Lower(activeAccount.address) !== a977Lower(piggy.address)) {
+        const signer = await a898SignerForPayer(piggy);
+        if (!signer.ok) return;
+      }
+      const account = activeAccount;
+      if (!account || a977Lower(account.address) !== a977Lower(piggy.address)) return;
+      if (state.secondJourney !== sj || sj.chosenDestinationId !== jobKey || state.scene !== "explore") return;
+      let forkBlock;
+      try { forkBlock = Number(await fork.publicClient.getBlockNumber()); } catch { return; }
+      if (!Number.isSafeInteger(forkBlock)) return;
+      sj.decisionEventSeq += 1;
+      const eventId = `fork-job:${jobKey}:${new Date().toISOString()}:${sj.decisionEventSeq}`;
+      sj.mockReceipt = null;
+      sj.executionReceipt = null;
+      sj.outcome = "pending";
+      a977Current = { sj, motionDone: false, finished: false };
+      started = true;
+      dropSecondDraft();
+      sj.awayLine = "";
+      setScene("secondAway", "", "");
+      const executor = Object.freeze({
+        kind: "local_fork", chainId: a974ForkChainId, forkBlock,
+        send: async () => { throw new Error("strict_transport_only"); }, // the strict transport below signs and broadcasts; this path is never used
+        receipt: async (hash) => {
+          const r = await fork.publicClient.waitForTransactionReceipt({ hash, timeout: 120000 });
+          return { status: r.status, gasUsed: Number(r.gasUsed), blockNumber: Number(r.blockNumber), logs: r.logs, gasCostWei: (BigInt(r.gasUsed) * BigInt(r.effectiveGasPrice ?? 0n)).toString() };
+        },
+      });
+      const transport = a977StrictTransport({ walletClient: createWalletClient({ account, chain: fork.chain, transport: fork.transport }), publicClient: fork.publicClient, account });
+      let out;
+      a956Signing += 1;
+      try {
+        out = await a977RunJob({ profile: CHAIN_PROFILE, piggy: { id: piggy.id, address: piggy.address }, jobKey, executor, transport, read: fork.read, storage: safeLocalStorage(), eventId, nowIso: new Date().toISOString(), entryCheck: a956ForkMoneyAllowed });
+      } catch { out = { status: "refused", receipt: null }; } finally { a956Signing -= 1; }
+      if (state.secondJourney !== sj) { a977Current = null; return; }
+      const candidate = out.receipt ? a977Candidate(out.receipt, secondJourneyScope()) : null;
+      sj.executionReceipt = candidate;
+      sj.outcome = candidate && out.status === "returned" && candidate.outcome === "done" ? "done" : "failed";
+      if (a977Current) a977Current.finished = true;
+      a977Settle(sj);
+    } finally {
+      a977Busy = false;
+      if (!started && state.secondJourney === sj && state.scene === "explore") render();
+    }
+  }
+}
+// ── [A-977] end Job 10 on the shared fork ──
+// ── [A-979 ④] Fork virtual-money badge. UI-only: no amount, fee, signer, transport or receipt changes. ──
+const a979ForkBadge = mountForkVirtualMoneyBadge({
+  document,
+  isFork: () => A974_FORK === true,
+  jobApproval: () => A977_FORK === true
+    && state.scene === "explore"
+    && state.secondJourney?.step === "readiness"
+    && a977JobKeys.includes(state.secondJourney?.chosenDestinationId)
+    && Boolean(document.querySelector("#secondSendButton")),
+});
+{
+  const a979RenderBase = render;
+  render = function renderA979Badge() {
+    const out = a979RenderBase();
+    a979ForkBadge.sync();
+    return out;
+  };
+  const a979A911SyncBase = a911Sync;
+  a911Sync = function a911SyncA979Badge() {
+    const out = a979A911SyncBase();
+    a979ForkBadge.sync();
+    return out;
+  };
+}
+a979ForkBadge.sync();
+// ── [A-979 ④] end ──
 // ── [A-912] small fixes (comments only; behaviour lives in chog-home.js · second-journey-view.js · style.css [A-912]) ─────────────────
 // 1 Chog speech: chog-home.js settleChogOneLine() keeps one speech line on screen (a newer line makes the older one leave, "tap me!" included).
 // 2 Readiness: amount = underline only, unknown values "—" (second-journey-view.js, style.css).
@@ -15235,8 +15429,11 @@ function startTesterIntro() {
     `</div>`;
   el.style.setProperty("--testerIntroBlink", `${TESTER_INTRO_BLINK_MS}ms`);
   document.body.appendChild(el);
+  const face = el.querySelector(".testerIntro__face");
+  registerA995InlineFace(face);
   testerIntroTimers.push(
     setTimeout(() => el.classList.add("is-closed"), TESTER_INTRO_CLOSE_AT_MS),
+    setTimeout(() => el.classList.remove("is-closed"), TESTER_INTRO_BLINK_MS - 120),
     setTimeout(() => el.classList.add("is-leaving"), TESTER_INTRO_BLINK_MS),
     setTimeout(removeTesterIntro, TESTER_INTRO_BLINK_MS + TESTER_INTRO_LEAVE_MS),
   );
@@ -15259,6 +15456,9 @@ if (offerGiftPaperAtBoot()) homeLifeLeft = !HOME_LIFE_SCENES.includes(state.scen
 
 render();
 startTesterIntro();
+// [A-995-b] Same-turn PWA splash -> loading bridge. The browser cannot paint the first render
+// before this module task ends, so the approved 3.6 s overlay remains the first visible surface.
+mountA995bLoadingPiggy();
 
 // [A-697] Invite fit rides the same debounce as Home (A-666 §2): a real width/orientation change
 // recomputes synchronously (so the wide<->mobile `render()` switch in fitInvite is immediate), an
