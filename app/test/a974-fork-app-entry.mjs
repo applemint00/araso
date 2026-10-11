@@ -4,6 +4,7 @@
 // openSecondJourneyExplore · the block run with stubs on testnet / mainnet / blocked / fork, level 1 / 2 (old-vs-new: off the fork nothing is
 // replaced) · the read-only reader (method allow-list, RPC judge, no write) · issuance gate old-vs-new (only "monad-fork" changes; 143 refuses).
 import assert from "node:assert/strict";
+import { restoreA1063ForkGift } from "./helpers/a1063-baseline.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,7 +52,7 @@ await check("main.js: exactly one contiguous [A-974] block, right after the [A-9
 await check("main.js outside the [A-974] block is byte-equal to the pre-card copy (private workspace)", () => {
   const pre = path.join(PRE, "main.js");
   if (!existsSync(pre)) { console.log("      (pre-card copy is private-workspace only — skipped)"); return; }
-  assert.equal(A1023_CUT(A977_CUT(MAIN)) /* [A-1023 RE-PIN] pre-A-1023: A977_CUT(MAIN) */.replace(BLOCK_RE, ""), readFileSync(pre, "utf8")); // pre-A-977: MAIN.replace(BLOCK_RE, "")
+  assert.equal(A1023_CUT(A977_CUT(restoreA1063ForkGift(MAIN))) /* [A-1063 RE-PIN] exact approved fork Gift hunks reversed; pre-A-1063 baseline: A1023_CUT(A977_CUT(MAIN)) */.replace(BLOCK_RE, ""), readFileSync(pre, "utf8")); // pre-A-977: MAIN.replace(BLOCK_RE, "")
 });
 const fnBody = (src, head) => { const i = src.indexOf(head); assert.ok(i >= 0, head); const j = src.indexOf("\n}\n", i); return src.slice(i + head.length, j); };
 const code = (s) => s.split("\n").filter((l) => !l.trim().startsWith("//")).map((l) => l.replace(/\s*\/\/.*$/, "")).filter((l) => l !== "").join("\n");

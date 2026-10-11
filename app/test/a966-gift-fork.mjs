@@ -258,8 +258,11 @@ await check("block: fork-only (forkGift gate + the fork chain id), the mainnet /
   assert.equal(/innerHTML|insertAdjacentHTML|document\.|setScene\(|render\(|textContent|`[^`]*<[a-z]/.test(code), false, "no DOM / markup / scene");
   assert.equal(/\b143\b|10143|monad-mainnet|monad-testnet/.test(BLOCK), false, "no mainnet / testnet literal");
   assert.equal(/PRIVATE_KEY|privateKey|localStorage|sessionStorage|console\./.test(code), false, "no key / storage / logging");
-  assert.equal(/\b0x[0-9a-fA-F]{40}\b/g.test(code) && [...code.matchAll(/\b0x[0-9a-fA-F]{40}\b/g)].length === 1, true, "one address literal: the fork escrow");
-  assert.match(BLOCK, /const A966_FORK_GIFT_ESCROW = "0xde5e2b28ea7da624e9fdf881714bf3d615485c4d";/);
+  // [A-1063 RE-PIN] env-configured escrow, mandatory OFF gate; pre-A-1063 baseline: one hard-coded local fork escrow literal.
+  assert.equal(/\b0x[0-9a-fA-F]{40}\b/g.test(code), false, "no hard-coded fork escrow fallback");
+  assert.match(BLOCK, /a1063GiftTransport\(CHAIN_PROFILE, \{ sponsorUrl: env\.VITE_ARASO_FORK_GIFT_SPONSOR_URL, escrow: env\.VITE_ARASO_FORK_GIFT_ESCROW \}\)/);
+  assert.match(BLOCK, /if \(!endpoint\) return null;/);
+  assert.match(BLOCK, /contractAddress: endpoint\.escrow/);
   assert.match(BLOCK, /deployment: a966GiftDeployment\.FORK_LOCAL_TEST_ONLY \}, \{ allowForkLocal: true \}/);
   assert.match(BLOCK, /a966RpcAllowed\(rpcUrl, \{ profile: CHAIN_PROFILE, dev: a966DevBuild \}\)/);
 });

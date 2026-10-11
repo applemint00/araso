@@ -1,0 +1,15 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+const file = new URL("../../relayer/src/fork-gift-state.mjs", import.meta.url);
+const source = readFileSync(file, "utf8");
+const needle = "needsHuman: findings.length > 0";
+assert.equal(source.split(needle).length, 2, "mutation target exists exactly once");
+const mutated = source.replace(needle, "needsHuman: findings.length === 0").replace('"./gift-sponsor-service.mjs"', JSON.stringify(new URL("gift-sponsor-service.mjs", file).href));
+const mutant = await import(`data:text/javascript;base64,${Buffer.from(mutated).toString("base64")}`);
+const original = await import(file);
+const checkpoint = { forkInstanceId: "fork-143-mutation", block: 8, snapshotHash: "restored" };
+const raw = { forkCheckpoint: { ...checkpoint, block: 10, snapshotHash: "newer" }, entries: { fixture: { giftId: "fixture", state: "CLAIMED" } }, archived: [], gasTxs: {} };
+const oracle = async (module) => assert.equal((await module.auditForkJournal(raw, checkpoint, async () => "absent")).needsHuman, true, "restored-away terminal transaction MUST disable startup");
+await oracle(original);
+await assert.rejects(oracle(mutant), { code: "ERR_ASSERTION" });
+console.log("PASS a1063 mutation: inverted restore gate killed by terminal-row oracle (source untouched)");

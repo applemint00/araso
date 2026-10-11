@@ -389,6 +389,19 @@ export const GIFT_DEPLOYMENT = Object.freeze({
 
 export const MAINNET_GIFT_ESCROW_CONFIG = null;
 
+/** Fork-only Railway transport. No fallback to the mainnet API or a different host. */
+export function resolveForkGiftTransport(profile, { sponsorUrl, escrow } = {}) {
+  if (!isProfileActive(profile) || profile.id !== CHAIN_PROFILE_ID.FORK) return null;
+  if (typeof escrow !== "string" || !ADDR.test(escrow) || /^0x0{40}$/i.test(escrow)) return null;
+  if (typeof sponsorUrl !== "string" || sponsorUrl !== sponsorUrl.trim()) return null;
+  try {
+    const url = new URL(sponsorUrl), rpc = new URL(profile.rpcUrl);
+    if (url.protocol !== "https:" || url.origin !== rpc.origin || url.username || url.password || url.search || url.hash
+      || url.pathname !== "/gift-sponsor" || !rpcUrlAllowed(profile.rpcUrl, { profile })) return null;
+    return Object.freeze({ sponsorUrl: url.href, escrow: escrow.toLowerCase() });
+  } catch { return null; }
+}
+
 /**
  * @param profile  resolved chain profile
  * @param config   { chainScope, contractAddress, deployment, verifiedAtBlock? } or null

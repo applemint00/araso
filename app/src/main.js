@@ -13778,27 +13778,28 @@ async function a960BindInvite(address) {
 // Off the fork nothing here runs (A966_FORK_GIFT = null): the testnet / mainnet Gift paths stay exactly as they are (mainnet Gift stays OFF, the
 // GIFT_RECORD_CONFIG / GIFT_CLAIM_SUBMIT_CONFIG / A915_GIFT_CREATE_CONFIG literals stay null). On the fork profile (release level ≥ 2, journeyFeatureOpen
 // "forkGift") with a complete fork Gift build config:
-//   · record source  = the fork escrow (the local-fork escrow address below; fork_local_test_only, accepted on the fork profile only), read through the page's
+//   · record source  = the configured fork escrow (fork_local_test_only, accepted on the fork profile only), read through the page's
 //                      fork RPC under the one RPC judge (chain-profile.js rpcUrlAllowed); handed to gift-claim-entry.js useForkGiftRecordSource;
 //   · claim          = the base settle still opens the record, checks the signer and signs the claim statement; only its "no transport" end goes
-//                      to the 7702 sponsor submitter (same-origin POST /api/gift-sponsor);
+//                      to the 7702 sponsor submitter (POST to this fork Guard's /gift-sponsor);
 //   · create step    = the Gift create executor with a fork config (a915Cfg · pre-Face-ID check · gas + fee line), after the fork entry server says yes
 //                      again (a956ForkMoneyAllowed, the Journey 2 entry rule for new fork money paths). Existing screens, copy, refusals.
 // Fork Gift build config (all required; missing / malformed = fork Gift OFF): VITE_ARASO_FORK_GIFT_SPONSOR (the fork sponsor address) ·
 // VITE_ARASO_FORK_GIFT_GAS_UNITS ("install,commit,revoke,claim" = the fork sponsor server's own units) · VITE_ARASO_FORK_GIFT_GAS_BUFFER_BPS ·
 // VITE_ARASO_FORK_MON_USD (fork MON has no market: the price the existing fee line uses on the fork; a fork fixture, read nowhere else).
-import { GIFT_DEPLOYMENT as a966GiftDeployment, RPC_DEV_BUILD as a966DevBuild, resolveGiftEscrowConfig as a966EscrowConfig, rpcUrlAllowed as a966RpcAllowed } from "./chain-profile.js";
+import { GIFT_DEPLOYMENT as a966GiftDeployment, RPC_DEV_BUILD as a966DevBuild, resolveGiftEscrowConfig as a966EscrowConfig, rpcUrlAllowed as a966RpcAllowed, resolveForkGiftTransport as a1063GiftTransport } from "./chain-profile.js";
 import { FORK_CHAIN_ID as a966ForkChainId } from "./funding-context.js";
 import { createGiftSponsorClaimSubmitter as a966SponsorSubmitter, useForkGiftRecordSource as a966UseForkRecordSource } from "./gift-claim-entry.js";
 import { GIFT_SPONSOR_MAX_EXPIRY_SECONDS as a966ExpirySeconds } from "./gift-sponsor-7702.js";
 import { custom as a966Custom, defineChain as a966DefineChain } from "viem";
-const A966_FORK_GIFT_ESCROW = "0xde5e2b28ea7da624e9fdf881714bf3d615485c4d"; // the 5-arg Gift escrow deployed on the local fork (fork-local only; private receipt)
 const A966_FORK_GIFT_EXPIRY_SECONDS = 7 * 24 * 3600; // the fork Gift's deadline from now (wall clock; the escrow checks it on the fork's slower clock)
 const A966_FORK_GIFT = (() => {
   try {
     const env = import.meta.env || {};
     if (!journeyFeatureOpen("forkGift", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE }) || CHAIN_PROFILE.numericChainId !== a966ForkChainId) return null;
-    const escrow = a966EscrowConfig(CHAIN_PROFILE, { chainScope: CHAIN_PROFILE.scope, contractAddress: A966_FORK_GIFT_ESCROW, deployment: a966GiftDeployment.FORK_LOCAL_TEST_ONLY }, { allowForkLocal: true });
+    const endpoint = a1063GiftTransport(CHAIN_PROFILE, { sponsorUrl: env.VITE_ARASO_FORK_GIFT_SPONSOR_URL, escrow: env.VITE_ARASO_FORK_GIFT_ESCROW });
+    if (!endpoint) return null;
+    const escrow = a966EscrowConfig(CHAIN_PROFILE, { chainScope: CHAIN_PROFILE.scope, contractAddress: endpoint.escrow, deployment: a966GiftDeployment.FORK_LOCAL_TEST_ONLY }, { allowForkLocal: true });
     const sponsor = String(env.VITE_ARASO_FORK_GIFT_SPONSOR || "").trim();
     const units = String(env.VITE_ARASO_FORK_GIFT_GAS_UNITS || "").split(",").map((x) => x.trim());
     const bufferText = String(env.VITE_ARASO_FORK_GIFT_GAS_BUFFER_BPS ?? "").trim();
@@ -13820,14 +13821,14 @@ const A966_FORK_GIFT = (() => {
     const chain = a966DefineChain({ id: a966ForkChainId, name: "Monad mainnet fork", nativeCurrency: { name: "MON", symbol: "MON", decimals: 18 }, rpcUrls: { default: { http: [rpcUrl] } } });
     const client = createPublicClient({ chain, transport });
     const post = async (body) => {
-      const res = await fetch("/api/gift-sponsor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const res = await fetch(endpoint.sponsorUrl, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...body, forkInstanceId: CHAIN_PROFILE.forkInstanceId, escrowAddress: escrow.config.contractAddress }) });
       let b = null; try { b = await res.json(); } catch { b = null; }
       return { status: res.status, body: b };
     };
     const submitter = a966SponsorSubmitter({ config: { chainId: a966ForkChainId, escrowAddress: escrow.config.contractAddress, sponsorAddress: sponsor, expirySeconds: a966ExpirySeconds }, chain: client, sponsorClient: { submit: post }, chainScope: CHAIN_PROFILE.scope });
     if (!submitter || !a966UseForkRecordSource({ client, contractAddress: escrow.config.contractAddress })) return null;
     return Object.freeze({
-      escrow: escrow.config.contractAddress, sponsor, client, chain, transport, submitter, monUsd, bufferBps,
+      escrow: escrow.config.contractAddress, sponsor, client, chain, transport, submitter, monUsd, bufferBps, post,
       gasUnits: Object.freeze({ install: BigInt(units[0]), commitClaim: BigInt(units[1]), revoke: BigInt(units[2]), claim: BigInt(units[3]), fundingTransfer: 21000n }),
     });
   } catch { return null; }
@@ -13849,6 +13850,7 @@ if (A966_FORK_GIFT) {
   // create: the Gift create executor with the fork config (the a915Cfg checks, the fork's chain id instead of the mainnet id)
   const createCfg = Object.freeze({
     chainId: a966ForkChainId, escrowAddress: F.escrow, sponsorAddress: F.sponsor, gas: () => forkGas(),
+    client: Object.freeze({ register: F.post }),
     giftExpiryUnix: () => Math.floor(Date.now() / 1000) + A966_FORK_GIFT_EXPIRY_SECONDS, receiptTimeoutMs: 120000,
     makeClients: (account) => ({ walletClient: createWalletClient({ account, chain: F.chain, transport: F.transport }), publicClient: F.client }),
   });
