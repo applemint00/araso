@@ -4627,7 +4627,6 @@ function renderExplore() {
       <div class="cardAnchor" id="sendCardAnchor">
         <div class="cardAnchor__fit">${cardMarkup}</div>
       </div>
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -4657,7 +4656,6 @@ function renderSecondAway() {
         ""
       }
       ${/* [A-912] preview tag: DEV preview only (0 in the product build) */ (typeof A912_PRODUCT_BUILD !== "undefined" && A912_PRODUCT_BUILD) ? "" : `<p class="secondJourney__mockTag">UI preview — no transaction</p>`}
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -4796,8 +4794,8 @@ function renderSecondReturn() {
     // 실제 receipt 가 있으면 "UI preview — no transaction" 은 더 이상 사실이 아니다 — 그
     // 문구만 숨긴다(새 문구를 더하지 않는다, 기존 reset 버튼 줄은 유지).
     devExtra: hasRealReceipt
-      ? (isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : "")
-      : `${/* [A-912] preview tag: DEV preview only (0 in the product build) */ (typeof A912_PRODUCT_BUILD !== "undefined" && A912_PRODUCT_BUILD) ? "" : `<p class="secondJourney__mockTag">UI preview — no transaction</p>`}${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}`,
+      ? ""
+      : `${/* [A-912] preview tag: DEV preview only (0 in the product build) */ (typeof A912_PRODUCT_BUILD !== "undefined" && A912_PRODUCT_BUILD) ? "" : `<p class="secondJourney__mockTag">UI preview — no transaction</p>`}`,
   });
 }
 
@@ -5723,7 +5721,6 @@ function renderAuthCard(view = state) {
           ${actions}
         </div>
       </div>
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -5749,7 +5746,6 @@ function loginCheckingMarkup(phase) {
       ${arasoBrandMarkup()}
       <h1 class="loginCheck__title">Checking…</h1>
       <p class="loginCheck__body">Face ID may appear once.</p>
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -6131,7 +6127,6 @@ function renderHatch() {
       <div class="hatchStage" id="hatchStage" aria-hidden="true"></div>
       <div class="hatchChog" id="hatchChog" aria-hidden="true">${chogInviteMarkup()}</div>
       <button class="tiny skip" id="skipHatchButton" type="button">skip</button>
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -6236,7 +6231,6 @@ function renderName() {
         </div>
       </div>
       <div class="nameScene__chog" aria-hidden="true">${chogInviteMarkup()}</div>
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -13304,7 +13298,6 @@ function renderSendStay() {
       ${homeCharacter(piggyName)}
       ${cardAnchorMarkup}
       ${recordsCardMarkup()}
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -13414,7 +13407,6 @@ function renderAway() {
         // 지우는 것이 아니라, 이 자리에 있던 awayLine 한 줄만 그리지 않는다.
         ""
       }
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }
@@ -14239,7 +14231,7 @@ function renderReturn() {
     receiptRowsMarkup: returnReceiptRows(),
     name: displayPiggyName(),
     homeChogMarkup: chogHomeMarkupForReturn("return"),
-    devExtra: isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : "",
+    devExtra: "",
   });
 }
 
@@ -14355,7 +14347,6 @@ function renderFileBox() {
       <!-- filebox 에는 다음 진입이 없었다 — Home 복귀와 Explore 진입을
            연결하는 첫 걸음. Home 에 도착한 뒤 Chog 탭이 Explore 를 연다. -->
       <button class="tiny home" id="fileboxHomeButton" type="button">home</button>
-      ${isDevDebugOptIn() ? `<button class="tiny" id="resetButton">reset local test</button>` : ""}
     </section>
   `;
 }

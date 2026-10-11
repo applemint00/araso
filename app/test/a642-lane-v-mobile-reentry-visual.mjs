@@ -9,6 +9,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { restorePreA1051 } from "./helpers/a1051-restore.mjs"; // [A-1051 RE-PIN] protected-body pins compare pre-A-1051 text
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const MAIN = readFileSync(path.join(ROOT, "src/main.js"), "utf8");
@@ -21,14 +22,14 @@ function check(label, fn) {
   try { fn(); console.log(`PASS  ${label}`); pass += 1; }
   catch (e) { console.log(`FAIL  ${label}\n      ${String((e && e.message) || e).split("\n").join("\n      ")}`); fail += 1; }
 }
-function fnBody(name) {
-  const m = MAIN.match(new RegExp(`(?:async )?function ${name}\\(`));
+function fnBody(name, src = MAIN) { // [A-1051] src param (default = MAIN, unchanged for every other check)
+  const m = src.match(new RegExp(`(?:async )?function ${name}\\(`));
   if (!m) throw new Error(`함수 없음: ${name}`);
   const start = m.index;
   let depth = 0;
-  for (let i = MAIN.indexOf("{", MAIN.indexOf(")", start)); i < MAIN.length; i += 1) {
-    if (MAIN[i] === "{") depth += 1;
-    else if (MAIN[i] === "}") { depth -= 1; if (depth === 0) return MAIN.slice(start, i + 1); }
+  for (let i = src.indexOf("{", src.indexOf(")", start)); i < src.length; i += 1) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}") { depth -= 1; if (depth === 0) return src.slice(start, i + 1); }
   }
   throw new Error(`함수 끝 없음: ${name}`);
 }
@@ -205,7 +206,8 @@ check("V8 A-633 auth/session/reconcile/return code byte-identical to the A-633 b
     awayRestoreLineMarkup: "960d811270c73c0d", renderAuthCard: "6f1694a9613c1890", mountInviteChog: "f894db5c8e334665",
     arasoBrandMarkup: "2916af023287cf7f", render: "866133cf60711093",
   };
-  const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha16(fnBody(n))]));
+  const PRE1051 = restorePreA1051(MAIN); // [A-1051 RE-PIN] pre-A-1051: fnBody(n) on MAIN
+  const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha16(fnBody(n, PRE1051))]));
   assert.deepEqual(got, want);
   // Boot lock block re-pinned once for the chain-profile seal: the only change is
   // `const bootPending = state.scene === "sendstay" && LEGACY_TESTNET_PATH ? readSendPending() : null;`

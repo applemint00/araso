@@ -27,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { buildClaimUrl, createClaimLink, parseClaimUrl } from "../src/gift-piggy-claim-link.js";
 import { GIFT_ENTRY_STATUS, readClaimFragment } from "../src/gift-claim-entry.js";
 import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
+import { restorePreA1051 } from "./helpers/a1051-restore.mjs"; // [A-1051 RE-PIN] protected-body pins compare pre-A-1051 text
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -135,7 +136,8 @@ const PINNED = {
   renderAuthCard: "f875d207380637d3", startTesterIntro: "f0e15c6020350860", readTesterInviteParam: "c721a03a8d12a206", stripTesterInviteFromUrl: "2b37487591e69107",
 };
 await check("S6 auth/recovery/Gift/A-733 primitives are byte-identical (comment-stripped) to the pre-A-734 tree — the entry only CALLS them", () => {
-  const drift = Object.entries(PINNED).filter(([n, h]) => sha(stripComments(fnBody(n))) !== h).map(([n]) => n);
+  const PRE1051 = restorePreA1051(MAIN); // [A-1051 RE-PIN] pre-A-1051: fnBody(n) on MAIN
+  const drift = Object.entries(PINNED).filter(([n, h]) => sha(stripComments(fnBodyOf(PRE1051, n))) !== h).map(([n]) => n);
   deq(drift, []);
 });
 await check("S7 the only UI caller of beginGiftPiggy is openGiftForExistingPiggy; startGiftOpen is reached only from the Gift Open paper's timer; #giftOpenButton only from inviteFace(gift) + its one delegated listener", () => {

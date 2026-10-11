@@ -33,6 +33,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
+import { restorePreA1051 } from "./helpers/a1051-restore.mjs"; // [A-1051 RE-PIN] protected-body pins compare pre-A-1051 text
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "../..");
@@ -55,13 +56,13 @@ function cut(startMarker, endMarker) {
   if (end < 0) throw new Error(`main.js: end marker missing: ${endMarker}`);
   return MAIN.slice(start, end);
 }
-function fnBody(name) {
-  const m = MAIN.match(new RegExp(`(?:async )?function ${name}\\(`));
+function fnBody(name, src = MAIN) { // [A-1051] src param (default = MAIN, unchanged for every other check)
+  const m = src.match(new RegExp(`(?:async )?function ${name}\\(`));
   if (!m) throw new Error(`function missing: ${name}`);
   let depth = 0;
-  for (let i = MAIN.indexOf("{", MAIN.indexOf(")", m.index)); i < MAIN.length; i += 1) {
-    if (MAIN[i] === "{") depth += 1;
-    else if (MAIN[i] === "}") { depth -= 1; if (depth === 0) return MAIN.slice(m.index, i + 1); }
+  for (let i = src.indexOf("{", src.indexOf(")", m.index)); i < src.length; i += 1) {
+    if (src[i] === "{") depth += 1;
+    else if (src[i] === "}") { depth -= 1; if (depth === 0) return src.slice(m.index, i + 1); }
   }
   throw new Error(`function end missing: ${name}`);
 }
@@ -474,12 +475,13 @@ await check("C6 render() birth wiring unchanged: #checkButton → checkPiggy (re
 });
 
 await check("P1 byte-identical pins: requestPrf / loginCheckingMarkup (security-kit baseline) and render / recovery+creation functions", () => {
+  const PRE1051 = restorePreA1051(MAIN); const fnBody1051 = (n) => fnBody(n, PRE1051); // [A-1051 RE-PIN] pre-A-1051: fnBody(n) on MAIN
   // Full sha256 pins, split into two halves only so the repo secret hook does not read them as keys (values unchanged).
-  assert.equal(sha(fnBody("requestPrf")), "766fc57ed63b6009feb116105bdc73cc" + "0c2cebff74ea614c02c48df6b935a321", "requestPrf");
-  assert.equal(sha(fnBody("loginCheckingMarkup")), "dcec88389ae4385ad03e7d4645cd7704" + "6eb95b7762695d2d59e96a8844772f91", "loginCheckingMarkup");
-  assert.equal(sha(fnBody("render")), "866133cf607110939b5ce2b05ad9ff25" + "3ee7ab77f8448b3977faa974a9d3e27c", "render");
+  assert.equal(sha(fnBody1051("requestPrf")), "766fc57ed63b6009feb116105bdc73cc" + "0c2cebff74ea614c02c48df6b935a321", "requestPrf");
+  assert.equal(sha(fnBody1051("loginCheckingMarkup")), "dcec88389ae4385ad03e7d4645cd7704" + "6eb95b7762695d2d59e96a8844772f91", "loginCheckingMarkup");
+  assert.equal(sha(fnBody1051("render")), "866133cf607110939b5ce2b05ad9ff25" + "3ee7ab77f8448b3977faa974a9d3e27c", "render");
   const want = { checkPiggy: PIN.checkPiggy, recoverPiggy: PIN.recoverPiggy, openPiggy: PIN.openPiggy, startPiggyOpen: PIN.startPiggyOpen, isCancelledAuthError: PIN.isCancelledAuthError, appLockSurface: PIN.appLockSurface, lockAppAfterIdle: PIN.lockAppAfterIdle, getRpId: PIN.getRpId };
-  const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha(fnBody(n)).slice(0, 16)]));
+  const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha(fnBody1051(n)).slice(0, 16)]));
   deq(got, want);
   assert.ok(/const PRODUCTION_RP_ID = "arasoo\.vercel\.app";/.test(MAIN), "PRODUCTION_RP_ID unchanged");
 });

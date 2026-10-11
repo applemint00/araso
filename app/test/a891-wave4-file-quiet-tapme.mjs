@@ -12,6 +12,7 @@ import { TAP_CUE_TIMING } from "../src/chog-home.js";
 import { scopedSecondKey } from "../src/boot-profile.js"; // [A-946 RE-PIN] SECOND_INTRO_SEEN_KEY is now built per chain scope (testnet = same key)
 import { testOutDir } from "./helpers/test-out.mjs"; // [A-932]
 import { privatePath } from "./helpers/private-base.mjs"; // [A-1033] private baseline root = $ARASO_PRIVATE_BASE (unset = public checkout)
+import { restorePreA1051 } from "./helpers/a1051-restore.mjs"; // [A-1051 RE-PIN] protected-body pins compare pre-A-1051 text
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..", "..");
@@ -207,8 +208,9 @@ await check("N10 UI-19 filebox: the STORED Receipt (no synthesis) opens centred;
 });
 
 await check("N11 protected bodies byte-identical to the A-891 pre-copy (render 866133cf…, arasoBrandMarkup, money/auth, a734 Invite); chog-home.js untouched", () => {
+  const PRE1051 = restorePreA1051(MAIN); // [A-1051 RE-PIN] pre-A-1051: cutFn(MAIN, …)
   const preP = path.join(A891_PRE_ROOT, "pre_copies/app/src/main.js");
-  assert.equal(sha(cutFn(MAIN, "render")).slice(0, 16), "866133cf60711093", "render() pin");
+  assert.equal(sha(cutFn(PRE1051, "render")).slice(0, 16), "866133cf60711093", "render() pin");
   if (!existsSync(preP)) return;
   const PRE = readFileSync(preP, "utf8");
   for (const f of ["render", "arasoBrandMarkup", "sendPiggyOnce", "requestPrf", "touchAppSession", "reconcileSendPending", "classifySendPending", "reconciledSendReceipt",
@@ -220,21 +222,21 @@ await check("N11 protected bodies byte-identical to the A-891 pre-copy (render 8
     // pre-A-893 baseline: compared to the A-891 pre-copy; now compared to the A-893 post body (receipts/A893_wave5_chog_cues/post_main.js) — A-891 still must not touch them.
     const A893_OWNED = new Set(["chogHomeMarkupForExplore", "openSecondJourneyExplore"]);
     const P893 = privatePath("ops/receipts/A893_wave5_chog_cues/post_main.js");
-    if (A893_OWNED.has(f) && existsSync(P893)) { assert.equal(cutFn(MAIN, f), cutFn(readFileSync(P893, "utf8"), f), `${f} == A-893 post body`); continue; }
+    if (A893_OWNED.has(f) && existsSync(P893)) { assert.equal(cutFn(PRE1051, f), cutFn(readFileSync(P893, "utf8"), f), `${f} == A-893 post body`); continue; }
     // [A-896 re-pin, named reason: 99e M-L-2 60 s signer margin] sendPiggyOnce (one entry check) is A-896-owned: pinned by sha256 of this file's cutFn() text.
     // pre-A-896 baseline: cutFn(sendPiggyOnce) f1a3d8dea0104b4d2f62780b22e6c1e556485d557a389ee1862305d6ac028fdd (== the A-891 pre-copy body). [A-896 R1 re-pin: + monotonic performance.now stamp/check; prior A-896 value was the old pin]
     // (activateSigningSession gets one stamp line in A-896; this cutFn() stops at its `{ persistAddress }` parameter brace, so that name still compares unchanged below.)
     const A896_PINS = { sendPiggyOnce: "3878d322b0f886098fb04ee85dd0113302bf771b7df0f81c74b177cf8abfefc2" };
-    if (A896_PINS[f]) { assert.equal(sha(cutFn(MAIN, f)), A896_PINS[f], `${f} == post-A-896 body`); continue; }
+    if (A896_PINS[f]) { assert.equal(sha(cutFn(PRE1051, f)), A896_PINS[f], `${f} == post-A-896 body`); continue; }
     // [A-893b re-pin · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로"] awayRestoreLineMarkup is A-893b-owned (Away-slot pending wording only:
     // "still out." → "still out working." / "not back yet."; kinds and decisions unchanged): pinned by sha256 of this file's cutFn() text.
     // pre-A-893b baseline: awayRestoreLineMarkup == the A-891 pre-copy body (sha256 027535c3b9c99afbbf8d75f2e994d81a64c469c9b6bcd25859fb6d02758bcc89)
     const A893B_PINS = { awayRestoreLineMarkup: "960d811270c73c0d653e0615cb228530581336e9f57137d3168e9c6ac9467e38" };
-    if (A893B_PINS[f]) { assert.equal(sha(cutFn(MAIN, f)), A893B_PINS[f], `${f} == post-A-893b body`); continue; }
+    if (A893B_PINS[f]) { assert.equal(sha(cutFn(PRE1051, f)), A893B_PINS[f], `${f} == post-A-893b body`); continue; }
     // [A-902 re-pin, named reason: Cowork answer "질문 · A-902" — frame-aligned bell/toss] pre-A-902 baseline: mountSecondReturn == the A-891 pre-copy body.
     // The only difference allowed is the single one-line hook below (the function body lives in the delimited [A-902] block).
     const A902_HOOK = "  a902WatchReturn(returnView, valid); // [A-902] bell + toss sounds\n";
-    assert.equal(cutFn(MAIN, f).replace(A902_HOOK, ""), cutFn(PRE, f), `${f} unchanged`);
+    assert.equal(cutFn(PRE1051, f).replace(A902_HOOK, ""), cutFn(PRE, f), `${f} unchanged`);
   }
   // pre-A-912 baseline: sha(chog-home.js) == sha(pre_copies/app/src/chog-home.js) (chog-home.js untouched by A-891). [A-912 re-pin, hash pin -> new sha256]
   // A-912 adds settleChogOneLine() + one MutationObserver block (one speech line at a time) to chog-home.js; nothing else changes.
