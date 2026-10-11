@@ -44,9 +44,9 @@ await check("main.js config: exact mainnet RPC + finalized, single literal; prod
   assert.match(MAIN, /status = "not_finalized"/);
 });
 
-await check("vercel.json connect-src: exactly one added host https://rpc.monad.xyz", () => {
+await check("vercel.json connect-src: exact RPC hosts plus the one Railway Guard origin", () => {
   const csp = JSON.parse(VERCEL).headers[0].headers.find((h) => h.key === "Content-Security-Policy").value;
-  assert.match(csp, /connect-src 'self' https:\/\/testnet-rpc\.monad\.xyz https:\/\/rpc\.monad\.xyz;/);
+  assert.match(csp, /connect-src 'self' https:\/\/testnet-rpc\.monad\.xyz https:\/\/rpc\.monad\.xyz https:\/\/accurate-perception-production-5423\.up\.railway\.app;/);
   assert.equal(/connect-src[^;]*\*/.test(csp), false);
 });
 

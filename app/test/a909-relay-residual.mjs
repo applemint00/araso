@@ -20,7 +20,7 @@ const mkRes = () => { const r = { statusCode: 0, headers: {}, body: "", setHeade
 const call = async (body) => {
   const rec = []; const res = mkRes();
   const fetchImpl = async (url, init) => { rec.push({ url, init }); return { status: 200, headers: {}, text: async () => "{}" }; };
-  await P.createRelayQuoteHandler({ fetchImpl, env: { RELAY_API_KEY: KEY } })({ method: "POST", url: P.PROXY_PATH, body, headers: { host: "app.example" } }, res);
+  await P.createRelayQuoteHandler({ fetchImpl, env: { RELAY_API_KEY: KEY, [P.RELAY_RELEASE_LEVEL_ENV]: "2" } })({ method: "POST", url: P.PROXY_PATH, body, headers: { host: "app.example" } }, res);
   return { res, rec };
 };
 const MUSDC = "0x754704Bc059F8C67012fEd69BC8A327a5aafb603";

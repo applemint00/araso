@@ -11,7 +11,7 @@ globalThis.fetch = () => { netCalls++; throw new Error("network forbidden in a90
 
 const P = await import("../../api/relay-quote.js");
 const RR = await import("../src/funding-rail-relay.js");
-const { createRelayQuoteHandler, PROXY_PATH, RELAY_UPSTREAM_URL, MAX_BODY_BYTES } = P;
+const { createRelayQuoteHandler, PROXY_PATH, RELAY_UPSTREAM_URL, MAX_BODY_BYTES, RELAY_RELEASE_LEVEL_ENV } = P;
 
 let pass = 0, fail = 0;
 const t = (name, cond) => { if (cond) pass++; else { fail++; console.log("FAIL", name); } };
@@ -33,10 +33,38 @@ const fakeUp = (status, text, { delayMs = 0, throws = false, rec } = {}) => asyn
   if (delayMs) await new Promise((r, j) => { const to = setTimeout(r, delayMs); init.signal.addEventListener("abort", () => { clearTimeout(to); const e = new Error("aborted"); e.name = "AbortError"; j(e); }); });
   return { status, headers: { "set-cookie": "x=1", "x-api-key": KEY }, text: async () => text };
 };
-const run = async (handlerOpts, reqOpts) => { const res = mkRes(); capture(); try { await createRelayQuoteHandler(handlerOpts)(mkReq(reqOpts), res); } finally { release(); } return res; };
+const runRaw = async (handlerOpts, reqOpts) => { const res = mkRes(); capture(); try { await createRelayQuoteHandler(handlerOpts)(mkReq(reqOpts), res); } finally { release(); } return res; };
+const level2Env = (env = {}) => {
+  const out = Object.create(Object.getPrototypeOf(env));
+  Object.assign(out, env);
+  out[RELAY_RELEASE_LEVEL_ENV] = "2";
+  return out;
+};
+const run = (handlerOpts, reqOpts) => runRaw({ ...handlerOpts, env: level2Env(handlerOpts.env) }, reqOpts);
 const MUSDC = "0x754704Bc059F8C67012fEd69BC8A327a5aafb603";
 const GOOD = { user: "0x" + "11".repeat(20), recipient: "0x" + "22".repeat(20), refundTo: "0x" + "11".repeat(20), originChainId: 8453, originCurrency: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", destinationChainId: 143, destinationCurrency: MUSDC, tradeType: "EXACT_INPUT", amount: "20000000", topupGas: false, includeProtocolData: true };
 const BODY = JSON.stringify(GOOD);
+
+// ── [A-1029] server release gate: fail closed before key/upstream; level >= 2 preserves the existing path ──
+for (const [label, value] of [["absent", undefined], ["level 1", "1"], ["empty", ""], ["blank", "   "], ["zero", "0"], ["negative", "-1"], ["word", "two"], ["float", "2.5"], ["leading zero", "02"], ["unsafe integer", "999999999999999999999"]]) {
+  const rec = [];
+  const env = { RELAY_API_KEY: KEY };
+  if (value !== undefined) env[RELAY_RELEASE_LEVEL_ENV] = value;
+  const res = await runRaw({ fetchImpl: fakeUp(200, "{}", { rec }), env }, { body: BODY });
+  t(`server release gate ${label} -> 404 not_found, no upstream`, res.statusCode === 404 && JSON.parse(res.body).error === "not_found" && rec.length === 0);
+}
+{
+  const rec = [];
+  const inherited = Object.create({ [RELAY_RELEASE_LEVEL_ENV]: "2" });
+  inherited.RELAY_API_KEY = KEY;
+  const res = await runRaw({ fetchImpl: fakeUp(200, "{}", { rec }), env: inherited }, { body: BODY });
+  t("server release level must be an own env property", res.statusCode === 404 && rec.length === 0);
+}
+for (const level of ["2", " 2 ", "3"]) {
+  const rec = [];
+  const res = await runRaw({ fetchImpl: fakeUp(200, "{}", { rec }), env: { RELAY_API_KEY: KEY, [RELAY_RELEASE_LEVEL_ENV]: level } }, { body: BODY });
+  t(`server release level ${JSON.stringify(level)} keeps the existing quote path`, res.statusCode === 200 && rec.length === 1);
+}
 
 // ── happy path: exactly one upstream POST, quote/v2 only, key header, body unchanged ──
 {
@@ -90,12 +118,18 @@ for (const [label, env] of [["absent", {}], ["empty", { RELAY_API_KEY: "" }], ["
   const res = await run({ fetchImpl: fakeUp(200, "{}"), env }, { body: BODY });
   t("env read as own property only (polluted proto ignored)", res.statusCode === 503);
 }
-// default export with no key in process.env -> 503, still 0 network
+// default export at server level 2 with no key -> the A-972 live expectation: 503, still 0 network
 {
-  const saved = process.env.RELAY_API_KEY; delete process.env.RELAY_API_KEY;
+  const saved = process.env.RELAY_API_KEY;
+  const savedLevel = process.env[RELAY_RELEASE_LEVEL_ENV];
+  delete process.env.RELAY_API_KEY;
+  process.env[RELAY_RELEASE_LEVEL_ENV] = "2";
   const res = mkRes(); await P.default(mkReq({ body: BODY }), res);
   if (saved !== undefined) process.env.RELAY_API_KEY = saved;
-  t("default export with no env key -> 503", res.statusCode === 503);
+  else delete process.env.RELAY_API_KEY;
+  if (savedLevel !== undefined) process.env[RELAY_RELEASE_LEVEL_ENV] = savedLevel;
+  else delete process.env[RELAY_RELEASE_LEVEL_ENV];
+  t("default export at level 2 with no key -> 503", res.statusCode === 503);
 }
 // method / path allowlist
 for (const m of ["GET", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH"]) {
@@ -129,11 +163,11 @@ for (const u of ["/api/relay-quote/quote/v2", "/api/relay-quote/", "/api/relay-q
   const rec = [];
   const req = mkReq({}); req.body = undefined;
   req[Symbol.asyncIterator] = async function* () { yield Buffer.from(BODY.slice(0, 10)); yield Buffer.from(BODY.slice(10)); };
-  const res = mkRes(); await createRelayQuoteHandler({ fetchImpl: fakeUp(200, "{}", { rec }), env: { RELAY_API_KEY: KEY } })(req, res);
+  const res = mkRes(); await createRelayQuoteHandler({ fetchImpl: fakeUp(200, "{}", { rec }), env: level2Env({ RELAY_API_KEY: KEY }) })(req, res);
   t("streamed body reassembled and forwarded", res.statusCode === 200 && rec[0].init.body === BODY);
   const big = mkReq({}); big.body = undefined;
   big[Symbol.asyncIterator] = async function* () { for (let i = 0; i < 10; i++) yield Buffer.alloc(1024, 0x61); };
-  const r2 = mkRes(); await createRelayQuoteHandler({ fetchImpl: fakeUp(200, "{}", { rec }), env: { RELAY_API_KEY: KEY } })(big, r2);
+  const r2 = mkRes(); await createRelayQuoteHandler({ fetchImpl: fakeUp(200, "{}", { rec }), env: level2Env({ RELAY_API_KEY: KEY }) })(big, r2);
   t("streamed oversize -> 413", r2.statusCode === 413);
 }
 // same-origin only
@@ -181,7 +215,7 @@ const code = src.replace(/(^|\s)\/\/.*$/gm, "$1");
 t("proxy source has no console.* / process.stdout logging", !/console\.|process\.std(out|err)/.test(code));
 t("proxy source never sets access-control-*", !/access-control/i.test(code));
 t("proxy source: only one upstream URL literal, quote/v2", (code.match(/https?:\/\/[^"'`\s)]+/g) || []).join(",") === "https://api.relay.link/quote/v2");
-t("proxy source: key only via RELAY_API_KEY env, no VITE_ and no key-looking literal", code.includes('"RELAY_API_KEY"') && !/VITE_/.test(code) && !/relay_[a-z0-9]{16,}/i.test(code));
+t("proxy source: key only via RELAY_API_KEY and gate only via server release env, no VITE_ and no key-looking literal", code.includes('"RELAY_API_KEY"') && code.includes('"ARASO_SERVER_RELEASE_LEVEL"') && !/VITE_/.test(code) && !/relay_[a-z0-9]{16,}/i.test(code));
 t("proxy does not import app/src (transport only; no binding logic copy)", !/from\s+["'][^"']*app\/src/.test(code) && !/verifyRelayDepositBinding|validateRelayQuote/.test(code));
 
 // ── adapter points at the proxy; binding still runs ──

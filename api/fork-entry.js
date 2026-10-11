@@ -1,6 +1,6 @@
-// [A-956] POST /api/fork-entry — Journey 2 entry (card E). LOCAL ONLY today: there is no durable store, no shared challenge store and no
-// hosted fork yet (A-949 hosting OPEN), so the default export answers 503 unless it runs as a local server process
-// (ARASO_FORK_ENTRY_LOCAL=1 and no production marker). Nothing here is deployed by this card.
+// [A-956/A-1027] POST /api/fork-entry — Journey 2 entry (card E). Local mode uses process-memory stores only when explicitly enabled.
+// Production mode uses the existing Upstash invite/challenge/ledger stores and the signed remote fork Admin; any incomplete configuration
+// stays closed with 503. This module never logs env values, invite tokens or HMAC material.
 //
 // Body (JSON, ≤ 8 KiB) — { action, ... }; the invite token rides in the `x-araso-invite` header (never in the body, never logged):
 //   challenge  { piggyAddress }                                            → { nonce, message, expiresAt }
@@ -10,8 +10,8 @@
 // testerId = server auth (invite token) only · Journey 1 = the server's own chain-10143 read · top-up = A-949 Admin at 127.0.0.1 with the
 // token from env · request fields beyond the action's list = 400. Same-origin browser calls only (plus code-injected local dev origins).
 import { appOriginOk, createInviteTable, createMemoryChallengeStore } from "./_lib/fork-auth.js";
-import { createForkEntryService, jsonRpc } from "./_lib/fork-entry.js";
-import { forkAdminClientFromEnv } from "./_lib/fork-grant-client.js";
+import { createForkEntryService, jsonRpc, upstashForkEntryParts } from "./_lib/fork-entry.js";
+import { forkAdminClientFromEnv, guardOrigin } from "./_lib/fork-grant-client.js";
 import { createMemoryForkLedgerStore } from "./_lib/fork-ledger-store-contract.js";
 
 export const FORK_ENTRY_MAX_BODY = 8 * 1024;
@@ -25,6 +25,8 @@ export const FORK_ENTRY_ENV = Object.freeze({
   appOrigin: "ARASO_FORK_APP_ORIGIN", // the app origin named in the challenge `uri:` line (required)
 });
 const DEFAULT_TESTNET_RPC = "https://testnet-rpc.monad.xyz";
+const GRANT_VERSION_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
+const INVITE_REFUSALS = new Set(["not_invited", "invite_not_bound", "invite_bound_to_other_piggy", "piggy_bound_to_other_tester"]);
 const ACTION_FIELDS = Object.freeze({
   challenge: ["action", "piggyAddress"],
   enter: ["action", "nonce", "signature", "piggyAddress", "journey1"],
@@ -111,8 +113,52 @@ export function localForkEntryServiceFromEnv(env = process.env, { fetchImpl = gl
   });
 }
 
+const httpsRpcUrl = (value) => {
+  if (typeof value !== "string" || value !== value.trim()) return null;
+  try {
+    const u = new URL(value);
+    return u.protocol === "https:" && u.hostname && !u.username && !u.password && !u.hash ? u.href : null;
+  } catch { return null; }
+};
+
+/** [A-1027] Hosted entry service from server env, or null (fail closed). All durable parts share the A-960 Upstash namespace. */
+export function productionForkEntryServiceFromEnv(env = process.env, { fetchImpl = globalThis.fetch, now } = {}) {
+  const own = (k) => (env && Object.prototype.hasOwnProperty.call(env, k) ? env[k] : undefined);
+  if (!looksProduction(env) || own(FORK_ENTRY_ENV.local) === "1") return null;
+  const appOrigin = own(FORK_ENTRY_ENV.appOrigin);
+  const publicRpcUrl = guardOrigin(own(FORK_ENTRY_ENV.forkRpc));
+  const configuredTestnet = own(FORK_ENTRY_ENV.testnetRpc);
+  const testnetRpcUrl = configuredTestnet === undefined || configuredTestnet === "" ? DEFAULT_TESTNET_RPC : httpsRpcUrl(configuredTestnet);
+  const grantVersion = own(FORK_ENTRY_ENV.grantVersion);
+  const parts = upstashForkEntryParts(env, { fetchImpl });
+  const admin = forkAdminClientFromEnv(env, fetchImpl);
+  if (!parts || !admin || !appOriginOk(appOrigin) || !publicRpcUrl || !testnetRpcUrl || typeof grantVersion !== "string" || !GRANT_VERSION_RE.test(grantVersion)) return null;
+  const service = createForkEntryService({
+    config: { invites: parts.invites, appOrigin, grantVersion },
+    store: parts.store,
+    challenges: parts.challenges,
+    admin,
+    testnetRpc: jsonRpc({ url: testnetRpcUrl, fetchImpl }),
+    forkRpc: jsonRpc({ url: publicRpcUrl, fetchImpl }),
+    ...(now ? { now } : {}),
+  });
+  const productionAuth = async (method, input) => {
+    const out = await service[method](input);
+    return out && INVITE_REFUSALS.has(out.reason) ? { ok: false, status: 403, reason: out.reason } : out;
+  };
+  return Object.freeze(Object.fromEntries(["challenge", "enter", "status", "complete"].map((method) => [method, (input) => productionAuth(method, input)])));
+}
+
+/** Chooses exactly one mode. Production markers can never fall back to the local memory path. */
+export function forkEntryServiceFromEnv(env = process.env, options = {}) {
+  return looksProduction(env) ? productionForkEntryServiceFromEnv(env, options) : localForkEntryServiceFromEnv(env, options);
+}
+
 let defaultHandler = null;
 export default async function handler(req, res) {
-  if (!defaultHandler) defaultHandler = createForkEntryHandler({ service: localForkEntryServiceFromEnv(process.env) });
+  if (!defaultHandler) {
+    const appOrigin = appOriginOk(process.env[FORK_ENTRY_ENV.appOrigin]) ? process.env[FORK_ENTRY_ENV.appOrigin] : null;
+    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
+  }
   return defaultHandler(req, res);
 }

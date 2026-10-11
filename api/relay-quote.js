@@ -8,9 +8,12 @@
 //   - upstream response HEADERS are dropped entirely (only status class + JSON body come back);
 //   - if the upstream body somehow contains the key string it is replaced before returning.
 // Same-origin only: no CORS headers are ever set, and a cross-site Origin / Sec-Fetch-Site is refused.
-// Missing key → 503 relay_key_missing · upstream timeout → 504 · oversize body → 413 · non-POST → 405.
+// Server release gate: env `ARASO_SERVER_RELEASE_LEVEL` must be an integer >= 2 before a quote can reach the key/upstream path.
+// Unset / level 1 / unreadable → the existing 404 not_found response. At level >= 2, missing key → 503 relay_key_missing.
+// Upstream timeout → 504 · oversize body → 413 · non-POST → 405.
 
 export const RELAY_KEY_ENV = "RELAY_API_KEY";
+export const RELAY_RELEASE_LEVEL_ENV = "ARASO_SERVER_RELEASE_LEVEL";
 export const RELAY_UPSTREAM_URL = "https://api.relay.link/quote/v2";
 export const PROXY_PATH = "/api/relay-quote";
 export const MAX_BODY_BYTES = 4096;
@@ -94,6 +97,10 @@ export function createRelayQuoteHandler({ fetchImpl, env, timeoutMs = UPSTREAM_T
       if (typeof req.url === "string" && req.url !== "" && req.url !== PROXY_PATH) return respond(res, 404, { ok: false, error: "not_found" });
       if (!sameOrigin(req)) return respond(res, 403, { ok: false, error: "cross_origin_refused" });
       const e = env === undefined ? process.env : env;
+      const rawLevel = ownEnv(e, RELAY_RELEASE_LEVEL_ENV);
+      const levelText = rawLevel == null ? "" : String(rawLevel).trim();
+      const level = /^[1-9]\d*$/.test(levelText) ? Number(levelText) : 1;
+      if (!Number.isSafeInteger(level) || level < 2) return respond(res, 404, { ok: false, error: "not_found" });
       const rawKey = ownEnv(e, RELAY_KEY_ENV);
       const key = typeof rawKey === "string" ? rawKey.trim() : "";
       if (key === "") return respond(res, 503, { ok: false, error: "relay_key_missing" });

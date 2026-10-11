@@ -71,7 +71,7 @@ const EXPECTED_HEADER_RULE = {
   source: "/(.*)",
   headers: [
     // pre-A-859 baseline: connect-src 'self' https://testnet-rpc.monad.xyz;
-    { key: "Content-Security-Policy", value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self' https://testnet-rpc.monad.xyz https://rpc.monad.xyz; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'" },
+    { key: "Content-Security-Policy", value: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src 'self' https://testnet-rpc.monad.xyz https://rpc.monad.xyz https://accurate-perception-production-5423.up.railway.app; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'; worker-src 'none'; manifest-src 'self'" },
     { key: "Referrer-Policy", value: "no-referrer" },
     { key: "X-Content-Type-Options", value: "nosniff" },
     { key: "Permissions-Policy", value: "publickey-credentials-create=(self), publickey-credentials-get=(self), accelerometer=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), interest-cohort=()" },
