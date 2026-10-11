@@ -80,12 +80,14 @@ function sameOrigin(req) {
   const h = req.headers || {};
   const site = h["sec-fetch-site"];
   if (site !== undefined && site !== "same-origin" && site !== "none") return false;
+  // [A-1053 · A-1031 opus condition 1] a matching Origin is REQUIRED (before the release level or the key is read): a request with no Origin
+  // (curl / server-side) is refused like a cross-origin one. Browsers send Origin on every same-origin POST, so the app path is unchanged.
+  // pre-A-1053: `if (origin !== undefined) { …host check… } return true;` (no Origin passed)
   const origin = h.origin;
-  if (origin !== undefined) {
-    let host;
-    try { host = new URL(origin).host; } catch { return false; }
-    if (!h.host || host !== h.host) return false;
-  }
+  if (typeof origin !== "string" || origin === "") return false;
+  let host;
+  try { host = new URL(origin).host; } catch { return false; }
+  if (!h.host || host !== h.host) return false;
   return true;
 }
 

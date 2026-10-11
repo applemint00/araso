@@ -26,7 +26,7 @@ const mkRes = () => {
   const r = { statusCode: 0, headers: {}, body: "", setHeader(k, v) { r.headers[k.toLowerCase()] = v; }, end(b) { r.body = b ?? ""; } };
   return r;
 };
-const mkReq = ({ method = "POST", url = PROXY_PATH, body, headers = {} } = {}) => ({ method, url, body, headers: { host: "app.example", ...headers } });
+const mkReq = ({ method = "POST", url = PROXY_PATH, body, headers = {} } = {}) => ({ method, url, body, headers: { host: "app.example", origin: "https://app.example", "sec-fetch-site": "same-origin", ...headers } }); // [A-1053] default = the real browser shape (same-origin Origin); pre-A-1053: headers { host } only
 const fakeUp = (status, text, { delayMs = 0, throws = false, rec } = {}) => async (url, init) => {
   if (rec) rec.push({ url, init });
   if (throws) throw new Error("boom");
@@ -178,8 +178,10 @@ for (const u of ["/api/relay-quote/quote/v2", "/api/relay-quote/", "/api/relay-q
   t("Sec-Fetch-Site cross-site refused 403", (await mk({ "sec-fetch-site": "cross-site" })).statusCode === 403);
   t("same-site (sibling subdomain) refused 403", (await mk({ "sec-fetch-site": "same-site" })).statusCode === 403);
   t("same-origin Origin accepted", (await mk({ origin: "https://app.example", "sec-fetch-site": "same-origin" })).statusCode === 200);
-  t("no Origin (server-side / curl) accepted", (await mk({})).statusCode === 200);
-  t("refused requests made no upstream call", rec.length === 2);
+  // [A-1053 RE-PIN · tightened] pre-A-1053: t("no Origin (server-side / curl) accepted", (await mk({})).statusCode === 200)
+  t("no Origin (server-side / curl) refused 403 before the key is read", (await mk({ origin: undefined, "sec-fetch-site": undefined })).statusCode === 403);
+  t("empty Origin refused 403", (await mk({ origin: "" })).statusCode === 403);
+  t("refused requests made no upstream call", rec.length === 1);
 }
 
 // ── [A-901 C2] body allowlist: only buildRelayQuoteRequest's shape is forwarded ──

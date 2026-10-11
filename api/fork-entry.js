@@ -121,10 +121,16 @@ const httpsRpcUrl = (value) => {
   } catch { return null; }
 };
 
+// [A-1053 · A-1031 opus condition 2] the hosted entry opens only at server release level >= 2 (same variable and parsing as api/relay-quote.js:
+// unset / empty / not a positive integer = 1). Below 2 the service is null → the existing closed answer (503 entry_unavailable).
+export const FORK_ENTRY_SERVER_LEVEL_ENV = "ARASO_SERVER_RELEASE_LEVEL";
+const serverReleaseLevel = (v) => { const t = v == null ? "" : String(v).trim(); const n = /^[1-9]\d*$/.test(t) ? Number(t) : 1; return Number.isSafeInteger(n) ? n : 1; };
+
 /** [A-1027] Hosted entry service from server env, or null (fail closed). All durable parts share the A-960 Upstash namespace. */
 export function productionForkEntryServiceFromEnv(env = process.env, { fetchImpl = globalThis.fetch, now } = {}) {
   const own = (k) => (env && Object.prototype.hasOwnProperty.call(env, k) ? env[k] : undefined);
   if (!looksProduction(env) || own(FORK_ENTRY_ENV.local) === "1") return null;
+  if (serverReleaseLevel(own(FORK_ENTRY_SERVER_LEVEL_ENV)) < 2) return null; // [A-1053] pre-A-1053: no level gate (opened at level 1 when the fork env was complete)
   const appOrigin = own(FORK_ENTRY_ENV.appOrigin);
   const publicRpcUrl = guardOrigin(own(FORK_ENTRY_ENV.forkRpc));
   const configuredTestnet = own(FORK_ENTRY_ENV.testnetRpc);

@@ -35,6 +35,7 @@ const completeEnv = Object.freeze({
   ARASO_FORK_APP_ORIGIN: APP,
   ARASO_FORK_PUBLIC_RPC_URL: GUARD,
   ARASO_FORK_TESTNET_RPC_URL: TESTNET,
+  ARASO_SERVER_RELEASE_LEVEL: "2", // [A-1053] hosted entry needs server level >= 2; pre-A-1053: absent
 });
 
 function makeWorld() {
@@ -81,7 +82,7 @@ async function call(handler, body, invite) {
 await check("production env is all-or-nothing; malformed values and every missing required name return HTTP 503", async () => {
   const world = makeWorld();
   assert.ok(productionForkEntryServiceFromEnv(completeEnv, { fetchImpl: world.fetchImpl }));
-  for (const name of ["VERCEL", "KV_REST_API_URL", "KV_REST_API_TOKEN", "ARASO_FORK_GUARD_URL", "ARASO_FORK_ADMIN_HMAC_SECRET", "ARASO_FORK_GRANT_VERSION", "ARASO_FORK_APP_ORIGIN", "ARASO_FORK_PUBLIC_RPC_URL"]) {
+  for (const name of ["VERCEL", "KV_REST_API_URL", "KV_REST_API_TOKEN", "ARASO_FORK_GUARD_URL", "ARASO_FORK_ADMIN_HMAC_SECRET", "ARASO_FORK_GRANT_VERSION", "ARASO_FORK_APP_ORIGIN", "ARASO_FORK_PUBLIC_RPC_URL", "ARASO_SERVER_RELEASE_LEVEL"]) { // [A-1053] + the server level
     const bad = { ...completeEnv }; delete bad[name];
     const service = productionForkEntryServiceFromEnv(bad, { fetchImpl: world.fetchImpl });
     assert.equal(service, null, name);
@@ -94,6 +95,20 @@ await check("production env is all-or-nothing; malformed values and every missin
     assert.equal((await call(createForkEntryHandler({ service }), { action: "challenge", piggyAddress: piggy }, "not-used")).statusCode, 503);
   }
   assert.equal(productionForkEntryServiceFromEnv({ ...completeEnv, ARASO_FORK_ENTRY_LOCAL: "1" }, { fetchImpl: world.fetchImpl }), null);
+  assert.equal(world.unexpected(), 0);
+});
+
+// [A-1053 · A-1031 opus condition 2] server release level gate on the hosted entry
+await check("hosted entry: server release level < 2 (unset · empty · 1 · 0 · garbage · negative) = closed 503 entry_unavailable; level 2 and 3 open", async () => {
+  const world = makeWorld();
+  for (const v of [undefined, "", "1", "0", "two", "-2", "1.5", " "]) {
+    const env = { ...completeEnv }; if (v === undefined) delete env.ARASO_SERVER_RELEASE_LEVEL; else env.ARASO_SERVER_RELEASE_LEVEL = v;
+    const service = productionForkEntryServiceFromEnv(env, { fetchImpl: world.fetchImpl });
+    assert.equal(service, null, `level ${JSON.stringify(v)}`);
+    const closed = await call(createForkEntryHandler({ service }), { action: "challenge", piggyAddress: piggy }, "not-used");
+    assert.equal(closed.statusCode, 503, `level ${JSON.stringify(v)}`); assert.equal(closed.body.reason, "entry_unavailable");
+  }
+  for (const v of ["2", "3", " 2 "]) assert.ok(productionForkEntryServiceFromEnv({ ...completeEnv, ARASO_SERVER_RELEASE_LEVEL: v }, { fetchImpl: world.fetchImpl }), `level ${v}`);
   assert.equal(world.unexpected(), 0);
 });
 
