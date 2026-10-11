@@ -4781,11 +4781,13 @@ function renderSecondReturn() {
   return returnSceneMarkup({
     // [A-421] Owner 승인 "가운데 문구가 남으면 안돼" — First(line: "")와 동일, 발화는 알람 한 줄뿐.
     line: "",
-    receiptRowsMarkup: receiptPaperMarkup(
+    // [A-1043 · Owner 10-11 20:5x] the mock path drops its "> mock · <status>" row (the fork/mock marker already shows at every send); the real-receipt path,
+    // every other row and the paper position are unchanged. pre-A-1043: receiptRowsMarkup: receiptPaperMarkup(hasRealReceipt ? receiptPaperFields(…) : secondJourneyReceiptFields(…)),
+    receiptRowsMarkup: ((rows) => (hasRealReceipt || typeof rows !== "string" ? rows : rows.replace(/\n\s*<div class="receiptPaper__status">[^<]*<\/div>/, "")))(receiptPaperMarkup(
       hasRealReceipt
         ? receiptPaperFields({ receipt: actual, name: displayPiggyName() })
         : secondJourneyReceiptFields(state.secondJourney.mockReceipt, displayPiggyName()),
-    ),
+    )),
     name: displayPiggyName(),
     // [A-421] First 와 **같은** 귀환 markup 경로 — 알람 발화 span(#returnArrivalAlarm)이
     // 여기서만 붙는다. 이전에는 plain chogHomeMarkup() 이라 Second 는 어떤 상태에서도
