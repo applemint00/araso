@@ -112,7 +112,9 @@ export function secondJourneyReceiptFields(mockReceipt, name = "Piggy") {
     date: now.toLocaleDateString("en-US", { month: "short", day: "numeric" }),
     wentOut: "—",
     cameBack: now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }),
-    kept: mockReceipt?.cost ? `${mockReceipt.cost.amount} (${mockReceipt.cost.source})` : "—",
+    // [A-1047 · Owner 10-11 21:3x] the paper shows the amount only; cost.source stays in the data (isDevMockReceipt / evidence checks read it), never printed.
+    // pre-A-1047: kept: mockReceipt?.cost ? `${mockReceipt.cost.amount} (${mockReceipt.cost.source})` : "—",
+    kept: mockReceipt?.cost ? String(mockReceipt.cost.amount) : "—",
     statusLabel: `mock · ${statusWord}`,
     empty: !attempted,
   };

@@ -38,12 +38,14 @@ check("mock path: no receiptPaper__status row and no 'mock ·' text on the paper
   assert.equal(/receiptPaper__status/.test(rows), false);
   assert.equal(/mock ·/.test(rows), false);
 });
-check("mock path: every other row stays (name · went out · came back · kept with its source · both rules · teeth)", () => {
+check("mock path: every other row stays (name · went out · came back · kept amount · both rules · teeth)", () => {
   const rows = render({ secondJourney: { executionReceipt: null, mockReceipt: MOCK } }).receiptRowsMarkup;
   const full = receiptPaperMarkup(secondJourneyReceiptFields(MOCK, "Honeybun"));
   assert.equal((rows.match(/receiptPaper__row/g) || []).length, 3);
   assert.equal((rows.match(/receiptPaper__rule/g) || []).length, 2);
-  assert.match(rows, /mock_placeholder/);
+  // [A-1047 RE-PIN · Owner 10-11 21:3x] the kept cell shows the amount only (no "(source)"); pre-A-1047: assert.match(rows, /mock_placeholder/);
+  assert.equal(/mock_placeholder/.test(rows), false);
+  assert.match(rows, /<span>kept<\/span><span>0<\/span>/);
   assert.match(rows, /receiptPaper__teeth/);
   for (const label of ["went out", "came back", "kept"]) assert.match(rows, new RegExp(`<span>${label}</span>`), `row "${label}" stays`);
   // independent of the implementation's regex: the exact row receipt-paper.js prints for this status, removed as a literal string
