@@ -1020,7 +1020,14 @@ function ownDataCopy(o, depth = 0) {
 // for. Only this snapshot is checked by the sign guard and signed. Returns { snap } or { problem }.
 const PREPARED_PRIMITIVE = Object.freeze(["chainId", "type", "to", "data", "value", "nonce", "gas", "maxFeePerGas", "maxPriorityFeePerGas", "gasPrice", "from"]);
 const PREPARED_DROPPED = Object.freeze(["account", "chain"]);
-function preparedSnapshot(prepared, tx) {
+const FORK_JOB_GAS_BUFFER_BPS = 2000n;
+function bufferForkJobGas(estimated, blockGasLimit) {
+  if (typeof estimated !== "bigint" || estimated <= 0n) return { gas: null, problem: "prepared_gas_invalid" };
+  if (typeof blockGasLimit !== "bigint" || blockGasLimit <= 0n || estimated > blockGasLimit) return { gas: null, problem: "block_gas_limit_unavailable" };
+  const buffered = estimated + (estimated * FORK_JOB_GAS_BUFFER_BPS) / 10000n;
+  return { gas: buffered > blockGasLimit ? blockGasLimit : buffered, problem: null };
+}
+function preparedSnapshot(prepared, tx, blockGasLimit) {
   if (!prepared || typeof prepared !== "object" || Array.isArray(prepared)) return { problem: "prepared_missing" };
   const snap = {};
   try {
@@ -1032,7 +1039,11 @@ function preparedSnapshot(prepared, tx) {
       if (v === undefined || v === null) continue;
       if (PREPARED_PRIMITIVE.includes(k)) {
         if (typeof v === "object" || typeof v === "function") return { problem: "prepared_field_not_plain" };
-        snap[k] = v;
+        if (k === "gas") {
+          const result = bufferForkJobGas(v, blockGasLimit);
+          if (result.problem) return { problem: result.problem };
+          snap.gas = result.gas;
+        } else snap[k] = v;
       } else if (k === "accessList") {
         if (!Array.isArray(v) || Object.getOwnPropertyDescriptor(v, "length").value !== 0) return { problem: "access_list_present" };
         snap.accessList = [];
@@ -1103,10 +1114,11 @@ export async function runForkJob(options = {}) {
   const acct = ownData(tp, "account");
   const prepareFn = ownData(wc, "prepareTransactionRequest");
   const chainIdFn = ownData(pc, "getChainId");
+  const getBlockFn = ownData(pc, "getBlock");
   const sendRawFn = ownData(pc, "sendRawTransaction");
   const signFn = ownData(acct, "signTransaction");
   const signerAddress = ownData(acct, "address");
-  if (ownData(tp, "kind") !== TRANSPORT_KIND.VIEM_RAW || typeof prepareFn !== "function" || typeof chainIdFn !== "function" || typeof sendRawFn !== "function" || typeof signFn !== "function" || typeof signerAddress !== "string") return refuse("strict_transport_required");
+  if (ownData(tp, "kind") !== TRANSPORT_KIND.VIEM_RAW || typeof prepareFn !== "function" || typeof chainIdFn !== "function" || typeof getBlockFn !== "function" || typeof sendRawFn !== "function" || typeof signFn !== "function" || typeof signerAddress !== "string") return refuse("strict_transport_required");
   if (lower(signerAddress) !== lower(p.address)) return refuse("signer_not_piggy");
   const entryCheck = opt("entryCheck");
   if (typeof entryCheck !== "function") return refuse("entry_check_missing");
@@ -1155,7 +1167,9 @@ export async function runForkJob(options = {}) {
         approvedRaw = null;
         if (!stepTx) fail("no_step_tx");
         const prepared = await prepareFn.call(wc, { account: acct, to: stepTx.to, data: stepTx.data, value: stepTx.value });
-        const s = preparedSnapshot(prepared, stepTx);
+        let blockGasLimit;
+        try { blockGasLimit = ownData(await getBlockFn.call(pc, { blockTag: "latest" }), "gasLimit"); } catch { fail("block_gas_limit_unavailable"); }
+        const s = preparedSnapshot(prepared, stepTx, blockGasLimit);
         if (s.problem) fail(s.problem);
         snapshot = s.snap;
         return s.snap;

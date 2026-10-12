@@ -80,7 +80,7 @@ const orderLog = (owner) => ({
 const eip1559 = (tx) => ({ type: "eip1559", chainId: tx.chainId, nonce: tx.nonce, gas: tx.gas, maxFeePerGas: tx.maxFeePerGas, maxPriorityFeePerGas: tx.maxPriorityFeePerGas, to: tx.to, data: tx.data, value: tx.value });
 const serializeSigned = (tx, key = PIGGY_KEY) => privateKeyToAccount(key).signTransaction(eip1559(tx));
 void serializeTransaction;
-function fakeFork(reads, { walletChain = FORK_ID, rpcChain = FORK_ID, executorChain = FORK_ID, signer = PIGGY, rawEdit = null, prepared = null, signKey = PIGGY_KEY } = {}) {
+function fakeFork(reads, { walletChain = FORK_ID, rpcChain = FORK_ID, executorChain = FORK_ID, signer = PIGGY, rawEdit = null, prepared = null, signKey = PIGGY_KEY, blockGasLimit = 30000000n } = {}) {
   const seq = new Map(Object.entries(reads).map(([k, v]) => [k.toLowerCase(), [...v]]));
   const take = (k) => { const q = seq.get(k.toLowerCase()); if (!q || !q.length) throw new Error(`no read ${k}`); return q.length > 1 ? q.shift() : q[0]; };
   const sent = [];
@@ -105,6 +105,7 @@ function fakeFork(reads, { walletChain = FORK_ID, rpcChain = FORK_ID, executorCh
   };
   const publicClient = {
     getChainId: async () => rpcChain,
+    getBlock: async () => ({ gasLimit: blockGasLimit }),
     sendRawTransaction: async ({ serializedTransaction }) => {
       const hash = keccak256(serializedTransaction);
       const tx = signed[signed.length - 1];
@@ -121,8 +122,8 @@ function fakeFork(reads, { walletChain = FORK_ID, rpcChain = FORK_ID, executorCh
 }
 function memStorage() { const m = new Map(); return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k), _m: m }; }
 const PIGGY_ROW = { id: "piggy-a977", address: PIGGY };
-async function run(jobKey, reads, extra = {}) {
-  const f = fakeFork(reads);
+async function run(jobKey, reads, extra = {}, forkOptions = {}) {
+  const f = fakeFork(reads, forkOptions);
   const storage = memStorage();
   const out = await L.runForkJob({ profile: FORK, piggy: PIGGY_ROW, jobKey, executor: f.executor, transport: f.transport, read: f.read, storage, eventId: `ev:${jobKey}`, nowIso: "2026-10-11T09:00:00.000Z", entryCheck: async () => true, ...extra });
   return { ...out, sent: f.sent, storage };
@@ -247,9 +248,20 @@ await check("J1 aave-usdc (grow): approve · supply · withdraw(max) == harness;
   const out = await run("aave-usdc", { [bal(USDC)]: ["10000000", "9999999"] });
   await receiptOk(out, { steps: ["approve", "supply", "withdraw"], asset: "USDC", deltaRaw: "-1" });
   assert.deepEqual(out.sent.map((t) => t.to), [USDC, AAVE_POOL, AAVE_POOL]);
+  assert.deepEqual(out.sent.map((t) => t.gas), [360000n, 360000n, 360000n]);
   assert.equal(out.sent[0].data, enc(H_ERC20, "approve", [AAVE_POOL, 5000000n]));
   assert.equal(out.sent[1].data, enc(H_AAVE, "supply", [USDC, 5000000n, PIGGY, 0]));
   assert.equal(out.sent[2].data, enc(H_AAVE, "withdraw", [USDC, maxUint256, PIGGY]));
+});
+await check("A-1093 fork gas: signed snapshot uses 20% buffer, caps at block limit, refuses an insufficient block", async () => {
+  const reads = { [bal(USDC)]: ["10000000", "9999999"] };
+  const capped = await run("aave-usdc", reads, {}, { blockGasLimit: 310000n });
+  assert.equal(capped.status, "returned");
+  assert.deepEqual(capped.sent.map((t) => t.gas), [310000n, 310000n, 310000n]);
+  const refused = await run("aave-usdc", reads, {}, { blockGasLimit: 299999n });
+  assert.equal(refused.status, "refused");
+  assert.equal(refused.reason, "block_gas_limit_unavailable");
+  assert.equal(refused.sent.length, 0);
 });
 await check("J2 neverland-usdc (grow): approve · supply · withdraw(whole) == harness", async () => {
   const E = NEVERLAND_FORK_EVIDENCE;
