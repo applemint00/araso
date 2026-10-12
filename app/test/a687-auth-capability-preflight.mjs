@@ -143,7 +143,7 @@ for (const [label, window, navigator, unsupported] of CASES) {
   check("unlockApp: preflight precedes requestPrf (same sync chain)", u.indexOf("webAuthnUnsupported(") > 0 && u.indexOf("webAuthnUnsupported(") < u.indexOf("requestPrf("));
   check("startPiggyOpen/render untouched by preflight", !/webAuthnUnsupported/.test(cutFn("startPiggyOpen", true)) && !/webAuthnUnsupported/.test(cutFn("render")));
   check("unsupported error is not a cancellation (name is not NotAllowedError)", /unsupported\.name = "WebAuthnUnsupported"/.test(MAIN));
-  check("openInvite still routes to startPiggyOpen", /inviteTimers\.push\(setTimeout\(\(\) => startPiggyOpen\(\), 5900\)\)/.test(MAIN));
+  check("openInvite routes to startPiggyOpen in the tap call stack", /setInvitePhase\("checking"\);\s*const out = await startPiggyOpen\(\);/.test(cutFn("openInvite", true)));
   // [A-698 M3 re-pin] was: sendPiggyOnce had NO webAuthnUnsupported. Now the Send recovery block (and only it) calls it
   // exactly once, before beginAuthAttempt("send") and before any await; finishTrip stays untouched.
   {
@@ -167,7 +167,8 @@ for (const [label, window, navigator, unsupported] of CASES) {
     }
   };
   const GUARD = /  \/\/ \[A-687 capability preflight\][\s\S]*?\n  \}\n/;
-  for (const [name, old] of [["checkPiggy", "e4d707461903f924"], ["openPiggy", "bb4d577044f8e7b9"], ["unlockApp", "d4167d7c8fbf1f82"]]) {
+  // checkPiggy's post-guard hash changed only for the Owner-canon unnamed recovery route (Name -> Home).
+  for (const [name, old] of [["checkPiggy", "d050cfb99a53f206"], ["openPiggy", "bb4d577044f8e7b9"], ["unlockApp", "d4167d7c8fbf1f82"]]) {
     const b = body(name);
     check(`${name}: exactly one added guard; body minus guard == pre-A-687 hash ${old}`, (b.match(/A-687 capability preflight/g) || []).length === 1 && sha16(b.replace(GUARD, "")) === old, sha16(b.replace(GUARD, "")));
   }

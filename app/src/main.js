@@ -518,6 +518,14 @@ const state = {
   awayRestore: null,
 };
 state.scene = computeInitialScene(!!state.credential, state.tripClosed, !!state.address);
+// ── [A-1105] First Send re-entry after a pre-send failure ─────────────────────
+// [A-1105 · Owner live finding 2026-10-12] Name 저장 직후의 첫 도착은 mountHome()이 기존
+// 타이밍대로 Send 카드를 연다. 그 전에 grant가 거절된 뒤 reload/redeploy로 다시 들어오면
+// 첫 도착 메모리(homeArrival/sendCardVisible)는 사라지지만 First Journey 미완료 사실은
+// state.tripClosed=false로 남는다. 그 testnet 재접속만 같은 Send 카드로 복구한다.
+// 완료자(tripClosed)·fork/mainnet profile·Name 미완료에는 열지 않는다.
+state.sendCardVisible = LEGACY_TESTNET_PATH && state.scene === "sendstay" && !state.tripClosed;
+// ── [A-1105] end First Send re-entry ─────────────────────────────────────────
 // 최초 진입이 곧장 Name it 이라는 것은 이름을 짓다 나갔다 왔다는 뜻이다.
 state.nameResumed = state.scene === "name";
 // [A-411-p] 초기 재방문도 실사용 흐름과 같은 정착→조용→Paper 를 타야 한다(Home next
@@ -1958,13 +1966,10 @@ async function checkPiggy() {
     if (!finishAuthAttempt(attempt)) return { ok: false, cancelled: false, reason: "superseded" };
     released = true;
     state.authPhase = "idle";
-    // 복구는 신규 탄생이 아니다 — 해치·hello 를 다시 재생하지 않는다(§7 checkPiggy 행).
-    // 다만 이름이 아직 없으면 그 칸만 마저 채운다. 그때 Piggy 는 숨은 상태다(A-288).
-    if (!readPiggyName()) {
-      setScene("name", "", "");
-    } else {
-      setScene("sendstay", "Piggy is home.", "Same place, same Piggy.");
-    }
+    // 복구는 신규 탄생이 아니다 — 해치·hello·Name it 을 다시 재생하지 않는다.
+    // [Owner + gift_card_20261004 README:48, 2026-10-12] 이름 데이터 없음은 새 Piggy가
+    // 아니다. 같은 Piggy로 Home에 먼저 복귀하고, 이름은 색인 복구/사용자 수정에 맡긴다.
+    setScene("sendstay", "Piggy is home.", "Same place, same Piggy.");
     return { ok: true };
   } catch (error) {
     // [A-667 R5] 이미 정리된(만료·대체된) 시도의 실패는 더 새로운 화면·서명자를 건드리지 않는다.
@@ -5512,34 +5517,59 @@ function setInvitePhase(phase) {
   if (label) label.textContent = phase === "checking" ? "checking..." : "Face ID";
 }
 
-// 봉투 열기 = 이 화면의 유일한 입력. 뜯기는 순서가 끝나면 실제 Face ID 를 켠다.
-// [A-389 §1] 옛 renderBirth() 의 Open 버튼(대기 화면 → 한 번 더 탭)을 지웠으므로, 봉투
-// 연출이 끝나는 순간이 곧 실제 인증 시도다. 새 패스키를 만들지 여부는 여전히
-// startPiggyOpen() 의 기존 판정(이미 Piggy 를 받았으면 recover, 아니면 create)이 정한다 —
-// 여기서 새로 만들지 않는다.
-function openInvite() {
+// 인증 성공 뒤, Owner가 확정한 기존 봉투 타임라인을 byte-for-byte 같은 phase/시각으로 한 번 돈다.
+// 새 화면·문구·레이아웃은 만들지 않는다. 실패/취소에는 Piggy 등장 연출을 재생하지 않는다.
+function playInviteTimelineAfterAuth(destination) {
+  setScene("received", "", "");
   const board = document.querySelector(".invite");
-  if (!board || (board.dataset.phase || "closed") !== "closed") return;
+  if (!board) {
+    setScene(destination.scene, destination.message, destination.detail);
+    return Promise.resolve();
+  }
   clearInviteTimers();
   setInvitePhase("checking");
-  INVITE_TIMELINE.forEach(([at, phase]) => {
-    inviteTimers.push(setTimeout(() => setInvitePhase(phase), at));
+  return new Promise((resolve) => {
+    INVITE_TIMELINE.forEach(([at, phase]) => {
+      inviteTimers.push(setTimeout(() => setInvitePhase(phase), at));
+    });
+    inviteTimers.push(setTimeout(() => {
+      if (state.scene === "received") setScene(destination.scene, destination.message, destination.detail);
+      resolve();
+    }, 5900));
   });
-  inviteTimers.push(setTimeout(() => startPiggyOpen(), 5900));
 }
 
-// [A-734] Gift Open 종이의 Open 탭(#giftOpenButton) — openInvite 와 같은 봉투 연출·같은 5.9s 뒤 단 한 번의 시작.
-// 다른 점은 끝에서 부르는 것뿐이다: startGiftOpen(아래 — 새 기기는 기존 find-first 그대로, Piggy 가 있는 기기는
-// 새 Gift Piggy). openInvite 자체는 손대지 않는다(A-667/A-687/A-726 이 그 본문을 고정한다).
-function openGiftInvite() {
+// 봉투 열기 = 이 화면의 유일한 입력.
+// [Owner live finding 2026-10-12] Invite 애니메이션은 새 Piggy 탄생만 있던 시절의 순서였는데,
+// find-first 복구가 추가된 뒤에도 인증보다 5.9초 먼저 돌아 기존 Piggy를 고르기 전에 검은 Piggy를
+// 보여줬다. 탭과 같은 call stack에서 실제 갈래(check/create)를 먼저 시작한다. 기존 Piggy 복구는
+// Hatch 0, 실제 신규 생성 성공만 openPiggy()의 기존 Hatch로 간다. 타임라인은 여기서 선재생하지 않는다.
+async function openInvite() {
   const board = document.querySelector(".invite");
   if (!board || (board.dataset.phase || "closed") !== "closed") return;
   clearInviteTimers();
   setInvitePhase("checking");
-  INVITE_TIMELINE.forEach(([at, phase]) => {
-    inviteTimers.push(setTimeout(() => setInvitePhase(phase), at));
-  });
-  inviteTimers.push(setTimeout(() => startGiftOpen(), 5900));
+  const out = await startPiggyOpen();
+  const succeeded = out?.ok === true || state.scene === "hatch" || state.scene === "name" || state.scene === "sendstay";
+  if (!succeeded) return out;
+  const destination = { scene: state.scene, message: state.message, detail: state.detail };
+  await playInviteTimelineAfterAuth(destination);
+  return out;
+}
+
+// [A-734 + Owner live finding 2026-10-12] Gift도 같은 선행 5.9초를 제거한다. Open 탭의 같은
+// call stack에서 startGiftOpen을 시작하고, 각 Gift 갈래의 기존 인증/복구/생성 판정은 그대로 둔다.
+async function openGiftInvite() {
+  const board = document.querySelector(".invite");
+  if (!board || (board.dataset.phase || "closed") !== "closed") return;
+  clearInviteTimers();
+  setInvitePhase("checking");
+  const out = await startGiftOpen();
+  const succeeded = out?.ok === true || out?.started === true || state.scene === "hatch";
+  if (!succeeded) return out;
+  const destination = { scene: state.scene, message: state.message, detail: state.detail };
+  await playInviteTimelineAfterAuth(destination);
+  return out;
 }
 
 // 봉투 hero — 두 아트보드가 같은 480×365 안쪽 좌표를 쓴다. 모바일은 그 덩어리를 0.55833 로 줄인다.

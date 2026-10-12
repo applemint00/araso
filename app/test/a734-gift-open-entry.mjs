@@ -127,7 +127,7 @@ await check("S5 live Gift stays fail-closed: GIFT_RECORD_CONFIG / GIFT_CLAIM_SUB
 });
 // Comment-stripped sha256 prefixes of the pre-A-734 tree (= $ARASO_PRIVATE_BASE/.../before/main.js, app_before.sha b22bec79…).
 const PINNED = {
-  openInvite: "85ec42659fa3680b", startPiggyOpen: "a982f3a9f680db89", checkPiggy: "6ced996d8c9836d3", openPiggy: "974d37202d48b60d",
+  startPiggyOpen: "a982f3a9f680db89", openPiggy: "974d37202d48b60d",
   recoverPiggy: "9159f2d83c77a8a6", beginGiftPiggy: "456da2932a6d47f4", beginAddPiggy: "64181c00827e6e5b", runModelAAdmission: "bc651294b7e95f27",
   admitAddedPiggy: "7df6b6e87ee3bffd", settleBoundGiftClaim: "2af8e4ff6f54cbc2", stripClaimFragmentFromUrl: "f6fb046b2a3e64c3",
   takePendingGiftClaim: "2c23bd8d2dc551e2", restorePendingGiftClaim: "7ebcc20ee13d1803", knownPiggyAddresses: "b6e3fc976ec22ce6",
@@ -135,17 +135,20 @@ const PINNED = {
   // [A-1007 RE-PIN] startTesterIntro only: A-995 ③ adds the approved eye binding; every other primitive stays pinned.
   renderAuthCard: "f875d207380637d3", startTesterIntro: "f0e15c6020350860", readTesterInviteParam: "c721a03a8d12a206", stripTesterInviteFromUrl: "2b37487591e69107",
 };
-await check("S6 auth/recovery/Gift/A-733 primitives are byte-identical (comment-stripped) to the pre-A-734 tree — the entry only CALLS them", () => {
+await check("S6 auth/recovery/Gift/A-733 primitives outside the explicitly retimed Invite entry are byte-identical (comment-stripped) to the pre-A-734 tree", () => {
   const PRE1051 = restorePreA1051(MAIN); // [A-1051 RE-PIN] pre-A-1051: fnBody(n) on MAIN
   const drift = Object.entries(PINNED).filter(([n, h]) => sha(stripComments(fnBodyOf(PRE1051, n))) !== h).map(([n]) => n);
   deq(drift, []);
+  const recovery = stripComments(fnBody("checkPiggy"));
+  assert.doesNotMatch(recovery, /setScene\("name"/, "existing Piggy recovery never forces Name it");
+  assert.match(recovery, /setScene\("sendstay", "Piggy is home\.", "Same place, same Piggy\."\);/);
 });
-await check("S7 the only UI caller of beginGiftPiggy is openGiftForExistingPiggy; startGiftOpen is reached only from the Gift Open paper's timer; #giftOpenButton only from inviteFace(gift) + its one delegated listener", () => {
+await check("S7 the only UI caller of beginGiftPiggy is openGiftForExistingPiggy; Gift Open starts its branch in the tap call stack", () => {
   const calls = (re) => [...CODE.matchAll(re)].length;
   assert.equal(calls(/(?<!function )\bbeginGiftPiggy\(/g), 1, "one call site");
   assert.ok(stripComments(fnBody("openGiftForExistingPiggy")).includes("await beginGiftPiggy()"));
   assert.equal(calls(/(?<!function )\bstartGiftOpen\(/g), 1);
-  assert.match(stripComments(fnBody("openGiftInvite")), /inviteTimers\.push\(setTimeout\(\(\) => startGiftOpen\(\), 5900\)\);/);
+  assert.match(stripComments(fnBody("openGiftInvite")), /setInvitePhase\("checking"\);\s*const out = await startGiftOpen\(\);/);
   assert.equal(calls(/(?<!function )\bopenGiftInvite\(/g), 1);
   assert.match(stripComments(fnBody("handleGiftOpenActivate")), /closest\?\.\("#giftOpenButton"\)\) return;\s*openGiftInvite\(\);/);
   assert.match(CODE, /document\.addEventListener\("click", handleGiftOpenActivate\);/);
@@ -159,7 +162,7 @@ await check("S7 the only UI caller of beginGiftPiggy is openGiftForExistingPiggy
 });
 await check("S8 new entry code: no storage, no network, no logging, no token/giftId handling, no Hatch, no create", () => {
   const NEW = ["giftPaperKind", "offerGiftPaperAtBoot", "startGiftOpen", "openGiftForExistingPiggy", "openGiftInvite", "handleGiftOpenActivate"].map((n) => stripComments(fnBody(n))).join("\n");
-  for (const bad of ["localStorage", "sessionStorage", "indexedDB", "setItem", "removeItem", "fetch(", "XMLHttpRequest", "sendBeacon", "console.", "recordSafeError", ".token", "giftId", "takePendingGiftClaim", "createPasskeyWithPrfOutput", "requestPrf", "openPiggy(", '"hatch"', "history.", "location."]) {
+  for (const bad of ["localStorage", "sessionStorage", "indexedDB", "setItem", "removeItem", "fetch(", "XMLHttpRequest", "sendBeacon", "console.", "recordSafeError", ".token", "giftId", "takePendingGiftClaim", "createPasskeyWithPrfOutput", "requestPrf", "openPiggy(", 'setScene("hatch"', "history.", "location."]) {
     assert.equal(NEW.includes(bad), false, `new entry code contains ${bad}`);
   }
   // copy = canon strings only (A-567 'a Piggy for you' / 'a Piggy came for you.'), Open = canon tap name
@@ -199,7 +202,7 @@ const FNS = [
   "beginAuthAttempt", "boundAuthAttempt", "finishAuthAttempt", "trackPlatformAuth",
   "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "openPiggy", "startPiggyOpen", "checkPiggy",
   "hasPlayedBirth", "readPiggyName", "hasReceivedPiggy", "takePendingGiftClaim", "restorePendingGiftClaim",
-  "clearInviteTimers", "openInvite",
+  "clearInviteTimers", "playInviteTimelineAfterAuth", "openInvite",
   // A-734 entry (the code under test)
   "giftPaperKind", "offerGiftPaperAtBoot", "startGiftOpen", "openGiftForExistingPiggy", "openGiftInvite",
 ].map(fnBody).join("\n");
@@ -276,8 +279,8 @@ this.api = { startPiggyOpen, startGiftOpen, openGiftForExistingPiggy, offerGiftP
   setPending: (p) => { pendingGiftClaim = p; }, pending: () => pendingGiftClaim, offered: () => giftPaperOffered };`, ctx);
   if (gift) ctx.api.setPending({ ...gift });
   const markers = () => Object.fromEntries(Object.entries(KEYS).map(([k, v]) => [k, store.has(v)]));
-  // the explicit Open tap on the Gift paper: #giftOpenButton → openGiftInvite → envelope timeline → startGiftOpen at 5.9s
-  const tapGiftOpen = async () => { ctx.api.openGiftInvite(); ctx.clock.advance(5900); await flush(); };
+  // the explicit Open tap on the Gift paper starts its real branch immediately.
+  const tapGiftOpen = async () => { ctx.api.openGiftInvite(); await flush(); };
   ctx.clock = clock;
   return { ctx, store, calls, pending, clock, board, state: ctx.state, api: ctx.api, markers, tapGiftOpen };
 }
@@ -320,6 +323,8 @@ await check("N3 no-Piggy path (genuine new user): Gift Open → find-first looks
   assert.equal(d.api.pending(), null, "intent taken at the START of the creating flow");
   d.pending.create[0].resolve({ credentialId: "NEW", transports: ["internal"], prfOutput: key(55), prfSalt: key(2) });
   await flush();
+  assert.equal(d.state.scene, "received", "successful create precedes the preserved Invite timeline");
+  d.clock.advance(5900); await flush();
   deq(d.calls.bind, [{ giftId: "gift-n", address: "0xADDR55", pre: [] }], "bound to exactly the new address");
   deq(d.calls.settle, [{ to: "0xADDR55", giftId: "gift-n" }]);
   assert.equal(d.calls.scenes.at(-1)[0], "hatch", trace(d));
@@ -332,26 +337,32 @@ await check("N4 [A-726 × Gift] markerless device + EXISTING passkey + Gift link
   await d.tapGiftOpen();
   d.pending.get[0].resolve({ credentialId: "EXISTING", prfOutput: key(44) });
   await flush();
+  assert.equal(d.state.scene, "received", "recovered Piggy replays the existing Gift paper timeline");
+  d.clock.advance(5900); await flush();
   deq({ get: d.calls.get.length, create: d.calls.create }, { get: 1, create: 0 });
   assert.equal(d.calls.scenes.some((s) => s[0] === "hatch" || s[0] === "finishHatch"), false, trace(d));
-  deq(d.calls.scenes.slice(-2), [["sendstay", "Piggy is home.", "Same place, same Piggy."], ["received", "", ""]], trace(d));
+  assert.equal(d.calls.scenes.some((s) => s[0] === "sendstay" && s[1] === "Piggy is home."), true, trace(d));
+  assert.equal(d.calls.scenes.at(-1)[0], "received", trace(d));
   deq([d.calls.bind.length, d.calls.settle.length, d.calls.beginGift], [0, 0, 0], "recovery never binds/settles the Gift");
   assert.equal(d.api.pending()?.token, GIFT.token);
   assert.equal(d.api.giftPaperKind(), "came");
   assert.equal(d.store.has(KEYS.birth), false);
   await d.tapGiftOpen();
   deq({ get: d.calls.get.length, create: d.calls.create, beginGift: d.calls.beginGift }, { get: 1, create: 0, beginGift: 1 });
+  d.clock.advance(5900); await flush();
   assert.equal(d.calls.scenes.at(-1)[0], "name");
   assert.equal(d.api.offered(), false);
   assert.equal(d.calls.scenes.some((s) => s[0] === "hatch"), false);
 });
-await check("N5 [A-726 × Gift] no name: recovery lands on Name only (no Hatch, no create); Gift stays in memory, not bound, not re-offered over Name", async () => {
+await check("N5 [A-726 × Gift] no name: recovery never forces Name/Hatch; Gift remains pending and returns as the same-Piggy paper", async () => {
   const d = device();
   d.api.offerGiftPaperAtBoot();
   await d.tapGiftOpen();
   d.pending.get[0].resolve({ credentialId: "EXISTING", prfOutput: key(44) });
   await flush();
-  deq(d.calls.scenes.map((s) => s[0]), ["birth", "name"]);
+  d.clock.advance(5900); await flush();
+  assert.equal(d.calls.scenes.some((s) => s[0] === "name" || s[0] === "hatch"), false, trace(d));
+  assert.equal(d.calls.scenes.at(-1)[0], "received", trace(d));
   deq([d.calls.create, d.calls.bind.length, d.calls.settle.length, d.calls.beginGift], [0, 0, 0, 0]);
   assert.equal(d.api.pending()?.token, GIFT.token);
 });
@@ -372,8 +383,10 @@ await check("N7 existing-Piggy path: Open → beginGiftPiggy only (startPiggyOpe
   const d = device({ cred: true, scene: "sendstay", name: "Honeybun", beginGift: (ctx) => { ctx.setScene("name", "", ""); return { started: true, piggyId: "piggy-gift", giftAttempted: true }; } });
   d.api.offerGiftPaperAtBoot();
   await d.tapGiftOpen();
+  d.clock.advance(5900); await flush();
   deq({ get: d.calls.get.length, create: d.calls.create, beginGift: d.calls.beginGift }, { get: 0, create: 0, beginGift: 1 });
-  deq(d.calls.scenes, [["name", "", ""]]);
+  assert.equal(d.calls.scenes.at(-1)[0], "name", trace(d));
+  assert.equal(d.calls.scenes.some((s) => s[0] === "received"), true, "existing Invite art replayed after auth");
   assert.equal(d.api.offered(), false);
 });
 await check("N8 existing-Piggy path, product default (live claim null → record_source_unavailable BEFORE auth): Home, paper retired, no new Piggy, no success copy", async () => {
@@ -400,7 +413,7 @@ await check("N10 double tap: the envelope only opens from 'closed' and a running
   const d = device({ cred: true, scene: "sendstay", beginGift: () => new Promise((r) => { release = r; }) });
   d.api.offerGiftPaperAtBoot();
   d.api.openGiftInvite(); d.api.openGiftInvite();
-  d.clock.advance(5900); await flush();
+  await flush();
   assert.equal(d.calls.beginGift, 1);
   deq(await d.api.openGiftForExistingPiggy(), { started: false, reason: "already_running" });
   release({ started: false, reason: "record_source_unavailable" }); await flush();
@@ -680,6 +693,7 @@ async function freshDeviceExistingPasskeyWithGift(browser, BASE) {
     assert.equal(w1.scenes.includes("hatch"), false, `no Hatch: ${w1.scenes.join(">")}`);
     assert.equal((await d.p.evaluate(() => localStorage.getItem("araso.address"))).toLowerCase(), address.toLowerCase(), "same Piggy");
     assert.equal(await d.p.evaluate(() => localStorage.getItem("araso.birthPlayed")), null);
+    await d.p.waitForFunction(() => document.querySelector(".invite")?.dataset.phase === "closed", null, { timeout: 10000 });
     await d.p.locator("#giftOpenButton").click();
     const home = await waitScene(d.p, ["sendstay", "name", "birth"], 20000);
     const w2 = await waOf(d.p);

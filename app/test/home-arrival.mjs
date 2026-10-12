@@ -21,6 +21,8 @@ function check(label, got, want) {
 const mountHomeSrc = cut("function mountHome({ cardClaimed = state.sendCardVisible } = {}) {", "\n// Home 3분 무입력 졸기 타이머");
 const settleSrc = cut("  const settle = ({ keepPose = false } = {}) => {", "\n  const startRect = state.homeStartRect;");
 const finishSrc = cut("  const finishSecondJourney = ({ persist = false } = {}) => {", "\n  // [A-421] First(mountReturn)와 같은 알람 생명주기");
+const initialSceneAt = SRC.indexOf("state.scene = computeInitialScene(!!state.credential, state.tripClosed, !!state.address);");
+const reentrySendAt = SRC.indexOf('state.sendCardVisible = LEGACY_TESTNET_PATH && state.scene === "sendstay" && !state.tripClosed;');
 
 // ── 1. 이름표: 걷기 전에 숨김, 정착에서 보임, 즉시 정착 경로는 숨기지 않음 ──────────────
 const hideAt = mountHomeSrc.indexOf('style.setProperty("visibility", "hidden")');
@@ -46,6 +48,13 @@ check("onOpenFilebox/onError/onIdleEnter all route to finishSecondJourney",
 // ── 3. First 최초 정착의 Send 카드 reveal 은 그대로 ─────────────────────────────────
 check("First reveal kept: isFirstArrival && !sendCardVisible → HOME_FIRST_JOURNEY_CARD_MS",
   /if \(isFirstArrival && !state\.sendCardVisible\) \{[\s\S]*sceneTimeout\(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS\);/.test(settleSrc), true);
+
+// ── 4. First 실패 뒤 reload/redeploy: testnet의 미완료 Home만 Send 카드 복구 ─────────
+check("First re-entry restores Send only after the initial scene is known", reentrySendAt > initialSceneAt && initialSceneAt > 0, true);
+check("First re-entry gate is testnet + Home + trip not closed",
+  /state\.sendCardVisible = LEGACY_TESTNET_PATH && state\.scene === "sendstay" && !state\.tripClosed;/.test(SRC), true);
+check("re-entry restore assignment exists exactly once",
+  SRC.split('state.sendCardVisible = LEGACY_TESTNET_PATH && state.scene === "sendstay" && !state.tripClosed;').length - 1, 1);
 
 console.log(`\n${pass}/${pass + fail} PASS`);
 process.exit(fail === 0 ? 0 : 1);

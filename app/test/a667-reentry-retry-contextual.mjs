@@ -107,7 +107,8 @@ const LOCK_VIEW_SRC = [fnBody("renderAuthCard"), fnBody("loginCheckingMarkup"), 
 // [A-669 re-pin] lockAppAfterIdle now first calls invalidateLiveAuthAttempt() (idle/session end kills live Check/Open/Send
 // attempts — behaviour pinned in a669-auth-hardening.mjs). Previous pin: lockAppAfterIdle 0083d873b56358ef.
 // [A-687] re-pinned: capability preflight in checkPiggy (e4d707461903f924 -> 5ec37f4dd967ec66) and openPiggy (bb4d577044f8e7b9 -> 1cfd3dd4c142f8bf); body-minus-guard == old hash is pinned in a687-auth-capability-preflight.mjs; every other pin unchanged.
-const PIN = { checkPiggy: "5ec37f4dd967ec66", recoverPiggy: "8809320780061f3d", openPiggy: "1cfd3dd4c142f8bf", startPiggyOpen: "68f68a54ac604c7e", isCancelledAuthError: "69419866a83768d3", appLockSurface: "8c31689ea48cf8aa", lockAppAfterIdle: "e4ef41131c978a25", getRpId: "a4de6277279db63f" };
+// [Owner canon 2026-10-12] checkPiggy success no longer forces Name for an existing unnamed Piggy.
+const PIN = { checkPiggy: "a33ad044254d8862", recoverPiggy: "8809320780061f3d", openPiggy: "1cfd3dd4c142f8bf", startPiggyOpen: "68f68a54ac604c7e", isCancelledAuthError: "69419866a83768d3", appLockSurface: "8c31689ea48cf8aa", lockAppAfterIdle: "e4ef41131c978a25", getRpId: "a4de6277279db63f" };
 const WAIT_MS = Number((MAIN.match(/const UNLOCK_UI_WAIT_MS = ([\d_]+);/) || [])[1]?.replace(/_/g, ""));
 
 // A deferred promise per requestPrf call so each test controls when (and whether) WebAuthn settles.
@@ -448,7 +449,7 @@ await check("C8 nothing on load/render/timeout: Make new/Invite never start crea
     if (fn !== "startPiggyOpen") assert.equal(/openPiggy\(|createPasskeyWithPrfOutput\(|credentials\.create/.test(b), false, `${fn} creates`);
   }
   assert.equal(/startPiggyOpen\(/.test(stripComments(fnBody("renderReceived"))), false, "render of Invite does not open");
-  assert.ok(/inviteTimers\.push\(setTimeout\(\(\) => startPiggyOpen\(\), 5900\)\);/.test(fnBody("openInvite")), "Invite's own Open sequence (explicit tap) unchanged");
+  assert.ok(/setInvitePhase\("checking"\);\s*const out = await startPiggyOpen\(\);/.test(stripComments(fnBody("openInvite"))), "Invite tap starts the passkey branch immediately");
 });
 
 await check("C9 separation: marker → Check Piggy only · markerless → Make new only · reentry lock → Try again only; three distinct ids, one each", async () => {

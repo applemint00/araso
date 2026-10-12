@@ -6,7 +6,7 @@
 // birth-played all absent) but with the user's existing discoverable Araso passkey must
 //   · recover on the FIRST explicit Open (Invite) tap — exactly one credentials.get, zero credentials.create;
 //   · never enter Hatch and never play hello even though hasPlayedBirth() === false;
-//   · land on Name only (no name) / Home "sendstay" with "Same place, same Piggy." (name present);
+//   · land on Home "sendstay" with "Same place, same Piggy." whether the recovered name is known or UNKNOWN;
 //   · on a cancelled / failed recovery, never auto-create on that same tap.
 //
 // Part N (node:vm): cuts the ACTUAL main.js text of startPiggyOpen / checkPiggy / recoverPiggy / openPiggy / commitIdentity
@@ -70,8 +70,8 @@ const FNS = [
   "beginAuthAttempt", "boundAuthAttempt", "finishAuthAttempt", "trackPlatformAuth",
   "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "openPiggy", "startPiggyOpen", "checkPiggy",
   "hasPlayedBirth", "readPiggyName", "hasReceivedPiggy",
-  // the REAL Invite Open path: #inviteFaceButton → openInvite → (envelope timeline) → setTimeout(startPiggyOpen, 5900)
-  "clearInviteTimers", "openInvite",
+  // the REAL Invite Open path: #inviteFaceButton → openInvite → startPiggyOpen in the same tap call stack
+  "clearInviteTimers", "playInviteTimelineAfterAuth", "openInvite",
 ].map(fnBody).join("\n");
 const INVITE_TIMELINE_SRC = (MAIN.match(/const INVITE_TIMELINE = \[[\s\S]*?\];/) || [])[0];
 const FRESH_FLAG = /const FRESH_DEVICE_RECOVERY_FIRST = (true|false);/.exec(MAIN)?.[1] === "true";
@@ -160,9 +160,8 @@ ${INVITE_TIMELINE_SRC}
 ${FNS}
 this.api = { startPiggyOpen, hasPlayedBirth, openInvite };`, ctx);
   const markers = () => Object.fromEntries(Object.entries(KEYS).map(([k, v]) => [k, store.has(v)]));
-  // The user's explicit tap on the Invite "Face ID" button (render(): #inviteFaceButton → openInvite), then the envelope
-  // timeline runs out and main.js's own timer calls startPiggyOpen().
-  const tapInviteOpen = async () => { ctx.state.scene = "received"; ctx.api.openInvite(); clock.advance(5900); await flush(); };
+  // The user's explicit tap on the Invite "Face ID" button starts the real passkey branch immediately.
+  const tapInviteOpen = async () => { ctx.state.scene = "received"; ctx.api.openInvite(); await flush(); };
   return { ctx, store, calls, pending, clock, board, tapInviteOpen, state: ctx.state, api: ctx.api, markers };
 }
 const NONE = { cred: false, recv: false, name: false, birth: false, addr: false, salt: false };
@@ -174,7 +173,7 @@ await check("N0 markerless fresh device: credential/address/received/name/birth-
   assert.ok(KEYS.cred && KEYS.recv && KEYS.name && KEYS.birth, "storage key names read from main.js");
 });
 
-await check("N1 fresh device, no name: FIRST startPiggyOpen → exactly one discoverable get (unpinned), create 0 → Name only; never hatch; birth-played never written", async () => {
+await check("N1 fresh device, no name: FIRST startPiggyOpen → exactly one discoverable get (unpinned), create 0 → same Piggy Home; never Name/Hatch", async () => {
   const d = freshDevice();
   const run = d.api.startPiggyOpen();
   await flush();
@@ -183,7 +182,8 @@ await check("N1 fresh device, no name: FIRST startPiggyOpen → exactly one disc
   deq(await run, { ok: true });
   assert.equal(d.calls.create, 0, "createPasskeyWithPrfOutput count");
   const scenes = d.calls.scenes.map((s) => s[0]);
-  deq(scenes, ["birth", "name"], "checking card → Name only");
+  deq(scenes, ["birth", "sendstay"], "checking card → same Piggy Home");
+  assert.equal(scenes.includes("name"), false, "unknown name never forces Name it");
   assert.equal(scenes.includes("hatch") || scenes.includes("finishHatch"), false, "no Hatch");
   assert.equal(d.store.has(KEYS.birth), false, "birth-played not written");
   assert.equal(d.api.hasPlayedBirth(), false, "still a never-played device, yet no Hatch");
@@ -220,26 +220,26 @@ for (const [label, err] of [["user cancel (NotAllowedError)", meraError("NotAllo
   });
 }
 
-await check("N5 REAL Invite path (openInvite → 5.9s timer → startPiggyOpen) on a markerless device + existing passkey: one get, create 0 → Name (no name) / sendstay \"Same place, same Piggy.\" (name); never hatch; no WebAuthn before the timer", async () => {
+await check("N5 REAL Invite path: tap starts find-first immediately; success then preserves the Invite timeline; existing Piggy lands Home with no Name/Hatch", async () => {
   assert.ok(INVITE_TIMELINE_SRC, "INVITE_TIMELINE cut from main.js");
   assert.match(MAIN, /document\.querySelector\("#inviteFaceButton"\)\?\.addEventListener\("click", openInvite\);/, "render(): Invite button → openInvite");
   for (const name of ["", "Honeybun"]) {
     const d = freshDevice({ name });
     d.state.scene = "received";
     d.api.openInvite();
-    d.clock.advance(5899);
     await flush();
-    deq({ get: d.calls.get.length, create: d.calls.create, scenes: d.calls.scenes.length }, { get: 0, create: 0, scenes: 0 }, "nothing before the Invite timeline ends");
-    d.clock.advance(1);
-    await flush();
-    deq(d.calls.get, [null], "exactly one discoverable get once the timeline ends");
+    deq(d.calls.get, [null], "exactly one discoverable get from the explicit tap");
     d.pending.get[0].resolve({ credentialId: "EXISTING", prfOutput: key(44) });
     await flush();
+    assert.equal(d.state.scene, "received", "successful auth returns to the existing Invite art for its timeline");
+    d.clock.advance(5899); await flush();
+    assert.equal(d.state.scene, "received", "destination waits for the unchanged Invite timeline");
+    d.clock.advance(1); await flush();
     assert.equal(d.calls.create, 0);
     const trace = d.calls.scenes.map((x) => x[0]);
     assert.equal(trace.includes("hatch"), false, `trace ${trace.join(">")}`);
-    if (name) deq(d.calls.scenes.at(-1), ["sendstay", "Piggy is home.", "Same place, same Piggy."], `trace ${trace.join(">")}`);
-    else deq(trace, ["birth", "name"], "checking card → Name only");
+    assert.equal(trace.includes("name"), false, `trace ${trace.join(">")}`);
+    deq(d.calls.scenes.at(-1), ["sendstay", "Piggy is home.", "Same place, same Piggy."], `trace ${trace.join(">")}`);
     assert.equal(d.store.has(KEYS.birth), false);
   }
 });
@@ -265,6 +265,8 @@ await check("N7 genuine NEW user (no existing passkey) is unchanged: Invite tap 
   deq({ get: d.calls.get.length, create: d.calls.create }, { get: 1, create: 1 }, "second explicit Open creates");
   d.pending.create[0].resolve({ credentialId: "NEW", transports: ["internal"], prfOutput: key(55), prfSalt: key(2) });
   await flush();
+  assert.equal(d.state.scene, "received", "new credential succeeds before the existing Invite art runs");
+  d.clock.advance(5900); await flush();
   deq(d.calls.scenes.at(-1)[0], "hatch", `trace ${d.calls.scenes.map((x) => x[0]).join(">")}`);
   deq([d.markers().cred, d.markers().addr, d.markers().recv], [true, true, true]);
 });
@@ -436,7 +438,7 @@ async function wipeToFreshProfile(d, BASE, name) {
 }
 
 async function freshDeviceRun(browser, BASE, { label, name }) {
-  await check(`${label}: [new user → Hatch regression] then fresh profile + that existing discoverable passkey → FIRST Invite Open tap recovers: get 1 (discoverable) · create 0 · same address · ${name ? "Home sendstay \"Same place, same Piggy.\"" : "Name only"} · Hatch/hello never rendered · birth-played absent`, async () => {
+  await check(`${label}: [new user → Hatch regression] then fresh profile + that existing discoverable passkey → FIRST Invite Open tap recovers: get 1 (discoverable) · create 0 · same address · Home sendstay · Name/Hatch/hello never rendered · birth-played absent`, async () => {
     const d = await newDevice(browser);
     const address = await mintAsNewUser(d, BASE);
     await wipeToFreshProfile(d, BASE, name);
@@ -463,7 +465,7 @@ async function freshDeviceRun(browser, BASE, { label, name }) {
     const diag = `trace ${wa.scenes.join(">")} · lastGet ${JSON.stringify(wa.lastGet)} · card "${landed === "birth" ? await cardText(d.p) : ""}"`;
     deq({ get: wa.get, create: wa.create }, { get: 1, create: 0 }, `credentials counts (${diag})`);
     deq(wa.getOpts, [{ allow: 0 }], "the one get is a discoverable request (no allowCredentials)");
-    assert.equal(landed, name ? "sendstay" : "name", `landed on ${landed}; ${diag}`);
+    assert.equal(landed, "sendstay", `landed on ${landed}; ${diag}`);
     assert.equal(await sceneOf(d.p), landed, "stayed");
     assert.equal(wa.scenes.includes("hatch"), false, `Hatch never rendered: ${diag}`);
     assert.equal(await d.p.locator(".stage--hatch, #skipHatchButton").count(), 0, "no Hatch stage / skip button in the DOM");
@@ -486,7 +488,10 @@ async function freshDeviceRun(browser, BASE, { label, name }) {
       deq({ homeName: home.homeName, sendCard: home.sendCard }, { homeName: name, sendCard: false }, `plain Home shows the same Piggy (${JSON.stringify(home)})`);
       console.log(`      note B2: "Same place, same Piggy." on screen = ${home.lineVisible} (plain Home has no message slot; Part N pins the setScene copy)`);
     }
-    else assert.ok(await d.p.locator("#piggyNameInput").count(), "Name input present");
+    else {
+      assert.equal(await d.p.locator("#piggyNameInput").count(), 0, "UNKNOWN existing name never forces Name it");
+      assert.equal(await d.p.evaluate(() => document.querySelector("#homeName")?.textContent?.trim()), "Piggy", "existing unnamed Piggy uses the current Home fallback label");
+    }
     // reload of the recovered-but-never-played device still never routes to Hatch
     await d.p.reload({ waitUntil: "networkidle" });
     await sleep(1500);
