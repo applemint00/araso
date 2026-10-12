@@ -67,7 +67,7 @@ function journey1For(t, who, base) {
 // the REAL createForkAdminClient (fetchImpl injected). Counts real top-ups and keeps balances.
 function fakeAdmin({ token = "admin-token-0123456789abcdef", delayMs = 5 } = {}) {
   const st = { instance: FORK_ID, start: 110874000, topups: new Map(), balance: new Map(), realTopups: 0, calls: [], chain: Promise.resolve() };
-  const GRANT = { MON: 5n * 10n ** 18n, USDC: 10n * 10n ** 6n, WETH: 15n * 10n ** 17n, AUSD: 150n * 10n ** 6n }; // pre-A-959: MON + USDC only (A-959 ① entry = 4 assets; WETH 1.5 · AUSD 150 = A-949 harness defaults)
+  const GRANT = { MON: 5n * 10n ** 18n, USDC: 100n * 10n ** 6n, WETH: 15n * 10n ** 17n, AUSD: 150n * 10n ** 6n }; // pre-A-959: MON + USDC only (A-959 ① entry = 4 assets; WETH 1.5 · AUSD 150 = A-949 harness defaults)
   const fetchImpl = async (url, init = {}) => {
     st.calls.push({ url, auth: init.headers?.authorization || null });
     const u = new URL(url);
@@ -231,18 +231,18 @@ await check("3 allowed → entry row (putIfAbsent, canonical) + MON and USDC onc
   const j1 = journey1For(S.t, P, 6000);
   const r = await signedEnter(S, { journey1: j1 });
   assert.equal(r.allowed, true); assert.equal(r.forkScope, "monad-fork"); assert.equal(r.forkInstanceId, FORK_ID);
-  assert.deepEqual(r.grants.map((g) => [g.asset, g.amountRaw, g.noop]), [["MON", "5000000000000000000", false], ["USDC", "10000000", false], ["WETH", "1500000000000000000", false], ["AUSD", "150000000", false]]); // pre-A-959: MON + USDC
+  assert.deepEqual(r.grants.map((g) => [g.asset, g.amountRaw, g.noop]), [["MON", "5000000000000000000", false], ["USDC", "100000000", false], ["WETH", "1500000000000000000", false], ["AUSD", "150000000", false]]); // pre-A-959: MON + USDC
   const rows = await S.store.list("entries");
   assert.equal(rows.length, 1); assert.equal(rows[0].kind, KIND.ENTRY); assert.equal(rows[0].piggyAddress, P); assert.equal(rows[0].journey1ChainId, "10143");
   assert.equal(rows[0].journey1DepositTxHash, j1.depositTxHash); assert.match(rows[0].testerId, /^tester-[0-9a-f]{16}$/);
   assert.equal((await S.store.list("topups")).length, 4); // pre-A-959: 2 (MON + USDC)
-  assert.equal(S.A.st.realTopups, 4); assert.equal(S.A.st.balance.get(`${P}|MON`), 5n * 10n ** 18n); assert.equal(S.A.st.balance.get(`${P}|USDC`), 10n ** 7n); // pre-A-959: 2 (MON + USDC)
+  assert.equal(S.A.st.realTopups, 4); assert.equal(S.A.st.balance.get(`${P}|MON`), 5n * 10n ** 18n); assert.equal(S.A.st.balance.get(`${P}|USDC`), 10n ** 8n); // pre-A-959: 2 (MON + USDC)
 });
 await check("3 same request repeated (new challenge each time) ×3 → still exactly 1 top-up per asset (noop answers)", async () => {
   const S = setup();
   const j1 = journey1For(S.t, P, 6100);
   for (let i = 0; i < 3; i += 1) assert.equal((await signedEnter(S, { journey1: j1 })).allowed, true);
-  assert.equal(S.A.st.realTopups, 4); assert.equal(S.A.st.balance.get(`${P}|USDC`), 10n ** 7n); // pre-A-959: 2 (MON + USDC)
+  assert.equal(S.A.st.realTopups, 4); assert.equal(S.A.st.balance.get(`${P}|USDC`), 10n ** 8n); // pre-A-959: 2 (MON + USDC)
 });
 await check("3 two CONCURRENT entries (first grant race) → exactly 1 top-up per asset; balances = one grant", async () => {
   const S = setup();
@@ -251,7 +251,7 @@ await check("3 two CONCURRENT entries (first grant race) → exactly 1 top-up pe
   const sigs = await Promise.all(cs.map((c) => PIGGY.signMessage({ message: c.message })));
   const rs = await Promise.all(cs.map((c, i) => S.svc.enter({ inviteToken: TOKEN, nonce: c.nonce, signature: sigs[i], piggyAddress: PIGGY.address, journey1: j1 })));
   assert.deepEqual(rs.map((r) => r.allowed), [true, true]);
-  assert.equal(S.A.st.realTopups, 4); assert.equal(S.A.st.balance.get(`${P}|MON`), 5n * 10n ** 18n); assert.equal(S.A.st.balance.get(`${P}|USDC`), 10n ** 7n); // pre-A-959: 2 (MON + USDC)
+  assert.equal(S.A.st.realTopups, 4); assert.equal(S.A.st.balance.get(`${P}|MON`), 5n * 10n ** 18n); assert.equal(S.A.st.balance.get(`${P}|USDC`), 10n ** 8n); // pre-A-959: 2 (MON + USDC)
   assert.equal((await S.store.list("topups")).length, 4); assert.equal((await S.store.list("entries")).length, 1); // pre-A-959: 2 (MON + USDC)
   // two SEPARATE service processes (no shared in-process single flight) racing on one Admin → the Admin key still gives 1 top-up
   const S2 = setup(); const j2 = journey1For(S2.t, P, 6300);

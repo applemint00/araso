@@ -34,7 +34,7 @@ const APP_ORIGIN = "http://localhost:5173";
 const TOKEN = "local-test-invite-0959";
 const PIGGY = privateKeyToAccount(`0x${"c3".repeat(32)}`);
 const P = PIGGY.address.toLowerCase();
-const GRANT = { MON: 5n * 10n ** 18n, USDC: 10n * 10n ** 6n, WETH: 15n * 10n ** 17n, AUSD: 150n * 10n ** 6n }; // = A-959 Admin defaults
+const GRANT = { MON: 5n * 10n ** 18n, USDC: 100n * 10n ** 6n, WETH: 15n * 10n ** 17n, AUSD: 150n * 10n ** 6n }; // = A-959 Admin defaults
 
 function fakeAdmin({ token = "admin-token-0123456789abcdef", delayMs = 5 } = {}) {
   const st = { instance: FORK_ID, topups: new Map(), balance: new Map(), realTopups: 0, perAsset: {}, calls: [], chain: Promise.resolve() };
@@ -167,7 +167,7 @@ if (existsSync(INFRA)) {
   const infra = readFileSync(INFRA, "utf8");
   await check("4 Admin: asset rows read from the fork asset table · A-959 defaults WETH 1.5e18 / AUSD 150e6 · amounts overridable by server env", async () => {
     assert.match(infra, /import \{ forkAssetTable \} from "\.\.\/\.\.\/\.\.\/\.\.\/api\/_lib\/fork-grant-client\.js"/);
-    assert.match(infra, /GRANT_DEFAULTS = Object\.freeze\(\{ MON: 5n \* 10n \*\* 18n, USDC: 10n \* 10n \*\* 6n, WETH: 15n \* 10n \*\* 17n, AUSD: 150n \* 10n \*\* 6n \}\)/);
+    assert.match(infra, /GRANT_DEFAULTS = Object\.freeze\(\{ MON: 5n \* 10n \*\* 18n, USDC: 100n \* 10n \*\* 6n, WETH: 15n \* 10n \*\* 17n, AUSD: 150n \* 10n \*\* 6n \}\)/);
     assert.match(infra, /process\.env\[`A949_GRANT_\$\{asset\}_RAW`\]/);
     assert.equal(15n * 10n ** 17n, GRANT.WETH); assert.equal(150n * 10n ** 6n, GRANT.AUSD);
     assert.doesNotMatch(code(infra), /0xEE8c0E9f1BFFb4Eb878d8f15f368A02a35481242|0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a/i, "no WETH/AUSD address copied into the harness");
