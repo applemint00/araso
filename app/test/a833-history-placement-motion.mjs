@@ -41,8 +41,11 @@ const P = placementOracle();
 await check("N1 placement = v10 generator at the evidence sizes (mode, Home left, History left within 2 px)", () => {
   const T = [
     [390, 844, "stacked"], [430, 932, "stacked"],
-    [640, 900, "fan", 39, 275], [810, 1080, "fan", 52, 346], [1000, 700, "fan", 72, 288], [1100, 800, "fan", 83, 329],
-    [1280, 800, "pair", 102, 466], [1440, 900, "pair", 124, 533], [1920, 1080, "pair", 219, 710], [2560, 1440, "pair", 372, 1027], [1440, 700, "pair", 211, 529],
+    // pre-A-1109: [640, 900, "fan", 39, 275], [810, 1080, "fan", 52, 346], [1000, 700, "fan", 72, 288], [1100, 800, "fan", 83, 329],
+    //   [1280, 800, "pair", 102, 466], [1440, 900, "pair", 124, 533], [1920, 1080, "pair", 219, 710], [2560, 1440, "pair", 372, 1027], [1440, 700, "pair", 211, 529].
+    // pre-A-1109(answer 14): [640, 900, "fan", 39, 242] (answer 11) · [1000, 700, "fan", 73, 182]. Answer 14: 640 is PHONE (stacked); the paper fit lowers 1000x700.
+    [640, 900, "stacked"], [810, 1080, "fan", 52, 347], [1000, 700, "fan", 73, 191], [1100, 800, "fan", 83, 270],
+    [1280, 800, "fan", 103, 429], [1440, 900, "pair", 125, 534], [1920, 1080, "pair", 169, 712], [2560, 1440, "pair", 480, 1023], [1440, 700, "pair", 125, 534],
   ];
   for (const [w, h, mode, hl, hist] of T) {
     const p = P(w, h);
@@ -53,8 +56,10 @@ await check("N1 placement = v10 generator at the evidence sizes (mode, Home left
 await check("N2 fan overlap = 2 card widths - free span, never above half a card; pair never overlaps; stacked has no Home move", () => {
   for (const h of [700, 800, 900, 1080, 1440]) for (let w = 360; w <= 2000; w += 4) {
     const p = P(w, h);
-    if (p.mode === "stacked") assert.ok(w < h, `${w}x${h}: stacked only in portrait (A-829 6c / Cowork: never in landscape or square)`);
-    if (p.mode === "fan") { if (w < h) assert.ok(p.overlap <= 0.5 * p.cardW + 1e-6, `${w}x${h} overlap ${p.overlap}`); near(p.homeLeft, layout(w, h, 0).M, 1e-6, "fan Home on the left margin"); }
+    // pre-A-1109(answer 10): stacked allowed for any portrait (w < h) and the half-card limit for w < h. Answer 10: both are PHONE-only (vw <= 640).
+    // answer 14: phone = vw <= 640 (the app's PHONE boundary; answer 11's vw < 640 withdrawn).
+    if (p.mode === "stacked") assert.ok(w < h && w <= 640, `${w}x${h}: stacked only on a phone-width portrait (A-1109 answers 10/14: vw <= 640)`);
+    if (p.mode === "fan") { if (w < h && w <= 640) assert.ok(p.overlap <= 0.5 * p.cardW + 1e-6, `${w}x${h} overlap ${p.overlap}`); near(p.homeLeft, layout(w, h, 0).M, 1e-6, "fan Home on the left margin"); }
     if (p.mode === "pair") assert.ok(p.histLeft - (p.homeLeft + p.cardW) >= p.gap - 1e-6, `${w}x${h} pair keeps the gap`);
     if (p.mode === "stacked") { assert.equal(p.homeDx, 0); assert.equal(p.histLeft, null); }
   }
@@ -63,7 +68,9 @@ await check("N3 no History/character overlap by construction: side modes end 12 
   for (const h of [700, 800, 900, 1080, 1440]) for (let w = 360; w <= 2000; w += 3) {
     const p = P(w, h); if (p.mode === "stacked") continue;
     const L = layout(w, h, 0);
-    assert.ok(p.homeLeft >= L.M - 1e-6 && p.histRight <= w - L.M + 1e-6 || p.histRight <= p.Rr + 1e-6, `${w}x${h} inside the span`);
+    // pre-A-1109(answer 14): `a && b || c` (&& bound first, so a Home left of the margin passed whenever History ended inside the rail).
+    // answer 14: pair accepts need <= span + 0.5, so History may end up to 0.5 px past the right margin (measured max 0.232 at 1050x1080).
+    assert.ok(p.homeLeft >= L.M - 1e-6 && (p.histRight <= w - L.M + 0.5 + 1e-6 || p.histRight <= p.Rr + 1e-6), `${w}x${h} inside the span`);
     if (p.conflict) assert.ok(p.histRight <= L.stageLeft - 12 + 1e-6, `${w}x${h} clear of the stage`);
     assert.ok(p.homeLeft >= L.M - 1e-6, `${w}x${h} Home on/after the margin`);
   }
@@ -88,7 +95,8 @@ await check("N4 Home card x/y has no step at the portrait/landscape switch: w/h 
 await check("N5 blend weight = the card-height aspect weight; portrait at w/h <= 0.75, landscape at >= 1.25 (generator values untouched at the evidence sizes)", () => {
   near(layout(810, 1080, 0).posT, 0, 1e-12, "810x1080 t"); near(layout(1100, 800, 0).posT, 1, 1e-12, "1100x800 t"); near(layout(1000, 1000, 0).posT, 0.5, 1e-12, "1:1 t");
   near(layout(1440, 900, 0).cardY, 0.125 * 900, 1e-9, "1440x900 top 12.5 %");
-  near(layout(1100, 800, 0).cardX, 196, 1.5, "1100x800 closed Home x (v10 picture 07)");
+  // pre-A-1109: 1100x800 closed Home x = 196 (height-derived card width).
+  near(layout(1100, 800, 0).cardX, 166.31507936507936, 1e-9, "1100x800 closed Home x (S4)");
 });
 await check("N6 source: pinned literals kept, durations / frames / curves per preset C, reduced motion, EXIT 260, no 46 px driver", () => {
   assert.match(MAIN, /const RECORDS_EXIT_MS = 260;/);
@@ -118,7 +126,21 @@ if (process.env.ARASO_TEST_BROWSER === "1") {
   const H = await S.launchHome(1440, 900);
   const out = { sizes: {} };
   const rectOf = (sel) => H.p.evaluate((s) => { const e = document.querySelector(s); if (!e) return null; const b = e.getBoundingClientRect(); return b.width ? { l: b.left, t: b.top, r: b.right, b: b.bottom, w: b.width, h: b.height } : null; }, sel);
+  // [A-1109 answer 6] opaque-pixel (ink) box of an <img>: alpha > 16 bbox of its natural bitmap, mapped onto the rendered element box.
+  const inkRectOf = (sel) => H.p.evaluate((s) => {
+    const e = document.querySelector(s); if (!e || !e.naturalWidth) return null;
+    const b = e.getBoundingClientRect(); if (!b.width) return null;
+    const c = document.createElement("canvas"); c.width = e.naturalWidth; c.height = e.naturalHeight;
+    const g = c.getContext("2d"); g.drawImage(e, 0, 0); const d = g.getImageData(0, 0, c.width, c.height).data;
+    let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+    for (let y = 0; y < c.height; y += 1) for (let x = 0; x < c.width; x += 1) if (d[(y * c.width + x) * 4 + 3] > 16) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 < 0) return null;
+    const sx = b.width / c.width, sy = b.height / c.height;
+    return { l: b.left + x0 * sx, t: b.top + y0 * sy, r: b.left + (x1 + 1) * sx, b: b.top + (y1 + 1) * sy, w: (x1 + 1 - x0) * sx, h: (y1 + 1 - y0) * sy };
+  }, sel);
   const openHistory = async () => {
+    // pre-A-1109: launchHome reached a free Home here; First Send re-entry can leave Stay mounted until it is explicitly chosen.
+    if (await H.p.locator("#stayButton").count()) { await H.p.evaluate(() => document.querySelector("#stayButton")?.click()); await S.sleep(1200); }
     if (!(await H.openHomePaper())) throw new Error("paper did not open");
     await S.sleep(900);
     let idx = await H.p.evaluate(() => [...document.querySelectorAll(".homePaper__records")].findIndex((e) => e.getBoundingClientRect().width > 0));
@@ -152,7 +174,8 @@ if (process.env.ARASO_TEST_BROWSER === "1") {
     await S.sleep(200);
     const home = await rectOf("#homePaper"), hist = await rectOf("#recordsCardAnchor");
     const cls = await H.p.evaluate(() => [...document.querySelector("#recordsCardAnchor").classList]);
-    const chars = { seat: await rectOf("#homeSeat"), chog: await rectOf("#chogHome img") };
+    // pre-A-1109: chog: await rectOf("#chogHome img") (element box incl. transparent PNG margin). A-1109 answer 6 = A-829 item 2 stage = Chog ink.
+    const chars = { seat: await rectOf("#homeSeat"), chog: await inkRectOf("#chogHome img") };
     const mountInert = await H.p.evaluate(() => document.querySelector(".homePaperMount").inert);
     const rec = { vw: w, vh: h, expected: exp, closedHome, home, hist, classes: cls, chars, mountInert, openFrames: rows.filter((_, i) => i % 3 === 0 || i === rows.length - 1) };
     await check(`B ${w}x${h}: mode ${exp.mode}; Home/History rects = the placement rule; class ${exp.mode === "stacked" ? "--stackedMode" : "--sideMode"}`, () => {
@@ -165,7 +188,9 @@ if (process.env.ARASO_TEST_BROWSER === "1") {
     await check(`B ${w}x${h}: History clear of the characters (no rect overlap) and ${exp.mode === "fan" ? "card overlap <= half a card" : "inside the viewport"}`, () => {
       assert.ok(hist.r <= w + 0.6 && hist.l >= -0.6, "inside viewport");
       for (const [n, c] of Object.entries(chars)) if (c) assert.ok(!(hist.l < c.r && hist.r > c.l && hist.t < c.b && hist.b > c.t), `History overlaps ${n}`);
-      if (exp.mode === "fan") assert.ok(home.r - hist.l <= 0.5 * home.w + 1, `overlap ${home.r - hist.l}`);
+      // pre-A-1109: if (exp.mode === "fan") (half-card limit in every orientation). A-1109 answer 7 / A-833 answer: landscape + square always fan, limit only when w < h (= node N2).
+      // pre-A-1109(answer 10): `&& w < h`. Answer 10: the half-card limit is phone-only (vw <= 640).
+      if (exp.mode === "fan" && w < h && w <= 640) assert.ok(home.r - hist.l <= 0.5 * home.w + 1, `overlap ${home.r - hist.l}`);
     });
     await check(`B ${w}x${h}: open frames - Home and History move together over ${exp.mode === "stacked" ? "320 ms (History from the right on top)" : "320 ms (tuck-out, z swap at the clear point, settle)"}`, () => {
       const first = rows[0], last = rows[rows.length - 1];

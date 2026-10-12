@@ -33,7 +33,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const APP_DIR = path.join(REPO_ROOT, "app");
 // [A-833] test-side placement oracle (computeHistoryPlacement() in a vm on the pure keyframe layout): the v10 rule decides the mode,
-// not the old live whitespace rect-math (641..~570 px at 900 tall are "fan" now, stacked only below ~574).
+// not the old live whitespace rect-math. Current rule (A-1109 answer 14): History stacks only on phones (vw <= 640); 641 and up fan or pair.
 const A833_MAIN = readFileSync(path.join(REPO_ROOT, "app/src/main.js"), "utf8");
 const A833_LAYOUT = layoutOracle(A833_MAIN);
 const A833_PLACE = (() => {
@@ -188,7 +188,7 @@ const PAGE = `window.__a662 = {
     };
   },
   // [coordinator browser regression, 2026-10-01] position-only checks (rect equality) missed a
-  // real bug: at web "stacked" widths (641-~710), the geometry was correct but HOME painted
+  // real bug (pre-A-833, when 641-~710 web widths stacked): the geometry was correct but HOME painted
   // OVER HISTORY (z-order), so HISTORY's own title text was actually unreadable/covered even
   // though its rect matched HOME's. This checks the ACTUAL topmost element at HISTORY's own
   // center point AND near its title/identity text (top-left of the card, under the 18px
@@ -314,7 +314,7 @@ async function live() {
   }
 
   // ── Stacking-order check (coordinator browser regression, 2026-10-01) ──
-  // Position-only checks (rect equality, above) missed this: at web "stacked" widths (641-700,
+  // Position-only checks (rect equality, above) missed this: at the then-"stacked" web widths (641-700, pre-A-833;
   // the exact widths the real-browser diagnosis named), the geometry was correct but HOME
   // painted OVER HISTORY — Owner's own text ("HISTORY slides/overlaps from viewer-right ABOVE
   // HOME · z-order above HOME") was violated purely visually, with no rect-level symptom. This
@@ -322,7 +322,7 @@ async function live() {
   // elementFromPoint — 641/700 must land inside #recordsCardAnchor (fixed); 800/1440 are
   // side-by-side controls where HOME/HISTORY never overlap, confirming this probe itself isn't
   // just trivially true everywhere.
-  // A-833: expected modes are HARD-CODED from the v10 pictures at 900 tall (not from the implementation): 641 / 700 / 800 = fan (picture 04 shows 640x900 fan), 1440 = pair; stacked only below ~574. expectStacked=false for all four.
+  // A-833: expected modes are HARD-CODED from the v10 pictures at 900 tall (not from the implementation): 641 / 700 / 800 = fan (picture 04 = 641-class fan), 1440 = pair; A-1109 answer 14: stacked only at vw <= 640. expectStacked=false for all four.
   // pre-A-833 baseline: [["641 stacked", 641, true], ["700 stacked", 700, true], ["800 side-by-side", 800, false], ["1440 side-by-side", 1440, false]] (v10: 641 / 700 x 900 = fan)
   for (const [label, W, expectStacked] of [["641 fan", 641, false], ["700 fan", 700, false], ["800 fan", 800, false], ["1440 pair", 1440, false]]) {
     // [coordinator feedback 2026-10-01] a stale `recordsCardAnchor--stackedMode` surfaced

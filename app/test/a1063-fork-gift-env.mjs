@@ -49,13 +49,15 @@ assert.match(fork, /client: Object.freeze\(\{ register: F.post \}\)/);
 assert.doesNotMatch(fork, /fetch\("\/api\/gift-sponsor"/);
 assert.match(fork, /VITE_ARASO_FORK_GIFT_ESCROW/);
 // Byte identity outside the fork block and the separately tested Owner live repairs
-// (First Send re-entry, passkey-first Invite/Gift entry, unnamed existing-Piggy recovery), including original 143 transport.
+// (First Send re-entry, passkey-first Invite/Gift entry, unnamed existing-Piggy recovery, A-1109 Home layout), including original 143 transport.
 const baseline = execFileSync("git", ["show", "5a76810:app/src/main.js"], { encoding: "utf8" });
 const withoutApprovedLiveRepairs = (s, forkBlock) => s
   .replace(forkBlock, "")
   .replace(reentry(s), "")
   .replace(inviteAuthEntry(s), "")
-  .replace(functionBlock(s, "checkPiggy"), "");
+  .replace(functionBlock(s, "checkPiggy"), "")
+  .replace(functionBlock(s, "homeKeyframeLayout"), "")
+  .replace(functionBlock(s, "computeHistoryPlacement"), ""); // [A-1109 answer 10] phone-only half-card limit (vw <= 640)
 assert.equal(withoutApprovedLiveRepairs(main, fork), withoutApprovedLiveRepairs(baseline, block(baseline)));
 for (const file of ["api/gift-sponsor.js", "api/gift-sponsor-reconcile.js", "api/_lib/gift-sponsor-runtime.js", "relayer/src/gift-sponsor-service.mjs", "relayer/src/gift-sponsor-reconcile.mjs"]) {
   assert.equal(readFileSync(file, "utf8"), execFileSync("git", ["show", `5a76810:${file}`], { encoding: "utf8" }), file);

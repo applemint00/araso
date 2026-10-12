@@ -58,22 +58,25 @@ await check("N1 keyframes: at 390x844 / 810x1080 / 1440x900 stage 211/321/361, m
   const q = L(1440, 900); near(q.asFont, q.cardW * 0.064, 1e-9, "ARASO font"); near(q.asTop, 2 * q.asFont, 1e-9, "ARASO top"); near(q.pitch, (32 * q.cardW) / 282, 1e-9, "pitch");
 });
 
-await check("N2 cap: above 1440 every length scales by min(vw/1440, 1.33); the card keeps the height rule", () => {
+await check("N2 S4 cap: 1920 reaches 1.33; above it the whole composition freezes and centres", () => {
   const { L } = fmt();
   // pre-A-831 baseline: s stops at 1.33 and the reference frame centres horizontally (ox = (vw - 1440 s) / 2)
   for (const [w, h] of [[1920, 1080], [2560, 1440]]) {
-    const q = L(w, h), c = Math.min(w / 1440, 1.33);
-    near(q.stageW, 361 * c, 1e-9, `stage ${w}`); near(q.M, 120 * c, 1e-9, `margin ${w}`); near(q.bottom, 0.08 * h, 1e-9, `bottom ${w}`);
-    near(q.cardW, (h * 0.594) / 1.42, 1e-9, `card ${w} = height rule (no card cap: the v10 generator has none; Q4 cap would step the card at 1441x1080)`);
+    const q = L(w, h), ox = Math.max(0, (w - 1920) / 2);
+    near(q.stageW, 361 * 1.33, 1e-9, `stage ${w}`); near(q.M, ox + 120 * 1.33, 1e-9, `margin ${w}`); near(q.bottom, 0.08 * h, 1e-9, `bottom ${w}`);
+    // pre-A-1109: card kept the uncapped height rule.
+    near(q.cardW, 376.5 * 1.33, 1e-9, `card ${w} = S4 max width`);
   }
-  near(L(1920, 1080).cardW, 451.8, 0.5, "1920x1080 card = height rule (452)");
+  near(L(1920, 1080).cardW, 500.745, 1e-9, "1920x1080 card = 376.5 x 1.33");
 });
 
-await check("N3 short window: no height-limited s any more (A-829 / Q6): the card is vh x f and everything follows vh; stage + margins do not depend on vh", () => {
+await check("N3 short window: S4 compresses vertical gaps first and only then caps width; stage + margins do not depend on vh", () => {
   const { L } = fmt();
   // pre-A-831 baseline: assert.equal(f(1440, 700).s, 1); assert.equal(f(1280, 640).s, 1280 / 1440); near(f(1440, 500).s, 500 / 612, 1e-12, "height-limited");
-  const q = L(1440, 700); near(q.cardH, 700 * 0.594, 1e-9, "card h"); near(q.stageW, 361, 1e-9, "stage"); near(q.cardY, 87.5, 0.01, "card top = 12.5 % vh");
-  near(L(1280, 640).cardH, 640 * 0.594, 1e-9, "1280x640 card h");
+  const q = L(1440, 700); near(q.cardW, 376.5, 1e-9, "1440x700 width key"); near(q.stageW, 361, 1e-9, "stage"); near(q.cardY, 87.5, 0.01, "card top = 12.5 % vh");
+  // pre-A-1109: 1280x640 cardH = 640 x .594.
+  // pre-A-1109(answer 11): 375.3974674271362 (Send box only); the open Home paper now also stays above the floor line.
+  near(L(1280, 640).cardW, 358.3169014084507, 1e-9, "1280x640 after floor-line cap (paper + Send box)");
 });
 
 await check("N4 the format is active at every width (no 1100 gate); the board is the keyframe stage, shared by Away / Return / Second", () => {

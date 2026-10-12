@@ -11825,38 +11825,80 @@ function hkKey(vw, kf, pct) {
 }
 // Pure: no DOM. safeTop = env(safe-area-inset-top) in px.
 function homeKeyframeLayout(vw, vh, safeTop = 0) {
-  const M = hkKey(vw, HK_SIDE_M);
-  const stageW = hkKey(vw, HK_STAGE_W);
-  const bottom = hkKey(vw, HK_BOTTOM, true) * vh;
-  const fPortrait = HK_F_PORTRAIT[0] + (HK_F_PORTRAIT[1] - HK_F_PORTRAIT[0]) * hkClamp((vw - 390) / 420, 0, 1);
-  const f = fPortrait + (HK_F_LANDSCAPE - fPortrait) * hkClamp((vw / vh - 0.75) / 0.5, 0, 1);
-  let cardW = (vh * f) / HK_PAPER_H_PER_W;
-  cardW = Math.min(cardW, Math.max(0, vw - 2 * M));
+  // [A-1109 · S4] Card width = Framer-style width key with two guards (Owner pick "ㅇㅇ" 10-12 = A-1113 board S4; expected values pinned in
+  //   app/test/a1109-card-width-rule.mjs):
+  //   cw = min(max(width key 282.3 / 410.7 / 376.5 at 390 / 810 / 1440, the A-829 item 3 height rule vh x f / 1.42), 376.5 x 1.33).
+  //   The height rule stays only as a no-shrink floor (A-1109 answer 2 "AFTER >= BEFORE"); 376.5 x 1.33 = A-825 4(b) cap.
+  //   Above 1920 the whole composition stays at its 1920 values and centres (ox); the outside is notebook background only.
+  //   Short window (A-825 4(a)): keep the item-5 position when the Send box is clear of ARASO / character ink / floor line; else move it
+  //   vertically inside [ARASO bottom + one line pitch, stage top (shared x) or floor line - one line pitch]; only then cap cw.
+  //   pre-A-1109: cardW = min(vh x f / 1.42, vw - 2M) with every length keyed on vw (no 1920 freeze).
+  const W = Math.min(vw, 1920);
+  const ox = (vw - W) / 2;
+  const M = hkKey(W, HK_SIDE_M);
+  const stageW = hkKey(W, HK_STAGE_W);
+  const bottom = hkKey(W, HK_BOTTOM, true) * vh;
+  const S = stageW / (HK_INK_R - HK_INK_L);
+  const floorY = vh - bottom;
+  const stageL = W - M - stageW;
+  const stageTop = floorY - S * (HK_INK_FOOT - HK_INK_TOP);
+  // [A-833 U2] card x/y blend between the portrait rule (A-829 item 5) and the landscape rule (zone-centred, top 12.5 %) with the SAME
+  // aspect weight as the card-height rule: t = clamp((w/h - 0.75)/0.5, 0, 1) - no step at the portrait/landscape switch.
+  // pre-A-833 baseline: hard switch at vw > vh (A-831 generator `landscape = W > H`).
+  const posT = hkClamp((W / vh - 0.75) / 0.5, 0, 1);
+  const fPortrait = HK_F_PORTRAIT[0] + (HK_F_PORTRAIT[1] - HK_F_PORTRAIT[0]) * hkClamp((W - 390) / 420, 0, 1);
+  const f = fPortrait + (HK_F_LANDSCAPE - fPortrait) * posT;
+  const room = Math.max(0, W - 2 * M);
+  const heightCardW = Math.min((vh * f) / HK_PAPER_H_PER_W, room);
+  const widthCardW = Math.min(hkKey(W, [282.3, 410.7, 376.5]), room);
+  const maxCardW = Math.min(Math.max(widthCardW, heightCardW), 376.5 * HK_CAP);
+  // Visible Send box = paper width x 285/282, height x 364/285, centred on the paper; ARASO box = 4.183 x font wide (A-1109 Chromium sizes.json).
+  const stage = { l: stageL, r: W - M, t: stageTop, b: floorY };
+  const place = (cw, dy = 0) => {
+    const ch = cw * HK_PAPER_H_PER_W, font = cw * 0.064, brandTop = 2 * font + safeTop, brandBottom = brandTop + font;
+    const zoneR = stageL - 0.03 * W;
+    const xL = Math.max(M, (M + zoneR) / 2 - cw / 2), yL = 0.125 * vh;
+    const yP = brandBottom + Math.max(0, (stageTop - brandBottom - ch) / 2);
+    const xP = M + (W - 2 * M - cw) * hkClamp((W - 390) / 840, 0, 0.5);
+    const x = xP + (xL - xP) * posT, y = yP + (yL - yP) * posT + dy;
+    const sw = (cw * 285) / 282, sh = (sw * 364) / 285, cx = x + cw / 2, cy = y + ch / 2;
+    const send = { l: cx - sw / 2, r: cx + sw / 2, t: cy - sh / 2, b: cy + sh / 2 }, paper = { l: x, r: x + cw, t: y, b: y + ch };
+    // [A-1109 answer 11] the open Home paper (cw x cw*1.42) is taller than the Send box, so both are checked (box = their union).
+    const box = { l: Math.min(send.l, paper.l), r: Math.max(send.r, paper.r), t: Math.min(send.t, paper.t), b: Math.max(send.b, paper.b) };
+    return { x, y, brandBottom, send, paper, box, brand: { l: M, r: M + 4.183 * font, t: brandTop, b: brandBottom } };
+  };
+  const hit = (a, b) => a.l < b.r - 0.01 && b.l < a.r - 0.01 && a.t < b.b - 0.01 && b.t < a.b - 0.01;
+  // pre-A-1109(answer 11): every test below read p.send only (the Send box), so the taller open Home paper could reach the character stage.
+  const clear = (p) => !hit(p.send, p.brand) && !hit(p.paper, p.brand) && !hit(p.box, stage) && p.box.b <= floorY + 0.01
+    && p.box.l >= -0.01 && p.box.t >= -0.01 && p.box.r <= W + 0.01 && p.box.b <= vh + 0.01;
+  const fit = (cw) => {
+    const p0 = place(cw);
+    if (clear(p0)) return p0;
+    const gap = (32 * cw) / HK_CARD_REF_W;
+    const sharesX = p0.box.l < stage.r - 0.01 && stage.l < p0.box.r - 0.01; // pre-A-1109(answer 14): p0.box.l < stage.r && stage.l < p0.box.r (same 0.01 slack as hit())
+    const top = p0.brandBottom + gap, bot = (sharesX ? stageTop : floorY) - gap, sh = p0.box.b - p0.box.t;
+    if (sh > bot - top + 1e-9) return null;
+    const p = place(cw, hkClamp(p0.box.t, top, bot - sh) - p0.box.t);
+    return clear(p) ? p : null;
+  };
+  let cardW = maxCardW;
+  let at = fit(cardW);
+  if (!at) {
+    let lo = 0, hi = cardW;
+    for (let i = 0; i < 60; i += 1) { const mid = (lo + hi) / 2; if (fit(mid)) lo = mid; else hi = mid; }
+    cardW = lo;
+    at = fit(cardW) || place(cardW);
+  }
   const cardH = cardW * HK_PAPER_H_PER_W;
   const k = cardW / HK_CARD_REF_W;
   const asFont = cardW * 0.064;
   const asTop = 2 * asFont;
   const asBottom = asTop + asFont + safeTop;
-  const S = stageW / (HK_INK_R - HK_INK_L);
-  const floorY = vh - bottom;
-  const boardLeft = vw - M - S * HK_INK_R;
-  const boardTop = floorY - S * HK_INK_FOOT;
-  const stageLeft = vw - M - stageW;
-  const stageTop = floorY - S * (HK_INK_FOOT - HK_INK_TOP);
-  // [A-833 U2] card x/y blend between the portrait rule (A-829 item 5) and the landscape rule (zone-centred, top 12.5 %) with the SAME
-  // aspect weight as the card-height rule: t = clamp((w/h - 0.75)/0.5, 0, 1) - no step at the portrait/landscape switch.
-  // pre-A-833 baseline: hard switch at vw > vh (A-831 generator `landscape = W > H`).
-  const posT = hkClamp((vw / vh - 0.75) / 0.5, 0, 1);
-  const zoneL = M;
-  const zoneR = stageLeft - 0.03 * vw;
-  const cardYL = 0.125 * vh;
-  const cardXL = Math.max(zoneL, (zoneL + zoneR) / 2 - cardW / 2);
-  const cardYP = asBottom + Math.max(0, (stageTop - asBottom - cardH) / 2);
-  const cardXP = M + (vw - 2 * M - cardW) * hkClamp((vw - 390) / 840, 0, 0.5);
-  const cardX = cardXP + (cardXL - cardXP) * posT;
-  const cardY = cardYP + (cardYL - cardYP) * posT;
-  return { vw, vh, s: k, k, M, stageW, bottom, cardW, cardH, cardX, cardY, posT, cx: cardX + cardW / 2, cy: cardY + cardH / 2,
-    asFont, asTop, asBottom, pitch: (32 * cardW) / HK_CARD_REF_W, S, boardLeft, boardTop, floorY, stageLeft, stageTop };
+  const cardX = at.x + ox;
+  const cardY = at.y;
+  return { vw, vh, s: k, k, M: M + ox, ox, stageW, bottom, cardW, cardH, cardX, cardY, posT, cx: cardX + cardW / 2, cy: cardY + cardH / 2,
+    asFont, asTop, asBottom, pitch: (32 * cardW) / HK_CARD_REF_W, S, boardLeft: W - M - S * HK_INK_R + ox, boardTop: floorY - S * HK_INK_FOOT,
+    floorY, stageLeft: stageL + ox, stageTop };
 }
 let hkMemo = null;
 function desktopFormat(vw = window.innerWidth, vh = window.innerHeight) {
@@ -11908,20 +11950,22 @@ function computeHistoryPlacement(vw = window.innerWidth, vh = window.innerHeight
   const cw = L.cardW;
   const gap = 24 * L.k;
   const need = 2 * cw + gap;
-  const conflict = L.cardY + L.cardH > L.stageTop;
+  const conflict = L.cardY + L.cardH > L.stageTop + 0.5; // pre-A-1109(answers 13/14): > L.stageTop (a card fitted to touch the stage top counted as reaching it)
   const Rr = conflict ? L.stageLeft - 12 : vw - L.M;
   const span = Rr - L.M;
   let mode;
   let homeLeft = L.cardX;
   let histLeft = null;
-  if (need <= span) {
+  if (need <= span + 0.5) { // pre-A-1109(answer 14): need <= span
     mode = "pair";
     const glPortrait = L.M + (span - need) / 2;
     const glLandscape = (L.M + (L.stageLeft - 0.03 * vw)) / 2 - need / 2;
     homeLeft = Math.max(L.M, glPortrait + (glLandscape - glPortrait) * L.posT);
     histLeft = homeLeft + cw + gap;
-  } else if (need - span <= 0.5 * cw || vw >= vh) {
+  } else if (need - span <= 0.5 * cw + 0.5 || vw > 640 || vw >= vh) { // pre-A-1109(answer 14): need - span <= 0.5 * cw · answers 11/13: vw >= 640
     // [A-833 Cowork 6(c)] stacked is the phone/portrait mode only: landscape or square (w/h >= 1) always fans, overlapping as much as needed.
+    // [A-1109 answers 10/14 · Owner] the half-card limit is PHONE-only (vw <= 640, the app's PHONE boundary: main.js <= 640, style.css max-width:640px,
+    // A-825 PHONE <= 640): from 641 up History always fans, so it stacks only on phones. pre-A-1109(answer 10): `else if (need - span <= 0.5 * cw || vw >= vh)`.
     mode = "fan";
     homeLeft = L.M;
     histLeft = Rr - cw;

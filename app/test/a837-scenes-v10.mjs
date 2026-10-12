@@ -24,6 +24,10 @@ async function check(name, fn) {
 }
 const near = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b} (tol ${tol})`);
 const lay = (w, h) => { const L = O.L(w, h, 0); return { L, n: O.name(L, w, h), r: O.ret(L) }; };
+// [A-1109] expected on-screen Name card top: the layout top, minus the existing A-849 UI-11 centred-card lift (main.js applyCenteredCardLift:
+// covered = natural bottom - viewport bottom; lift = covered + CENTER_CARD_GAP_PX 16 when covered > 0). S4's larger HomeCard makes the 1440x600 Name
+// card (1.55 x HomeCard, A-835 item 1) reach below the viewport, so the lift now engages there. pre-A-1109: expected top = n.cardTop.
+const nameTopOnScreen = (n, h) => { const bottom = n.cardTop + 300 * n.sc; return bottom > h ? h - 16 - 300 * n.sc : n.cardTop; };
 const REF = [[390, 844], [810, 1080], [1440, 900]];
 
 // ── Part N ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -173,7 +177,7 @@ try {
   await check("B6 Name: no clipping at 600-tall windows - card and Chog inside the viewport, peek below ARASO", () => {
     const m = name["1440x600"]; const { L, n } = lay(1440, 600);
     assert.ok(m.card.t >= L.asBottom && m.card.b <= 600, `card ${JSON.stringify(m.card)}`);
-    near(m.card.t, n.cardTop, 1, "card top"); assert.ok(m.chog.b <= 600 + 1, "Chog inside");
+    near(m.card.t, nameTopOnScreen(n, 600), 1, "card top"); assert.ok(m.chog.b <= 600 + 1, "Chog inside");
     near(m.scrollW, 1440, 0.5, "no horizontal overflow");
   });
   // Name arrival frame: the peek head rises above the card top by NAME_PEEK_VISIBLE x rig scale, below ARASO
@@ -182,8 +186,10 @@ try {
     for (const [w, h] of [[390, 844], [810, 1080], [1440, 900], [1440, 600]]) {
       const m = await S.measureName(H, w, h, { arrival: true }); const { L, n } = lay(w, h);
       assert.ok(m.peekPx >= 3000, `${w}x${h} peek pixels ${m.peekPx}`);
-      near(m.card.t, n.cardTop, 1.5, `${w}x${h} card top`);
-      assert.ok(m.card.t - 147 * (n.rigG * n.sc) >= m.brand.b - 0.5, `${w}x${h} peek head below ARASO`);
+      near(m.card.t, nameTopOnScreen(n, h), 1.5, `${w}x${h} card top`);
+      // pre-A-1109: m.card.t - 147 x rig (head measured from the on-screen card top). The A-849 lift translates only .nameScene__pad, not the
+      // Piggy rig, so the head stays at the layout card top - 147 x rig (1440x600: 271.4 - 191.8 = 79.6; screenshot ink top 82 > ARASO 67.6).
+      assert.ok(n.cardTop - 147 * (n.rigG * n.sc) >= m.brand.b - 0.5, `${w}x${h} peek head below ARASO`);
     }
   });
 } finally { await H.close?.(); }

@@ -34,11 +34,12 @@ await check("N1 keyframe equality at 390x844 / 810x1080 / 1440x900 (<= 0.5 px): 
     near(q.boardLeft + (1041 - 0.4991 * 150 + 150) * q.S, t.w - t.m, 1e-6, `right ink edge ${t.w}`);
   }
 });
-await check("N2 card rule: f_portrait .475 -> .54, f = .594 at w/h >= 1.25, width never above vw - 2 margin, stage/margin cap above 1440", () => {
-  near(L(390, 844).cardH, 844 * 0.475, 1e-9, "390 f"); near(L(810, 1080).cardH, 1080 * 0.54, 1e-9, "810 f"); near(L(1440, 900).cardH, 900 * 0.594, 1e-9, "1440 f");
-  near(L(1100, 800).cardH, 800 * 0.594, 1e-9, "1100x800"); near(L(1920, 1080).cardW, 451.8, 0.5, "1920x1080 = height rule 452");
+await check("N2 S4 card rule: max(width key, old height floor), 500.745 cap, composition centred and frozen above 1920", () => {
+  // pre-A-1109: cardW was only vh x f / 1.42, with no 1920 Framer max-width composition.
+  near(L(390, 844).cardW, 282.32394366197184, 1e-9, "390 no-shrink floor"); near(L(810, 1080).cardW, 410.7042253521127, 1e-9, "810 no-shrink floor"); near(L(1440, 900).cardW, 376.5, 1e-9, "1440 width key");
+  near(L(1100, 800).cardW, 394.95714285714286, 1e-9, "1100 width key"); near(L(1920, 1080).cardW, 500.745, 1e-9, "1920 cap");
   for (const [w, h] of [[360, 800], [390, 844], [500, 1000], [1440, 900]]) { const q = L(w, h); assert.ok(q.cardW <= w - 2 * q.M + 1e-9, `${w} inside margins`); }
-  const q = L(2560, 1440); near(q.cardW, (1440 * 0.594) / 1.42, 1e-9, "no card cap (generator rule; Q4 cap would step 452 -> 377 at 1441x1080)"); near(q.stageW, 361 * 1.33, 1e-9, "cap stage"); near(q.M, 120 * 1.33, 1e-9, "cap margin");
+  const q = L(2560, 1440); near(q.cardW, 500.745, 1e-9, "S4 card cap"); near(q.stageW, 361 * 1.33, 1e-9, "frozen stage"); near(q.M, 320 + 120 * 1.33, 1e-9, "centred 1920 composition margin");
   near(L(300, 700).stageW, (211 * 300) / 390, 1e-9, "below 390 proportional"); near(L(300, 700).bottom, 0.071 * 700, 1e-9, "bottom % constant below 390");
 });
 await check("N3 no step: 1 px width sweep 360..1920 at heights 800 / 900 / 1080 - adjacent widths differ <= 1 % in every keyframed value", () => {
