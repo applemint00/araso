@@ -1,3 +1,4 @@
+import { createResponsiveLayout } from "./responsive-layout.js";
 import {
   createPasskeyWithPrfOutput,
   createSecp256k1SigningSession,
@@ -5062,7 +5063,7 @@ function syncRecordsViewportState() {
   const stackedMode = computeHistoryFitMode() === "stacked";
   const mount = document.querySelector(".homePaperMount");
   if (!mount) return;
-  const shift = open && !stackedMode;
+  const shift = open; // Both papers share the solved size, including the stacked transition.
   if (mount.classList.contains("homePaperMount--twoCardShift") !== shift) setHomeTwoCardShift(shift);
   else if (shift) {
     // [A-833] live resize / mode change while open: re-place instantly (no animation), cancel a running open/close animation.
@@ -11824,7 +11825,7 @@ function hkKey(vw, kf, pct) {
   return pct ? c : c * Math.min(vw / 1440, HK_CAP);
 }
 // Pure: no DOM. safeTop = env(safe-area-inset-top) in px.
-function homeKeyframeLayout(vw, vh, safeTop = 0) {
+function homeKeyframeLayoutBase(vw, vh, safeTop = 0) {
   // [A-1109 · S4] Card width = Framer-style width key with two guards (Owner pick "ㅇㅇ" 10-12 = A-1113 board S4; expected values pinned in
   //   app/test/a1109-card-width-rule.mjs):
   //   cw = min(max(width key 282.3 / 410.7 / 376.5 at 390 / 810 / 1440, the A-829 item 3 height rule vh x f / 1.42), 376.5 x 1.33).
@@ -11900,6 +11901,18 @@ function homeKeyframeLayout(vw, vh, safeTop = 0) {
     asFont, asTop, asBottom, pitch: (32 * cardW) / HK_CARD_REF_W, S, boardLeft: W - M - S * HK_INK_R + ox, boardTop: floorY - S * HK_INK_FOOT,
     floorY, stageLeft: stageL + ox, stageTop };
 }
+let responsiveSolver = null;
+let responsiveSafeTop = null;
+function getResponsiveSolver(safeTop = resolveCssLengthVarPx("--hk-safe-top", 0)) {
+  if (!responsiveSolver || responsiveSafeTop !== safeTop) {
+    responsiveSafeTop = safeTop;
+    responsiveSolver = createResponsiveLayout((w, h) => homeKeyframeLayoutBase(w, h, safeTop));
+  }
+  return responsiveSolver;
+}
+function homeKeyframeLayout(vw, vh, safeTop = 0) {
+  return getResponsiveSolver(safeTop).layout(vw, vh);
+}
 let hkMemo = null;
 function desktopFormat(vw = window.innerWidth, vh = window.innerHeight) {
   if (!(vw > 0 && vh > 0)) return null;
@@ -11944,41 +11957,8 @@ function fmtLen(px) {
 //   stacked : otherwise (phone) -> History over Home as today (geometry = stackMobileRecordsOverHome()).
 // homeDx = Home's open-state sideways move in viewport px (signed), measured from the closed Home x (A-831 card x).
 function computeHistoryPlacement(vw = window.innerWidth, vh = window.innerHeight) {
-  const f = desktopFormat(vw, vh);
-  if (!f) return null;
-  const L = f.L;
-  const cw = L.cardW;
-  const gap = 24 * L.k;
-  const need = 2 * cw + gap;
-  const conflict = L.cardY + L.cardH > L.stageTop + 0.5; // pre-A-1109(answers 13/14): > L.stageTop (a card fitted to touch the stage top counted as reaching it)
-  const Rr = conflict ? L.stageLeft - 12 : vw - L.M;
-  const span = Rr - L.M;
-  let mode;
-  let homeLeft = L.cardX;
-  let histLeft = null;
-  if (need <= span + 0.5) { // pre-A-1109(answer 14): need <= span
-    mode = "pair";
-    const glPortrait = L.M + (span - need) / 2;
-    const glLandscape = (L.M + (L.stageLeft - 0.03 * vw)) / 2 - need / 2;
-    homeLeft = Math.max(L.M, glPortrait + (glLandscape - glPortrait) * L.posT);
-    histLeft = homeLeft + cw + gap;
-  } else if (need - span <= 0.5 * cw + 0.5 || vw > 640 || vw >= vh) { // pre-A-1109(answer 14): need - span <= 0.5 * cw · answers 11/13: vw >= 640
-    // [A-833 Cowork 6(c)] stacked is the phone/portrait mode only: landscape or square (w/h >= 1) always fans, overlapping as much as needed.
-    // [A-1109 answers 10/14 · Owner] the half-card limit is PHONE-only (vw <= 640, the app's PHONE boundary: main.js <= 640, style.css max-width:640px,
-    // A-825 PHONE <= 640): from 641 up History always fans, so it stacks only on phones. pre-A-1109(answer 10): `else if (need - span <= 0.5 * cw || vw >= vh)`.
-    mode = "fan";
-    homeLeft = L.M;
-    histLeft = Rr - cw;
-  } else {
-    mode = "stacked";
-  }
-  const side = mode !== "stacked";
-  const overlap = side ? Math.max(0, homeLeft + cw - histLeft) : 0;
-  return {
-    mode, homeLeft, homeDx: side ? homeLeft - L.cardX : 0, histLeft, histRight: side ? histLeft + cw : null,
-    cardW: cw, cardH: L.cardH, gap, conflict, Rr, overlap,
-    underDx: side ? homeLeft - histLeft : 0, clearDx: overlap + 10,
-  };
+  if (!(vw > 0 && vh > 0)) return null;
+  return getResponsiveSolver().history(vw, vh);
 }
 // Desktop pre-branch for the canvases that share the Home board (work pose, departure): same board box as #homeBoard. Returns true when applied.
 function applyDesktopBoardToCanvas(canvas) {
@@ -14516,17 +14496,32 @@ function homeTwoCardShiftLocalPx() {
   const rect = paper.getBoundingClientRect();
   const scale = new DOMMatrix(getComputedStyle(paper).transform).a;
   if (!(rect.width > 0) || !(scale > 0)) return 0;
-  return placement.homeDx * ((400 * scale) / rect.width);
+  return (placement.homeLeft + placement.cardW / 2 - placement.L.cx) * ((400 * scale) / rect.width);
 }
 function setHomeTwoCardShift(active, instant = false) {
   const mount = document.querySelector(".homePaperMount");
   if (!mount) return;
   if (instant) mount.style.transition = "none";
-  if (active) mount.style.setProperty("--twoCardShiftLocalPx", `${homeTwoCardShiftLocalPx()}px`);
+  if (active) {
+    const p = computeHistoryPlacement();
+    const paper = mount.querySelector(".homePaper");
+    if (p && paper) {
+      const r = paper.getBoundingClientRect();
+      const localScale = new DOMMatrix(getComputedStyle(paper).transform).a;
+      const ratio = r.width > 0 ? 400 * localScale / r.width : 0;
+      mount.dataset.historySizing = "1";
+      mount.style.setProperty("--historyTargetK", String(p.cardW / p.L.cardW));
+      mount.style.setProperty("--twoCardShiftLocalPx", `${(p.homeLeft + p.cardW / 2 - p.L.cx) * ratio}px`);
+      mount.style.setProperty("--twoCardShiftLocalY", `${(p.top + p.cardH / 2 - p.L.cy) * ratio}px`);
+      if (instant) paper.style.transition = "none";
+    }
+  }
   mount.classList.toggle("homePaperMount--twoCardShift", Boolean(active));
   if (instant) {
     void mount.offsetWidth;
     mount.style.transition = "";
+    const paper = mount.querySelector(".homePaper");
+    if (paper) paper.style.transition = "";
   }
   recordsShiftKey = active ? homeTwoCardShiftKey() : "";
 }
@@ -14535,8 +14530,10 @@ function setHomeTwoCardShift(active, instant = false) {
 function homeTwoCardShiftKey() {
   const p = computeHistoryPlacement();
   const paper = document.querySelector(".homePaper");
-  const w = paper ? Math.round(paper.getBoundingClientRect().width) : 0;
-  return p ? `${window.innerWidth}x${window.innerHeight}:${p.mode}:${Math.round(p.homeDx)}:${w}` : "";
+  const rectW = paper?.getBoundingClientRect().width || 0;
+  const localScale = paper ? new DOMMatrix(getComputedStyle(paper).transform).a : 0;
+  const parentRatio = rectW > 0 ? Math.round(400 * localScale / rectW * 10000) : 0;
+  return p ? `${window.innerWidth}x${window.innerHeight}:${p.mode}:${p.homeDx}:${p.cardW}:${p.top}:${parentRatio}` : "";
 }
 
 // [A-459 Lane C] 오른쪽 HISTORY 종이 머리 — Explore(secondJourney) masthead 와 같은 paper
@@ -14852,6 +14849,9 @@ function alignRecordsCardToHomePaper() {
   if (!anchor) return;
   // [A-623] shift/inert follow the CURRENT breakpoint before the live `.homePaper` is measured.
   syncRecordsViewportState();
+  // Keep History typography at the same paper scale as Home throughout sizing.
+  const homeWidth = document.querySelector(".homePaper")?.getBoundingClientRect().width;
+  if (homeWidth > 0) anchor.style.setProperty("--fmtS", String(homeWidth / HK_CARD_REF_W));
   // [A-662] geometry-fit decision (side-by-side vs stacked) replaces the old flat fixed-width
   // check — see computeHistoryFitMode() above.
   if (computeHistoryFitMode() === "stacked") {
@@ -14919,7 +14919,8 @@ function stackMobileRecordsOverHome() {
   if (!paperRect.width || !paperRect.height) return;
   const stageRect = stage.getBoundingClientRect();
   const inset = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--mobile-inset")) || 24;
-  const left = Math.max(paperRect.left, window.innerWidth - inset - paperRect.width);
+  const placement = computeHistoryPlacement();
+  const left = placement?.histLeft ?? paperRect.left;
   anchor.style.left = `${left - stageRect.left}px`;
   anchor.style.top = `${paperRect.top - stageRect.top}px`;
   anchor.style.width = `${paperRect.width}px`;

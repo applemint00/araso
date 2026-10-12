@@ -1901,7 +1901,8 @@ h1 {
    불변). 클래스는 main.js openRecordsCard/closeRecordsCard 만 붙였다 뗀다 — 닫으면 기존
    Home 자리 그대로. 캐릭터(Chog/Piggy) 좌표·모습·모션은 이 규칙과 무관(건드리지 않는다). */
 .homePaperMount--twoCardShift {
-  transform: translateX(var(--twoCardShiftLocalPx, -19.74px));
+  --historyHomeK: var(--historyTargetK, 1);
+  transform: translate(var(--twoCardShiftLocalPx, -19.74px), var(--twoCardShiftLocalY, 0px));
 }
 
 .homePaper {
@@ -5244,8 +5245,8 @@ html .nameCard__gotLine { line-height: 1.03em; }
 .stage[data-scene="sendstay"] .homePaper {
   transform:
     translate(var(--fmtPaperDx, 0px), var(--fmtPaperDy, 0px))
-    translate(calc(55px - 200px * 0.275 * var(--homePaperK) * var(--fmtS, 1)), calc(78.1px - 284px * 0.275 * var(--homePaperK) * var(--fmtS, 1)))
-    scale(calc(0.275 * var(--homePaperK) * var(--fmtS, 1)));
+    translate(calc(55px - 200px * 0.275 * var(--homePaperK) * var(--fmtS, 1) * var(--historyHomeK, 1)), calc(78.1px - 284px * 0.275 * var(--homePaperK) * var(--fmtS, 1) * var(--historyHomeK, 1)))
+    scale(calc(0.275 * var(--homePaperK) * var(--fmtS, 1) * var(--historyHomeK, 1)));
 }
 /* Background line pitch 32 x card width / 282 = 32 k. [A-839] now also the body rule for every scene (above); this Home-scoped copy stays because a827 pins its text. */
 body:has(.stage[data-scene="sendstay"]) {
@@ -6766,6 +6767,13 @@ html .a911-amtLine { display: inline-flex; align-items: baseline; gap: 2px; bord
 html .a911-amtLine__cur { font: 700 var(--a911-title) / 1.1 var(--a911-serif); font-style: normal; color: var(--a911-ink); }
 html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-width: none; width: 6em; font-size: max(16px, var(--a911-title)); color: var(--a911-ink); background: transparent; border-radius: 0; outline: none; }
 /* ── [A-911] end ───────────────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+/* Coupled paper sizing uses the established opening/closing timing. */
+.homePaperMount[data-history-sizing] .homePaper { transition: transform 240ms cubic-bezier(.5,0,.75,.2); }
+.homePaperMount[data-history-sizing].homePaperMount--twoCardShift .homePaper { transition-duration: 320ms; transition-timing-function: cubic-bezier(.2,.9,.3,1); }
+@media (prefers-reduced-motion: reduce) {
+ .homePaperMount[data-history-sizing] .homePaper { transition: none; }
+}
 
 @media (max-width: 640px) {
   .homeLiving__name { display: none; }

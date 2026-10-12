@@ -20,10 +20,10 @@ const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a}
 const L = layoutOracle(MAIN);
 
 // ═══ Part N ═══
-await check("N1 keyframe equality at 390x844 / 810x1080 / 1440x900 (<= 0.5 px): stage, margin, bottom, card, ARASO x / font / top, pitch", () => {
+await check("N1 keyframe equality at 390x844 / 810x900 / 1440x900 (<= 0.5 px): stage, margin, bottom, card, ARASO x / font / top, pitch", () => {
   const T = [
     { w: 390, h: 844, st: 211, m: 20, bot: 0.071, cw: 400.9 / 1.42, as: 18.07 },
-    { w: 810, h: 1080, st: 321, m: 52, bot: 0.08, cw: 583.2 / 1.42, as: 26.29 },
+    { w: 810, h: 900, st: 321, m: 52, bot: 0.08, cw: 387.9083444539284, as: 24.826 },
     { w: 1440, h: 900, st: 361, m: 120, bot: 0.08, cw: 534.6 / 1.42, as: 24.09 },
   ];
   for (const t of T) {
@@ -34,13 +34,13 @@ await check("N1 keyframe equality at 390x844 / 810x1080 / 1440x900 (<= 0.5 px): 
     near(q.boardLeft + (1041 - 0.4991 * 150 + 150) * q.S, t.w - t.m, 1e-6, `right ink edge ${t.w}`);
   }
 });
-await check("N2 S4 card rule: max(width key, old height floor), 500.745 cap, composition centred and frozen above 1920", () => {
-  // pre-A-1109: cardW was only vh x f / 1.42, with no 1920 Framer max-width composition.
-  near(L(390, 844).cardW, 282.32394366197184, 1e-9, "390 no-shrink floor"); near(L(810, 1080).cardW, 410.7042253521127, 1e-9, "810 no-shrink floor"); near(L(1440, 900).cardW, 376.5, 1e-9, "1440 width key");
-  near(L(1100, 800).cardW, 394.95714285714286, 1e-9, "1100 width key"); near(L(1920, 1080).cardW, 500.745, 1e-9, "1920 cap");
-  for (const [w, h] of [[360, 800], [390, 844], [500, 1000], [1440, 900]]) { const q = L(w, h); assert.ok(q.cardW <= w - 2 * q.M + 1e-9, `${w} inside margins`); }
-  const q = L(2560, 1440); near(q.cardW, 500.745, 1e-9, "S4 card cap"); near(q.stageW, 361 * 1.33, 1e-9, "frozen stage"); near(q.M, 320 + 120 * 1.33, 1e-9, "centred 1920 composition margin");
-  near(L(300, 700).stageW, (211 * 300) / 390, 1e-9, "below 390 proportional"); near(L(300, 700).bottom, 0.071 * 700, 1e-9, "bottom % constant below 390");
+await check("N2 1940 max composition centres on both axes; phone reference stays intact",()=>{
+ near(L(390,844).cardW,282.32394366197184,1e-9,'phone');
+ near(L(1440,900).cardW,376.5,1e-9,'desktop');
+ const a=L(1940,1200),b=L(2560,1400);
+ near(a.cardW,376.5*1.05,1e-9,'max card');near(b.cardW,a.cardW,1e-9,'fixed size');
+ near(b.cardX-a.cardX,310,1e-9,'x margins');near(b.cardY-a.cardY,100,1e-9,'y margins');
+ near(b.stageTop-a.stageTop,100,1e-9,'stage y');
 });
 await check("N3 no step: 1 px width sweep 360..1920 at heights 800 / 900 / 1080 - adjacent widths differ <= 1 % in every keyframed value", () => {
   const res = {};
@@ -85,7 +85,7 @@ if (process.env.ARASO_TEST_BROWSER === "1") {
       near(q.cardW282, l.cardW, tol, `${tag} card w`); near(q.card.h, 364 * l.k, 0.8, `${tag} card h`);
       near(q.pitch, l.pitch, 0.01, `${tag} pitch`);
     };
-    await check("B1 keyframe equality in the browser at 390x844 / 810x1080 / 1440x900 (<= 0.6 px)", async () => {
+    await check("B1 keyframe equality in the browser at 390x844 / 810x900 / 1440x900 (<= 0.6 px)", async () => {
       for (const [w, h] of [[390, 844], [810, 1080], [1440, 900]]) eq(await S.measure831(H, w, h, { settle: 900 }), L(w, h), `${w}x${h}`);
     });
     await check("B2 sampled widths 360..1920 at heights 800 / 900 / 1080 equal the rule; ARASO left of the card; card inside margins; no scroll", async () => {

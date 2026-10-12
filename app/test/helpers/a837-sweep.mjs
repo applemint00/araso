@@ -1,3 +1,4 @@
+import {createResponsiveLayout} from "../../src/responsive-layout.js";
 // [A-837] Second / Name / Return v10 measurement + sweep helper (A-835 items 1-5, 8). Reuses the A-819 browser scaffold.
 //   CLI (local browser + vite port; run unsandboxed, one at a time):
 //     ARASO_TEST_BROWSER=1 node app/test/helpers/a837-sweep.mjs snapshot <outDir> [w,h ...]
@@ -27,7 +28,7 @@ function fnSrc(src, name) {
 
 /** The pure scene layouts from main.js evaluated in a vm: { L, nameSceneLayout, returnLayout }. */
 export function sceneOracle(main = readFileSync(MAIN_PATH, "utf8")) {
-  const ctx = { Math, window: { innerWidth: 1440, innerHeight: 900 } };
+  const ctx = { Math, createResponsiveLayout, resolveCssLengthVarPx:()=>0, window: { innerWidth: 1440, innerHeight: 900 } };
   vm.createContext(ctx);
   const consts = ["HK_STAGE_W", "HK_SIDE_M", "HK_BOTTOM", "HK_CAP", "HK_PAPER_H_PER_W", "HK_CARD_REF_W", "HK_F_PORTRAIT", "HK_F_LANDSCAPE", "HK_INK_L", "HK_INK_R", "HK_INK_FOOT", "HK_INK_TOP",
     "NAME_CARD_BOARD_W", "NAME_CARD_BOARD_CX", "NAME_CARD_BOARD_TOP", "NAME_PEEK_CONTACT_X", "NAME_PEEK_VISIBLE", "NAME_RIG_RATIO", "NAME_CHOG_BOX_W", "NAME_CHOG_BOX_H_PX", "HOME_CHOG_INK_W", "HOME_CHOG_FOOT_GAP",
@@ -35,7 +36,7 @@ export function sceneOracle(main = readFileSync(MAIN_PATH, "utf8")) {
   vm.runInContext([
     "const HOME_SEAT_W = 150; const HOME_SEAT_H = (HOME_SEAT_W * 551) / 528; const HOME_CENTER = 1041; const HOME_SEAT_L = HOME_CENTER - 0.4991 * HOME_SEAT_W;",
     ...consts, main.match(/const NAME_CHOG_INK = [^;]+;/)[0],
-    main.match(/const hkClamp = [^;]+;/)[0], ...["NAME_TOP_K", "NAME_PEEK_DX_K", "NAME_CHOG_DROP_K", "NAME_CHOG_DX_K", "RET_RCX_SHIFT"].map((k) => main.match(new RegExp(`const ${k} = [^;]+;`))[0]) /* [A-920 RE-PIN] the A-920 keyframe consts nameSceneLayout / returnLayout read; pre-A-920 baseline: none */, fnSrc(main, "hkKey"), fnSrc(main, "homeKeyframeLayout"), fnSrc(main, "nameSceneLayout"), fnSrc(main, "returnLayout"),
+    main.match(/const hkClamp = [^;]+;/)[0], ...["NAME_TOP_K", "NAME_PEEK_DX_K", "NAME_CHOG_DROP_K", "NAME_CHOG_DX_K", "RET_RCX_SHIFT"].map((k) => main.match(new RegExp(`const ${k} = [^;]+;`))[0]) /* [A-920 RE-PIN] the A-920 keyframe consts nameSceneLayout / returnLayout read; pre-A-920 baseline: none */, fnSrc(main, "hkKey"), fnSrc(main, "homeKeyframeLayoutBase"), "let responsiveSolver=null,responsiveSafeTop=null;", fnSrc(main,"getResponsiveSolver"), fnSrc(main, "homeKeyframeLayout"), fnSrc(main, "nameSceneLayout"), fnSrc(main, "returnLayout"),
     "globalThis.__o = { L: homeKeyframeLayout, name: nameSceneLayout, ret: returnLayout };",
   ].join("\n"), ctx);
   return ctx.__o;

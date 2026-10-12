@@ -1,3 +1,4 @@
+import { createResponsiveLayout } from "../../src/responsive-layout.js";
 // [A-831] Home keyframe layout sweep / snapshot helper (A-829 items 1-5). Reuses the A-827 browser scaffold.
 //   CLI (local browser + vite port; run unsandboxed, one at a time):
 //     ARASO_TEST_BROWSER=1 node app/test/helpers/a831-sweep.mjs sweep    <outDir> [wFrom=360] [wTo=1920] [step=1] [heights=800,900,1080]
@@ -26,16 +27,17 @@ function fnSrc(src, name) {
 }
 
 /** The pure keyframe rule from main.js, evaluated in a vm: (vw, vh, safeTop?) -> layout. */
-export function layoutOracle(main = readFileSync(MAIN_PATH, "utf8")) {
-  const ctx = { Math };
+export function layoutOracle(main = readFileSync(MAIN_PATH, "utf8"), raw = false) {
+  const ctx = { Math, createResponsiveLayout, resolveCssLengthVarPx: () => 0 };
   vm.createContext(ctx);
   vm.runInContext([
     "const HOME_SEAT_W = 150; const HOME_SEAT_H = (HOME_SEAT_W * 551) / 528; const HOME_CENTER = 1041; const HOME_SEAT_L = HOME_CENTER - 0.4991 * HOME_SEAT_W;",
     ...["HK_STAGE_W", "HK_SIDE_M", "HK_BOTTOM", "HK_CAP", "HK_PAPER_H_PER_W", "HK_CARD_REF_W", "HK_F_PORTRAIT", "HK_F_LANDSCAPE", "HK_INK_L", "HK_INK_R", "HK_INK_FOOT", "HK_INK_TOP"].map((n) => main.match(new RegExp(`const ${n} = [^;]+;`))[0]),
-    main.match(/const hkClamp = [^;]+;/)[0], fnSrc(main, "hkKey"), fnSrc(main, "homeKeyframeLayout"),
+    main.match(/const hkClamp = [^;]+;/)[0], fnSrc(main, "hkKey"), fnSrc(main, "homeKeyframeLayoutBase"),
+    "let responsiveSolver = null, responsiveSafeTop = null;", fnSrc(main, "getResponsiveSolver"), fnSrc(main, "homeKeyframeLayout"),
     "globalThis.__L = homeKeyframeLayout;",
   ].join("\n"), ctx);
-  return ctx.__L;
+  return raw ? vm.runInContext("homeKeyframeLayoutBase", ctx) : ctx.__L;
 }
 
 /** Measured Home values (CSS px). Character stage width = group scale (Piggy seat box / 150 board units) x 271.37 ink units. */

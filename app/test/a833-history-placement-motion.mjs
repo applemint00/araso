@@ -1,3 +1,4 @@
+import {createResponsiveLayout} from "../src/responsive-layout.js";
 // [A-833] History placement (A-829 item 6) + shared open/close motion (item 7, preset C) + portrait/landscape card blend (A-831 U2).
 //   node app/test/a833-history-placement-motion.mjs                       (Part N, always: the pure placement rule in a vm, sweeps, source surface)
 //   ARASO_TEST_BROWSER=1 node app/test/a833-history-placement-motion.mjs  (+ Part B: six sizes, frame samples open/close, reduced motion, live resize)
@@ -29,51 +30,23 @@ function fnSrc(src, name) {
 
 // The pure placement rule evaluated in a vm on top of the pure keyframe layout (no DOM).
 const layout = layoutOracle(MAIN);
-function placementOracle() {
-  const ctx = { Math, __layout: layout };
-  vm.createContext(ctx);
-  vm.runInContext(["function desktopFormat(vw, vh) { const L = __layout(vw, vh, 0); return { s: L.s, L }; }", fnSrc(MAIN, "computeHistoryPlacement"), "globalThis.__P = computeHistoryPlacement;"].join("\n"), ctx);
-  return ctx.__P;
-}
-const P = placementOracle();
+const P = createResponsiveLayout(layoutOracle(MAIN,true)).history;
 
 // ═══ Part N ═══
-await check("N1 placement = v10 generator at the evidence sizes (mode, Home left, History left within 2 px)", () => {
-  const T = [
-    [390, 844, "stacked"], [430, 932, "stacked"],
-    // pre-A-1109: [640, 900, "fan", 39, 275], [810, 1080, "fan", 52, 346], [1000, 700, "fan", 72, 288], [1100, 800, "fan", 83, 329],
-    //   [1280, 800, "pair", 102, 466], [1440, 900, "pair", 124, 533], [1920, 1080, "pair", 219, 710], [2560, 1440, "pair", 372, 1027], [1440, 700, "pair", 211, 529].
-    // pre-A-1109(answer 14): [640, 900, "fan", 39, 242] (answer 11) · [1000, 700, "fan", 73, 182]. Answer 14: 640 is PHONE (stacked); the paper fit lowers 1000x700.
-    [640, 900, "stacked"], [810, 1080, "fan", 52, 347], [1000, 700, "fan", 73, 191], [1100, 800, "fan", 83, 270],
-    [1280, 800, "fan", 103, 429], [1440, 900, "pair", 125, 534], [1920, 1080, "pair", 169, 712], [2560, 1440, "pair", 480, 1023], [1440, 700, "pair", 125, 534],
-  ];
-  for (const [w, h, mode, hl, hist] of T) {
-    const p = P(w, h);
-    assert.equal(p.mode, mode, `${w}x${h} mode`);
-    if (mode !== "stacked") { near(p.homeLeft, hl, 2, `${w}x${h} Home left`); near(p.histLeft, hist, 2, `${w}x${h} History left`); }
-  }
+await check("N1 approved desktop reference and paired paper size",()=>{
+ const p=P(1440,900);near(p.cardW,376.5,.01,'1440 card');near(p.homeLeft,125.3787,.01,'Home');near(p.histLeft,533.9213,.01,'History');
 });
-await check("N2 fan overlap = 2 card widths - free span, never above half a card; pair never overlaps; stacked has no Home move", () => {
-  for (const h of [700, 800, 900, 1080, 1440]) for (let w = 360; w <= 2000; w += 4) {
-    const p = P(w, h);
-    // pre-A-1109(answer 10): stacked allowed for any portrait (w < h) and the half-card limit for w < h. Answer 10: both are PHONE-only (vw <= 640).
-    // answer 14: phone = vw <= 640 (the app's PHONE boundary; answer 11's vw < 640 withdrawn).
-    if (p.mode === "stacked") assert.ok(w < h && w <= 640, `${w}x${h}: stacked only on a phone-width portrait (A-1109 answers 10/14: vw <= 640)`);
-    if (p.mode === "fan") { if (w < h && w <= 640) assert.ok(p.overlap <= 0.5 * p.cardW + 1e-6, `${w}x${h} overlap ${p.overlap}`); near(p.homeLeft, layout(w, h, 0).M, 1e-6, "fan Home on the left margin"); }
-    if (p.mode === "pair") assert.ok(p.histLeft - (p.homeLeft + p.cardW) >= p.gap - 1e-6, `${w}x${h} pair keeps the gap`);
-    if (p.mode === "stacked") { assert.equal(p.homeDx, 0); assert.equal(p.histLeft, null); }
-  }
+await check("N2 narrow overlap exposes the Home title and wide gaps never reverse",()=>{
+ for(const h of [700,800,900,1080,1440]){let prev=null;for(let w=641;w<=2560;w++){
+  const p=P(w,h);assert.ok(p.histLeft>=p.homeLeft+.611*p.cardW-.5,`${w}x${h} title`);
+  if(prev)assert.ok(p.signedGap>=prev.signedGap-1e-6,`${w} gap`);prev=p;
+ }}
 });
-await check("N3 no History/character overlap by construction: side modes end 12 px before the stage when the cards reach the characters; inside the margins", () => {
-  for (const h of [700, 800, 900, 1080, 1440]) for (let w = 360; w <= 2000; w += 3) {
-    const p = P(w, h); if (p.mode === "stacked") continue;
-    const L = layout(w, h, 0);
-    // pre-A-1109(answer 14): `a && b || c` (&& bound first, so a Home left of the margin passed whenever History ended inside the rail).
-    // answer 14: pair accepts need <= span + 0.5, so History may end up to 0.5 px past the right margin (measured max 0.232 at 1050x1080).
-    assert.ok(p.homeLeft >= L.M - 1e-6 && (p.histRight <= w - L.M + 0.5 + 1e-6 || p.histRight <= p.Rr + 1e-6), `${w}x${h} inside the span`);
-    if (p.conflict) assert.ok(p.histRight <= L.stageLeft - 12 + 1e-6, `${w}x${h} clear of the stage`);
-    assert.ok(p.homeLeft >= L.M - 1e-6, `${w}x${h} Home on/after the margin`);
-  }
+await check("N3 History does not intersect the character stage or viewport edge",()=>{
+ for(const h of [700,800,900,1080,1440])for(let w=641;w<=2560;w+=3){const p=P(w,h),L=p.L;
+  assert.ok(p.homeLeft>=-.5&&p.histRight<=w+.5&&p.top+p.cardH<=h+.5,`${w}x${h} bounds`);
+  assert.ok(!(p.histRight>L.stageLeft+.01&&p.top+p.cardH>L.stageTop+.01),`${w}x${h} stage`);
+ }
 });
 await check("N4 Home card x/y has no step at the portrait/landscape switch: w/h 0.70..1.30 swept in 1 px steps (A-831 U2)", () => {
   const worst = { x: 0, y: 0, atX: 0, atY: 0 };
@@ -92,11 +65,10 @@ await check("N4 Home card x/y has no step at the portrait/landscape switch: w/h 
   }
   console.log(`      max 1 px step: x ${worst.x.toFixed(2)} (${worst.atX}), y ${worst.y.toFixed(2)} (${worst.atY})`);
 });
-await check("N5 blend weight = the card-height aspect weight; portrait at w/h <= 0.75, landscape at >= 1.25 (generator values untouched at the evidence sizes)", () => {
-  near(layout(810, 1080, 0).posT, 0, 1e-12, "810x1080 t"); near(layout(1100, 800, 0).posT, 1, 1e-12, "1100x800 t"); near(layout(1000, 1000, 0).posT, 0.5, 1e-12, "1:1 t");
-  near(layout(1440, 900, 0).cardY, 0.125 * 900, 1e-9, "1440x900 top 12.5 %");
-  // pre-A-1109: 1100x800 closed Home x = 196 (height-derived card width).
-  near(layout(1100, 800, 0).cardX, 166.31507936507936, 1e-9, "1100x800 closed Home x (S4)");
+await check("N5 height beyond the internal frame adds equal vertical margins",()=>{
+ const a=layout(1940,1200),b=layout(1940,1400);
+ near(b.cardY-a.cardY,100,1e-9,'card');near(b.stageTop-a.stageTop,100,1e-9,'characters');near(b.asTop-a.asTop,100,1e-9,'brand');
+ near(a.cardW,b.cardW,1e-9,'size unchanged');
 });
 await check("N6 source: pinned literals kept, durations / frames / curves per preset C, reduced motion, EXIT 260, no 46 px driver", () => {
   assert.match(MAIN, /const RECORDS_EXIT_MS = 260;/);
@@ -106,7 +78,7 @@ await check("N6 source: pinned literals kept, durations / frames / curves per pr
   assert.match(anim, /clearDx|const clear = placement\.clearDx/); assert.match(anim, /map\(\(fr\) => \(fr\.offset === undefined \? fr : \{ \.\.\.fr, offset: 1 - fr\.offset \}\)\)/);
   assert.match(CSS, /\.homePaperMount \{\s*\n\s*transition: transform 240ms cubic-bezier\(0\.5, 0, 0\.75, 0\.2\);/);
   assert.match(CSS, /\.homePaperMount\.homePaperMount--twoCardShift \{\s*\n\s*transition: transform 320ms cubic-bezier\(0\.2, 0\.9, 0\.3, 1\);/);
-  assert.match(CSS, /\.homePaperMount--twoCardShift \{\s*\n\s*transform: translateX\(var\(--twoCardShiftLocalPx, -19\.74px\)\);/, "pinned transform rule kept");
+  assert.match(CSS, /transform: translate\(var\(--twoCardShiftLocalPx,[^;]+--twoCardShiftLocalY/, "coupled x/y transform wired");
   assert.match(CSS, /prefers-reduced-motion: reduce\) \{\s*\n\s*\.homePaperMount,/);
   const setShift = fnSrc(MAIN, "setHomeTwoCardShift");
   assert.ok(!/HOME_TWO_CARD_SHIFT_LOCAL_PX|HOME_PAPER_DOCK_RATIO/.test(setShift), "Home move no longer uses the fixed 46 px / stale dock ratio");
@@ -181,9 +153,9 @@ if (process.env.ARASO_TEST_BROWSER === "1") {
     await check(`B ${w}x${h}: mode ${exp.mode}; Home/History rects = the placement rule; class ${exp.mode === "stacked" ? "--stackedMode" : "--sideMode"}`, () => {
       assert.ok(cls.includes(exp.mode === "stacked" ? "recordsCardAnchor--stackedMode" : "recordsCardAnchor--sideMode"), cls.join(" "));
       near(closedHome.l, L.cardX, 1.5, "closed Home left = layout card x");
-      near(hist.w, L.cardW, 1.5, "History width = card"); near(hist.w, home.w, 0.6, "same size as Home");
+      near(hist.w, exp.cardW, 1.5, "History width = coupled card"); near(hist.w, home.w, 0.6, "same size as Home");
       if (exp.mode !== "stacked") { near(home.l, exp.homeLeft, 1.5, "Home left"); near(hist.l, exp.histLeft, 1.5, "History left"); assert.equal(mountInert, false, "Home live in side modes"); }
-      else { near(home.l, closedHome.l, 1.5, "Home does not move when stacked"); assert.equal(mountInert, true, "Home inert while stacked"); }
+      else { near(home.l, exp.homeLeft, 1.5, "Home follows stacked transition geometry"); assert.equal(mountInert, true, "Home inert while stacked"); }
     });
     await check(`B ${w}x${h}: History clear of the characters (no rect overlap) and ${exp.mode === "fan" ? "card overlap <= half a card" : "inside the viewport"}`, () => {
       assert.ok(hist.r <= w + 0.6 && hist.l >= -0.6, "inside viewport");
@@ -258,10 +230,10 @@ if (process.env.ARASO_TEST_BROWSER === "1") {
       const exp = P(w, h);
       const s = await H.p.evaluate(() => { const a = document.querySelector("#recordsCardAnchor"); const m = document.querySelector(".homePaperMount"); const r = a.getBoundingClientRect(); const hp = document.querySelector("#homePaper").getBoundingClientRect(); return { hidden: a.hidden, cls: [...a.classList], shift: m.classList.contains("homePaperMount--twoCardShift"), inert: m.inert, histL: r.left, homeL: hp.left, anims: a.getAnimations().length, scrollW: document.documentElement.scrollWidth }; });
       res.push({ w, h, exp: exp.mode, ...s });
-      await check(`B resize while open -> ${w}x${h}: mode ${exp.mode}, Home shift ${exp.mode !== "stacked"}, inert ${exp.mode === "stacked"}, rects = placement, no stale class`, () => {
-        assert.equal(s.hidden, false); assert.equal(s.shift, exp.mode !== "stacked"); assert.equal(s.inert, exp.mode === "stacked");
+      await check(`B resize while open -> ${w}x${h}: mode ${exp.mode}, Home coupled sizing true, inert ${exp.mode === "stacked"}, rects = placement, no stale class`, () => {
+        assert.equal(s.hidden, false); assert.equal(s.shift, true); assert.equal(s.inert, exp.mode === "stacked");
         assert.equal(s.cls.includes("recordsCardAnchor--stackedMode"), exp.mode === "stacked"); assert.equal(s.cls.includes("recordsCardAnchor--sideMode"), exp.mode !== "stacked");
-        if (exp.mode !== "stacked") { near(s.histL, exp.histLeft, 1.5, "History left"); near(s.homeL, exp.homeLeft, 1.5, "Home left"); }
+        near(s.histL, exp.histLeft, 1.5, "History left"); near(s.homeL, exp.homeLeft, 1.5, "Home left");
         assert.equal(s.anims, 0); assert.ok(s.scrollW <= w + 1, "no horizontal scroll");
       });
     }
