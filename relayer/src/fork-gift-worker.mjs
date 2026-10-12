@@ -2,7 +2,7 @@
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createPublicClient, createTransport, HttpRequestError, http as transport } from "viem";
+import { createPublicClient, createTransport, HttpRequestError, http as transport, isAddress, getAddress } from "viem";
 import { readGiftSponsorForkEnv, buildGiftSponsorForkRuntime, giftSponsorForkChainDef } from "../../api/_lib/gift-sponsor-runtime.js";
 import { createGiftSponsorRoute } from "./gift-sponsor-service.mjs";
 import { openForkGiftJournal, readForkCheckpoint } from "./fork-gift-state.mjs";
@@ -12,6 +12,11 @@ export const FORK_GIFT_PATH = "/gift-sponsor";
 const FORK_ID = 31337143;
 const unavailable = () => ({ status: 503, body: { ok: false, error: "unavailable_not_sent" } });
 const bad = () => ({ status: 400, body: { ok: false, error: "bad_request" } });
+
+export function forkGiftReadyMessage(sponsor) {
+  if (typeof sponsor !== "string" || !isAddress(sponsor)) throw new Error("FORK_SPONSOR_ADDRESS_INVALID");
+  return { type: "fork-gift-ready", sponsor: getAddress(sponsor) };
+}
 
 // One queue for ALL worker RPC: startup audit, runtime sends and reconciliation.
 // 110ms leaves headroom below Guard's 20/s and 600/min loopback quotas.
@@ -184,6 +189,7 @@ export async function startForkGiftWorker(env = process.env) {
   const store = await openForkGiftJournal({ dir: cfg.ledgerDir, checkpoint, inspect: forkJournalInspector(client, cfg.escrow) });
   try {
     const runtime = buildGiftSponsorForkRuntime(cfg, { publicClient: client, store, readChainId: async () => await identityCheck() ? FORK_ID : 0 });
+    const readyMessage = forkGiftReadyMessage(runtime.sponsor.address);
     const controller = createForkGiftController({ runtime, instanceId, identityCheck, intervalMs: Number(env.GIFT_SPONSOR_FORK_RECONCILE_MS) });
     const server = http.createServer(createForkGiftHttpHandler(controller, { perMinute: Number(env.GIFT_SPONSOR_FORK_REQUESTS_PER_MINUTE) }));
     server.headersTimeout = 15000; server.requestTimeout = 15000;
@@ -202,7 +208,7 @@ export async function startForkGiftWorker(env = process.env) {
     process.on("message", (m) => { if (m?.type === "drain") void stop(); });
     process.on("SIGTERM", () => { void stop(); });
     process.on("SIGINT", () => { void stop(); });
-    process.send?.({ type: "fork-gift-ready" });
+    process.send?.(readyMessage);
     return { server, controller };
   } catch (e) { store.close(); throw e; }
 }
