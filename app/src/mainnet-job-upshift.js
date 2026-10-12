@@ -40,6 +40,7 @@ import { EVIDENCE_LABEL } from "./second-job-readiness.js";
 import { NATIVE_ASSET_NOT_ERC20, bindRecordToProfile, chainMatchesExecutor, erc20TokenOfBinding, isProfileActive } from "./chain-profile.js";
 import { permissionNonce } from "./permission-envelope.js";
 import { ADDR, executorRefusal, formatUnits, isDigits, lower } from "./mainnet-job-common.js";
+import { FORK_SHARE_TOLERANCE_BPS } from "./mainnet-job-euler.js";
 
 export const UPSHIFT_JOB_ID = "upshift-earnausd";
 export const UPSHIFT_ACTION = "earn_vault_ausd_roundtrip";
@@ -185,7 +186,8 @@ function exactWithin(v, limit, notExact, above) {
   return { amount: BigInt(v), error: null };
 }
 const exactAmount = (v) => exactWithin(v, UPSHIFT_FORK_SIZE_RAW, "amount_not_exact", "amount_above_fork_proven_size");
-const exactShares = (v) => exactWithin(v, UPSHIFT_FORK_POSITION_RAW, "shares_not_measured", "shares_above_fork_proven_position");
+const shareToleranceLimit = (v) => (BigInt(v) * (10000n + BigInt(FORK_SHARE_TOLERANCE_BPS))) / 10000n;
+const exactShares = (v) => exactWithin(v, shareToleranceLimit(UPSHIFT_FORK_POSITION_RAW), "shares_not_measured", "shares_above_fork_proven_position");
 
 // A caller may name the token / spender / vault it expects; any name other than the fork-proven address for THIS step is refused
 // (never re-aimed). The token of approveShares is the share token; of approve it is AUSD.

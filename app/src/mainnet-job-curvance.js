@@ -30,6 +30,7 @@ import { EVIDENCE_LABEL } from "./second-job-readiness.js";
 import { bindRecordToProfile, chainMatchesExecutor, isProfileActive } from "./chain-profile.js";
 import { permissionNonce } from "./permission-envelope.js";
 import { ADDR, executorRefusal, formatUnits, isDigits, lower } from "./mainnet-job-common.js";
+import { FORK_SHARE_TOLERANCE_BPS } from "./mainnet-job-euler.js";
 
 export const CURVANCE_JOB_ID = "curvance-usdc";
 export const CURVANCE_ACTION = "curvance_deposit_redeem";
@@ -201,7 +202,8 @@ function exactWithin(v, limit, notExact, above) {
   return { amount: BigInt(v), error: null };
 }
 const exactAmount = (v) => exactWithin(v, CURVANCE_FORK_SIZE_RAW, "amount_not_exact", "amount_above_fork_proven_size");
-const exactShares = (v) => exactWithin(v, CURVANCE_FORK_SHARES_RAW, "shares_not_exact", "shares_above_fork_proven_position");
+const shareToleranceLimit = (v) => (BigInt(v) * (10000n + BigInt(FORK_SHARE_TOLERANCE_BPS))) / 10000n;
+const exactShares = (v) => exactWithin(v, shareToleranceLimit(CURVANCE_FORK_SHARES_RAW), "shares_not_exact", "shares_above_fork_proven_position");
 
 /**
  * Preview minus realized, in raw units, from two MEASURED readings. Signed; zero only if they were equal. It

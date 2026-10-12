@@ -76,6 +76,9 @@ export const EULER_FORK_EVIDENCE = Object.freeze({
 // The size run end to end, and the share position the exit was run from.
 export const EULER_FORK_SIZE_RAW = EULER_FORK_EVIDENCE.sentRaw;
 export const EULER_FORK_POSITION_RAW = EULER_FORK_EVIDENCE.measured.realizedSharesRaw;
+// The fork position is historical evidence, not an exact future share quote. Reuse the live
+// slippage precedent as a bounded upper tolerance; amount caps remain exact and unchanged.
+export const FORK_SHARE_TOLERANCE_BPS = 100;
 
 export const EULER_FIELDS = Object.freeze({
   vault: Object.freeze({ proof: EULER_PROOF.PROVEN_FORK, value: EULER_FORK_EVIDENCE.vault }),
@@ -159,7 +162,8 @@ function exactWithin(v, limit, notExact, above) {
   return { amount: BigInt(v), error: null };
 }
 const exactAmount = (v) => exactWithin(v, EULER_FORK_SIZE_RAW, "amount_not_exact", "amount_above_fork_proven_size");
-const exactShares = (v) => exactWithin(v, EULER_FORK_POSITION_RAW, "shares_not_measured", "shares_above_fork_proven_position");
+const shareToleranceLimit = (v) => (BigInt(v) * (10000n + BigInt(FORK_SHARE_TOLERANCE_BPS))) / 10000n;
+const exactShares = (v) => exactWithin(v, shareToleranceLimit(EULER_FORK_POSITION_RAW), "shares_not_measured", "shares_above_fork_proven_position");
 
 // A caller may name the token / spender / vault it expects; any name other than the fork-proven address is refused (never re-aimed).
 function pinnedTargetProblem(a) {

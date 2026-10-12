@@ -22,6 +22,7 @@ const H_ERC20 = parseAbi(["function approve(address,uint256) returns (bool)"]);
 const H_EV = parseAbi(["function deposit(uint256,address) returns (uint256)", "function redeem(uint256,address,address) returns (uint256)"]);
 const EV_VAULT = "0x2C803c8C3C57b9D4A9abA011615561315c2b6aC1", WETH = "0xEE8c0E9f1BFFb4Eb878d8f15f368A02a35481242"; // harness ADDR (:18)
 const W1 = 10n ** 18n, SH = 991583922407801588n;
+const SHARE_CAP = SH * 10100n / 10000n;
 const call = (step, args) => { const r = EU.encodeEulerStep(step, { piggyAddress: ACTOR, ...args }); assert.equal(r.error, null, r.error); return r.call; };
 
 // (a) calldata == harness
@@ -38,7 +39,7 @@ const refuse = [
   ["approve", { amountRaw: "1.5" }, "amount_not_exact"],
   ["deposit", { amountRaw: 1000 }, "amount_not_exact"],
   ["redeem", {}, "shares_not_measured"],
-  ["redeem", { heldSharesRaw: (SH + 1n).toString() }, "shares_above_fork_proven_position"],
+  ["redeem", { heldSharesRaw: (SHARE_CAP + 1n).toString() }, "shares_above_fork_proven_position"],
   ["approve", { amountRaw: "1", token: "0x754704Bc059F8C67012fEd69BC8A327a5aafb603" }, "token_not_fork_proven"],
   ["approve", { amountRaw: "1", spender: "0x502e4a0B61dEBA3015Eb9E51116B832003B22c2C" }, "spender_not_fork_proven"],
   ["deposit", { amountRaw: "1", vault: "0x36eDbF0C834591BFdfCaC0Ef9605528c75c406aA" }, "vault_not_fork_proven"],

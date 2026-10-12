@@ -302,7 +302,8 @@ await check("U5 encoder: exact amounts within the fork-proven size; no unlimited
     assert.equal(encodeCurvanceStep("approve", { ...ok, amountRaw }).error, "amount_above_fork_proven_size");
     assert.equal(encodeCurvanceStep("deposit", { ...ok, amountRaw }).error, "amount_above_fork_proven_size");
   }
-  for (const heldSharesRaw of ["4829899", "5000000", maxUint256.toString()]) assert.equal(encodeCurvanceStep("redeem", { ...ok, heldSharesRaw }).error, "shares_above_fork_proven_position");
+  const shareCap = 4829898n * 10100n / 10000n;
+  for (const heldSharesRaw of [(shareCap + 1n).toString(), "5000000", maxUint256.toString()]) assert.equal(encodeCurvanceStep("redeem", { ...ok, heldSharesRaw }).error, "shares_above_fork_proven_position");
   // a partial redeem (shares != the whole measured position) is unproven
   for (const sharesRaw of ["1", "4829897", "4829899", maxUint256.toString(), "max", 0, ""]) assert.equal(encodeCurvanceStep("redeem", { ...ok, heldSharesRaw: "4829898", sharesRaw }).error, "unproven_step:redeemPartial", String(sharesRaw));
   assert.equal(encodeCurvanceStep("redeem", { ...ok, heldSharesRaw: "100", sharesRaw: "100" }).call.sharesRaw, "100");

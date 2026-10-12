@@ -22,6 +22,7 @@ const H_ERC20 = parseAbi(["function approve(address,uint256) returns (bool)"]);
 const H_UP = parseAbi(["function deposit(address,uint256,address) returns (uint256)", "function instantRedeem(uint256,address) returns (uint256,uint256)", "function requestRedeem(uint256,address) returns (uint256,uint256)"]);
 const AUSD = "0x00000000eFE302BEAA2b3e6e1b18d08D69a9012a", UP_VAULT = "0x36eDbF0C834591BFdfCaC0Ef9605528c75c406aA", UP_LP = "0x103222f020e98Bba0AD9809A011FDF8e6F067496"; // harness ADDR (:16-17)
 const AMT = 100_000_000n, SH = 95643316n;
+const SHARE_CAP = SH * 10100n / 10000n;
 const call = (step, args) => { const r = UP.encodeUpshiftStep(step, { piggyAddress: ACTOR, ...args }); assert.equal(r.error, null, r.error); return r.call; };
 
 // (a) calldata == harness
@@ -39,9 +40,9 @@ const refuse = [
   ["deposit", { amountRaw: "0" }, "amount_not_exact"],
   ["approve", { amountRaw: "-1" }, "amount_not_exact"],
   ["instantRedeem", {}, "shares_not_measured"],
-  ["instantRedeem", { heldSharesRaw: (SH + 1n).toString() }, "shares_above_fork_proven_position"],
-  ["approveShares", { heldSharesRaw: (SH + 1n).toString() }, "shares_above_fork_proven_position"],
-  ["requestRedeem", { heldSharesRaw: (SH + 1n).toString() }, "shares_above_fork_proven_position"],
+  ["instantRedeem", { heldSharesRaw: (SHARE_CAP + 1n).toString() }, "shares_above_fork_proven_position"],
+  ["approveShares", { heldSharesRaw: (SHARE_CAP + 1n).toString() }, "shares_above_fork_proven_position"],
+  ["requestRedeem", { heldSharesRaw: (SHARE_CAP + 1n).toString() }, "shares_above_fork_proven_position"],
   ["approve", { amountRaw: "1", token: UP_LP }, "token_not_fork_proven"],
   ["approveShares", { heldSharesRaw: "1", token: AUSD }, "token_not_fork_proven"],
   ["approve", { amountRaw: "1", spender: "0xE0b7DEab801D864650DEc58CbD1b3c441D058C79" }, "spender_not_fork_proven"],
@@ -95,7 +96,7 @@ check("header keeps the 10 fork review conditions OPEN", () => { assert.equal((S
 check("module imports no executor / signer / network; no card id or private path in shipped strings", () => {
   const code = SRC.replace(/^\/\/.*$/gm, "");
   assert.ok(!/money-executor|executeMoneyStep|issuePermission|fetch\(|createWalletClient|sendTransaction/.test(code));
-  assert.deepEqual([...SRC.matchAll(/from "([^"]+)"/g)].map((m) => m[1]).sort(), ["./chain-profile.js", "./mainnet-job-common.js", "./permission-envelope.js", "./second-job-readiness.js", "viem"]);
+  assert.deepEqual([...SRC.matchAll(/from "([^"]+)"/g)].map((m) => m[1]).sort(), ["./chain-profile.js", "./mainnet-job-common.js", "./mainnet-job-euler.js", "./permission-envelope.js", "./second-job-readiness.js", "viem"]);
   assert.equal(PRIVATE_RE.test(SRC), false); assert.equal(/\bA-\d{3}\b/.test(SRC), false);
 });
 
