@@ -1,4 +1,4 @@
-// [A-960] Tester invites on Upstash Redis (REST) — 보충 7: one link `/?i=<display>#invite=<secret>`, the secret is a 256-bit server-made
+// [A-960] Tester invites on Upstash Redis (REST) — 보충 7: one link `/?i=<display>#invite=<secret>`, the secret is a 128-bit server-made
 // random token. Only its SHA-256 digest is stored (key name); the raw token is returned ONCE by issue() to the operator and never stored
 // or logged. testerId = a server-made random id (not derived from the token). Opening a link uses nothing: the invite is bound only when
 // the Piggy proves control (EIP-191 challenge, fork-auth.js purpose "invite-bind") — once, atomically, to the first Piggy.
@@ -61,7 +61,7 @@ export function createUpstashInviteStore({ cmd, prefix = ARASO_REDIS_PREFIX, max
     /** Operator only. -> { ok:true, token, testerId, expiresAt } (token shown once) | { ok:false, reason:"max_reached" } */
     async issue() {
       for (let i = 0; i < 4; i += 1) {
-        const token = randomBytes(32).toString("base64url"); // 256 bit
+        const token = randomBytes(16).toString("base64url"); // [A-1115] 128 bit, 22 chars (pre-A-1115: randomBytes(32) = 256 bit, 43 chars)
         const testerId = `tester-${randomBytes(8).toString("hex")}`;
         const t = now(); const expiresAt = t + ttlMs;
         const r = Number(await cmd("EVAL", INVITE_ISSUE_LUA, 2, tokKey(prefix, inviteTokenDigest(token)), issuedKey(prefix), testerId, expiresAt, t, maxInvites, ttlMs));

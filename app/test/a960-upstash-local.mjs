@@ -296,13 +296,14 @@ await check("A-956 challenge reuse: purposes cannot cross (fork-entry record ≠
 });
 
 // ==== 2) invite store ====================================================================================================
-await check("2 invites: 256-bit token shown once · only its SHA-256 digest is a key · testerId = server random (not from the token) · 20 max · 7 days", async () => {
+// pre-A-1115: label "256-bit token" and token /^[A-Za-z0-9_-]{43}$/ decoding to 32 bytes. A-1115 (Owner "1번"): 128-bit, 22 chars, 16 bytes.
+await check("2 invites: 128-bit token shown once · only its SHA-256 digest is a key · testerId = server random (not from the token) · 20 max · 7 days", async () => {
   const kv = fakeUpstash(); const p = parts(kv);
   const all = [];
   for (let i = 0; i < 20; i += 1) { const r = await issue(p); assert.equal(r.ok, true); all.push(r); }
   assert.deepEqual(await p.invites.issue(), { ok: false, reason: "max_reached" });
   for (const r of all) {
-    assert.match(r.token, /^[A-Za-z0-9_-]{43}$/); assert.equal(Buffer.from(r.token, "base64url").length, 32);
+    assert.match(r.token, /^[A-Za-z0-9_-]{22}$/); assert.equal(Buffer.from(r.token, "base64url").length, 16);
     assert.match(r.testerId, /^tester-[0-9a-f]{16}$/);
     assert.equal(await p.invites.testerFor(r.token), r.testerId);
     assert.equal(kv.ttlOf(`araso:v1:invite:tok:${I.inviteTokenDigest(r.token)}`), I.INVITE_DEFAULTS.ttlMs);
