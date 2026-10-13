@@ -1349,7 +1349,7 @@ function commitIdentity({ credential, address, prfSaltHex = null, received = fal
   }
   state.credential = credential;
   state.address = address;
-  // [A-695 SEQ-5=A] `received: true` 는 openPiggy 생성 경로만 넘긴다(checkPiggy/recoverPiggy 는 false) → 생성 직후 표식 후보를 메모리에만 둔다.
+  // [A-695 SEQ-5=A] `received: true` 는 생성 경로만 넘긴다(추가 탭의 pendingBirth 포함; 기존 Piggy 복구는 false) → 생성 직후 표식 후보를 메모리에만 둔다.
   if (received) bornPiggyPending = String(address).toLowerCase();
 }
 
@@ -1465,6 +1465,7 @@ async function recoverPiggy(options = {}) {
       },
       address,
       ...(options.pin?.prfSalt ? { prfSaltHex: toHex(options.pin.prfSalt) } : {}),
+      ...(options.pin?.pendingBirth ? { received: true } : {}),
     });
     // 저장 salt 로 열었으면 그 salt, 아니면 Mera 기본 salt(= locator 에 salt 필드 없음).
     indexControlledPiggy({
@@ -1507,8 +1508,37 @@ function a1212CreateEnableOnly() {
   } catch { return false; }
 }
 
+// A1214: tab-scoped proof of an unfinished creation. Metadata only; never PRF output/Gift token.
+function a1214RememberBirth(pin) {
+  try {
+    sessionStorage.setItem("araso.pendingBirth.v1", JSON.stringify({
+      credentialId: pin.credentialId, transports: pin.transports,
+      prfSaltHex: toHex(pin.prfSalt), chainId: secondJourneyScope().chainId,
+    }));
+  } catch { /* reload without evidence remains recovery */ }
+}
+
+function a1214ReadPendingBirth() {
+  try {
+    // Any existing identity/birth/index evidence, or an unreadable index, is recovery.
+    if (state.credential || state.address || hasReceivedPiggy() || readPiggyName() || hasPlayedBirth()) return null;
+    const loaded = loadMyPiggiesIndex(safeLocalStorage(), secondJourneyScope().chainId);
+    if ((loaded.error && loaded.error !== "absent") || loaded.tainted || loaded.index.piggies.length) return null;
+    const record = JSON.parse(sessionStorage.getItem("araso.pendingBirth.v1") || "null");
+    if (!record || record.chainId !== secondJourneyScope().chainId || typeof record.credentialId !== "string" || !/^[A-Za-z0-9_-]+$/.test(record.credentialId)) return null;
+    const prfSalt = prfSaltFromHex(record.prfSaltHex);
+    if (!prfSalt) return null;
+    return { credentialId: record.credentialId, prfSalt, pendingBirth: true,
+      ...(Array.isArray(record.transports) ? { transports: record.transports } : {}) };
+  } catch { return null; }
+}
+
+function a1214ClearPendingBirth() {
+  try { sessionStorage.removeItem("araso.pendingBirth.v1"); } catch { /* stored identity/born evidence prevents replay */ }
+}
+
 // A1202/A1212: observe creation independently; never let Mera start an automatic
-// fallback assertion. Credential metadata/salt stay in memory until a fresh tap.
+// fallback assertion. Pending metadata also survives reload in this tab (A1214).
 function a1202CreatePasskey(options, stage, enableOnly = false) {
   const browserCreate = async request => {
     const credential = await globalThis.navigator?.credentials?.create({ publicKey: {
@@ -1539,6 +1569,7 @@ function a1202CreatePasskey(options, stage, enableOnly = false) {
           prfSalt: new Uint8Array(request.prfSalt), pendingBirth: true,
           prfUnavailable: created.prfEnabled !== true,
         };
+        if (typeof a1214RememberBirth === "function") a1214RememberBirth(stage.pin);
         const error = new Error(created.prfEnabled === true ? "prf_requires_tap" : "prf_unavailable");
         error.code = created.prfEnabled === true ? "PRF_REQUIRES_TAP" : "PRF_UNAVAILABLE";
         throw error; // before Mera can invoke its fallback get
@@ -2030,7 +2061,11 @@ async function checkPiggy() {
   }
   const attempt = beginAuthAttempt("check");
   // 시간초과 뒤 늦게 만들어진 패스키가 있고 이 기기에 저장된 credential 이 없으면, find-first 는 그 패스키 하나로만 묻는다.
-  const pin = !state.credential && lateCreatedCredential ? lateCreatedCredential : null;
+  const pin = !state.credential && lateCreatedCredential ? lateCreatedCredential
+    : (typeof a1214ReadPendingBirth === "function" ? a1214ReadPendingBirth() : null);
+  const giftIntent = pin?.pendingBirth ? takePendingGiftClaim() : null;
+  const giftPreExisting = giftIntent ? knownPiggyAddresses() : null;
+  let giftAttempted = false;
   let recovered = false;
   let released = false;
   // 생성 폴백 없음 — 이 버튼은 절대 새 패스키를 만들지 않는다.
@@ -2043,13 +2078,28 @@ async function checkPiggy() {
     await boundAuthAttempt(attempt, trackPlatformAuth(recoverPiggy({ isCurrent: () => attempt.live, pin })));
     recovered = true;
     clearTimeout(attempt.timer);
+    if (pin?.pendingBirth) {
+      if (typeof a1214ClearPendingBirth === "function") a1214ClearPendingBirth();
+      // Only this newly created, pinned Piggy may consume the captured Gift intent.
+      if (giftIntent) {
+        const bound = bindGiftToNewPiggy({ intent: giftIntent, piggy: { address: state.address }, preExistingAddresses: giftPreExisting, signerAddress: state.activeSignerAddress, requireSequence: false });
+        if (bound.ok) {
+          giftAttempted = true;
+          try { lastGiftClaimSettlement = await settleBoundGiftClaim(bound.binding, giftIntent); }
+          catch { lastGiftClaimSettlement = { status: "claim_settle_failed" }; }
+        } else {
+          lastGiftClaimSettlement = { status: GIFT_ENTRY_STATUS.REFUSED, reason: bound.reason };
+          restorePendingGiftClaim(giftIntent);
+        }
+      }
+    }
     // [A-579 Lane G] 되찾은 Piggy 는 **이미 있던** Piggy 다 — Gift 는 새 Gift Piggy 에만 묶인다(A-567 canon).
-    // 그래서 여기서는 claim 을 시도하지 않고 pendingGiftClaim 을 건드리지도 않는다(메모리에 그대로 남는다).
+    // pendingBirth 이 아닌 기존 Piggy 복구는 claim 0, pendingGiftClaim 도 그대로 남긴다.
     // [A-554] R1(위 recoverPiggy) 이 이미 성공했다 — 그 위에서만, adapter 가 실제로 설정된
     // 경우에만 추가 Piggy 순번 목록 복원을 시도한다. adapter 가 없으면(제품 기본값) 이 블록은
     // 통째로 건너뛴다 — 오늘까지의 정확한 동작, 추가 requestPrf 0. 실패해도 위의 root 복구
     // 성공을 무효로 만들지 않는다(best-effort, 조용히 삼킨다 — 사용자 화면·씬은 그대로).
-    if (INDEX_BACKUP_ADAPTER) {
+    if (!pin?.pendingBirth && INDEX_BACKUP_ADAPTER) {
       try {
         await recoverProductList({
           adapter: INDEX_BACKUP_ADAPTER,
@@ -2082,8 +2132,9 @@ async function checkPiggy() {
     released = true;
     if (pin && lateCreatedCredential === pin) lateCreatedCredential = null;
     state.authPhase = "idle";
-    if (pin?.pendingBirth && !hasPlayedBirth()) {
-      setScene("hatch");
+    if (pin?.pendingBirth) {
+      if (hasPlayedBirth()) setScene(readPiggyName() ? "sendstay" : "name", "Piggy is home.", "");
+      else setScene("hatch");
       return { ok: true };
     }
     // 복구는 신규 탄생이 아니다 — 해치·hello·Name it 을 다시 재생하지 않는다.
@@ -2092,6 +2143,7 @@ async function checkPiggy() {
     setScene("sendstay", "Piggy is home.", "Same place, same Piggy.");
     return { ok: true };
   } catch (error) {
+    if (giftIntent && !giftAttempted) restorePendingGiftClaim(giftIntent);
     // [A-667 R5] 이미 정리된(만료·대체된) 시도의 실패는 더 새로운 화면·서명자를 건드리지 않는다.
     if (!released && !finishAuthAttempt(attempt)) return { ok: false, cancelled: false, reason: "superseded" };
     // [A-667 R3] 되찾기가 성공한 뒤 이어진 단계가 실패했다면 방금 연 서명자를 남기지 않는다.
