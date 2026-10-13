@@ -3988,7 +3988,14 @@ function mountSecondHomeBell() {
   a1172ConsumeBell();
   sj.bellCandidateId = null;
   sj.waitingForPlace = false;
-  openSecondJourneyExplore({ bellOpenId: a1182OpenId }); // existing fork gate + candidates/draft restore; no selection or money action
+  const pending = { sj, address: state.address, openId: a1182OpenId, bell, timer: null };
+  a1187BellPaper = pending;
+  pending.timer = setTimeout(() => {
+    if (a1187BellPaper !== pending) return;
+    a1187BellPaper = null;
+    if (!a1182HomeVisible() || pending.openId !== a1182OpenId || state.secondJourney !== sj || state.address !== pending.address) { bell.remove(); return; }
+    openSecondJourneyExplore({ bellOpenId: pending.openId });
+  }, A891_FILED_LINE_HOLD_MS);
 }
 
 // A1182: one Home opportunity per app open, not each in-app return to Home.
@@ -4004,6 +4011,7 @@ function armSecondHomeWait() {
 // [A-1172] Test-period candidate stand-in only. @EXPIRES_WITH: A-1172
 // A1182 lifecycle also handles real A851 candidates when the test flag is off.
 let a1172BellVisit = null;
+let a1187BellPaper = null;
 let a1182OpenId = 1;
 let a1182HomeOpen = 0;
 let a1182ConsumedOpen = 0;
@@ -4038,6 +4046,12 @@ function a1172BellEligible() {
     && a1182HomeVisible();
 }
 function a1172ResetBell() {
+  if (a1187BellPaper && (!a1182HomeVisible() || a1187BellPaper.openId !== a1182OpenId
+    || a1187BellPaper.sj !== state.secondJourney || a1187BellPaper.address !== state.address)) {
+    clearTimeout(a1187BellPaper.timer);
+    a1187BellPaper.bell.remove();
+    a1187BellPaper = null;
+  }
   if (a1172BellVisit) clearTimeout(a1172BellVisit.timer);
   a1172BellVisit = null; // keep consumed/open markers across scene changes
 }
