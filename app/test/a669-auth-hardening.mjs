@@ -56,7 +56,8 @@ const IDLE_MS = 10 * 60 * 1000;
 
 // Pre-A-669 sha256 pins (concatenated so no raw 64-hex literal sits in this file).
 const PRE = {
-  requestMoneyPermission: "905ac3b10d261a22" + "bca9ecec3e0c9409" + "371895f782257a09" + "4f408baa1d561dd1",
+  // A-1171 answer (1): auth before server, live signer reuse; PRF-zeroing behavioral tests below retained.
+  requestMoneyPermission: "d5170e013fce81d5" + "cb3558b0d29d36d4" + "65c40c6b596a8ec7" + "0f81b9bfec4c1664",
   proveFundingTargetControl: "75510cd7a119811d" + "a1437fafb7959ab3" + "677c9500ba9d641d" + "23569f868ed6bf72",
   admitSequencedPiggy: "c04fa2bfb30fa441" + "ebc1bf2e40bf8d9b" + "eb3c4f7935856f8b" + "e2b85daa70ff3e29",
   sendPiggyOnce: "33e13215c9fc55c2" + "a6a57758de638d7f" + "c363231353541cb0" + "d251b7cc7af3a730", // pre-A-669 (historical; SEND-0 now pins POST_A698 below)
@@ -407,7 +408,7 @@ const OLD_ADMIT_BLOCK = `  // 돌아온 credential 이 우리가 고정한 그 �
     return refuse("derive_failed");
   }`;
 
-await check("PRF-0 zeroing-only delta: removing exactly the A-669 zeroing lines restores the pre-A-669 bytes of all three callers (sha256)", () => {
+await check("PRF-0 zeroing-only delta: Money uses approved A-1171 pin; other callers retain original A-669 pins", () => {
   const rmp = fnBody("requestMoneyPermission");
   assert.notEqual(sha(rmp), PRE.requestMoneyPermission, "requestMoneyPermission did change");
   assert.equal(sha(stripMoneyPermission(rmp)), PRE.requestMoneyPermission, "requestMoneyPermission minus zeroing == pre-A-669");

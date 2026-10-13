@@ -5,10 +5,10 @@
 // node:vm with a deterministic fake clock and spies. Network 0 · browser 0 · real WebAuthn 0 · tx 0.
 //   A  source contracts — unlock path never reaches signer/creation/permission/gift; reconcile path never
 //      reaches sign/send/grant/approve/wallet/permission/gift; boot never calls WebAuthn by itself.
-//   B  unlock-only runtime — WebAuthn called synchronously inside the tap, pinned credential only,
-//      prfOutput zeroed, signing session 0, signer timer 0, activeSignerAddress "", app-idle armed.
+//   B  A-1171 authenticated unlock runtime — WebAuthn called synchronously inside the tap, pinned credential only,
+//      prfOutput zeroed, address-bound signer and absolute five-minute timer, app-idle armed.
 //   C  app-idle 10m on the mobile/app surface → locked presentation (destination kept); web unchanged;
-//      trusted activity refreshes; the signer's 5-minute absolute cap is not touched by unlock.
+//      trusted activity refreshes; fresh authentication starts the unchanged 5-minute absolute cap.
 //   D  First Send pending reconcile matrix — every stage with mocked public receipt reads.
 // On the pre-A-633 tree the new functions do not exist → the first cut throws → exit 1.
 import assert from "node:assert/strict";
@@ -63,10 +63,11 @@ const SIGNER_OR_CREATE = ["activateSigningSession(", "createSecp256k1SigningSess
 const MONEY = ["sendTransaction", "signDigest", "signMessage", "requestGrant(", "approve(", "createWalletClient", "activeSession", "activeAccount", "issuePermission(", "authorize(", "requestMoneyPermission(", "sendPiggy("];
 const GIFT = ["takePendingGiftClaim(", "bindGiftToNewPiggy(", "settleBoundGiftClaim(", "beginGiftClaim(", "restorePendingGiftClaim("];
 
-await check("A1 unlock/lock functions never reach signer creation, passkey creation, money or Gift", () => {
+await check("A1 unlock uses only canonical signer activation; no raw signer/passkey creation, money or Gift", () => {
   for (const name of UNLOCK_FNS) {
     const body = stripComments(fnBody(name));
     for (const bad of [...SIGNER_OR_CREATE, ...MONEY, ...GIFT, "localStorage.setItem"]) {
+      if (name === "settleUnlock" && bad === "activateSigningSession(") continue;
       assert.equal(body.includes(bad), false, `${name} contains ${bad}`);
     }
   }
@@ -82,10 +83,12 @@ await check("A2 unlockApp calls requestPrf with the pinned stored credential, wi
   assert.equal((body.match(/requestPrf\(/g) || []).length, 1, "exactly one requestPrf call");
   assert.equal(/requestPrf\(null/.test(body), false, "no unpinned fallback");
 });
-await check("A3 settleUnlock zeroes prfOutput and forwards it nowhere; success arms only app-idle (touchAppSession)", () => {
+await check("A3 settleUnlock binds stored address, uses canonical signer without persistence and always wipes PRF", () => {
   const body = stripComments(fnBody("settleUnlock"));
   assert.ok(body.includes("result.prfOutput.fill(0)"), "prfOutput zeroed");
-  assert.equal((body.match(/prfOutput/g) || []).length, 2, "prfOutput referenced only by the instanceof guard + fill(0)");
+  assert.ok(body.includes("activateSigningSession(result.prfOutput, { persistAddress: false })"));
+  assert.ok(body.includes("state.address === attempt.address"));
+  assert.ok(body.includes("finally"));
   assert.ok(body.includes("touchAppSession()"), "app-idle armed on success");
 });
 await check("A4 reconcile path is read-only: no sign/send/grant/approve/wallet/permission/auth/Gift call", () => {
@@ -163,7 +166,7 @@ function mockStorage(init = {}) {
 function buildUnlockApp({ width = 390, allowed = true, credential = { credentialId: "cred-1" }, prf } = {}) {
   const clock = makeFakeClock();
   const calls = { requestPrf: [], sess: 0, render: 0, scenes: [], errors: [], prfOutputs: [] };
-  const state = { scene: "sendstay", message: "", detail: "", credential, appLock: { phase: "waiting", cancelled: false }, activeSignerAddress: "", address: "0xabc", homePaperMode: "home", moneyIntent: null };
+  const state = { scene: "sendstay", message: "", detail: "", credential, appLock: { phase: "waiting", cancelled: false }, activeSignerAddress: "", address: getEvmAddress(createSecp256k1SigningSession({ privateKey: new Uint8Array(32).fill(7) }).publicKey), homePaperMode: "home", moneyIntent: null };
   const storage = mockStorage({ "araso.piggyName": "Honeybun" });
   const ctx = {
     state, console, Date, JSON, Promise, Uint8Array,
@@ -200,14 +203,14 @@ await check("B1 Chog tap: WebAuthn requested synchronously inside the tap (same 
   assert.equal(app.calls.requestPrf[0].opts.prfSalt.length, 32);
   assert.equal(app.state.appLock.phase, "checking");
 });
-await check("B2 success unlocks identity only: signing session 0 · signer timer 0 · activeSignerAddress '' · moneyIntent null · prfOutput zeroed · app-idle armed", async () => {
+await check("B2 same PRF unlocks and arms signer; no money or address persistence; PRF wiped", async () => {
   const app = buildUnlockApp();
   app.unlockApp();
   await flush();
   assert.equal(app.state.appLock, null, "unlocked");
-  assert.equal(app.calls.sess, 0, "createSecp256k1SigningSession never called");
-  deq(app.get(), { hasSigner: false, signerArmed: false, idleArmed: true });
-  assert.equal(app.state.activeSignerAddress, "");
+  assert.equal(app.calls.sess, 1);
+  deq(app.get(), { hasSigner: true, signerArmed: true, idleArmed: true });
+  assert.equal(app.state.activeSignerAddress, app.state.address);
   assert.equal(app.state.moneyIntent, null);
   assert.ok(app.calls.prfOutputs[0].every((b) => b === 0), "PRF output bytes zeroed");
   // [A-667 re-pin] was 1. unlockApp now renders the "checking" lock view once right AFTER requestPrf is called
@@ -277,16 +280,19 @@ await check("C3 web (1440) idle behavior unchanged: existing resting setScene, n
   assert.equal(app.state.appLock, null);
   deq(app.calls.scenes.at(-1), ["sendstay", "Piggy is resting.", "Open again when you need it."]);
 });
-await check("C4 unlock never arms/extends the signer's 5-minute absolute cap", async () => {
+await check("C4 new authenticated unlock arms exactly five minutes; activity does not extend it", async () => {
   const app = buildUnlockApp();
   app.state.appLock = null;
-  app.activateSigningSession(new Uint8Array(32).fill(3)); // signer @ t=0 → expires t=5m
+  app.activateSigningSession(new Uint8Array(32).fill(7), { persistAddress: false }); // initial signer
   app.clock.advance(4 * 60 * 1000);
   app.state.appLock = { phase: "waiting", cancelled: false };
   app.unlockApp(); await flush();
   assert.equal(app.state.appLock, null);
-  app.clock.advance(60 * 1000 + 1000); // t=5m01s — original signer cap still fires
-  assert.equal(app.get().hasSigner, false, "signer expired on its original schedule");
+  app.clock.advance(4 * 60 * 1000);
+  app.touchAppSession();
+  assert.equal(app.get().hasSigner, true);
+  app.clock.advance(60 * 1000 + 1);
+  assert.equal(app.get().hasSigner, false, "signer expired five minutes after fresh unlock");
   assert.equal(app.get().idleArmed, true, "app-idle still running from the unlock");
 });
 

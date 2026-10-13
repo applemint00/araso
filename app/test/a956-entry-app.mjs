@@ -243,7 +243,7 @@ function harness({ profile = TESTNET, level = 2, signer = PIGGY, invite = TOKEN,
   let B;
   B = loadBlock({
     CHAIN_PROFILE: profile, state, readReceipts: () => state.receipts, activeAccount: signer, RELEASE_LEVEL: level, sendInFlight: false, readSendPending: () => null,
-    requestMoneyPermission: async () => { calls.money += 1; }, proveFundingTargetControl: async () => {}, settleBoundGiftClaim: async () => {},
+    requestMoneyPermission: async ({ checkPermission = null } = {}) => { if (checkPermission && !(await checkPermission())) return; calls.money += 1; }, proveFundingTargetControl: async () => {}, settleBoundGiftClaim: async () => {},
     a891ArmPostFileQuietHome: () => { calls.baseArm += 1; }, a891HomeChogTap: () => { calls.baseTap += 1; }, a891CueChog: null, a891FirstArrivalHold: null,
     homeChog: chog, sceneTimeout: (fn) => timers.push(fn), HOME_FIRST_JOURNEY_CARD_MS: 1200, POST_FILE_QUIET_HOME_MS: 8000,
     checkForkPermission: C.checkForkPermission, forkEntryOpen: C.forkEntryOpen, forkEntryUrl: C.forkEntryUrl, journey1Pointers: C.journey1Pointers, onForkProfile: C.onForkProfile, readForkInvite: C.readForkInvite, requestForkEntry: C.requestForkEntry,
@@ -342,7 +342,7 @@ await check("4 the cue is not armed without an invite or a Journey 1 receipt, no
     assert.equal(U.calls.baseArm, 1); assert.equal(U.calls.baseTap, 1); assert.equal(U.calls.cue, 0);
   }
 });
-await check("6 fork profile: Money permission (Face ID) runs only after a fresh server OK; none / other instance / server down = not run, nothing changed", async () => {
+await check("A-1171 fork profile: envelope remains after fresh server OK (Face ID precedes it); none / other instance / server down = no envelope", async () => {
   const S = server(); const j1 = S.addJ1(P, 500);
   const T0 = harness({ profile: FORK, fetchImpl: S.fetchImpl });
   await T0.B.get("requestMoneyPermission")(); assert.equal(T0.calls.money, 0, "no entry yet");

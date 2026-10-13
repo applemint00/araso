@@ -1,3 +1,4 @@
+import { waitForPasskey } from "../src/passkey-wait.js";
 // [A-558 Lane B] Direct behavioral coverage of the ACTUAL main.js `proveFundingTargetControl` —
 // the one real function that produces the `controlProof` `beginFundingForPiggy`/
 // `verifyFundingTargetProof` require (residual noted in both A-555 and A-556 receipts: this
@@ -16,7 +17,7 @@ import vm from "node:vm";
 import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import { recoverMessageAddress } from "viem";
-import { getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress } from "@category-labs/mera";
+import { getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress, isMeraError } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
 import { authRequestForPiggy, bindSigner, fundingTargetChallenge, verifyFundingTargetProof } from "../src/piggy-session.js";
 
@@ -153,7 +154,8 @@ function openApp() {
     setTimeout: timers.setTimeout,
     clearTimeout: timers.clearTimeout,
     // real Mera SDK — nothing here is reimplemented
-    getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress, toViemAccount,
+    getPasskeyPrfOutput, createSecp256k1SigningSession, getEvmAddress, toViemAccount, isMeraError,
+    waitForPasskey, UNLOCK_UI_WAIT_MS: 45000,
     // real piggy-session.js exports
     authRequestForPiggy, bindSigner, fundingTargetChallenge,
     // browser/env primitives requestPrf() itself reads — stubbed, not reimplemented logic
@@ -162,7 +164,7 @@ function openApp() {
   };
   vm.createContext(ctx);
   vm.runInContext(
-    `${SESSION_DECLS_SRC}\n${SESSION_TIMERS_SRC}\n${TOHEX_SRC}\n${REQUEST_PRF_SRC}\n${SCOPE_SRC}\n${PROVE_SRC}\n` +
+    `${SESSION_DECLS_SRC}\n${SESSION_TIMERS_SRC}\n${TOHEX_SRC}\n${REQUEST_PRF_SRC}\n${cutFn("function isCancelledAuthError(error) {")}\n${SCOPE_SRC}\n${PROVE_SRC}\n` +
       `globalThis.__prove = proveFundingTargetControl;\n` +
       `globalThis.__get = () => ({ hasSigner: !!activeAccount, address: activeAccount ? activeAccount.address : null });`,
     ctx,

@@ -135,6 +135,8 @@ function buildHarness({ allowed = true, credential = { credentialId: "cred-1" },
     isCancelledAuthError: (e) => e?.name === "NotAllowedError" || e?.cause?.name === "NotAllowedError",
     recordSafeError: (phase, e) => { calls.errors.push([phase, e?.name]); },
     touchAppSession: () => { calls.touch += 1; },
+    activateSigningSession: () => ({ address: state.address }),
+    endActiveSession: () => {},
     requestPrf: (credentialArg, opts) => {
       let resolve, reject;
       const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
@@ -204,8 +206,8 @@ await check("S2 tap → requestPrf synchronously inside the tap (pinned credenti
   assert.equal(h.clock.pending(), 1, "one bounded-wait timer armed");
 });
 
-await check("S3 success → unlocked, timer cleared, app-idle only, PRF output zeroed, no recovery/creation", async () => {
-  const h = buildHarness();
+await check("S3 success → unlocked, timer cleared, signer through canonical activation, PRF output zeroed, no recovery/creation", async () => {
+  const h = buildHarness({ markers: { address: "saved-address" } });
   h.tap("loginChogButton");
   h.calls.requestPrf[0].resolve(h.okResult());
   await flush();
@@ -290,7 +292,7 @@ await check("S9 one tap = one attempt: repeated taps while checking start nothin
 });
 
 await check("S10 retry after timeout = exactly one NEW attempt; superseded attempt's late result ignored; new attempt can unlock", async () => {
-  const h = buildHarness();
+  const h = buildHarness({ markers: { address: "saved-address" } });
   h.tap("loginChogButton");
   h.clock.advance(WAIT_MS);
   h.tap("unlockRetryButton");
@@ -479,7 +481,7 @@ await check("C6 render() birth wiring unchanged: #checkButton → checkPiggy (re
 await check("P1 byte-identical pins: requestPrf / loginCheckingMarkup (security-kit baseline) and render / recovery+creation functions", () => {
   const PRE1051 = restorePreA1051(MAIN); const fnBody1051 = (n) => fnBody(n, PRE1051); // [A-1051 RE-PIN] pre-A-1051: fnBody(n) on MAIN
   // Full sha256 pins, split into two halves only so the repo secret hook does not read them as keys (values unchanged).
-  assert.equal(sha(fnBody1051("requestPrf")), "766fc57ed63b6009feb116105bdc73cc" + "0c2cebff74ea614c02c48df6b935a321", "requestPrf");
+  assert.equal(sha(fnBody1051("requestPrf")), "0322e1d0b710367764065b82e9e6e5cf" + "510275a79034887e7d9544d3d75f5c80", "requestPrf");
   assert.equal(sha(fnBody1051("loginCheckingMarkup")), "dcec88389ae4385ad03e7d4645cd7704" + "6eb95b7762695d2d59e96a8844772f91", "loginCheckingMarkup");
   assert.equal(sha(fnBody1051("render")), "521db6368b3a331d44eb1287883319905c2a4f98c9148331df4adf698bbf6dd4", "render");
   const want = { checkPiggy: PIN.checkPiggy, recoverPiggy: PIN.recoverPiggy, openPiggy: PIN.openPiggy, startPiggyOpen: PIN.startPiggyOpen, isCancelledAuthError: PIN.isCancelledAuthError, appLockSurface: PIN.appLockSurface, lockAppAfterIdle: PIN.lockAppAfterIdle, getRpId: PIN.getRpId };

@@ -1,3 +1,4 @@
+import { waitForPasskey } from "./passkey-wait.js";
 import { createResponsiveLayout, responsiveFrame } from "./responsive-layout.js";
 import {
   createPasskeyWithPrfOutput,
@@ -1242,13 +1243,16 @@ function formatError(error) {
 // (@category-labs/mera passkey.d.ts) → 브라우저가 이 rpId 의 기존 패스키를 고르게 한다.
 // [A-512] `prfSalt` 가 있으면 **그 salt 로** 묻는다(기본 salt 로 조용히 바꾸지 않는다). 없으면 Mera 기본 salt.
 function requestPrf(credential, { prfSalt = null } = {}) {
-  return getPasskeyPrfOutput({
+  return waitForPasskey(() => getPasskeyPrfOutput({
     rpId: getRpId(),
     ...(credential ? { credential } : {}),
     ...(prfSalt instanceof Uint8Array && prfSalt.length === 32 ? { prfSalt } : {}),
     timeout: 120_000,
     // LOCAL_ONLY. 잠금이 하나라도 걸리면 빈 객체다(위 localTestWebAuthnOption 주석).
     ...localTestWebAuthnOption(),
+  }), { timeoutMs: UNLOCK_UI_WAIT_MS }).catch((error) => {
+    console.debug("passkey", error?.name === "AuthWaitTimeout" ? "timeout" : isCancelledAuthError(error) ? "cancelled" : "failed");
+    throw error;
   });
 }
 
@@ -2010,15 +2014,8 @@ async function checkPiggy() {
   }
 }
 
-// [A-633 A] LOGIN_CHECKING 잠금 해제 = **신원 확인만**. recoverPiggy()/checkPiggy() 를 쓰지 않는다 — 그 둘은
-// 서명 세션을 연다(activateSigningSession). 여기서는:
-//   · 사용자의 Chog 탭(신뢰된 click) 핸들러 안에서 **곧장** requestPrf 를 부른다 — 그 앞에 await·render·
-//     타이머 0(Invite 의 5.9s 지연 패턴을 쓰지 않는다). 부팅 때 저절로 부르지 않는다.
-//   · 저장된 credential **하나로만** 묻는다(생성 폴백 0 · 고정 해제 재시도 0 — 다른 패스키는 다른 주소다).
-//   · 돌아온 credentialId 가 저장된 그 id 와 같을 때만 풀린다. PRF 출력(=서명 재료)은 판정 직후 0 으로
-//     지우고 어디에도 넘기지 않는다: activateSigningSession·createSecp256k1SigningSession·armSignerExpiry·
-//     activeSignerAddress·permission envelope 0. 풀리면 기존 app-idle 10분(touchAppSession)만 시작한다.
-//   · 돈 동작은 여전히 자기 Face ID/서명 경계(sendPiggyOnce → recoverPiggy 등)를 따로 지난다.
+// [A-1171 ⑥] 잠금 해제의 같은 PRF로 저장 주소를 확인하고 5분 서명 세션을 연다.
+// pinned credential 한 번만 요청하며 생성/복구 폴백·주소 저장·돈 실행은 없다.
 // [A-667] 한 탭 = 한 시도(attempt 토큰). requestPrf 를 **부른 뒤에만** 화면 대기 상한 타이머를 걸고 확인 중 모습을
 // 그린다(render) — WebAuthn 호출 앞 동기 체인은 그대로다. 시도는 성공 또는 재시도 가능한 실패 카드로 반드시 끝난다.
 function unlockApp() {
@@ -2037,7 +2034,7 @@ function unlockApp() {
     settleUnlock(null, unsupported, pinned);
     return;
   }
-  const attempt = { timer: null };
+  const attempt = { timer: null, address: state.address };
   lock.phase = "checking";
   lock.cancelled = false;
   lock.attempt = attempt;
@@ -2061,25 +2058,38 @@ function unlockWaitTimeoutError() {
 }
 
 function settleUnlock(result, error, pinned, attempt = null) {
-  const same = !!result && !!pinned && typeof result.credentialId === "string" && result.credentialId === pinned.credentialId;
-  if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
-  const lock = state.appLock;
-  if (!lock) return;
-  // [A-667] 시간이 다 됐거나 새 시도로 대체된 시도의 결과는 잠금을 풀지도, 상태를 바꾸지도 못한다.
-  if ((lock.attempt || null) !== attempt) return;
-  if (attempt) clearTimeout(attempt.timer);
-  lock.attempt = null;
-  if (!same) {
-    // 기존 정직한 인증 실패 카드(renderAuthCard)로 — 생성 폴백 0 · Hatch 0 · 잠금 유지.
-    lock.phase = "failed";
-    lock.cancelled = !!error && isCancelledAuthError(error);
-    if (error) recordSafeError("unlock", error);
+  try {
+    const lock = state.appLock;
+    if (!lock || (lock.attempt || null) !== attempt) return;
+    if (attempt) clearTimeout(attempt.timer);
+    lock.attempt = null;
+    let same = !!result && !!pinned && result.credentialId === pinned.credentialId
+      && state.credential?.credentialId === pinned.credentialId
+      && !!attempt?.address && state.address === attempt.address;
+    if (same) {
+      try {
+        const signer = activateSigningSession(result.prfOutput, { persistAddress: false });
+        same = String(signer.address).toLowerCase() === String(attempt.address).toLowerCase();
+        if (!same) endActiveSession();
+      } catch {
+        same = false;
+        endActiveSession();
+      }
+    }
+    if (!same) {
+      console.debug("unlock", "identity_failed");
+      lock.phase = "failed";
+      lock.cancelled = !!error && isCancelledAuthError(error);
+      if (error) recordSafeError("unlock", error);
+      render();
+      return;
+    }
+    state.appLock = null;
+    touchAppSession();
     render();
-    return;
+  } finally {
+    if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
   }
-  state.appLock = null;
-  touchAppSession();
-  render();
 }
 
 function stayHome() {
@@ -7033,10 +7043,13 @@ function selectedRegistryPiggy() {
   return moneyPiggiesSnapshot().piggies.find((p) => p.id === sel.id) || null;
 }
 
-async function requestMoneyPermission() {
+async function requestMoneyPermission({ checkPermission = null } = {}) {
+  if (state.appLock) { console.debug("money_permission", "locked"); return; }
   const intent = state.moneyIntent;
   if (!intent || intent.status !== PERMISSION_STATE.AWAITING) return;
   const fail = (reason) => {
+    console.debug("money_permission", "refused");
+    if (state.moneyIntent !== intent) return;
     state.moneyIntent = { ...intent, status: PERMISSION_STATE.FAILED, permissionError: reason, permission: null };
     render();
   };
@@ -7050,9 +7063,15 @@ async function requestMoneyPermission() {
   let result = null;
   try {
     // 여기서 실제로 Face ID/passkey 가 뜬다. 이 호출 없이는 봉투가 만들어지지 않는다.
-    result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
-    ({ address: signerAddress } = activateSigningSession(result.prfOutput, { persistAddress: false }));
-    verifiedAt = Date.now();
+    if (activeAccount && String(activeAccount.address).toLowerCase() === String(sel.address).toLowerCase() && !state.appLock) {
+      signerAddress = activeAccount.address;
+      verifiedAt = Date.now();
+    } else {
+      result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
+      if (state.appLock || state.moneyIntent !== intent || state.selectedPiggy !== sel) return fail("selection_changed");
+      ({ address: signerAddress } = activateSigningSession(result.prfOutput, { persistAddress: false }));
+      verifiedAt = Date.now();
+    }
   } catch {
     // 취소/실패 — **돈도 투영도 건드리지 않는다.**
     const cancelled = cancelPermission("passkey_declined");
@@ -7069,6 +7088,13 @@ async function requestMoneyPermission() {
     endActiveSession();
     return fail(bound.reason);
   }
+  // Authenticate inside the tap; server permission still precedes the envelope.
+  const account = activeAccount;
+  if (typeof checkPermission === "function" && !(await checkPermission())) {
+    console.debug("money_permission", "server_refused");
+    return;
+  }
+  if (state.appLock || state.moneyIntent !== intent || state.selectedPiggy !== sel || activeAccount !== account) return fail("selection_changed");
   const at = new Date(verifiedAt).toISOString();
   const base = {
     piggyId: intent.piggyId,
@@ -10222,13 +10248,25 @@ async function a898ProveDestination(paperPiggy) {
 // Face ID for the payer Piggy only: derive its signer; the reducer then requires signer == payer (bindSigner).
 async function a898SignerForPayer(piggy) {
   const { request, error } = authRequestForPiggy(piggy);
-  if (error) return { ok: false, reason: error };
+  if (error || state.appLock) { console.debug("payer_auth", "unavailable"); return { ok: false, reason: error || "locked" }; }
+  if (activeAccount && String(activeAccount.address).toLowerCase() === String(piggy.address).toLowerCase()) return { ok: true, signerAddress: activeAccount.address };
+  const identity = state.address;
   let result = null;
   try {
     result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
+    if (state.appLock || state.address !== identity || result.credentialId !== request.credential.credentialId) {
+      console.debug("payer_auth", "changed");
+      return { ok: false, reason: "identity_changed" };
+    }
     const { address } = activateSigningSession(result.prfOutput, { persistAddress: false });
+    if (String(address).toLowerCase() !== String(piggy.address).toLowerCase()) {
+      endSignerSession();
+      console.debug("payer_auth", "mismatch");
+      return { ok: false, reason: "signer_mismatch" };
+    }
     return { ok: true, signerAddress: address };
   } catch {
+    console.debug("payer_auth", "auth_failed");
     return { ok: false, reason: "passkey_declined" };
   } finally {
     if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
@@ -10417,11 +10455,12 @@ async function a898FaceId() {
     if (a915Why) { state.giftSend = { ...d0, stage: "unavailable", refusal: a915Why, lock: null }; refreshHomePaperMount(); return; }
   }
   state.giftSend = giftSendReduce(d0, { type: "faceid_start", lock });
-  refreshHomePaperMount();
   // From here a payer signer may be live: it ALWAYS ends (finally), even if the draft is closed or anything throws.
   let result = { ok: false, reason: "executor_unavailable" };
   try {
-    const proved = await a898SignerForPayer(piggy);
+    const proving = a898SignerForPayer(piggy);
+    refreshHomePaperMount();
+    const proved = await proving;
     // re-read after the await: the draft may have been closed / replaced while the passkey prompt was open
     const cur = state.giftSend;
     if (!cur || cur.draftId !== d0.draftId || cur.stage !== "faceid") return;
@@ -14066,9 +14105,15 @@ async function a956Enter() {
   const counted = (fn) => async (...args) => { a956Signing += 1; try { return await fn(...args); } finally { a956Signing -= 1; } };
   registerJourneySwitchBusyProbe(() => ({ signing: a956Signing > 0 || sendInFlight, unconfirmed: !!readSendPending() }));
   const a956BaseRequestMoneyPermission = requestMoneyPermission;
-  requestMoneyPermission = counted(async (...args) => {
-    if (onForkProfile(CHAIN_PROFILE) && !(await a956ForkMoneyAllowed())) return undefined;
-    return a956BaseRequestMoneyPermission(...args);
+  let permissionBusy = false;
+  requestMoneyPermission = counted(async () => {
+    if (permissionBusy) { console.debug("money_permission", "busy"); return; }
+    permissionBusy = true;
+    try {
+      return await a956BaseRequestMoneyPermission({ checkPermission: onForkProfile(CHAIN_PROFILE) ? a956ForkMoneyAllowed : null });
+    } catch {
+      console.debug("money_permission", "failed");
+    } finally { permissionBusy = false; }
   });
   proveFundingTargetControl = counted(proveFundingTargetControl);
   settleBoundGiftClaim = counted(settleBoundGiftClaim);
@@ -14523,7 +14568,7 @@ if (A977_FORK) {
     const jobKey = sj.chosenDestinationId;
     if (sj.step !== "readiness" || !isForkJob(jobKey)) return a977BaseSend();
     if (a977Current && a977Current.sj !== sj) a977Current = null; // a run of an earlier (finished) Second card holds nothing
-    if (a977Busy || a977Current) return undefined;
+    if (a977Busy || a977Current) { console.debug("fork_send", "busy"); return undefined; }
     void a977Send(sj, jobKey);
     return undefined;
   };
@@ -14532,18 +14577,20 @@ if (A977_FORK) {
     let started = false;
     try {
       const piggy = a898SenderPiggy();
-      if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) return;
-      if (!(await a956ForkMoneyAllowed())) return; // the fork money rule: asked again right before money moves
+      if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) { console.debug("fork_send", "unavailable"); return; }
+      // No server await or render before the pinned get: keep the click gesture.
       if (!activeAccount || a977Lower(activeAccount.address) !== a977Lower(piggy.address)) {
         const signer = await a898SignerForPayer(piggy);
-        if (!signer.ok) return;
+        if (!signer.ok) { console.debug("fork_send", "auth_failed"); return; }
       }
       const account = activeAccount;
-      if (!account || a977Lower(account.address) !== a977Lower(piggy.address)) return;
-      if (state.secondJourney !== sj || sj.chosenDestinationId !== jobKey || state.scene !== "explore") return;
+      if (!account || a977Lower(account.address) !== a977Lower(piggy.address)) { console.debug("fork_send", "signer_mismatch"); return; }
+      if (!(await a956ForkMoneyAllowed())) { console.debug("fork_send", "server_refused"); return; }
+      const current = () => !state.appLock && activeAccount === account && a977Lower(state.address) === a977Lower(piggy.address) && state.secondJourney === sj && sj.chosenDestinationId === jobKey && state.scene === "explore";
+      if (!current()) { console.debug("fork_send", "changed"); return; }
       let forkBlock;
-      try { forkBlock = Number(await fork.publicClient.getBlockNumber()); } catch { return; }
-      if (!Number.isSafeInteger(forkBlock)) return;
+      try { forkBlock = Number(await fork.publicClient.getBlockNumber()); } catch { console.debug("fork_send", "read_failed"); return; }
+      if (!current() || !Number.isSafeInteger(forkBlock)) { console.debug("fork_send", "changed"); return; }
       sj.decisionEventSeq += 1;
       const eventId = `fork-job:${jobKey}:${new Date().toISOString()}:${sj.decisionEventSeq}`;
       sj.mockReceipt = null;
@@ -14574,6 +14621,8 @@ if (A977_FORK) {
       sj.outcome = candidate && out.status === "returned" && candidate.outcome === "done" ? "done" : "failed";
       if (a977Current) a977Current.finished = true;
       a977Settle(sj);
+    } catch {
+      console.debug("fork_send", "failed");
     } finally {
       a977Busy = false;
       if (!started && state.secondJourney === sj && state.scene === "explore") render();
