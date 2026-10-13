@@ -1,3 +1,4 @@
+import {CHOG_HOME_GEOMETRY as cg} from '../src/chog-home.js';
 import {createResponsiveLayout} from "../src/responsive-layout.js";
 // [A-833] History placement (A-829 item 6) + shared open/close motion (item 7, preset C) + portrait/landscape card blend (A-831 U2).
 //   node app/test/a833-history-placement-motion.mjs                       (Part N, always: the pure placement rule in a vm, sweeps, source surface)
@@ -30,22 +31,24 @@ function fnSrc(src, name) {
 
 // The pure placement rule evaluated in a vm on top of the pure keyframe layout (no DOM).
 const layout = layoutOracle(MAIN);
-const P = createResponsiveLayout(layoutOracle(MAIN,true)).history;
+const rawLayout = layoutOracle(MAIN,true);
+const P = createResponsiveLayout((w,h,limit)=>rawLayout(w,h,0,limit)).history;
 
 // ═══ Part N ═══
 await check("N1 approved desktop reference and paired paper size",()=>{
  const p=P(1440,900);near(p.cardW,376.5,.01,'1440 card');near(p.homeLeft,125.3787,.01,'Home');near(p.histLeft,533.9213,.01,'History');
 });
-await check("N2 narrow overlap exposes the Home title and wide gaps never reverse",()=>{
+await check("N2 fixed card width and continuous History placement",()=>{
  for(const h of [700,800,900,1080,1440]){let prev=null;for(let w=641;w<=2560;w++){
-  const p=P(w,h);assert.ok(p.histLeft>=p.homeLeft+.611*p.cardW-.5,`${w}x${h} title`);
-  if(prev)assert.ok(p.signedGap>=prev.signedGap-1e-6,`${w} gap`);prev=p;
+  const p=P(w,h);assert.equal(p.cardW,p.L.cardW,`${w}x${h} no shrink`);
+  if(prev)assert.ok(Math.abs(p.histLeft-prev.histLeft)<6&&Math.abs(p.homeLeft-prev.homeLeft)<6,`${w}x${h} placement jump`);prev=p;
  }}
 });
-await check("N3 History does not intersect the character stage or viewport edge",()=>{
+await check("N3 History does not intersect character regions or viewport edge",()=>{
  for(const h of [700,800,900,1080,1440])for(let w=641;w<=2560;w+=3){const p=P(w,h),L=p.L;
   assert.ok(p.homeLeft>=-.5&&p.histRight<=w+.5&&p.top+p.cardH<=h+.5,`${w}x${h} bounds`);
-  assert.ok(!(p.histRight>L.stageLeft+.01&&p.top+p.cardH>L.stageTop+.01),`${w}x${h} stage`);
+  const chars=[{l:L.boardLeft+L.S*(cg.cornerTransform.x+cg.inkLocal.left*cg.homeScale),t:L.boardTop+L.S*(cg.cornerTransform.y+cg.inkLocal.top*cg.homeScale)},{l:L.boardLeft+L.S*(1041-.4991*150),t:L.stageTop}];
+  for(const c of chars)assert.ok(!(p.histRight>c.l+.01&&p.top+p.cardH>c.t+.01),`${w}x${h} character`);
  }
 });
 await check("N4 Home card x/y has no step at the portrait/landscape switch: w/h 0.70..1.30 swept in 1 px steps (A-831 U2)", () => {
@@ -65,9 +68,9 @@ await check("N4 Home card x/y has no step at the portrait/landscape switch: w/h 
   }
   console.log(`      max 1 px step: x ${worst.x.toFixed(2)} (${worst.atX}), y ${worst.y.toFixed(2)} (${worst.atY})`);
 });
-await check("N5 height beyond the internal frame adds equal vertical margins",()=>{
+await check("N5 above 1440 the frame uses full viewport height",()=>{
  const a=layout(1940,1200),b=layout(1940,1400);
- near(b.cardY-a.cardY,100,1e-9,'card');near(b.stageTop-a.stageTop,100,1e-9,'characters');near(b.asTop-a.asTop,100,1e-9,'brand');
+ near(b.stageTop-a.stageTop,184,1e-9,'characters');near(b.floorY-a.floorY,184,1e-9,'floor');near(b.asTop-a.asTop,0,1e-9,'brand');
  near(a.cardW,b.cardW,1e-9,'size unchanged');
 });
 await check("N6 source: pinned literals kept, durations / frames / curves per preset C, reduced motion, EXIT 260, no 46 px driver", () => {
@@ -180,9 +183,9 @@ if (process.env.ARASO_TEST_BROWSER === "1") {
       void zi;
       const swapIdx = rows.findIndex((r, i) => i > 0 && Number(r.z) >= 2 && Number(rows[i - 1].z) < 2);
       assert.ok(swapIdx > 0 || exp.overlap === 0 || Number(rows[0].z) >= 2, "z swap observed");
-      if (swapIdx > 0) assert.ok(rows[swapIdx].histL >= homeFinalR - 3, `swap at the clear point (History left ${rows[swapIdx].histL} vs Home final right ${homeFinalR})`);
+      if (swapIdx > 0) assert.ok(rows[swapIdx].histL >= Math.min(homeFinalR, exp.histLeft + exp.clearDx) - 3, "swap at the character-safe excursion bound");
       near(rows[rows.length - 1].histL, exp.histLeft, 1.5, "History settled");
-      assert.ok(Math.max(...rows.map((r) => r.histL)) >= exp.histLeft + exp.clearDx - 3, "slides out beyond rest until clear of Home (+10), then settles back");
+      assert.ok(Math.max(...rows.map((r) => r.histL)) >= exp.histLeft + exp.clearDx - 3, "reaches the character-safe excursion bound, then settles back");
     });
     // close: reversed, never instant
     const crows = await sample(CLOSE, 520);

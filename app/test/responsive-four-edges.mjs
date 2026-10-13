@@ -23,5 +23,5 @@ for(const h of [568,600,659,700,800,844,900,1080,1440]){
   prev=a;count++;
  }
 }
-assert.ok(layout(393,659).cardW>=282.3,'Safari toolbar must not shrink the phone paper');
+assert.ok(Math.abs(layout(393,659).cardW-283.217)<.5,'A-1144: 393x659 follows the phone width key');
 console.log(`PASS four-edge reference and vertical continuity: ${count} sizes`);

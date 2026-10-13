@@ -20,10 +20,10 @@ const near = (a, b, tol, msg) => assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a}
 const L = layoutOracle(MAIN);
 
 // ═══ Part N ═══
-await check("N1 keyframe equality at 390x844 / 810x900 / 1440x900 (<= 0.5 px): stage, margin, bottom, card, ARASO x / font / top, pitch", () => {
+await check("N1 v10 keyframe equality at 390x844 / 810x1080 / 1440x900", () => {
   const T = [
     { w: 390, h: 844, st: 211, m: 20, bot: 0.071, cw: 400.9 / 1.42, as: 18.07 },
-    { w: 810, h: 900, st: 321, m: 52, bot: 0.08, cw: 376.5, as: 24.096 },
+    { w: 810, h: 1080, st: 321, m: 52, bot: 0.08, cw: 410.704, as: 26.285 },
     { w: 1440, h: 900, st: 361, m: 120, bot: 0.08, cw: 534.6 / 1.42, as: 24.09 },
   ];
   for (const t of T) {
@@ -34,16 +34,18 @@ await check("N1 keyframe equality at 390x844 / 810x900 / 1440x900 (<= 0.5 px): s
     near(q.boardLeft + (1041 - 0.4991 * 150 + 150) * q.S, t.w - t.m, 1e-6, `right ink edge ${t.w}`);
   }
 });
-await check("N2 1940 max composition centres on both axes; phone reference stays intact",()=>{
+await check("N2 1940 max width composition and full viewport height",()=>{
  // A-1123 width keyframe=282.3, rather than 844*.475/1.42. Preserve
  // the canon reference within its declared half-pixel tolerance.
  near(L(390,844).cardW,282.32394366197184,.5,'phone');
- near(L(390,659).cardW,L(390,900).cardW,1e-9,'phone toolbar invariance');
+ near(L(393,659).cardW,220.656,.5,'v10 short phone');
  near(L(1440,900).cardW,376.5,1e-9,'desktop');
- const a=L(1940,1200),b=L(2560,1400);
+ const a=L(1940,1200),b=L(2560,1200),c=L(2560,1400);
  near(a.cardW,376.5*1.05,1e-9,'max card');near(b.cardW,a.cardW,1e-9,'fixed size');
- near(b.cardX-a.cardX,310,1e-9,'x margins');near(b.cardY-a.cardY,100,1e-9,'y margins');
- near(b.stageTop-a.stageTop,100,1e-9,'stage y');
+ near(b.cardX-a.cardX,310,1e-9,'x margins');near(b.cardY-a.cardY,0,1e-9,'same-height card y');
+ assert.ok(c.floorY>b.floorY+100,'floor follows full height');
+ near(L(1440,1440).cardX,L(1440,900).cardX,0.1,'1440 horizontal anchor retained at tall height');
+ near(L(2560,1440).cardX,870.13,0.6,'2560 horizontal anchor from A-1137 baseline');
 });
 await check("N3 no step: 1 px width sweep 360..1920 at heights 800 / 900 / 1080 - adjacent widths differ <= 1 % in every keyframed value", () => {
   const res = {};

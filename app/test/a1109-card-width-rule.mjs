@@ -17,16 +17,15 @@ const check = (label, fn) => { try { fn(); console.log(`PASS  ${label}`); pass +
 // Keep original phone closed-card expectations; use invariant tests for the new
 // coupled geometry and centred 1940 / +5% composition.
 await import('./responsive-layout.mjs');
-check("N1 closed phone sizing stays at the original Safari-width baseline",()=>{
- // A-1123 Owner: Safari toolbar height must not change the width-based size.
- // The old 393x852 pin (285.279) retained the height-floor bug.
- for(const[w,h,cw] of [[390,844,282.324],[393,659,283.217]])near(L(w,h).cardW,cw,.5,`${w}x${h}`);
- for(const h of [659,800,852,900]) near(L(393,h).cardW,L(393,659).cardW,1e-9,`393x${h} toolbar invariance`);
+check("N1 closed phone follows A-1144 width key despite toolbar height changes",()=>{
+ for(const[w,h,cw] of [[390,844,282.3],[393,659,283.217],[393,852,283.217],[430,932,294.529]])near(L(w,h).cardW,cw,.5,`${w}x${h}`);
+ for(let h=659;h<900;h++)near(L(393,h+1).cardW,L(393,h).cardW,1e-9,`393x${h} height resize invariance`);
 });
-check("N2 desktop cap is 1940 / 1.05 with surplus space centred on both axes",()=>{
- const a=L(1440,900),b=L(1940,1200),c=L(2560,1400);
+check("N2 desktop cap is 1940 / 1.05 with full viewport height",()=>{
+ const a=L(1440,900),b=L(1940,1200),c=L(2560,1200),d=L(2560,1400);
  near(b.cardW,a.cardW*1.05,1e-9,'growth');near(c.cardW,b.cardW,1e-9,'cap');
- near(c.cardX-b.cardX,310,1e-9,'horizontal');near(c.cardY-b.cardY,100,1e-9,'vertical');
+ near(c.cardX-b.cardX,310,1e-9,'horizontal');near(c.cardY-b.cardY,0,1e-9,'same-height vertical');
+ assert.ok(d.floorY>c.floorY+100,'floor follows taller viewport');
 });
 check("N3 existing card consumers remain connected to shared layout",()=>{
  assert.match(MAIN,/--hlCardW/);assert.match(MAIN,/cardW \/ 285/);assert.match(MAIN,/getResponsiveSolver\(\)\.history/);

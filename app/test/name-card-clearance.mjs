@@ -11,8 +11,10 @@ for(const h of [568,659,800,900,1080,1440]){
   const gap=12*L.S;
   assert.ok(n.cardW>1,`Name infeasible ${w}x${h}`);
   assert.ok(left>=chogRight+gap-.02||bottom<=chogTop-gap+.02,`Name/Chog collision ${w}x${h}: left=${left}, right=${chogRight}, bottom=${bottom}, top=${chogTop}`);
-  if(prev){assert.ok(n.cardW>=prev.cardW-.001,`Name shrinks ${w}x${h}`);assert.ok(n.cardW/prev.cardW<=1.01,`Name width step ${w}x${h}`);}
+  // A-1140 keeps viewport height fixed above 1440; a short Name scene may
+  // ease its fit against the floor while the horizontal frame grows.
+  if(prev)assert.ok(Math.abs(n.cardW-prev.cardW)/prev.cardW<=.01,`Name width step ${w}x${h}`);
   prev=n;count++;
  }
 }
-console.log(`PASS Name card: ${count} sizes, no Chog intersection, monotonic width, <=1% adjacent growth`);
+console.log(`PASS Name card: ${count} sizes, no Chog intersection, <=1% adjacent width change`);

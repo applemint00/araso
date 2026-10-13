@@ -11,6 +11,7 @@ const CSS = readFileSync(new URL("../src/style.css", import.meta.url), "utf8");
 
 const HTML = readFileSync(new URL("../index.html", import.meta.url), "utf8");
 const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+const INVITE_WIDE_MIN = Number((MAIN.match(/const INVITE_WIDE_MIN = (\d+);/) || [])[1]);
 let pass = 0, fail = 0;
 function check(name, ok, extra = "") {
   if (ok) { pass += 1; console.log(`PASS  ${name}`); } else { fail += 1; console.log(`FAIL  ${name}${extra ? ` (${extra})` : ""}`); }
@@ -58,7 +59,7 @@ const win = { innerWidth: 390, innerHeight: 844 };
 let renders = 0, transform = "";
 const ctx = vm.createContext({
   responsiveFrame, homeKeyframeLayout: layoutOracle(MAIN), hkClamp: (v,a,b) => Math.min(b,Math.max(a,v)),
-  window: win, INVITE_WIDE_MIN: 900, inviteKind: "mobile",
+  window: win, INVITE_WIDE_MIN, inviteKind: "mobile",
   // [A-839] fitInvite also reads the A-831 layout (syncDesktopFormatVars) and writes the --invS/--invVw/--invVh vars; pre-A-839 baseline: style had only the `transform` setter.
   syncDesktopFormatVars: () => ({ L: { cardW: 376.5, M: 120, asTop: 48, asFont: 24 } }),
   document: { querySelector: () => ({ dataset: { kind: ctx_kind() }, style: { set transform(v) { transform = v; }, setProperty() {} } }) },
@@ -68,7 +69,7 @@ const ctx = vm.createContext({
   clearTimeout: (id) => { if (id && timers[id - 1]) timers[id - 1].dead = true; },
   Number, Math,
 });
-function ctx_kind() { return win.innerWidth >= 900 ? "wide" : "mobile"; }
+function ctx_kind() { return win.innerWidth >= INVITE_WIDE_MIN ? "wide" : "mobile"; }
 vm.runInContext(
   `/* [A-920 RE-PIN] the vm also needs hkKey + the three A-920 keyframe consts (inviteGroupScale reads them). pre-A-920 baseline: no such lines */const HOME_TOOLBAR_RESIZE_DELTA_PX = 150;\n${MAIN.match(/const INVITE_WIDE_ART_SCALE = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_PHONE_ART_SCALE = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_CONTENT_W = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_CONTENT_H = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_GROUP_K = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_OFFSET_X = [^;]+;/)[0]}\n${MAIN.match(/const INVITE_OFFSET_Y = [^;]+;/)[0]}\n${cutFn("hkKey")}\n${cutFn("inviteGroupScale")}\n${cutFn("inviteHolePhase")}\n${cutFn("isToolbarOnlyResizeDelta")}\n${cutFn("debouncedHomeResizeListener")}\n${cutFn("wantedInviteKind")}\n${cutFn("fitInvite")}\nglobalThis.onResize = debouncedHomeResizeListener(fitInvite);`,
   ctx,

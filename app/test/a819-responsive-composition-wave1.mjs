@@ -373,30 +373,41 @@ try {
 // ── UI-03 Invite ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 H = await A.launchFresh();
 try {
-  await check("B-UI03 901 -> 899 and 899 -> 901 mid-timeline: the phase is never reset to 'closed', the layer animation clock continues, the artboard family does switch", async () => {
-    for (const [from, to, atMs] of [[901, 899, 1500], [899, 901, 2600]]) {
-      const r = await A.measureInvitePhaseResize(H, from, to, 800, { atMs, afterMs: [60, 400, 1200] });
-      assert.notEqual(r.before.phase, "closed");
-      assert.equal(r.after[0].kind, to >= 900 ? "wide" : "mobile");
-      const order = ["checking", "success", "peek1", "peek2", "tear", "teared", "exit", "settle", "idle"];
-      let last = order.indexOf(r.before.phase);
-      for (const s of r.after) {
-        assert.notEqual(s.phase, "closed", `${from}->${to} @+${s.sinceResizeMs}ms phase reset`);
-        const i = order.indexOf(s.phase); assert.ok(i >= last, `${from}->${to} phase went backwards ${s.phase}`); last = i;
+  await check("B-UI03 701 -> 699 and 699 -> 701 during pending auth: Invite stays mounted in checking, with no destination flash", async () => {
+    // A-1131 defers the envelope timeline until authentication succeeds. This
+    // local no-grant harness cannot enter that timeline. Hold WebAuthn in this
+    // browser only; N7/N8 above still test the success-phase animation clock.
+    await H.p.addInitScript(() => {
+      window.__a819AuthCalls = [];
+      const pending = new Promise(() => {});
+      Object.defineProperty(navigator, "credentials", { configurable: true, value: {
+        get: () => { window.__a819AuthCalls.push("get"); return pending; },
+        create: () => { window.__a819AuthCalls.push("create"); return pending; },
+      } });
+      if (window.PublicKeyCredential) {
+        PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable = async () => true;
+        PublicKeyCredential.isConditionalMediationAvailable = async () => true;
       }
-      const b0 = r.before.anims[0], a0 = r.after[0].anims[0];
-      if (b0 && a0 && b0.name === a0.name) assert.ok(Number.isFinite(b0.active) && Number.isFinite(a0.active) && a0.active >= b0.active - 80, `${from}->${to} animation restarted: active time ${b0.active} -> ${a0.active}`);
-      assert.equal(r.after[0].face && r.after[0].face.w > 0, true, "Face ID control still reachable");
+    });
+    for (const [from, to, atMs] of [[701, 699, 1500], [699, 701, 2600]]) {
+      const r = await A.measureInvitePhaseResize(H, from, to, 800, { atMs, afterMs: [60, 400, 1200] });
+      assert.equal(r.before.phase, "checking");
+      assert.equal(r.after[0].kind, to >= 700 ? "wide" : "mobile");
+      for (const s of r.after) {
+        assert.equal(s.phase, "checking", `${from}->${to} @+${s.sinceResizeMs}ms phase changed`);
+        assert.ok(s.board && s.face?.w > 0, `${from}->${to} Invite or Face ID disappeared`);
+      }
+      assert.ok((await H.p.evaluate(() => window.__a819AuthCalls?.length)) > 0, "pending WebAuthn fixture reached");
     }
   });
   // pre-A-839 baseline: board + paper inside the viewport at 899/900/901 x 675/800/1000 and the representative sizes (inside(m.board), inside(m.paper)). A-839: the board's art margins are
   // transparent and may overhang the viewport (clipped by .stage--invite, no scroll); the A-724 containment intent is carried by the CONTENT group (hero, Face ID, Chog, burst) staying inside.
   const contentInside = async (w, h) => { const rs = await H.p.evaluate(() => [".invite__hero", "#inviteFaceButton", ".invite__chog", ".invite__chogNative", ".invite__burst"].map((q) => { const e = document.querySelector(q); const r = e && e.getBoundingClientRect(); return r ? { l: r.left, t: r.top, r: r.right, b: r.bottom } : null; }).filter(Boolean)); assert.ok(rs.length >= 3, "content present"); for (const r of rs) inside(r, w, h, `${w}x${h} invite content`); };
-  await check("B-UI03 899/900/901 static: the Invite content group is inside the viewport at 675/800/1000 high (A-724 containment; A-839: board art margins may overhang), brand anchor unchanged by this card", async () => {
-    for (const h of [675, 800, 1000]) for (const w of [899, 900, 901]) {
+  await check("B-UI03 699/700/701 static: the Invite content group is inside the viewport at 675/800/1000 high (A-724 containment; A-839: board art margins may overhang), brand anchor unchanged by this card", async () => {
+    for (const h of [675, 800, 1000]) for (const w of [699, 700, 701]) {
       const m = await A.measureInviteStatic(H, w, h);
       await contentInside(w, h);
-      assert.equal(m.kind, w >= 900 ? "wide" : "mobile");
+      assert.equal(m.kind, w >= 700 ? "wide" : "mobile");
     }
     for (const [w, h] of A.REPRESENTATIVE) { await A.measureInviteStatic(H, w, h); await contentInside(w, h); }
   });

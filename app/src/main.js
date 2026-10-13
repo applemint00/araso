@@ -4948,11 +4948,13 @@ function goHomeFromFilebox() {
 // `alignRecordsCardToHomePaper()` itself now no-ops at ≤640px (see its own comment) so
 // narrow keeps A-607's fixed CSS positioning undisturbed. [A-621] current mobile behavior:
 // HISTORY stacks over the unmoved HOME from viewer-right — stackMobileRecordsOverHome().
+let recordsReturnFocus = null;
 function openRecordsCard() {
   const anchor = document.querySelector("#recordsCardAnchor");
   if (!anchor) return;
   // [A-833] an identity switch while open re-enters here: do not replay the open motion (History is already out).
   const alreadyOpen = !anchor.hidden && Boolean(state.recordsCardVisible);
+  if (!alreadyOpen) recordsReturnFocus = document.activeElement;
   state.recordsCardVisible = true;
   state.recordsDetailIndex = null;
   // [A-411] 두 카드 왼쪽 이동은 anchor.hidden 을 풀기 전, opening 클래스를 걸기 전에
@@ -4994,6 +4996,7 @@ function openRecordsCard() {
     });
   }
   startRecordsAlignLoop();
+  if (!alreadyOpen) document.querySelector("#recordsCardClose")?.focus({ preventScroll: true });
 }
 
 // 닫으면 원래 Home 그대로(§4) — 기록 카드만 숨기고 그 옆 Home 카드는 손대지 않는다.
@@ -5041,6 +5044,8 @@ function closeRecordsCard() {
   // [A-623] recordsCardVisible is false here → shift off AND HOME background controls live
   // again immediately (not after the 180ms mobile exit).
   syncRecordsViewportState();
+  if (recordsReturnFocus?.isConnected) recordsReturnFocus.focus({ preventScroll: true });
+  recordsReturnFocus = null;
 }
 
 // [A-623] the single owner of the two viewport-dependent pieces of "Records is open" state:
@@ -5356,7 +5361,7 @@ function arasoBrandMarkup() {
 // 봉투를 뜯는 단계 전환은 와이드 아트보드의 tapFace() 타임라인 그대로다.
 // 원본(폰트 otf·풀사이즈 PNG)은 비공개 디자인 원본에만 둔다. 손글씨 두 줄은
 // 폰트 파일을 배포하지 않으려고 낱말만 그림으로 렌더한 것이다.
-const INVITE_WIDE_MIN = 900;
+const INVITE_WIDE_MIN = 700;
 
 // 캔버스 tapFace() 의 타임라인 그대로(ms).
 const INVITE_TIMELINE = [
@@ -5482,8 +5487,17 @@ function inviteGroupScale(kind, L, vw, vh) {
   const boundary = homeKeyframeLayout(INVITE_WIDE_MIN, baseH);
   const phoneAtBoundary = Math.min(INVITE_PHONE_ART_SCALE * Math.min(boundary.cardW / 283, baseH / 780)
     * hkKey(INVITE_WIDE_MIN, INVITE_GROUP_K, true), INVITE_WIDE_MIN / INVITE_CONTENT_W.mobile, baseH / INVITE_CONTENT_H.mobile);
-  const blend = hkClamp((baseW - INVITE_WIDE_MIN) / (1440 - INVITE_WIDE_MIN), 0, 1);
-  const out = Math.min(rule * hkKey(baseW, INVITE_GROUP_K, true),
+  const blend = hkClamp((baseW - INVITE_WIDE_MIN) / (861 - INVITE_WIDE_MIN), 0, 1);
+  // [A-1140 answer (4)] The 861/1000/1100 envelope follows the restored
+  // HomeCard: 553.3 x (cardW / 376.5). Blend only across the 700 artboard
+  // hand-off; a fixed pixel target here was a misread of answer (2).
+  const wideScale = phoneAtBoundary + (rule - phoneAtBoundary) * blend;
+  // On short landscape viewports the burst is the topmost visible actor.
+  // Its 712 px target extent returns to the retained 720 px desktop guard
+  // after 1100, so 1439/1440 has no scale step at any viewport height.
+  const extentT = hkClamp((baseW - 1100) / 340, 0, 1);
+  const wideExtent = 712 + 8 * extentT * extentT * (3 - 2 * extentT);
+  const out = wide && baseW < 1440 ? Math.min(wideScale, baseH / wideExtent) : Math.min(rule * hkKey(baseW, INVITE_GROUP_K, true),
     frame.width * frame.scale / INVITE_CONTENT_W[key], frame.height * frame.scale / INVITE_CONTENT_H[key]);
   // [A-920 item 4] position: the content group (envelope, sparkle, Face ID, Chog) sits at the mock x / y (img_30 / 31 / 33: ~13 px left / 14 px down at 390, 17 / 24 at 810, same at 1440) as a board-unit
   // offset keyframe, straight line between; the notebook (lines, holes, tape) stays where it is. Written as --invDx / --invDy on the board, read by one style.css rule. No basis for "Invite 390 centred" was found in
@@ -11964,18 +11978,29 @@ function homeKeyframeLayoutBase(vw, vh, safeTop = 0, cardLimit = Infinity) {
   const floorY = vh - bottom;
   const stageL = W - M - stageW;
   const stageTop = floorY - S * (HK_INK_FOOT - HK_INK_TOP);
-  // [A-833 U2] card x/y blend between the portrait rule (A-829 item 5) and the landscape rule (zone-centred, top 12.5 %) with the SAME
-  // aspect weight as the card-height rule: t = clamp((w/h - 0.75)/0.5, 0, 1) - no step at the portrait/landscape switch.
-  // pre-A-833 baseline: hard switch at vw > vh (A-831 generator `landscape = W > H`).
-  const posT = hkClamp((W / vh - 0.75) / 0.5, 0, 1);
+  // A-1140: the full viewport height drives vertical fit, while the retained
+  // 1440+ horizontal composition uses its former 900px aspect reference.
+  // FINAL 경계 연결용: blend in 1280..1440 so x has no boundary step.
+  const handoff = hkClamp((W - 1280) / 160, 0, 1);
+  const blend = handoff * handoff * (3 - 2 * handoff);
+  const horizontalHeight = vh + (Math.min(vh, 900) - vh) * blend;
+  const posT = hkClamp((W / horizontalHeight - 0.75) / 0.5, 0, 1);
+  const verticalT = hkClamp((W / vh - 0.75) / 0.5, 0, 1);
   const fPortrait = HK_F_PORTRAIT[0] + (HK_F_PORTRAIT[1] - HK_F_PORTRAIT[0]) * hkClamp((W - 390) / 420, 0, 1);
-  const f = fPortrait + (HK_F_LANDSCAPE - fPortrait) * posT;
+  const f = fPortrait + (HK_F_LANDSCAPE - fPortrait) * verticalT;
   const room = Math.max(0, W - 2 * M);
   const heightCardW = Math.min((vh * f) / HK_PAPER_H_PER_W, room);
-  // Grow from the established phone size to the desktop reference, without
-  // the old tablet peak or a viewport-height floor that reverses growth.
-  const targetW = Math.min(376.5, hkKey(W, [282.3,410.7,376.5]));
-  const maxCardW = Math.min(targetW, room);
+  // A-1144 Owner: width-only through 550; FINAL 경계 연결용 550..640
+  // joins the existing height rule without changing any 641+ composition.
+  const phoneWidth = Math.min(hkKey(W, [282.3, 410.7, 376.5]), room);
+  const phoneT = hkClamp((W - 550) / 90, 0, 1);
+  // One width interpolation here; easing this again amplifies the fitted
+  // paper's vertical travel before History consumes that same geometry.
+  const phoneBlend = phoneT;
+  const rawCardW = W < 640 ? phoneWidth + (heightCardW - phoneWidth) * phoneBlend : heightCardW;
+  // The last source frame is 1280. Meet the unchanged 1440 horizontal size
+  // continuously in the unkeyframed band, including short viewports.
+  const maxCardW = W < 1440 ? rawCardW + (Math.min(376.5, room) - rawCardW) * blend : Math.min(376.5, room);
   // Visible Send box = paper width x 285/282, height x 364/285, centred on the paper; ARASO box = 4.183 x font wide (A-1109 Chromium sizes.json).
   const stage = { l: stageL, r: W - M, t: stageTop, b: floorY };
   // Keep the full Piggy seat reserve, but use Chog's exported ink boundary
@@ -11995,7 +12020,7 @@ function homeKeyframeLayoutBase(vw, vh, safeTop = 0, cardLimit = Infinity) {
     const xL = Math.max(M, (M + zoneR) / 2 - cw / 2), yL = 0.125 * vh;
     const yP = brandBottom + Math.max(0, (stageTop - brandBottom - ch) / 2);
     const xP = M + (W - 2 * M - cw) * hkClamp((W - 390) / 840, 0, 0.5);
-    const x = xP + (xL - xP) * posT + dx, y = yP + (yL - yP) * posT + dy;
+    const x = xP + (xL - xP) * posT + dx, y = yP + (yL - yP) * verticalT + dy;
     const sw = (cw * 285) / 282, sh = (sw * 364) / 285, cx = x + cw / 2, cy = y + ch / 2;
     const send = { l: cx - sw / 2, r: cx + sw / 2, t: cy - sh / 2, b: cy + sh / 2 }, paper = { l: x, r: x + cw, t: y, b: y + ch };
     // [A-1109 answer 11] the open Home paper (cw x cw*1.42) is taller than the Send box, so both are checked (box = their union).
@@ -12011,12 +12036,20 @@ function homeKeyframeLayoutBase(vw, vh, safeTop = 0, cardLimit = Infinity) {
     const gap = (32 * cw) / HK_CARD_REF_W;
     // Release vertical space gradually after clearing each character in x.
     // A binary above/beside switch made the paper jump when the lane opened.
-    const edge = Math.min(floorY, ...residents.map(r => {
+    let edge = Math.min(floorY, ...residents.map(r => {
       const distance = Math.max(r.l-p0.box.r, p0.box.l-r.r, 0);
       const t = hkClamp(distance/(cw*.3), 0, 1);
       return r.t+(floorY-r.t)*t*t*(3-2*t);
     }));
-    const sh = p0.box.b - p0.box.t, roomGap=Math.max(0,Math.min(gap,(edge-p0.brandBottom-sh)/2,p0.box.t-p0.brandBottom)); const top=p0.brandBottom+roomGap,bot=edge-roomGap;
+    const sh = p0.box.b - p0.box.t;
+    if (W < 640) {
+      // A proximity reserve is not a collision. Compress it before reducing
+      // phone paper; only a real overlapping character/floor can limit size.
+      const collisionEdge = Math.min(floorY, ...residents
+        .filter(r => p0.box.l < r.r - .01 && p0.box.r > r.l + .01).map(r => r.t));
+      edge = Math.min(collisionEdge, Math.max(edge, p0.brandBottom + sh));
+    }
+    const roomGap=Math.max(0,Math.min(gap,(edge-p0.brandBottom-sh)/2,p0.box.t-p0.brandBottom)); const top=p0.brandBottom+roomGap,bot=edge-roomGap;
     if (sh > bot - top + 1e-9) return null;
     const p = place(cw, hkClamp(p0.box.t, top, bot - sh) - p0.box.t);
     return clear(p) ? p : null;
@@ -12701,7 +12734,7 @@ function returnLayout(L = desktopFormat()?.L, paperAspect = 1 / RECEIPT_ASPECT_H
   let rw = rw0;
   {
     const fits = (w) => topFor(w, 1) + (1.09 * w) / paperAspect <= readLimit(w) + 1e-7;
-    if (!fits(rw0)) { let lo = 0, hi = rw0; for (let i = 0; i < 30; i += 1) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; } rw = lo; }
+    if (f > 0 && !fits(rw0)) { let lo = 0, hi = rw0; for (let i = 0; i < 30; i += 1) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; } rw = rw0 + (lo - rw0) * f; }
   }
   const rh = rw / paperAspect;
   const rcxP = L.vw / 2;
@@ -12727,7 +12760,10 @@ function returnLayout(L = desktopFormat()?.L, paperAspect = 1 / RECEIPT_ASPECT_H
   // [A-920 item 3] Receipt x: the mock (img_27) has the paper 11 px further left of the character group at 1440 (gap 51 vs 40 px). One length keyframe 390 / 810 / 1440 = [0, 0, -11] (hkKey length mode, straight line,
   // landscape weight t only; the character group / dxChar are not touched). pre-A-920 baseline: rcx: rcxP + (rcxL - rcxP) * t
   const a920Rcx = hkKey(L.vw, RET_RCX_SHIFT) * t;
-  return { rcx: rcxP + (rcxL - rcxP) * t + a920Rcx, rcy: top + rh / 2, top, rw, rh, dyChar, dxChar: dxP + (dxL - dxP) * t };
+  // At intermediate aspect ratios the portrait and side-arrangement endpoints
+  // can each fit while their interpolation crosses the right safe margin.
+  const dxChar = Math.min(dxP + (dxL - dxP) * t, L.vw - L.M - clW - clHome);
+  return { rcx: rcxP + (rcxL - rcxP) * t + a920Rcx, rcy: top + rh / 2, top, rw, rh, dyChar, dxChar };
 }
 // The delivered box must have the paper's OWN rendered aspect (return-view.js contain-fits the rotated paper into it): otherwise a paper that is taller at <=640 (its own
 // A-666 type rules) is height-limited and comes out narrower than 0.91 x HomeCard. Same quantity return-view.js measures for the rail; memoised per element and width.

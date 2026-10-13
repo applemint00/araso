@@ -37,6 +37,7 @@ check("pin does not reach >=1280 (canonical wide artboard untouched)", maxW < 12
 // ---- browser
 const VIEWPORTS = [
   { w: 390, h: 844, band: "mobile" }, { w: 430, h: 932, band: "mobile" },
+  { w: 700, h: 800, band: "tablet" }, { w: 861, h: 800, band: "tablet" },
   { w: 900, h: 675, band: "tablet" }, { w: 1024, h: 768, band: "tablet" }, { w: 1024, h: 694, band: "tablet" },
   { w: 1180, h: 820, band: "tablet" }, { w: 1279, h: 800, band: "tablet" },
   { w: 1280, h: 800, band: "desktop" }, { w: 1366, h: 1024, band: "desktop" },
@@ -125,7 +126,7 @@ async function main() {
       if (OUT) await page.screenshot({ path: path.join(OUT, "shots", `${PHASE}_invite_${vp.w}x${vp.h}.png`) });
       const tag = `${m.viewport}`;
       const bL = m.board ? m.board.l : NaN, bR = m.board ? +(vp.w - m.board.r).toFixed(2) : NaN;
-      check(`${tag} invite present, kind=${vp.w >= 900 ? "wide" : "mobile"}`, m.kind === (vp.w >= 900 ? "wide" : "mobile"), String(m.kind));
+      check(`${tag} invite present, kind=${vp.w >= 700 ? "wide" : "mobile"}`, m.kind === (vp.w >= 700 ? "wide" : "mobile"), String(m.kind));
       check(`${tag} grid track width <= viewport (no oversized implicit track)`, m.track != null && m.track <= vp.w + 0.5, m.cols);
       // pre-A-839 baseline: check(`${tag} no stage horizontal overflow (scrollWidth <= clientWidth)`, m.stage && m.stage.sw <= m.stage.cw, ...) - the board (art margins included) was always inside the viewport.
       // A-839: the board's art margins are transparent and may extend past the viewport (clipped by .stage--invite, no scrollbar: doc check below); the CONTENT group must stay inside (A-724 containment intent).

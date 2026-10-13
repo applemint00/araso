@@ -27,28 +27,30 @@ const near = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${
 const cutFn = (src, name) => { const i = src.indexOf(`function ${name}(`); if (i < 0) return null; let d = 0, st = false; for (let j = src.indexOf("{", i); j < src.length; j += 1) { if (src[j] === "{") { d += 1; st = true; } else if (src[j] === "}") { d -= 1; if (st && d === 0) return src.slice(i, j + 1); } } return null; };
 
 const L = layoutOracle(MAIN);
-const ctx = vm.createContext({ Math, responsiveFrame, homeKeyframeLayout:L, INVITE_WIDE_MIN:900, hkClamp:(v,a,b)=>Math.min(b,Math.max(a,v)) });
+const ctx = vm.createContext({ Math, responsiveFrame, homeKeyframeLayout:L, INVITE_WIDE_MIN:700, hkClamp:(v,a,b)=>Math.min(b,Math.max(a,v)) });
 vm.runInContext([MAIN.match(/const INVITE_WIDE_ART_SCALE = [^;]+;/)[0], MAIN.match(/const INVITE_PHONE_ART_SCALE = [^;]+;/)[0], MAIN.match(/const INVITE_CONTENT_W = [^;]+;/)[0], MAIN.match(/const INVITE_CONTENT_H = [^;]+;/)[0], MAIN.match(/const INVITE_GROUP_K = [^;]+;/)[0], MAIN.match(/const INVITE_OFFSET_X = [^;]+;/)[0], MAIN.match(/const INVITE_OFFSET_Y = [^;]+;/)[0], cutFn(MAIN, "hkKey"), cutFn(MAIN, "inviteGroupScale"), "globalThis.__s = inviteGroupScale;"].join("\n"), ctx);
-const scaleAt = (w, h) => ctx.__s(w >= 900 ? "wide" : "mobile", L(w, h, 0), w, h);
+const scaleAt = (w, h) => ctx.__s(w >= 700 ? "wide" : "mobile", L(w, h, 0), w, h);
 // [A-920 RE-PIN] the rule carries the mock keyframe factor [0.927, 0.927, 1] at 390 / 810 / 1440 (held outside). pre-A-920 baseline: no factor
 const qA920 = (w) => (w <= 390 ? 0.927 : w <= 810 ? 0.927 : w <= 1440 ? 0.927 + ((1 - 0.927) * (w - 810)) / 630 : 1);
-const ruleAt = (w, h) => { const c = L(w, h, 0).cardW; return qA920(w) * (w >= 900 ? (1.125 * c) / 377 : (390 / 420) * Math.min(c / 283, Math.min(h, 900) / 780)); };
+const ruleAt = (w, h) => { const c = L(w, h, 0).cardW; return qA920(w) * (w >= 900 ? (1.125 * c) / 377 : (390 / 420) * Math.min(c / 283, h / 780)); };
 
-await check("N1 group scale equals the A-835 item 6 rule (Cowork U-I1) at 390x844 / 810x1080 / 1100x800 / 1440x900 within 1 %; 1440x900 ~ today's 1.125", () => {
-  for (const [w, h] of [[390, 844], [810, 1080], [1100, 800], [1440, 900]]) near(scaleAt(w, h) / ruleAt(w, h), 1, 0.01, `${w}x${h}`);
+await check("N1 Owner A-1140 HomeCard-ratio Invite envelopes and retained 1440 scale", () => {
+  for (const w of [861,1000,1100]) near(scaleAt(w,800) * 553.267 / (1.125 * 376.5 / 377),553.3 * L(w,800,0).cardW / 376.5,2,`${w} envelope`);
+  near(scaleAt(390,844) / ruleAt(390,844),1,.01,'390 phone ratio');
+  near(scaleAt(1440,900) / ruleAt(1440,900),1,.01,'1440 retained ratio');
   near(scaleAt(1440, 900), 1.125, 0.0015 * 1.125, "1440x900 vs today's board scale");
   near(scaleAt(390, 844), 0.927 * (390 / 420) * (282.32 / 283), 0.005, "390x844 phone"); /* [A-920 RE-PIN] pre-A-920 baseline: (390 / 420) * (282.32 / 283) */
 });
-await check("N2 no step in a 1 px width sweep 360..1920 at heights 600 / 800 / 900 / 1080 - sizes <= 1 % - except the documented portrait<->landscape arrangement switch at 900 (both sides reported)", () => {
+await check("N2 no scale step in a 1 px width sweep including the 700 artboard switch", () => {
   const sw = [];
   for (const h of [600, 800, 900, 1080]) {
     for (let w = 360; w < 1920; w += 1) {
       const a = scaleAt(w, h), b = scaleAt(w + 1, h);
-      if (w === 899) { sw.push(`${h}: 899 ${a.toFixed(4)} -> 900 ${b.toFixed(4)}`); continue; }
+      if (w === 699) sw.push(`${h}: 699 ${a.toFixed(4)} -> 700 ${b.toFixed(4)}`);
       assert.ok(Math.abs(b - a) / a <= 0.01, `${w}->${w + 1} @h${h}: ${a} -> ${b}`);
     }
   }
-  console.log(`INFO  arrangement switch (899 -> 900): ${sw.join(" | ")}`);
+  console.log(`INFO  arrangement switch (699 -> 700): ${sw.join(" | ")}`);
 });
 if (!PRE) console.log("SKIP  N3 — private pre-copy absent (public checkout)"); else // [A-888] public-clone guard
 await check("N3 source: a734 byte-pinned Invite markup + render / openInvite / setInvitePhase / mountInviteChog / arasoBrandMarkup / carryInviteTimelineAcross are byte-identical to the pre-copy", () => {
@@ -116,7 +118,7 @@ async function openInvite(w, h) {
   });
 }
 const SIZES = [];
-for (const h of [600, 800, 900, 1080]) for (const w of [360, 390, 640, 810, 899, 900, 901, 1100, 1280, 1440, 1920]) SIZES.push([w, h]);
+for (const h of [600, 800, 900, 1080]) for (const w of [360, 390, 640, 699, 700, 701, 810, 899, 900, 901, 1100, 1280, 1440, 1920]) SIZES.push([w, h]);
 let infoOverlap = []; const containment = [];
 for (const [w, h] of SIZES) {
   let m; try { m = await openInvite(w, h); } catch (e) { await check(`B0 [${w}x${h}] Invite reachable`, () => { throw e; }); continue; }
@@ -136,7 +138,8 @@ for (const [w, h] of SIZES) {
     assert.ok(first >= 0 && first <= 4, `first gold pixel at y=${first}`);
   });
   await check(`B3 [${w}x${h}] content group scale = rule (+-1 %); ARASO on the rail; hole column at 0.8 x side margin; line pitch = 32 x HomeCard / 282`, () => {
-    near(m.s / scaleAt(w, h), 1, 0.01, "group scale vs inviteGroupScale"); { const guard = Math.min(w / (m.kind === "wide" ? 760 : 380), h / (m.kind === "wide" ? 720 : 768)); const rule = ruleAt(w, h); if (rule <= guard) near(m.s / rule, 1, 0.01, "group scale vs the A-835 rule"); else { near(m.s / guard, 1, 0.01, "content-containment guard (A-724) binds"); containment.push(`${w}x${h} rule ${rule.toFixed(3)} -> ${m.s.toFixed(3)}`); } }
+    near(m.s / scaleAt(w, h), 1, 0.01, "group scale vs inviteGroupScale");
+    if (w < 700 || w >= 1440) { const guard = Math.min(w / (m.kind === "wide" ? 760 : 380), h / (m.kind === "wide" ? 720 : 768)); const rule = ruleAt(w, h); if (rule <= guard) near(m.s / rule, 1, 0.01, "group scale vs the A-835 rule"); else { near(m.s / guard, 1, 0.01, "content-containment guard (A-724) binds"); containment.push(`${w}x${h} rule ${rule.toFixed(3)} -> ${m.s.toFixed(3)}`); } }
     near(m.brand.l, l.M, 0.6, "ARASO left"); near(m.brandFont, l.asFont, 0.1, "ARASO font"); near(m.brand.t, l.asTop, 1.5, "ARASO top");
     near((m.holes.l + m.holes.r) / 2, 0.8 * l.M, 1.5, "hole column centre");
     near(parseFloat(m.bodySize.split(" ")[1]), (32 * l.cardW) / 282, 0.05, "body line pitch"); assert.ok(m.scrollW <= w, `no horizontal overflow ${m.scrollW} > ${w}`);
@@ -158,10 +161,10 @@ await check("B4 [every scene] the body notebook pitch is 32 x HomeCard / 282 (Ho
     for (const sc of [["name", { resumed: true }], ["explore", { secondJourneyPreview: true }], ["return", { arrival: true }]]) { await H.p.evaluate(([n, o]) => window.__arasoScene(n, o), sc); await sleep(1500); near(await pitchOf(), pitch, 0.05, `${w} ${sc[0]}`); }
   }
 });
-await check("B5 Invite phase survives the 900 arrangement switch (a819 B-UI03 carries it; here: the artboard family switches and the page keeps rendering)", async () => {
-  await H.p.setViewportSize({ width: 901, height: 800 }); await H.p.goto(H.BASE, { waitUntil: "networkidle" }); await H.p.waitForSelector(".invite"); await sleep(900);
+await check("B5 Invite phase survives the 700 arrangement switch (a819 B-UI03 carries it; here: the artboard family switches and the page keeps rendering)", async () => {
+  await H.p.setViewportSize({ width: 701, height: 800 }); await H.p.goto(H.BASE, { waitUntil: "networkidle" }); await H.p.waitForSelector(".invite"); await sleep(900);
   const k1 = await H.p.evaluate(() => document.querySelector(".invite").dataset.kind);
-  await H.p.setViewportSize({ width: 899, height: 800 }); await sleep(600);
+  await H.p.setViewportSize({ width: 699, height: 800 }); await sleep(600);
   const k2 = await H.p.evaluate(() => document.querySelector(".invite")?.dataset.kind);
   assert.equal(k1, "wide"); assert.equal(k2, "mobile");
 });
