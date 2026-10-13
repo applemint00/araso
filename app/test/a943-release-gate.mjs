@@ -45,15 +45,16 @@ const boot = main.slice(bootS, bootE), sec = main.slice(secS, secE);
 // [A-948 RE-PIN] main.js asks journeyFeatureOpen(feature, { level, profile }) at the same 4 places. pre-A-948: /releaseAllows\("([A-Za-z]+)"\)/g
 const calls = [...main.matchAll(/journeyFeatureOpen\("([A-Za-z]+)", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/g)].map((m) => m[1]);
 check("main.js imports releaseAllows from ./release-gate.js only", () => { assert.match(main, /^import \{ releaseAllows \} from "\.\/release-gate\.js";/m); });
-check("every gate call is inside the two [A-943] blocks", () => {
+check("gate calls remain in declared release blocks plus opt-in A1172 bell", () => {
   // [A-948 RE-PIN] the gate call is journeyFeatureOpen; pre-A-948: releaseAllows(
   // [A-966 RE-PIN] the one [A-966] fork Gift block asks journeyFeatureOpen("forkGift") (release-gate.js names it for exactly this); it is cut here and pinned below.
   const outside = (main.slice(0, secS) + main.slice(secE, bootS) + main.slice(bootE)).replace(/^\/\/ ── \[A-966\] Gift on the shared fork[\s\S]*?^\/\/ ── \[A-966\] end Gift on the shared fork ──\n/m, "").replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "") /* [A-974 re-pin] the one [A-974] fork entry block (journeyFeatureOpen "second" ×1, pinned below); pre-A-974: no cut */.replace(/^import \{ releaseAllows \}.*$/m, "").replace(/^import \{ storedJourney \}.*$/m, "").replace(/\/\/[^\n]*/g, "");
-  assert.equal(/(releaseAllows|journeyFeatureOpen)\(/.test(outside), false);
+  assert.equal(/(releaseAllows|journeyFeatureOpen)\(/.test(outside.replace(/function a1172BellEnabled\(\) \{[\s\S]*?\n\}/, "")), false);
+  assert.match(main, /function a1172BellEnabled\(\) \{[\s\S]*?VITE_ARASO_TEST_REPEAT_BELL === "1"[\s\S]*?onForkProfile\(CHAIN_PROFILE\)[\s\S]*?journeyFeatureOpen\("second"/);
 });
 // [A-966 RE-PIN] + forkGift ×1 inside the [A-966] block. pre-A-966: ["afterSecond", "gift", "second", "second"]
-check("gate calls = afterSecond ×1 · forkGift ×1 ([A-966] block) · gift ×1 · second ×2 + second ×1 ([A-974] block) (nothing else)" /* [A-974 re-pin] pre-A-974 title: … second ×2 (nothing else) */, () => {
-  assert.deepEqual(calls.sort(), ["afterSecond", "forkGift", "gift", "second", "second", "second"]); // [A-974 re-pin] + second ×1 in the [A-974] block. pre-A-974: ["afterSecond", "forkGift", "gift", "second", "second"]
+check("gate calls = afterSecond ×1 · forkGift ×1 ([A-966] block) · gift ×1 · second ×2 + second ×1 ([A-974] block) + opt-in bell ×1" /* [A-974 re-pin] pre-A-974 title: … second ×2 (nothing else) */, () => {
+  assert.deepEqual(calls.sort(), ["afterSecond", "forkGift", "gift", "second", "second", "second", "second"]); // [A-974 re-pin] + second ×1 in the [A-974] block. pre-A-974: ["afterSecond", "forkGift", "gift", "second", "second"]
   const blk974 = main.match(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m)?.[0] || ""; // [A-974 re-pin]
   assert.equal([...blk974.matchAll(/journeyFeatureOpen\(/g)].length, 1); // [A-974 re-pin]
   assert.match(blk974, /journeyFeatureOpen\("second", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/); // [A-974 re-pin]

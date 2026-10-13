@@ -419,7 +419,10 @@ await check("PRF-0 zeroing-only delta: Money uses approved A-1171 pin; other cal
   // A-1159 adds only a static pre-auth screen; retain the original hash for the remaining render body.
   const inviteOnlyBlock = '  if (inviteOnlyEntry()) {\n    clearInviteTimers();\n    app.innerHTML = renderInviteOnly();\n    return;\n  }\n';
   assert.equal(fnBody("render").split(inviteOnlyBlock).length, 2, "exactly one A-1159 branch");
-  assert.equal(sha(fnBody("render").replace(inviteOnlyBlock, "")), PRE.render, "render() otherwise byte-identical");
+  // A-1172 only adds an opt-in bell timer cancellation; preserve the original render pin.
+  const repeatBellReset = '  if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEnabled() && !a1172BellEligible()) a1172ResetBell();\n';
+  assert.equal(fnBody("render").split(repeatBellReset).length, 2, "exactly one A-1172 cancellation guard");
+  assert.equal(sha(fnBody("render").replace(inviteOnlyBlock, "").replace(repeatBellReset, "")), PRE.render, "render() otherwise byte-identical");
 });
 
 // requestMoneyPermission / proveFundingTargetControl over stubs. `variant` = current text or the stripped pre-A-669 text.

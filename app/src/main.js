@@ -3974,7 +3974,7 @@ async function recheckSecondCandidatesOnHome() {
 
 function mountSecondHomeBell() {
   const sj = state.secondJourney;
-  if (!sj.bellCandidateId || state.scene !== "sendstay" || state.sendCardVisible) return;
+  if ((!sj.bellCandidateId && !(import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellReady())) || state.scene !== "sendstay" || state.sendCardVisible) return;
   const stage = document.querySelector('.stage[data-scene="sendstay"]');
   if (!stage || stage.querySelector("#secondHomeBell")) return;
   const btn = document.createElement("button");
@@ -3984,6 +3984,7 @@ function mountSecondHomeBell() {
   btn.setAttribute("aria-label", "bell");
   btn.innerHTML = '<img src="/card/crayon-bell.svg" alt="" draggable="false" />';
   btn.addEventListener("click", () => {
+    if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1") a1172ConsumeBell();
     sj.bellCandidateId = null;
     sj.waitingForPlace = false;
     btn.remove();
@@ -3998,14 +3999,68 @@ function mountSecondHomeBell() {
 
 // Called once per Home settle: draws a pending bell, re-checks on entry, and re-checks when the app is visible again.
 function armSecondHomeWait() {
+  if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1") a1172ArmBell();
   mountSecondHomeBell();
   recheckSecondCandidatesOnHome();
   if (secondVisibilityArmed) return; // one listener per scene, however many times settle runs
   secondVisibilityArmed = true;
   onSceneTeardown(() => { secondVisibilityArmed = false; });
   sceneListener(document, "visibilitychange", () => {
+    if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEnabled()) {
+      if (a1172BellVisit?.ready && !state.secondJourney.bellCandidateId) document.querySelector("#secondHomeBell")?.remove();
+      a1172ResetBell();
+      if (document.visibilityState === "visible") a1172ArmBell();
+    }
     if (document.visibilityState === "visible") recheckSecondCandidatesOnHome();
   });
+}
+
+// [A-1172] Test-period repeat invitation only. @EXPIRES_WITH: A-1172
+// Remove this opt-in when the tester period closes; it never asserts candidate evidence.
+let a1172BellVisit = null;
+function a1172BellEnabled() {
+  return import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1"
+    && onForkProfile(CHAIN_PROFILE)
+    && journeyFeatureOpen("second", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE });
+}
+function a1172BellEligible() {
+  return a1172BellEnabled() && state.secondJourneyCompletedOnce === true
+    && state.scene === "sendstay" && !state.appLock && !state.sendCardVisible
+    && document.visibilityState === "visible";
+}
+function a1172ResetBell() {
+  if (a1172BellVisit) clearTimeout(a1172BellVisit.timer);
+  a1172BellVisit = null;
+}
+function a1172BellReady() {
+  return a1172BellEligible() && a1172BellVisit?.sj === state.secondJourney
+    && a1172BellVisit.address === state.address && a1172BellVisit.ready === true;
+}
+function a1172ConsumeBell() {
+  if (!a1172BellEnabled() || !a1172BellVisit) return;
+  clearTimeout(a1172BellVisit.timer);
+  a1172BellVisit.rung = true;
+  a1172BellVisit.ready = false;
+}
+function a1172ArmBell() {
+  if (!a1172BellEligible()) { a1172ResetBell(); return; }
+  if (a1172BellVisit?.sj !== state.secondJourney || a1172BellVisit.address !== state.address) a1172ResetBell();
+  if (!a1172BellVisit) a1172BellVisit = {
+    sj: state.secondJourney, address: state.address,
+    due: Date.now() + 20_000 + Math.floor(Math.random() * 70_001),
+    rung: false, ready: false, timer: null,
+  };
+  const visit = a1172BellVisit;
+  clearTimeout(visit.timer);
+  if (state.secondJourney.bellCandidateId) visit.rung = true; // existing A-851 bell wins
+  if (visit.rung) return;
+  visit.timer = setTimeout(() => {
+    if (a1172BellVisit !== visit || !a1172BellEligible() || visit.sj !== state.secondJourney || visit.address !== state.address) return;
+    visit.rung = true;
+    visit.ready = true;
+    mountSecondHomeBell();
+  }, Math.max(0, visit.due - Date.now()));
+  onSceneTeardown(() => clearTimeout(visit.timer)); // same-Home render keeps deadline and rung
 }
 
 // [A-791] A-762 routing consumed as evidence. The reader result is routed per protocol (routeSecondCurrentRead) and each
@@ -15353,6 +15408,7 @@ function resetRecordsForFullRender() {
 }
 
 function render() {
+  if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEnabled() && !a1172BellEligible()) a1172ResetBell();
   // A-1131: do not mount a checking card / start Hatch before the envelope timeline.
   // Failure/cancel and the app-lock surface are never suppressed.
   if (holdInviteAuthPresentation()) return;

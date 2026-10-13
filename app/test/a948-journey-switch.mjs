@@ -127,8 +127,8 @@ await check("session boundary in main.js: CHAIN_PROFILE assigned once (no in-pag
   assert.match(MAIN, /function endSignerSession\(\) \{\n  activeSession\?\.end\(\);\n  activeSession = null;\n  activeAccount = null;/);
   assert.equal(/(localStorage|sessionStorage)\.setItem\([^)]*(activeSession|activeAccount|prfOutput|privateKey)/.test(MAIN), false);
 });
-await check("main.js: the 4 gate calls pass the page's level + CHAIN_PROFILE; boot line passes the stored journey", () => {
-  assert.equal([...MAIN.replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "").matchAll(/journeyFeatureOpen\("(second|afterSecond|gift)", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/g)].length, 4); // [A-974 re-pin] the one [A-974] fork entry block asks "second" once (pinned in a974-fork-app-entry.mjs); counted outside it. pre-A-974: MAIN
+await check("main.js: the 4 existing gate calls plus A1172 opt-in bell pass the page's level + CHAIN_PROFILE; boot line passes the stored journey", () => {
+  assert.equal([...MAIN.replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "").matchAll(/journeyFeatureOpen\("(second|afterSecond|gift)", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/g)].length, 5); // [A-974 re-pin] the one [A-974] fork entry block asks "second" once (pinned in a974-fork-app-entry.mjs); counted outside it. pre-A-974: MAIN
   assert.match(MAIN, /^const CHAIN_PROFILE = selectBootProfile\(\{ [^\n]*journey: storedJourney\(\) \}\);/m);
   assert.equal(/\breleaseAllows\(/.test(MAIN.replace(/\/\/[^\n]*/g, "")), false, "no level-only Second gate left in main.js");
 });

@@ -219,7 +219,7 @@ await check("8 preservation: boot-profile.js · release-gate.js · api/grant.js 
 await check("4/8 block content: no new screen/copy/scene · no Explore · no Journey 1 storage write · no admin/fork RPC · a948 pins intact", () => {
   const code = block.replace(/^\s*\/\/.*$/gm, "");
   for (const bad of [/textContent|innerHTML|a891ChogSay|setScene\(|render\(|createElement/, /openSecondJourneyExplore|SECOND_INTRO_SEEN_KEY/, /localStorage\.(setItem|removeItem)|sessionStorage/, /\/admin|ARASO_FORK_ADMIN|anvil_|127\.0\.0\.1/, /\breleaseAllows\(/, /journeyFeatureOpen\(/]) assert.doesNotMatch(code, bad);
-  assert.equal([...MAIN.replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "").matchAll(/journeyFeatureOpen\("(second|afterSecond|gift)", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/g)].length, 4, "a948 pin"); // [A-974 re-pin] counted outside the later [A-974] block (its one "second" call: a974 test). pre-A-974: MAIN
+  assert.equal([...MAIN.replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "").matchAll(/journeyFeatureOpen\("(second|afterSecond|gift)", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/g)].length, 5, "a948 pin"); // [A-974 re-pin] counted outside the later [A-974] block (its one "second" call: a974 test). pre-A-974: MAIN
   assert.equal(/\breleaseAllows\(/.test(MAIN.replace(/\/\/[^\n]*/g, "")), false, "a948 pin");
   assert.doesNotMatch(code, /setScene\(|render\(|textContent|innerHTML/, "no user-facing copy in the block");
 });
