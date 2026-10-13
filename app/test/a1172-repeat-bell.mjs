@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { createMemoryStorage, createSecondJourneyState, applyExploreSelection, saveSecondJourneyState, loadSecondJourneyState, recordSecondJourneyReceipt } from '../src/second-journey-state.js';
+import { createMemoryStorage, createSecondJourneyState, applyExploreSelection, saveSecondJourneyState, loadSecondJourneyState, recordSecondJourneyReceipt, saveSecondJourneyDraft, loadSecondJourneyDraft, secondJourneyDraftKey } from '../src/second-journey-state.js';
 import { readFileSync } from 'node:fs';
 const source = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 const section = source.slice(source.indexOf('const secondBellRung ='), source.indexOf('// [A-791] A-762 routing consumed as evidence.')).replaceAll('import.meta.env', 'env');
@@ -8,13 +8,15 @@ let pass = 0;
 function test(name, run) { run(); pass++; console.log(`PASS ${name}`); }
 function harness({ enabled = true, fork = true, completed = true, release = true, random = 0 } = {}) {
   let now = 0, id = 0, button = null, opens = 0;
-  const timers = new Map(), cleanups = [], listeners = {};
+  const timers = new Map(), cleanups = [], listeners = {}, storage = createMemoryStorage();
   const stage = { querySelector: () => button, appendChild: b => { button = b; } };
   const ctx = { console, Promise, Set, Math: { random: () => random, floor: Math.floor, max: Math.max }, Date: { now: () => now },
     env: { VITE_ARASO_TEST_REPEAT_BELL: enabled ? '1' : '' }, CHAIN_PROFILE: {}, RELEASE_LEVEL: 2,
     onForkProfile: () => fork, journeyFeatureOpen: () => release,
     state: { secondJourneyCompletedOnce: completed, address: 'piggy', scene: 'sendstay', appLock: null, sendCardVisible: false, secondJourney: { selectedIds: ['grow'], step: 'candidates', waitingForPlace: false } },
     secondLaneMode: () => true,
+    safeLocalStorage: () => storage, loadSecondJourneyDraft,
+    secondJourneyScope: () => ({ accountId: ctx.state.address, chainId: "monad-fork" }),
     document: { visibilityState: 'visible', querySelector: sel => sel === '#secondHomeBell' ? button : stage,
       createElement: () => ({ setAttribute() {}, addEventListener: (_, f) => { ctx.click = f; }, remove: () => { button = null; } }) },
     setTimeout: (f, ms) => { timers.set(++id, { f, due: now + ms }); return id; }, clearTimeout: i => timers.delete(i),
@@ -25,7 +27,7 @@ function harness({ enabled = true, fork = true, completed = true, release = true
   const tick = ms => { now += ms; for (const [i, t] of [...timers]) if (t.due <= now) { timers.delete(i); t.f(); } };
   const visibility = value => { ctx.document.visibilityState = value; listeners.visibilitychange(); };
   const rerender = () => { for (const f of cleanups.splice(0)) f(); button = null; if (ctx.a1172BellEnabled() && !ctx.a1172BellEligible()) ctx.a1172ResetBell(); if (ctx.state.scene === 'sendstay' && !ctx.state.appLock) ctx.armSecondHomeWait(); };
-  return { ctx, tick, visibility, rerender, timers, bell: () => button, opens: () => opens };
+  return { ctx, storage, tick, visibility, rerender, timers, bell: () => button, opens: () => opens };
 }
 test('completed fork Home: 20s lower bound, one existing bell, tap uses existing Explore entry', () => {
   const h = harness(); h.ctx.armSecondHomeWait(); h.tick(19999); assert.equal(h.bell(), null); h.tick(1); assert.ok(h.bell());
@@ -92,4 +94,39 @@ test('identity changes discard a stale timer, no automatic execution or selectio
   assert.match(source.slice(source.indexOf('function recordSecondLaneDecision'), source.indexOf('// ok on a lane candidate:')), /recordSecondJourneyDecisionReceiptDurably\(safeLocalStorage\(\), scope, decision.receipt\)/);
   pass++; console.log('PASS actual fork bell entry resumes candidates with stored interests/preference/receipt intact; existing pick and decision storage paths retained');
 }
+// Answer (1): use the REAL persisted draft reader and REAL restore function.
+for (const step of ['interests', 'candidates', 'readiness']) {
+  const h = harness({ completed: false }), scope = h.ctx.secondJourneyScope();
+  const draft = { step, seedStage: 'done', selectedIds: ['grow'], pickedCandidateId: 'job', chosenDestinationId: 'job', amount: '2' };
+  assert.equal(saveSecondJourneyDraft(h.storage, scope, draft).saved, true);
+  Object.assign(h.ctx, {
+    ensureSecondJourneyDomainState: () => ({ interests: [] }), inferSeedStage: () => 'a',
+    computeExploreDisplayErrands: () => [{ id: 'grow' }], buildVisibleLaneChoices: () => [{ id: 'grow' }],
+    recomputeSecondJourneyFlow() {}, keepSecondLaneDraftIfValid() {},
+    setScene: scene => { h.ctx.state.scene = scene; }, refreshSecondLaneCandidates: async () => {}, a974AskEntry: async () => true,
+  });
+  const restoreStart = source.indexOf('function applySecondDraftIfAny(');
+  const restoreEnd = source.indexOf('// [A-405]', restoreStart);
+  const openStart = source.indexOf('function a974OpenForkExplore()');
+  const openEnd = source.indexOf('function a974ForkReader()', openStart);
+  const wrapStart = source.indexOf('  const a974PrevOpen = openSecondJourneyExplore;');
+  const wrapEnd = source.indexOf('  // post-file quiet Home:', wrapStart);
+  vm.runInContext((source.slice(restoreStart, restoreEnd) + source.slice(openStart, openEnd) + source.slice(wrapStart, wrapEnd)).replaceAll('import.meta.env', 'env'), h.ctx);
+  h.ctx.armSecondHomeWait(); h.tick(19999); assert.equal(h.bell(), null); h.tick(1); assert.ok(h.bell());
+  h.ctx.click(); await Promise.resolve(); await Promise.resolve();
+  assert.equal(h.ctx.state.scene, 'explore'); assert.equal(h.ctx.state.secondJourney.step, step);
+  assert.deepEqual(Array.from(h.ctx.state.secondJourney.selectedIds), ['grow']);
+  assert.equal(h.ctx.state.secondJourney.chosenDestinationId, 'job'); assert.equal(h.ctx.state.secondJourney.amount, '2');
+  pass++; console.log(`PASS unfinished persisted draft: bell1 -> existing fork opener -> real restore ${step}/selection/amount`);
+}
+test('draft eligibility refuses other account/chain, malformed storage and missing storage', () => {
+  for (const mode of ['account', 'chain', 'corrupt', 'missing']) {
+    const h = harness({ completed: false }), scope = h.ctx.secondJourneyScope();
+    const savedScope = { ...scope, ...(mode === 'account' ? { accountId: 'other' } : mode === 'chain' ? { chainId: 'other' } : {}) };
+    if (mode === 'corrupt') h.storage.setItem(secondJourneyDraftKey(scope), '{broken');
+    else if (mode !== 'missing') saveSecondJourneyDraft(h.storage, savedScope, { step: 'candidates', selectedIds: ['grow'] });
+    else h.ctx.safeLocalStorage = () => null;
+    h.ctx.armSecondHomeWait(); h.tick(100000); assert.equal(h.bell(), null); assert.equal(h.timers.size, 0);
+  }
+});
 console.log(`A1172 ${pass} PASS / 0 FAIL (controlled clock, mocked DOM; no browser/auth/network)`);

@@ -4024,7 +4024,7 @@ function a1172BellEnabled() {
     && journeyFeatureOpen("second", { level: RELEASE_LEVEL, profile: CHAIN_PROFILE });
 }
 function a1172BellEligible() {
-  return a1172BellEnabled() && state.secondJourneyCompletedOnce === true
+  return a1172BellEnabled() && (state.secondJourneyCompletedOnce === true || !!loadSecondJourneyDraft(safeLocalStorage(), secondJourneyScope()).draft)
     && state.scene === "sendstay" && !state.appLock && !state.sendCardVisible
     && document.visibilityState === "visible";
 }
