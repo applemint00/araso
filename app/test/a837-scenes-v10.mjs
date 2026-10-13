@@ -2,6 +2,7 @@
 //   N: the pure layouts (homeKeyframeLayout / nameSceneLayout / returnLayout evaluated in a vm) equal the canon at 390x844 / 810x1080 / 1440x900, show no step in a
 //      1 px sweep 360..1920 (heights 900 and 1080) nor over w/h 0.7-1.3, and the source keeps its pinned literals / removed paths.
 //   B: the live DOM equals the oracle (paper widths, character size + feet vs Home, Name Chog on the margin line / floor, Return group shift, ARASO rail).
+import {responsiveFrame} from "../src/responsive-layout.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
@@ -32,7 +33,7 @@ const REF = [[390, 844], [810, 1080], [1440, 900]];
 
 // ── Part N ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 await check("N1 paper widths equal the A-835 rule at 390 / 810 / 1440 (Second 1.0 x HomeCard, Receipt 0.91 x, Name min(1.55 x, 0.9 inner)) +-0.5 px", () => {
-  const want = { 390: { second: 282.3, name: 315, rcpt: 256.9 }, 810: { second: 387.9, name: 601.3, rcpt: 353.0 }, 1440: { second: 376.5, name: 583.6, rcpt: 342.6 } };
+  const want = { 390: { second: 282.3, name: 315, rcpt: 256.9 }, 810: { second: 376.5, name: 583.575, rcpt: 342.615 }, 1440: { second: 376.5, name: 583.6, rcpt: 342.6 } };
   for (const [w, h] of REF) {
     const { L, n, r } = lay(w, h);
     near(L.cardW, want[w].second, 0.6, `${w} HomeCard (Second)`);
@@ -82,7 +83,7 @@ await check("N3 no-step sweep: 1 px widths 360..1920 at h 900 and 1080 - sizes <
 await check("N4 Name peek is visible below ARASO and the card clears the floor: cardTop - peek >= ARASO bottom + 2 % H at 390x844 / 810x1080 / 1440x900 and 1440x600", () => {
   for (const [w, h] of [...REF, [1440, 600]]) {
     const { L, n } = lay(w, h);
-    assert.ok(n.cardTop - 147 * (n.rigG * n.sc) >= L.asBottom + 0.02 * h - 0.5, `${w}x${h} peek below ARASO`);
+    assert.ok(n.cardTop - 147 * (n.rigG * n.sc) >= L.asBottom + 0.02 * responsiveFrame(w,h).height * responsiveFrame(w,h).scale - 0.5, `${w}x${h} peek below ARASO`);
   }
 });
 await check("N5 source: pinned literals kept, removed paths gone, pinned functions untouched", () => {

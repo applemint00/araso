@@ -21,7 +21,7 @@ if (process.env.ARASO_TEST_BROWSER !== "1") {
 const { launch, sleep, REPO } = await import("./helpers/a803-browser.mjs");
 const OUT = testOutDir("a898-funding-gift-browser", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A898_funding_gift_send/browser
 mkdirSync(OUT, { recursive: true });
-const SIZES = [[390, 844], [1440, 900]];
+const SIZES = process.env.ARASO_PHONE_AUDIT === "1" ? [[375, 667], [390, 844], [430, 932]] : [[390, 844], [1440, 900]];
 const frames = {};
 const note = (id, size, facts) => { (frames[id] ||= {})[`${size[0]}x${size[1]}`] = facts; };
 

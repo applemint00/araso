@@ -1,3 +1,4 @@
+// A-1131 render pin: defer Invite auth presentation before teardown; auth/money bodies unchanged.
 // [A-891] UI Wave 4 · File → quiet Home → tap me → Second intro (CG-03 · CG-04 · CG-05 intro · UI-19) + UI-26 verify (source).
 //   node app/test/a891-wave4-file-quiet-tapme.mjs                       (Part N: source + vm-run contracts, no browser)
 //   ARASO_TEST_BROWSER=1 node app/test/a891-wave4-file-quiet-tapme.mjs  (+ Part B: time series at 390 / 810 / 1440, normal + reduced)
@@ -210,7 +211,7 @@ await check("N10 UI-19 filebox: the STORED Receipt (no synthesis) opens centred;
 await check("N11 protected bodies byte-identical to the A-891 pre-copy (render 866133cf…, arasoBrandMarkup, money/auth, a734 Invite); chog-home.js untouched", () => {
   const PRE1051 = restorePreA1051(MAIN); // [A-1051 RE-PIN] pre-A-1051: cutFn(MAIN, …)
   const preP = path.join(A891_PRE_ROOT, "pre_copies/app/src/main.js");
-  assert.equal(sha(cutFn(PRE1051, "render")).slice(0, 16), "866133cf60711093", "render() pin");
+  assert.equal(sha(cutFn(PRE1051, "render")).slice(0, 16), "521db6368b3a331d", "render() pin");
   if (!existsSync(preP)) return;
   const PRE = readFileSync(preP, "utf8");
   for (const f of ["render", "arasoBrandMarkup", "sendPiggyOnce", "requestPrf", "touchAppSession", "reconcileSendPending", "classifySendPending", "reconciledSendReceipt",

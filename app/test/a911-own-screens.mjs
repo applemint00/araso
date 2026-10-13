@@ -23,8 +23,8 @@ const GIFT = {
 };
 const PIGGIES = [{ id: "a", name: "Honeybun", amount: "$20", away: false }, { id: "b", name: "Mochi", amount: "unknown", away: true }];
 
-check("A1 files: a911-screens.js has no imports, back-sticker.svg exists, the CSS block + two main.js blocks are present", () => {
-  assert.ok(!/^\s*import\s/m.test(SCREENS), "no imports");
+check("A1 files: a911-screens.js imports only pure responsive geometry, back-sticker.svg exists, the CSS block + two main.js blocks are present", () => {
+  assert.deepEqual(SCREENS.match(/^import .*$/gm), ['import { responsiveFrame } from "./responsive-layout.js";'], "only the shared pure geometry import");
   assert.ok(existsSync(path.join(REPO, "app/public/card/back-sticker.svg")));
   assert.ok(CSS_BLOCK.length > 5000, "CSS block");
   assert.ok(MAIN.includes("// ── [A-911] imports") && MAIN.includes("// ── [A-911] end imports ──") && MAIN_BLOCK.length > 3000, "main.js blocks");

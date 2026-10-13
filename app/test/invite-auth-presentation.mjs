@@ -1,0 +1,13 @@
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const src=readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
+const block=src.slice(src.indexOf('let inviteAuthPresentation'),src.indexOf('function playInviteTimelineAfterAuth'));
+let mounted=true,renders=0;
+const ctx=vm.createContext({state:{scene:'birth',authPhase:'checking',appLock:null},document:{querySelector:()=>mounted?{}:null},render:()=>renders++});
+vm.runInContext(block+';globalThis.run=withInviteAuthPresentation;globalThis.hold=holdInviteAuthPresentation;',ctx);
+await ctx.run(async()=>{assert.equal(ctx.hold(),true);ctx.state.authPhase='idle';assert.equal(ctx.hold(),false);for(const scene of ['hatch','name','sendstay']){ctx.state.scene=scene;assert.equal(ctx.hold(),true);}ctx.state.appLock={};assert.equal(ctx.hold(),false);ctx.state.appLock=null;mounted=false;assert.equal(ctx.hold(),false);mounted=true;await Promise.resolve();assert.equal(ctx.hold(),true)});
+assert.equal(ctx.hold(),false);
+await assert.rejects(ctx.run(async()=>{throw Error('test')}));assert.equal(ctx.hold(),false);assert.equal(renders,1);
+assert.ok(src.indexOf('if (holdInviteAuthPresentation()) return;',src.indexOf('function render()'))<src.indexOf('teardownScene();',src.indexOf('function render()')));
+console.log('PASS pending/success deferral, failure and lock visibility, microtask hold, throw release');

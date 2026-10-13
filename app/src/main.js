@@ -1,4 +1,4 @@
-import { createResponsiveLayout } from "./responsive-layout.js";
+import { createResponsiveLayout, responsiveFrame } from "./responsive-layout.js";
 import {
   createPasskeyWithPrfOutput,
   createSecp256k1SigningSession,
@@ -5427,7 +5427,12 @@ function fitInvite() {
     // The scheduled timeline timers (inviteTimers) were never the problem — they survive the render — so only the
     // DOM state is carried: phase + each layer's own animation clock. The `typeof` guard keeps this function
     // self-contained for the vm harness in a697 (which cuts fitInvite alone).
-    if (typeof carryInviteTimelineAcross === "function") carryInviteTimelineAcross(render);
+    if (typeof carryInviteTimelineAcross === "function") carryInviteTimelineAcross(() => {
+      // Resize the visible Invite without mounting the deferred auth destination.
+      const scene = state.scene;
+      if (typeof inviteAuthPresentation !== "undefined" && inviteAuthPresentation) state.scene = "received";
+      try { render(); } finally { state.scene = scene; }
+    });
     else render();
     return;
   }
@@ -5461,22 +5466,81 @@ const INVITE_WIDE_ART_SCALE = 1.125;
 const INVITE_PHONE_ART_SCALE = 390 / 420;
 const INVITE_OFFSET_X = [-15.1, -15.7, 0]; // [A-920] board units at 390 / 810 / 1440
 const INVITE_OFFSET_Y = [16.3, 22.2, 0];
-const INVITE_GROUP_K = [0.927, 0.84, 1]; // [A-920] mock keyframes 390 / 810 / 1440
+const INVITE_GROUP_K = [0.927, 0.927, 1]; // [A-920] mock keyframes 390 / 810 / 1440
 const INVITE_CONTENT_W = { mobile: 380, wide: 760 };
 const INVITE_CONTENT_H = { mobile: 768, wide: 720 };
 function inviteGroupScale(kind, L, vw, vh) {
   const wide = kind === "wide";
-  const rule = wide ? (INVITE_WIDE_ART_SCALE * L.cardW) / 377 : INVITE_PHONE_ART_SCALE * Math.min(L.cardW / 283, vh / 780);
+  const frame = responsiveFrame(vw, vh);
+  const rule = wide ? (INVITE_WIDE_ART_SCALE * L.cardW) / 377 : INVITE_PHONE_ART_SCALE * Math.min(L.cardW / 283, frame.height / 780);
   const key = wide ? "wide" : "mobile";
   // [A-920 item 4] the Owner mocks (img_30 / 31 / 33) size the whole content group as one keyframe factor on the HomeCard rule: 390 / 810 / 1440, straight line between (hkKey, ends held), 1 at 1440.
   // pre-A-920 baseline: return Math.min(rule, ...) (factor 1 at every width: envelope / Face ID / Chog 1.06 x at 390, 1.19 x at 810).
-  const out = Math.min(rule * hkKey(vw, INVITE_GROUP_K, true), vw / INVITE_CONTENT_W[key], vh / INVITE_CONTENT_H[key]);
+  // Both artboards share the same visible envelope size at the switch.
+  // The mobile hero has an internal .55833 scale; account for it explicitly.
+  const baseW = frame.width, baseH = frame.height;
+  const boundary = homeKeyframeLayout(INVITE_WIDE_MIN, baseH);
+  const phoneAtBoundary = Math.min(INVITE_PHONE_ART_SCALE * Math.min(boundary.cardW / 283, baseH / 780)
+    * hkKey(INVITE_WIDE_MIN, INVITE_GROUP_K, true), INVITE_WIDE_MIN / INVITE_CONTENT_W.mobile, baseH / INVITE_CONTENT_H.mobile);
+  const blend = hkClamp((baseW - INVITE_WIDE_MIN) / (1440 - INVITE_WIDE_MIN), 0, 1);
+  const out = Math.min(rule * hkKey(baseW, INVITE_GROUP_K, true),
+    frame.width * frame.scale / INVITE_CONTENT_W[key], frame.height * frame.scale / INVITE_CONTENT_H[key]);
   // [A-920 item 4] position: the content group (envelope, sparkle, Face ID, Chog) sits at the mock x / y (img_30 / 31 / 33: ~13 px left / 14 px down at 390, 17 / 24 at 810, same at 1440) as a board-unit
   // offset keyframe, straight line between; the notebook (lines, holes, tape) stays where it is. Written as --invDx / --invDy on the board, read by one style.css rule. No basis for "Invite 390 centred" was found in
   // 94_VISUAL_DIRECTION (:306 only says the group scales together), so the mock x is used. pre-A-920 baseline: no offset.
   if (typeof document !== "undefined") {
     const board = document.querySelector(".invite");
     if (board) { board.style.setProperty("--invDx", `${hkKey(vw, INVITE_OFFSET_X, true)}px`); board.style.setProperty("--invDy", `${hkKey(vw, INVITE_OFFSET_Y, true)}px`); }
+  }
+  if (wide && typeof document !== "undefined") {
+    const board = document.querySelector(".invite");
+    const mix = (a,b) => a+(b-a)*blend;
+    const phoneS = phoneAtBoundary * frame.scale;
+    const dx = hkKey(baseW, INVITE_OFFSET_X, true), dy = hkKey(baseW, INVITE_OFFSET_Y, true);
+    const phoneDx = hkKey(INVITE_WIDE_MIN, INVITE_OFFSET_X, true), phoneDy = hkKey(INVITE_WIDE_MIN, INVITE_OFFSET_Y, true);
+    // Map the mobile actor anchors through viewport space into the wide board.
+    // This preserves envelope, button and Chog sizes/positions across 899/900,
+    // then interpolates to the unchanged desktop artwork by 1440.
+    const actor = (selector, mx, my, wx, wy, ratio=1, translated=true) => {
+      const el=board?.querySelector(selector); if(!el)return;
+      el.style.left=`${mix(640+(mx+phoneDx)*phoneS/out-48-(translated?dx:0),wx)}px`;
+      el.style.top=`${mix(400+(my+phoneDy)*phoneS/out-17-(translated?dy:0),wy)}px`;
+      return {el,k:mix(ratio*phoneS/out,1)};
+    };
+    const hero=actor(".invite__hero",-134,-240,396,126,.55833);
+    if(hero){hero.el.style.width=`${480*hero.k}px`;hero.el.style.height=`${365*hero.k}px`;hero.el.querySelector(".invite__heroScale").style.transform=`scale(${hero.k})`;}
+    const underline=board?.querySelector(".invite__underline");
+    if(underline)underline.style.width=`${mix(150,220)}px`;
+    const face=board?.querySelector(".invite__face");
+    if(face){
+      const a=actor(".invite__face",0,7,540+169/2,567,54/55);
+      a.el.style.transformOrigin="50% 0";a.el.style.transform=`translateX(-50%) scale(${a.k})`;
+      face.style.padding=`0 ${mix(28*55/54,34)}px`;
+      face.style.width="max-content";
+      face.style.minWidth=`${97*blend}px`;
+      face.style.fontSize=`${mix(16*55/54,17)}px`;
+      face.style.gap=`${mix(10*55/54,12)}px`;
+      const icon=face.querySelector(".invite__faceIcon");
+      icon.style.width=icon.style.height=`${mix(22*55/54,24)}px`;
+
+    }
+    const chog=actor(".invite__chogNative",-166,162,321.7,496.9,1,false);
+    if(chog){chog.el.style.transformOrigin="0 0";chog.el.style.transform=`scale(${chog.k})`;}
+    const trail=actor(".invite__chog",-166,162,235,519);
+    if(trail){
+      const img=trail.el.querySelector(".invite__trail");
+      img.style.left=`${mix(7*phoneS/out,27)}px`;img.style.top=`${mix(54*phoneS/out,82)}px`;
+      img.style.width=`${mix(35*phoneS/out,55)}px`;img.style.height=`${mix(8*phoneS/out,12)}px`;
+      img.style.opacity=String(mix(.55,.25));
+    }
+    const tape=board?.querySelector(".invite__tape");
+    if(tape){
+      const k=mix((219*.5*phoneS)/(434*111/275*out),1);
+      tape.style.transform=`scale(${k}) rotate(-2deg)`;
+      tape.style.top=`${(800-vh/out)/2-17-23.8*k}px`;
+    }
+    const burst=actor(".invite__burst",121,-286,852,44,30/54);
+    if(burst){burst.el.style.transformOrigin="0 0";burst.el.style.transform=`scale(${burst.k})`;}
   }
   return out;
 }
@@ -5520,8 +5584,26 @@ function setInvitePhase(phase) {
 
 // 인증 성공 뒤, Owner가 확정한 기존 봉투 타임라인을 byte-for-byte 같은 phase/시각으로 한 번 돈다.
 // 새 화면·문구·레이아웃은 만들지 않는다. 실패/취소에는 Piggy 등장 연출을 재생하지 않는다.
+let inviteAuthPresentation = false;
+
+// Keep the mounted envelope while authentication resolves. State/auth decisions
+// still advance normally; only premature destination mounting is deferred.
+async function withInviteAuthPresentation(start) {
+  inviteAuthPresentation = true;
+  try { return await start(); }
+  catch (error) { inviteAuthPresentation = false; render(); throw error; }
+  finally { inviteAuthPresentation = false; }
+}
+
+function holdInviteAuthPresentation() {
+  return inviteAuthPresentation && !state.appLock && !!document.querySelector(".invite") &&
+    ((state.scene === "birth" && state.authPhase === "checking") ||
+      ["hatch", "name", "sendstay"].includes(state.scene));
+}
+
 function playInviteTimelineAfterAuth(destination) {
   setScene("received", "", "");
+  inviteAuthPresentation = false;
   const board = document.querySelector(".invite");
   if (!board) {
     setScene(destination.scene, destination.message, destination.detail);
@@ -5550,12 +5632,17 @@ async function openInvite() {
   if (!board || (board.dataset.phase || "closed") !== "closed") return;
   clearInviteTimers();
   setInvitePhase("checking");
-  const out = await startPiggyOpen();
-  const succeeded = out?.ok === true || state.scene === "hatch" || state.scene === "name" || state.scene === "sendstay";
-  if (!succeeded) return out;
-  const destination = { scene: state.scene, message: state.message, detail: state.detail };
-  await playInviteTimelineAfterAuth(destination);
-  return out;
+  return withInviteAuthPresentation(async () => {
+    const out = await startPiggyOpen();
+    const succeeded = out?.ok === true || state.scene === "hatch" || state.scene === "name" || state.scene === "sendstay";
+    if (!succeeded) {
+      if (document.querySelector(".invite")) setInvitePhase("closed");
+      return out;
+    }
+    const destination = { scene: state.scene, message: state.message, detail: state.detail };
+    await playInviteTimelineAfterAuth(destination);
+    return out;
+  });
 }
 
 // [A-734 + Owner live finding 2026-10-12] Gift도 같은 선행 5.9초를 제거한다. Open 탭의 같은
@@ -5565,12 +5652,17 @@ async function openGiftInvite() {
   if (!board || (board.dataset.phase || "closed") !== "closed") return;
   clearInviteTimers();
   setInvitePhase("checking");
-  const out = await startGiftOpen();
-  const succeeded = out?.ok === true || out?.started === true || state.scene === "hatch";
-  if (!succeeded) return out;
-  const destination = { scene: state.scene, message: state.message, detail: state.detail };
-  await playInviteTimelineAfterAuth(destination);
-  return out;
+  return withInviteAuthPresentation(async () => {
+    const out = await startGiftOpen();
+    const succeeded = out?.ok === true || out?.started === true || state.scene === "hatch";
+    if (!succeeded) {
+      if (document.querySelector(".invite")) setInvitePhase("closed");
+      return out;
+    }
+    const destination = { scene: state.scene, message: state.message, detail: state.detail };
+    await playInviteTimelineAfterAuth(destination);
+    return out;
+  });
 }
 
 // 봉투 hero — 두 아트보드가 같은 480×365 안쪽 좌표를 쓴다. 모바일은 그 덩어리를 0.55833 로 줄인다.
@@ -6302,9 +6394,17 @@ const NAME_CHOG_BOX_H_PX = 139.9;
 const NAME_CHOG_INK = { l: 1.9, r: 104.2, b: 136.9 }; // ink box (incl. the black outline: pixels differing from the ground) inside the sibling at scale 1, box px (measured at 1440x900, g 1.202: ink x 194-317, bottom 828). pre-review baseline: { l: 12.2, r: 94, b: 130 } = bright pixels only (the outline was missed, ink sat ~12 px left of M + .06 W)
 const HOME_CHOG_INK_W = 92.3; // Home Chog ink width incl. outline, board units (123 px at S 1.33, 109 px at S 1.183). pre-review baseline: 73.9 (bright pixels only)
 const HOME_CHOG_FOOT_GAP = 0.4; // board units between the Home Chog ink bottom (incl. outline) and the floor line (ink row 827 vs floor 828 at S 1.33). pre-review baseline: 6.2 (bright pixels only)
-function nameSceneLayout(L, vw = window.innerWidth, vh = window.innerHeight) {
-  const cardW = Math.min(1.55 * L.cardW, 0.9 * (vw - 2 * L.M));
-  const sc = cardW / NAME_CARD_BOARD_W;
+function nameSceneLayout(L, vw = window.innerWidth, vh = window.innerHeight, fit = true) {
+  const frame = responsiveFrame(vw, vh);
+  if (frame.scale !== 1 || frame.x !== 0 || frame.y !== 0) {
+    const n = nameSceneLayout(homeKeyframeLayout(frame.width, frame.height, Math.max(0,(L.asBottom-L.asTop-L.asFont)/frame.scale)), frame.width, frame.height, fit);
+    return { ...n, cardW:n.cardW*frame.scale, sc:n.sc*frame.scale,
+      cardTop:n.cardTop*frame.scale+frame.y, tx:n.tx*frame.scale+frame.x, ty:n.ty*frame.scale+frame.y,
+      chogG:n.chogG*frame.scale, chogLeft:n.chogLeft*frame.scale+frame.x,
+      chogBottom:n.chogBottom*frame.scale+frame.y };
+  }
+  L={...L,floorY:Math.min(L.floorY,vh*(1-hkKey(vw,HK_BOTTOM,true)))};
+  let cardW = Math.min(1.55 * L.cardW, 0.9 * (vw - 2 * L.M));
   const rigScale = NAME_RIG_RATIO * L.S;
   // [A-920 item 1] card top = the mock keyframes (img_20 / 21 / 22): fraction of the viewport height at 390 / 810 / 1440, straight line between. The Piggy peek rig and the Chog follow the card as in the mock
   // (peek sideways shift in card widths, Chog drop below the Home floor line and ink-left shift: same three keyframes). pre-A-920 baseline: cardTop = Math.max(vh / 2 - 108 * sc, ...) (73 / 120 / 30 px too low).
@@ -6312,11 +6412,36 @@ function nameSceneLayout(L, vw = window.innerWidth, vh = window.innerHeight) {
   const chogG = (L.S * HOME_CHOG_INK_W) / (NAME_CHOG_INK.r - NAME_CHOG_INK.l);
   const inkLeft = L.M + 0.06 * vw * L.posT + hkKey(vw, NAME_CHOG_DX_K);
   const chogDrop = hkKey(vw, NAME_CHOG_DROP_K, true) * vh;
+  const chogLeft = inkLeft - NAME_CHOG_INK.l * chogG;
+  const chogBottom = vh - (L.floorY - HOME_CHOG_FOOT_GAP * L.S + (NAME_CHOG_BOX_H_PX - NAME_CHOG_INK.b) * chogG) - chogDrop;
+  // A-1123: Name's paper used to intersect Chog in short tablet windows.
+  // Keep the approved character/top anchors. Fit the whole paper above OR beside
+  // Chog, including a stage-scaled 12px gap. The suffix envelope prevents a
+  // grow-then-shrink pulse while crossing the two arrangements.
+  const gap = 12 * L.S;
+  const above = (vh - chogBottom - NAME_CHOG_BOX_H_PX * chogG - gap - cardTop) * 460 / 300;
+  const beside = vw - 2 * (chogLeft + NAME_CHOG_BOX_W * chogG + gap);
+  const fitW = Math.max(1, Math.min(cardW, (L.floorY-cardTop)*460/300, Math.max(above, beside)));
+  if (fit) {
+    const safeTop = Math.max(0, Math.round((L.asBottom-L.asTop-L.asFont)*1e6)/1e6);
+    const key = `${vh}:${safeTop}`;
+    const cache = nameSceneLayout.fitCache ||= new Map();
+    if (!cache.has(key)) {
+      const widths=[];
+      for(let w=320;w<=1440;w++) widths.push(nameSceneLayout(homeKeyframeLayout(w,vh,safeTop),w,vh,false).fitW);
+      for(let i=widths.length-2;i>=0;i--) widths[i]=Math.min(widths[i],widths[i+1]);
+      if(cache.size>=8) cache.delete(cache.keys().next().value);
+      cache.set(key,widths);
+    }
+    const widths=cache.get(key),x=hkClamp(vw,320,1440)-320,i=Math.floor(x);
+    cardW=Math.min(fitW,widths[i]+(widths[Math.min(i+1,widths.length-1)]-widths[i])*(x-i));
+  }
+  const sc = cardW / NAME_CARD_BOARD_W;
   return {
-    cardW, sc, rigG: rigScale / sc, cardTop,
+    cardW, sc, fitW, rigG: rigScale / sc, cardTop,
     peekDx: hkKey(vw, NAME_PEEK_DX_K, true) * NAME_CARD_BOARD_W,
     tx: vw / 2 - NAME_CARD_BOARD_CX * sc, ty: cardTop - NAME_CARD_BOARD_TOP * sc,
-    chogG, chogLeft: inkLeft - NAME_CHOG_INK.l * chogG, chogBottom: vh - (L.floorY - HOME_CHOG_FOOT_GAP * L.S + (NAME_CHOG_BOX_H_PX - NAME_CHOG_INK.b) * chogG) - chogDrop,
+    chogG, chogLeft, chogBottom,
   };
 }
 function fitNameScene() {
@@ -11825,21 +11950,17 @@ function hkKey(vw, kf, pct) {
   return pct ? c : c * Math.min(vw / 1440, HK_CAP);
 }
 // Pure: no DOM. safeTop = env(safe-area-inset-top) in px.
-function homeKeyframeLayoutBase(vw, vh, safeTop = 0) {
-  // [A-1109 · S4] Card width = Framer-style width key with two guards (Owner pick "ㅇㅇ" 10-12 = A-1113 board S4; expected values pinned in
-  //   app/test/a1109-card-width-rule.mjs):
-  //   cw = min(max(width key 282.3 / 410.7 / 376.5 at 390 / 810 / 1440, the A-829 item 3 height rule vh x f / 1.42), 376.5 x 1.33).
-  //   The height rule stays only as a no-shrink floor (A-1109 answer 2 "AFTER >= BEFORE"); 376.5 x 1.33 = A-825 4(b) cap.
-  //   Above 1920 the whole composition stays at its 1920 values and centres (ox); the outside is notebook background only.
-  //   Short window (A-825 4(a)): keep the item-5 position when the Send box is clear of ARASO / character ink / floor line; else move it
-  //   vertically inside [ARASO bottom + one line pitch, stage top (shared x) or floor line - one line pitch]; only then cap cw.
-  //   pre-A-1109: cardW = min(vh x f / 1.42, vw - 2M) with every length keyed on vw (no 1920 freeze).
+function homeKeyframeLayoutBase(vw, vh, safeTop = 0, cardLimit = Infinity) {
+  // Phone reference preserved; the tablet peak is capped by the desktop width.
+  // The shared solver removes infeasible local peaks before placement. Short
+  // windows compress vertical gaps first, then fit the paper within the stage.
   const W = Math.min(vw, 1920);
   const ox = (vw - W) / 2;
   const M = hkKey(W, HK_SIDE_M);
   const stageW = hkKey(W, HK_STAGE_W);
   const bottom = hkKey(W, HK_BOTTOM, true) * vh;
   const S = stageW / (HK_INK_R - HK_INK_L);
+  // The outer floor reserve is a design anchor, not card fitting space.
   const floorY = vh - bottom;
   const stageL = W - M - stageW;
   const stageTop = floorY - S * (HK_INK_FOOT - HK_INK_TOP);
@@ -11851,17 +11972,30 @@ function homeKeyframeLayoutBase(vw, vh, safeTop = 0) {
   const f = fPortrait + (HK_F_LANDSCAPE - fPortrait) * posT;
   const room = Math.max(0, W - 2 * M);
   const heightCardW = Math.min((vh * f) / HK_PAPER_H_PER_W, room);
-  const widthCardW = Math.min(hkKey(W, [282.3, 410.7, 376.5]), room);
-  const maxCardW = Math.min(Math.max(widthCardW, heightCardW), 376.5 * HK_CAP);
+  // Grow from the established phone size to the desktop reference, without
+  // the old tablet peak or a viewport-height floor that reverses growth.
+  const targetW = Math.min(376.5, hkKey(W, [282.3,410.7,376.5]));
+  const maxCardW = Math.min(targetW, room);
   // Visible Send box = paper width x 285/282, height x 364/285, centred on the paper; ARASO box = 4.183 x font wide (A-1109 Chromium sizes.json).
   const stage = { l: stageL, r: W - M, t: stageTop, b: floorY };
-  const place = (cw, dy = 0) => {
+  // Keep the full Piggy seat reserve, but use Chog's exported ink boundary
+  // at the shorter left end of the stage. The empty upper-left corner is
+  // usable paper space; neither character nor the floor moves to make room.
+  const cg = CHOG_HOME_GEOMETRY;
+  const boardX = W - M - S * HK_INK_R, boardY = floorY - S * HK_INK_FOOT;
+  const residents = [
+    { l: boardX + S * (cg.cornerTransform.x + cg.inkLocal.left * cg.homeScale),
+      r: boardX + S * (cg.cornerTransform.x + cg.inkLocal.right * cg.homeScale),
+      t: boardY + S * (cg.cornerTransform.y + cg.inkLocal.top * cg.homeScale), b: floorY },
+    { l: boardX + S * HOME_SEAT_L, r: stage.r, t: stageTop, b: floorY },
+  ];
+  const place = (cw, dy = 0, dx = 0) => {
     const ch = cw * HK_PAPER_H_PER_W, font = cw * 0.064, brandTop = 2 * font + safeTop, brandBottom = brandTop + font;
     const zoneR = stageL - 0.03 * W;
     const xL = Math.max(M, (M + zoneR) / 2 - cw / 2), yL = 0.125 * vh;
     const yP = brandBottom + Math.max(0, (stageTop - brandBottom - ch) / 2);
     const xP = M + (W - 2 * M - cw) * hkClamp((W - 390) / 840, 0, 0.5);
-    const x = xP + (xL - xP) * posT, y = yP + (yL - yP) * posT + dy;
+    const x = xP + (xL - xP) * posT + dx, y = yP + (yL - yP) * posT + dy;
     const sw = (cw * 285) / 282, sh = (sw * 364) / 285, cx = x + cw / 2, cy = y + ch / 2;
     const send = { l: cx - sw / 2, r: cx + sw / 2, t: cy - sh / 2, b: cy + sh / 2 }, paper = { l: x, r: x + cw, t: y, b: y + ch };
     // [A-1109 answer 11] the open Home paper (cw x cw*1.42) is taller than the Send box, so both are checked (box = their union).
@@ -11870,19 +12004,24 @@ function homeKeyframeLayoutBase(vw, vh, safeTop = 0) {
   };
   const hit = (a, b) => a.l < b.r - 0.01 && b.l < a.r - 0.01 && a.t < b.b - 0.01 && b.t < a.b - 0.01;
   // pre-A-1109(answer 11): every test below read p.send only (the Send box), so the taller open Home paper could reach the character stage.
-  const clear = (p) => !hit(p.send, p.brand) && !hit(p.paper, p.brand) && !hit(p.box, stage) && p.box.b <= floorY + 0.01
+  const clear = (p) => !hit(p.send, p.brand) && !hit(p.paper, p.brand) && !residents.some(r => hit(p.box, r)) && p.box.b <= floorY + 0.01
     && p.box.l >= -0.01 && p.box.t >= -0.01 && p.box.r <= W + 0.01 && p.box.b <= vh + 0.01;
   const fit = (cw) => {
     const p0 = place(cw);
-    if (clear(p0)) return p0;
     const gap = (32 * cw) / HK_CARD_REF_W;
-    const sharesX = p0.box.l < stage.r - 0.01 && stage.l < p0.box.r - 0.01; // pre-A-1109(answer 14): p0.box.l < stage.r && stage.l < p0.box.r (same 0.01 slack as hit())
-    const top = p0.brandBottom + gap, bot = (sharesX ? stageTop : floorY) - gap, sh = p0.box.b - p0.box.t;
+    // Release vertical space gradually after clearing each character in x.
+    // A binary above/beside switch made the paper jump when the lane opened.
+    const edge = Math.min(floorY, ...residents.map(r => {
+      const distance = Math.max(r.l-p0.box.r, p0.box.l-r.r, 0);
+      const t = hkClamp(distance/(cw*.3), 0, 1);
+      return r.t+(floorY-r.t)*t*t*(3-2*t);
+    }));
+    const sh = p0.box.b - p0.box.t, roomGap=Math.max(0,Math.min(gap,(edge-p0.brandBottom-sh)/2,p0.box.t-p0.brandBottom)); const top=p0.brandBottom+roomGap,bot=edge-roomGap;
     if (sh > bot - top + 1e-9) return null;
     const p = place(cw, hkClamp(p0.box.t, top, bot - sh) - p0.box.t);
     return clear(p) ? p : null;
   };
-  let cardW = maxCardW;
+  let cardW = Math.min(maxCardW, cardLimit);
   let at = fit(cardW);
   if (!at) {
     let lo = 0, hi = cardW;
@@ -11904,9 +12043,12 @@ function homeKeyframeLayoutBase(vw, vh, safeTop = 0) {
 let responsiveSolver = null;
 let responsiveSafeTop = null;
 function getResponsiveSolver(safeTop = resolveCssLengthVarPx("--hk-safe-top", 0)) {
+  // Frame round-trips can produce 1e-14 instead of zero. Keep equivalent
+  // insets on the same solver rather than rebuilding its width envelopes.
+  safeTop = Math.round(safeTop * 1e6) / 1e6;
   if (!responsiveSolver || responsiveSafeTop !== safeTop) {
     responsiveSafeTop = safeTop;
-    responsiveSolver = createResponsiveLayout((w, h) => homeKeyframeLayoutBase(w, h, safeTop));
+    responsiveSolver = createResponsiveLayout((w, h, limit) => homeKeyframeLayoutBase(w, h, safeTop, limit));
   }
   return responsiveSolver;
 }
@@ -12147,7 +12289,23 @@ function applyOnboardingPhoneFoot() {
   const scaleTransform = narrow && boost !== 1 ? `scale(${boost})` : "";
   const scaleOrigin = narrow && boost !== 1 ? "center bottom" : "";
   const hatch = document.querySelector(".hatchChog");
-  if (hatch) { hatch.style.bottom = bottomPx; hatch.style.transform = scaleTransform; hatch.style.transformOrigin = scaleOrigin; }
+  if (hatch) {
+    // Keep the same character geometry through Hatch -> Name. The legacy
+    // phone boost predates the shared stage and enlarged only this scene.
+    const f = syncDesktopFormatVars();
+    if (f) {
+      const n = nameSceneLayout(f.L);
+      hatch.style.left = `${n.chogLeft}px`;
+      hatch.style.top = "auto";
+      hatch.style.bottom = `${n.chogBottom}px`;
+      hatch.style.transformOrigin = "left bottom";
+      hatch.style.transform = `scale(${n.chogG})`;
+    } else {
+      hatch.style.bottom = bottomPx;
+      hatch.style.transform = scaleTransform;
+      hatch.style.transformOrigin = scaleOrigin;
+    }
+  }
   const name = document.querySelector(".nameScene__chog");
   if (name) { name.style.bottom = bottomPx; name.style.transform = scaleTransform; name.style.transformOrigin = scaleOrigin; }
 }
@@ -12376,24 +12534,30 @@ function applyHomeFloorToChogOnly(fit) {
 // group Home settled uses, so the coming-home Chog, the filed Chog and the filed name all agree
 // with Home on mobile and mid-band (A-656 P3 §4 R2/R3). Same idempotent global marker/unwrap
 // idiom as `applyHomeFloorToChogOnly()` — Home/Away/Return never share the DOM at once.
-function applyHomeFloorToReturnCluster(fit, dxViewport = 0) {
+function applyHomeFloorToReturnCluster(fit, dxViewport = 0, dyViewport = 0) {
   const board = document.querySelector("#homeBoard");
-  unwrapHomeCharacterScaleFloor();
   if (!board) return null;
+  // Keep the same ancestor while the stage glides. Reparenting every frame
+  // would drop keyboard focus and restart any descendant CSS animation.
+  let group = board.querySelector('.homeCharScaleFloor[data-return-layout]');
+  if (!group) unwrapHomeCharacterScaleFloor();
   const plan = computeHomeCharScaleFloorPlan(fit);
   // [A-837] dxViewport = the Return group's horizontal offset from the Home stage (returnLayout.dxChar); 0 keeps every other caller as before.
-  if (!plan || (!plan.applied && !plan.midBand && !dxViewport)) return plan;
+  if (!plan || (!group && !plan.applied && !plan.midBand && !dxViewport && !dyViewport)) return plan;
   const parts = [board.querySelector("#returnChogHop"), board.querySelector("#returnName")].filter(Boolean);
   if (!parts.length) return plan;
   const s = plan.s;
   const k = plan.applied ? plan.k : plan.midK || 1; // [A-819] mid-band: the stage boost (1 from 700 up)
   const nudgeLocalX = (plan.applied ? plan.nudgeLocalX : (plan.midNudgeX || 0) / s) + dxViewport / s;
-  const nudgeLocalY = plan.applied ? plan.nudgeLocalY : (plan.midBandDy || 0) / s;
-  const group = document.createElement("div");
-  group.className = "homeCharScaleFloor";
+  const nudgeLocalY = (plan.applied ? plan.nudgeLocalY : (plan.midBandDy || 0) / s) + dyViewport / s;
+  if (!group) {
+    group = document.createElement("div");
+    group.className = "homeCharScaleFloor";
+    group.setAttribute("data-return-layout", "");
+    board.insertBefore(group, board.firstChild);
+    parts.forEach((el) => group.appendChild(el));
+  }
   group.setAttribute("data-scale-floor", plan.applied ? String(HOME_CHAR_SCALE_FLOOR) : "1");
-  board.insertBefore(group, board.firstChild);
-  parts.forEach((el) => group.appendChild(el));
   group.style.transformOrigin = `${HOME_CENTER}px ${HOME_FLOOR}px`;
   group.style.transform = `translate(${nudgeLocalX}px, ${nudgeLocalY}px) scale(${k})`;
   return plan;
@@ -12454,13 +12618,18 @@ function mountReturnBrand() {
   if (stage && !stage.querySelector(".arasoBrand")) stage.insertAdjacentHTML("afterbegin", arasoBrandMarkup());
 }
 // [A-837] fitBoard for First and Second Return: Home stage + the Return group's shift (dx) on the DOM cluster AND the canvas, so Chog, bell, Piggy and name stay one group.
-function returnFitBoard() {
+function returnFitBoard(motion = null) {
   const fit = fitHomeBoard();
   const r = returnLayout();
-  const dx = r ? r.dxChar : 0;
-  const plan = applyHomeFloorToReturnCluster(fit, dx);
+  // The presentation offset belongs to the receipt gate, not the Home seat.
+  // Carry the entire stage back to Home during the renderer's existing walk.
+  // Scale, paper dimensions, poses and timing are unchanged.
+  const presentation = 1 - hkClamp(motion?.settle || 0, 0, 1);
+  const dx = (r ? r.dxChar : 0) * presentation;
+  const dy = (r?.dyChar || 0) * presentation;
+  const plan = applyHomeFloorToReturnCluster(fit, dx, dy);
   const floor = computeHomeFloorViewportNudge(plan, fit.s) || keyframeCanvasFloor(fit);
-  return { ...fit, floor: floor && dx ? { ...floor, nudgeViewportX: floor.nudgeViewportX + dx } : floor };
+  return { ...fit, floor: floor ? { ...floor, nudgeViewportX: floor.nudgeViewportX + dx, nudgeViewportY: floor.nudgeViewportY + dy } : floor };
 }
 function computeHomeFloorViewportNudge(plan, s) {
   if (!plan || !(s > 0)) return null;
@@ -12487,7 +12656,22 @@ const RET_CLUSTER_W = 218; // board units: cluster width without the caption (li
 // paperAspect = the rendered .receiptPaper rotated-bbox w/h (receiptPaperAspect()); the legacy delivered box aspect until it is measured.
 function returnLayout(L = desktopFormat()?.L, paperAspect = 1 / RECEIPT_ASPECT_H_PER_W) {
   if (!L) return null;
-  const t = L.posT;
+  // Move to the side arrangement while there is still room above the head.
+  // Waiting for landscape aspect made the read-mode paper cross Piggy.
+  const frame = responsiveFrame(L.vw,L.vh);
+  if(frame.scale!==1 || frame.x!==0 || frame.y!==0){
+    const safeTop=Math.max(0,(L.asBottom-L.asTop-L.asFont)/frame.scale);
+    const r=returnLayout(homeKeyframeLayout(frame.width,frame.height,safeTop),paperAspect);
+    return {...r,rcx:r.rcx*frame.scale+frame.x,rcy:r.rcy*frame.scale+frame.y,
+      top:r.top*frame.scale+frame.y,rw:r.rw*frame.scale,rh:r.rh*frame.scale,
+      dxChar:r.dxChar*frame.scale,dyChar:r.dyChar*frame.scale};
+  }
+
+  const normalFloor = frame.y + frame.height * (1-hkKey(frame.width,HK_BOTTOM,true)) * frame.scale;
+  const dyChar = Math.min(0,normalFloor-L.floorY);
+  L={...L,floorY:L.floorY+dyChar,boardTop:L.boardTop+dyChar,stageTop:L.stageTop+dyChar};
+  const blend = hkClamp((L.vw - 390) / 420, 0, 1);
+  const t = 1-(1-blend)*(1-blend);
   const ck = L.stageW / RET_STAGE_REF_W;
   const topP = L.asBottom + 0.06 * L.vh;
   const topAt = (w) => Math.max(L.asBottom, topP + (L.floorY - 368 * ck - (0.55 * w) / paperAspect - topP) * t);
@@ -12499,17 +12683,25 @@ function returnLayout(L = desktopFormat()?.L, paperAspect = 1 / RECEIPT_ASPECT_H
   const clW = RET_CLUSTER_W * L.S;
   const clHome = L.stageLeft + RET_CLUSTER_OFF * L.S;
   const xP = Math.min((L.vw - clW) / 2 + 0.07 * L.vw, L.vw - L.M - clW);
-  const gapL = 30 * L.k;
+  const gapL = 30 * L.k + (0.09 * rw0 + 12) * (1-hkClamp((L.vw-1100)/340,0,1)); // include read-mode expansion
   const parts = (w) => { const gl = (L.vw - (w + gapL + clW)) / 2; return { rcx: L.vw / 2 + (gl + w / 2 - L.vw / 2) * t, clLeft: xP + ((gl + w + gapL) - xP) * t }; };
   // only where the read paper and the cluster share x does the paper have to clear Piggy's head (in the landscape arrangement it is beside her, not above her); there the paper is first
   // lifted (never above the ARASO bottom), then narrowed
   const limit = L.boardTop + L.S * RET_GATE_PIGGY_TOP; // the paper never touches Piggy's head (the old <= 640 rail kept 32 px but shrank the paper, which breaks 0.91 x HomeCard at 640x808; a819 B-UI17 pins that)
   const above = (w) => { const p = parts(w); return Math.abs(p.rcx - (p.clLeft + clW / 2)) < 0.59 * w + 8 + clW / 2; };
-  const topFor = (w, ff) => { const d = topAt(w); if (!(ff > 0) || !above(w)) return d; const e = Math.min(d, Math.max(L.asBottom, limit - (1.09 * w) / paperAspect)); return d + (e - d) * ff; };
+  const readLimit = (w) => {
+    const p = parts(w);
+    const distance = Math.max(0, Math.abs(p.rcx-(p.clLeft+clW/2))-(.59*w+8+clW/2));
+    const q = hkClamp(distance/Math.max(1,(gapL-.09*rw0-8)*1.3),0,1);
+    return limit+(L.floorY-limit)*q;
+  };
+  // READ zoom expands around the centre: reserve its upper 9% below the brand.
+  const readTopFloor = (w) => L.asBottom + .09*w/paperAspect + 8*L.k;
+  const topFor = (w, ff) => { const d = Math.max(readTopFloor(w), topAt(w)); if (!(ff > 0)) return d; const e = Math.min(d, Math.max(readTopFloor(w), readLimit(w) - (1.09 * w) / paperAspect)); return d + (e - d) * ff; };
   let rw = rw0;
-  if (f > 0) {
-    const fits = (w) => !above(w) || topFor(w, 1) + (1.09 * w) / paperAspect <= limit;
-    if (!fits(rw0)) { let lo = 0, hi = rw0; for (let i = 0; i < 30; i += 1) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; } rw = rw0 + (lo - rw0) * f; }
+  {
+    const fits = (w) => topFor(w, 1) + (1.09 * w) / paperAspect <= readLimit(w) + 1e-7;
+    if (!fits(rw0)) { let lo = 0, hi = rw0; for (let i = 0; i < 30; i += 1) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; } rw = lo; }
   }
   const rh = rw / paperAspect;
   const rcxP = L.vw / 2;
@@ -12527,11 +12719,15 @@ function returnLayout(L = desktopFormat()?.L, paperAspect = 1 / RECEIPT_ASPECT_H
   const preAspect = paperAspect * (0.8696 / 0.8171); // the same paper with the pre-A-845 type above 640
   const topAtA = (w, a) => Math.max(L.asBottom, topP + (L.floorY - 368 * ck - (0.55 * w) / a - topP) * t);
   const raise = hkClamp((L.vw - 640) / 60, 0, 1) * Math.max(0, topAtA(rw, paperAspect) + rh - (topAtA(rw, preAspect) + rw / preAspect));
-  const top = Math.max(L.asBottom, Math.min(topFor(rw, f), topAt(rw) - raise));
+  const settle = hkClamp((L.vw-810)/630, 0, 1);
+  const portraitMix = hkClamp((L.vw-430)/170,0,1);
+  const portraitTop = Math.max(readTopFloor(rw), topP)*(1-portraitMix)+readTopFloor(rw)*portraitMix;
+  const desiredTop = portraitTop+Math.max(0,topAt(rw)-raise-portraitTop)*settle*settle*(3-2*settle);
+  const top = Math.max(readTopFloor(rw), Math.min(topFor(rw, 1), desiredTop));
   // [A-920 item 3] Receipt x: the mock (img_27) has the paper 11 px further left of the character group at 1440 (gap 51 vs 40 px). One length keyframe 390 / 810 / 1440 = [0, 0, -11] (hkKey length mode, straight line,
   // landscape weight t only; the character group / dxChar are not touched). pre-A-920 baseline: rcx: rcxP + (rcxL - rcxP) * t
   const a920Rcx = hkKey(L.vw, RET_RCX_SHIFT) * t;
-  return { rcx: rcxP + (rcxL - rcxP) * t + a920Rcx, rcy: top + rh / 2, top, rw, rh, dxChar: dxP + (dxL - dxP) * t };
+  return { rcx: rcxP + (rcxL - rcxP) * t + a920Rcx, rcy: top + rh / 2, top, rw, rh, dyChar, dxChar: dxP + (dxL - dxP) * t };
 }
 // The delivered box must have the paper's OWN rendered aspect (return-view.js contain-fits the rotated paper into it): otherwise a paper that is taller at <=640 (its own
 // A-666 type rules) is height-limited and comes out narrower than 0.91 x HomeCard. Same quantity return-view.js measures for the rail; memoised per element and width.
@@ -14964,6 +15160,9 @@ function resetRecordsForFullRender() {
 }
 
 function render() {
+  // A-1131: do not mount a checking card / start Hatch before the envelope timeline.
+  // Failure/cancel and the app-lock surface are never suppressed.
+  if (holdInviteAuthPresentation()) return;
   resetRecordsForFullRender();
   teardownScene();
   // [A-633 A] 잠긴 동안은 목적지 대신 LOGIN_CHECKING(또는 해제 실패 카드)만 — 목적지 mount·1회용 표 소비 0.

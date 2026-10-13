@@ -4115,12 +4115,10 @@ h1 {
 
 .secondJourneyCard .secondJourney__body { top:96px; height:440px; } /* [A-421] +12 = 버튼 음영(0 2px 0 + 0 5px 7px) 자리. overflow:auto 가 잘라 버튼이 납작했음 */
 /* [A-920 item 2] the candidates step is the SAME card as the interests step (A-847 UI-24: one card, one size; mock img_15/16/17): no width / margin override here, so the card keeps the base .sendCard
-   box (438.46 local, 285 on a 390 phone) and the left edge on the margin line at every width. The body keeps the base box (left 30, width 378) + the 8 px text inset. Only the readiness card (a .job row
-   outside the candidates step) keeps the A-421 380 box. pre-A-920 baseline: .secondJourneyCard:has(.job), .secondJourneyCard--candidates { width:380px; margin-left:-190px } and body width:312px for the candidates step. */
-.secondJourneyCard:not(.secondJourneyCard--candidates) .secondJourney__body:has(> .job) { width:312px; }
+   box (438.46 local, 285 on a 390 phone) and the left edge on the margin line at every width. The body keeps the base box (left 30, width 378) + the 8 px text inset. The readiness card also keeps this same paper and body box. pre-A-920 baseline: .secondJourneyCard:has(.job), .secondJourneyCard--candidates { width:380px; margin-left:-190px } and body width:312px for the candidates step. */
+/* Readiness uses the same paper and body width as interests and candidates. */
 .secondJourneyCard .secondJourney__body:has(> .job),
 .secondJourneyCard--candidates .secondJourney__body { display:flex; flex-direction:column; padding-left:8px; padding-bottom:12px; }
-.secondJourneyCard:has(.job):not(.secondJourneyCard--candidates) { width:380px; margin-left:-190px; } /* [A-849 UI-24] keyed on the candidates step, not on a candidate existing: 0 / 1 / 3 rows keep one size + the bottom footer */
 /* [A-849 UI-20] scrolling stays (long content still scrolls) but the scrollbar is never drawn */
 .secondJourney__body { scrollbar-width: none; -ms-overflow-style: none; }
 .secondJourney__body::-webkit-scrollbar { display: none; width: 0; height: 0; }
@@ -6548,7 +6546,7 @@ html .a979-forkBadge {
 
 /* ── GIFT ── */
 html .a911-giftGroup { width: 100%; display: flex; flex-direction: column; align-items: center; gap: calc(20px * var(--a911-z)); flex: none; }
-html .a911-cards { position: relative; width: 100%; flex: none; height: calc(342px * var(--a911-fanC)); }
+html .a911-cards { transform: translateY(var(--a911-lift, 0px)); position: relative; width: 100%; flex: none; height: calc(342px * var(--a911-fanC)); }
 html .a911-cards[data-a911-cards="pick"], html .a911-cards[data-a911-cards="done"] { height: calc(342px * var(--a911-s)); }
 html .a911-card {
   position: absolute; left: 50%; top: 0;

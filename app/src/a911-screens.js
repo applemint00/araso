@@ -1,3 +1,4 @@
+import { responsiveFrame } from "./responsive-layout.js";
 // [A-911] Own screens: Gift a Piggy · Money · Move money (design writer, wt a911d).
 // MARKUP + LAYOUT ONLY. No money logic, no storage, no network, no new copy. Every visible word below already exists in the app or in the
 // Owner README 2026-10-08 ("Gift a Piggy", "Move money", "Money", "Send", "in", "out", "tap to turn it over", "for you", "from <Piggy> · $X",
@@ -223,19 +224,19 @@ export function a911MoveMarkup(view = {}) {
 }
 
 // ── geometry (pure) ──────────────────────────────────────────────────────────────────────────────────────────────────────
-// [A-917] A-829 keyframe maths, same as main.js hkKey (390 / 810 / 1440, linear between; below 390 x W/390 and above 1440 x min(W/1440, 1.33) unless pct).
-const A911_CAP = 1.33;
+// [A-917] A-829 keyframe maths, same as main.js hkKey (390 / 810 / 1440, linear between; below 390 x W/390 and above 1440 grows 5% through 1940 then holds unless pct).
+const a911Growth = W => responsiveFrame(W, 900).scale;
 function a911Key(W, kf, pct) {
   const [a, b, c] = kf;
   if (W <= 390) return pct ? a : (a * W) / 390;
   if (W <= 810) return a + ((b - a) * (W - 390)) / 420;
   if (W <= 1440) return b + ((c - b) * (W - 810)) / 630;
-  return pct ? c : c * Math.min(W / 1440, A911_CAP);
+  return pct ? c : c * a911Growth(W);
 }
 // the one zoom for text / button / paper / gutters: NO media-query steps. Below 390 it stays 1 (A-843 on-screen minimum 12 px beats A-829 "below 390 x W/390").
-export const a911Z = (W) => a911Key(W, [1, 1.15, 1.35], true) * (W > 1440 ? Math.min(W / 1440, A911_CAP) : 1);
-export const a911Bottom = (W, H) => a911Key(W, [0.071, 0.08, 0.08], true) * H; // A-829 bottom margin (floor to viewport bottom), + safe-area in CSS
-export const a911SideM = (W) => a911Key(W, [20, 52, 120]);
+export const a911Z = (W) => a911Key(W, [1, 1.15, 1.35], true) * (W > 1440 ? a911Growth(W) : 1);
+export const a911Bottom = (W, H) => { const f=responsiveFrame(W,H); return f.y + a911Key(f.width, [0.071, 0.08, 0.08], true) * f.height * f.scale; }; // A-829 bottom margin (floor to viewport bottom), + safe-area in CSS
+export const a911SideM = (W) => { const f=responsiveFrame(W,900); return f.x + a911Key(f.width, [20,52,120]) * f.scale; };
 
 // Writes --a911-* vars on the screen root. Reads: the root's .a911-body rect (already ends above the keyboard when typing), the optional
 // .a911-ctrl height. `kb` = px the keyboard covers (visualViewport based in the app; a number in the frames).
@@ -253,8 +254,8 @@ export function a911Fit(root, { width = window.innerWidth, height = window.inner
   const tier = W < 1024 ? 0 : 2; // only the Gift controls side-by-side switch (>= 1024); card scales below are interpolated, not tiered
   // card scales from the mock (gift_screen_mock.html P()), keyframed 390 / 810 / 1440: [fan centre, fan side, fan dx, pick, done]
   const kf = (i, c) => a911Key(W, [c[0][i], c[1][i], c[2][i]], true);
-  const KF = [[0.84, 0.66, 158, 1.17, 0.86], [1.2, 0.95, 270, 1.55, 1.2], [1.18, 0.96, 300, 1.6, 1.25]];
-  const T = [kf(0, KF), kf(1, KF), W <= 390 ? (158 * W) / 390 : kf(2, KF), kf(3, KF), kf(4, KF)];
+  const KF = [[0.84, 0.66, 158, 1.17, 0.86], [1.18, 0.95, 270, 1.55, 1.2], [1.18, 0.96, 300, 1.6, 1.25]];
+  const T = [kf(0, KF) * a911Growth(W), kf(1, KF) * a911Growth(W), W <= 390 ? (158 * W) / 390 : kf(2, KF), kf(3, KF) * a911Growth(W), kf(4, KF) * a911Growth(W)];
   const stage = root.dataset.a911Stage;
   const typing = root.dataset.typing === "1";
   const ctrl = root.querySelector(".a911-ctrl");
@@ -265,7 +266,26 @@ export function a911Fit(root, { width = window.innerWidth, height = window.inner
   // no step at the 1024 arrangement switch (A-917 Cowork 19:20 / A-829 #1) and the 1440 pick card reaches its keyframe (1.6 = mock ~345 x 541; A-919 row 7).
   // pre-A-924 baseline: the full controls height was reserved at every width (1440 pick card 270 x 428).
   const reserve = W < 1024 ? 1 : Math.max(0, Math.min(1, (1440 - W) / (1440 - 1024)));
-  const ctrlH = !typing && ctrl ? (ctrl.getBoundingClientRect().height + gap) * reserve : 0;
+  const fitZ = Math.max(a911Z(1024), z);
+  let controlHeight = 0;
+  if (!typing && ctrl) {
+    const probe = ctrl.cloneNode(true);
+    probe.removeAttribute("id");
+    for (const el of probe.querySelectorAll("[id]")) el.removeAttribute("id");
+    probe.style.cssText = `position:absolute;visibility:hidden;pointer-events:none;transform:none;width:420px;max-width:none;--a911-z:${fitZ};--a911-choice:${18*fitZ}px;--a911-body:${14*fitZ}px;--a911-label:${13*fitZ}px;--a911-detail:${12*fitZ}px`;
+    root.append(probe); controlHeight = probe.getBoundingClientRect().height; probe.remove();
+    controlHeight = Math.max(controlHeight, ctrl.getBoundingClientRect().height);
+  }
+  const ctrlH = !typing && ctrl ? (controlHeight + 20*fitZ) * reserve : 0;
+  // Keep enough room for the largest header/footer before controls move beside
+  // the card. Otherwise their growing text takes space back from the paper.
+  if (root.dataset.a911 === "gift" && !typing) {
+    const f = responsiveFrame(W, height);
+    const head = Math.max(body?.getBoundingClientRect().top || 0, f.y + 376.5*.192*f.scale + 5 + 44*fitZ);
+    const bottom = f.y + .08*f.height*f.scale + 63.2*fitZ;
+    availH = Math.min(availH, height-head-bottom);
+  }
+  set("--a911-lift", `${W >= 1024 && !typing && stage !== "fan" ? -((stage === "done" ? link : ctrl)?.getBoundingClientRect().height + gap || 0)*reserve/2 : 0}px`);
   const linkH = link ? link.getBoundingClientRect().height + gap : 0;
   const fit = (want, extra) => Math.max(0.45, Math.min(want, (availH - extra - 4) / 342));
   if (root.dataset.a911 === "gift") {

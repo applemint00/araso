@@ -1,3 +1,4 @@
+// A-1131 render pin: defer Invite auth presentation before teardown; auth/money bodies unchanged.
 // Narrow mainnet lane: explicit closed chain profile + one Job (Aave v3 USDC) + testnet isolation.
 //   node app/test/a653-mainnet-lane.mjs
 //
@@ -587,7 +588,7 @@ await check("N17 legacy testnet paths sealed off-testnet: state init, send start
 
 await check("N18 render() byte-identical to HEAD (sha256 of its source); the lane module has no private-dir path or card id in shipped strings", () => {
   const h = createHash("sha256").update(fnBody("render")).digest("hex");
-  assert.equal(h, "866133cf607110939b5ce2b05ad9ff253ee7ab77f8448b3977faa974a9d3e27c");
+  assert.equal(h, "521db6368b3a331d44eb1287883319905c2a4f98c9148331df4adf698bbf6dd4");
   for (const f of ["app/src/chain-profile.js", "app/src/mainnet-job-lane.js"]) {
     const src = readFileSync(path.join(REPO, f), "utf8");
     assert.equal(PRIVATE_RE.test(src), false, `${f}: private dir path`);

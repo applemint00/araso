@@ -18,7 +18,10 @@ const check = (label, fn) => { try { fn(); console.log(`PASS  ${label}`); pass +
 // coupled geometry and centred 1940 / +5% composition.
 await import('./responsive-layout.mjs');
 check("N1 closed phone sizing stays at the original Safari-width baseline",()=>{
- for(const[w,h,cw] of [[390,844,282.324],[393,659,283.217],[393,852,285.279]])near(L(w,h).cardW,cw,.5,`${w}x${h}`);
+ // A-1123 Owner: Safari toolbar height must not change the width-based size.
+ // The old 393x852 pin (285.279) retained the height-floor bug.
+ for(const[w,h,cw] of [[390,844,282.324],[393,659,283.217]])near(L(w,h).cardW,cw,.5,`${w}x${h}`);
+ for(const h of [659,800,852,900]) near(L(393,h).cardW,L(393,659).cardW,1e-9,`393x${h} toolbar invariance`);
 });
 check("N2 desktop cap is 1940 / 1.05 with surplus space centred on both axes",()=>{
  const a=L(1440,900),b=L(1940,1200),c=L(2560,1400);

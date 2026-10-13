@@ -1,3 +1,4 @@
+// A-1131 render pin: defer Invite auth presentation before teardown; auth/money bodies unchanged.
 // [A-711 W1] Issuance-authority client gate. NETWORK 0 · REAL FACE ID 0 · NO LIVE AUTHORITY · fake in-memory registry only.
 //   node app/test/a711-issuance-authority.mjs
 //
@@ -708,7 +709,7 @@ await check("S1. admitSequencedPiggy (restore / first-open shared path; also pin
 // Baseline = the tree after A-707 (money lock) + A-710 landed and before A-711 (main.js f35f9d8b…). sendPiggyOnce was
 // re-pinned from the pre-A-707 draft value b7c47a07… because A-707 legitimately changed it; A-711 does not touch it.
 await check("S2. untouched protected functions: render(), sendPiggyOnce(), beginAddPiggy() byte-identical to pre-A-711", () => {
-  assert.equal(sha(bodyOf(MAIN, "render")), "866133cf607110939b5ce2b05ad9ff253ee7ab77f8448b3977faa974a9d3e27c");
+  assert.equal(sha(bodyOf(MAIN, "render")), "521db6368b3a331d44eb1287883319905c2a4f98c9148331df4adf698bbf6dd4");
   // [A-756 re-pin, named reason: Owner decision lock (A) copy only] away line "Can go out once, up to $5." -> "Can go out once." — the A-707 r2 body
   // (6430b5e0…) with exactly that string replaced hashes to the value below. A-711 still does not touch sendPiggyOnce.
   // [A-768 re-pin, named reason: 99e M-L-1] post-deposit redeem reads moved into prepareRedeemAfterDeposit + lag keeps "still out."

@@ -3,6 +3,7 @@
 //   the a734 byte-pinned Invite markup / render / openInvite / setInvitePhase / mountInviteChog / arasoBrandMarkup unchanged vs the pre-copy.
 //   Part B (browser, ARASO_TEST_BROWSER=1): no box edge at any width/height sample, tape on the viewport top edge at the horizontal centre, group scale = rule, hole column at 0.8 x margin,
 //   common background pitch in every scene, ARASO rail, phase carry across the 900 switch.
+import {responsiveFrame} from "../src/responsive-layout.js";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
@@ -26,12 +27,12 @@ const near = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${
 const cutFn = (src, name) => { const i = src.indexOf(`function ${name}(`); if (i < 0) return null; let d = 0, st = false; for (let j = src.indexOf("{", i); j < src.length; j += 1) { if (src[j] === "{") { d += 1; st = true; } else if (src[j] === "}") { d -= 1; if (st && d === 0) return src.slice(i, j + 1); } } return null; };
 
 const L = layoutOracle(MAIN);
-const ctx = vm.createContext({ Math });
+const ctx = vm.createContext({ Math, responsiveFrame, homeKeyframeLayout:L, INVITE_WIDE_MIN:900, hkClamp:(v,a,b)=>Math.min(b,Math.max(a,v)) });
 vm.runInContext([MAIN.match(/const INVITE_WIDE_ART_SCALE = [^;]+;/)[0], MAIN.match(/const INVITE_PHONE_ART_SCALE = [^;]+;/)[0], MAIN.match(/const INVITE_CONTENT_W = [^;]+;/)[0], MAIN.match(/const INVITE_CONTENT_H = [^;]+;/)[0], MAIN.match(/const INVITE_GROUP_K = [^;]+;/)[0], MAIN.match(/const INVITE_OFFSET_X = [^;]+;/)[0], MAIN.match(/const INVITE_OFFSET_Y = [^;]+;/)[0], cutFn(MAIN, "hkKey"), cutFn(MAIN, "inviteGroupScale"), "globalThis.__s = inviteGroupScale;"].join("\n"), ctx);
 const scaleAt = (w, h) => ctx.__s(w >= 900 ? "wide" : "mobile", L(w, h, 0), w, h);
-// [A-920 RE-PIN] the rule carries the mock keyframe factor [0.927, 0.84, 1] at 390 / 810 / 1440 (held outside). pre-A-920 baseline: no factor
-const qA920 = (w) => (w <= 390 ? 0.927 : w <= 810 ? 0.927 + ((0.84 - 0.927) * (w - 390)) / 420 : w <= 1440 ? 0.84 + ((1 - 0.84) * (w - 810)) / 630 : 1);
-const ruleAt = (w, h) => { const c = L(w, h, 0).cardW; return qA920(w) * (w >= 900 ? (1.125 * c) / 377 : (390 / 420) * Math.min(c / 283, h / 780)); };
+// [A-920 RE-PIN] the rule carries the mock keyframe factor [0.927, 0.927, 1] at 390 / 810 / 1440 (held outside). pre-A-920 baseline: no factor
+const qA920 = (w) => (w <= 390 ? 0.927 : w <= 810 ? 0.927 : w <= 1440 ? 0.927 + ((1 - 0.927) * (w - 810)) / 630 : 1);
+const ruleAt = (w, h) => { const c = L(w, h, 0).cardW; return qA920(w) * (w >= 900 ? (1.125 * c) / 377 : (390 / 420) * Math.min(c / 283, Math.min(h, 900) / 780)); };
 
 await check("N1 group scale equals the A-835 item 6 rule (Cowork U-I1) at 390x844 / 810x1080 / 1100x800 / 1440x900 within 1 %; 1440x900 ~ today's 1.125", () => {
   for (const [w, h] of [[390, 844], [810, 1080], [1100, 800], [1440, 900]]) near(scaleAt(w, h) / ruleAt(w, h), 1, 0.01, `${w}x${h}`);

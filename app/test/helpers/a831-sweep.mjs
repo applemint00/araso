@@ -1,3 +1,4 @@
+import {CHOG_HOME_GEOMETRY} from '../../src/chog-home.js';
 import { createResponsiveLayout } from "../../src/responsive-layout.js";
 // [A-831] Home keyframe layout sweep / snapshot helper (A-829 items 1-5). Reuses the A-827 browser scaffold.
 //   CLI (local browser + vite port; run unsandboxed, one at a time):
@@ -28,7 +29,7 @@ function fnSrc(src, name) {
 
 /** The pure keyframe rule from main.js, evaluated in a vm: (vw, vh, safeTop?) -> layout. */
 export function layoutOracle(main = readFileSync(MAIN_PATH, "utf8"), raw = false) {
-  const ctx = { Math, createResponsiveLayout, resolveCssLengthVarPx: () => 0 };
+  const ctx = { CHOG_HOME_GEOMETRY, Math, createResponsiveLayout, resolveCssLengthVarPx: () => 0 };
   vm.createContext(ctx);
   vm.runInContext([
     "const HOME_SEAT_W = 150; const HOME_SEAT_H = (HOME_SEAT_W * 551) / 528; const HOME_CENTER = 1041; const HOME_SEAT_L = HOME_CENTER - 0.4991 * HOME_SEAT_W;",

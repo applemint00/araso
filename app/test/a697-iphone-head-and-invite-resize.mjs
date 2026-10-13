@@ -5,6 +5,8 @@
 //    change = synchronous; toolbar-sized height delta = trailing 160ms), and a wide<->mobile switch still render()s.
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
+import { responsiveFrame } from "../src/responsive-layout.js";
+import { layoutOracle } from "./helpers/a831-sweep.mjs";
 const CSS = readFileSync(new URL("../src/style.css", import.meta.url), "utf8");
 
 const HTML = readFileSync(new URL("../index.html", import.meta.url), "utf8");
@@ -55,6 +57,7 @@ const timers = [];
 const win = { innerWidth: 390, innerHeight: 844 };
 let renders = 0, transform = "";
 const ctx = vm.createContext({
+  responsiveFrame, homeKeyframeLayout: layoutOracle(MAIN), hkClamp: (v,a,b) => Math.min(b,Math.max(a,v)),
   window: win, INVITE_WIDE_MIN: 900, inviteKind: "mobile",
   // [A-839] fitInvite also reads the A-831 layout (syncDesktopFormatVars) and writes the --invS/--invVw/--invVh vars; pre-A-839 baseline: style had only the `transform` setter.
   syncDesktopFormatVars: () => ({ L: { cardW: 376.5, M: 120, asTop: 48, asFont: 24 } }),

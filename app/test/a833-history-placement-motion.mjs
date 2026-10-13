@@ -136,7 +136,7 @@ if (process.env.ARASO_TEST_BROWSER === "1") {
   const CLOSE = `document.querySelector("#recordsCardClose")?.click()`;
   const openTrig = (idx) => `document.querySelectorAll(".homePaper__records")[${idx}].click()`;
 
-  for (const [w, h] of [[390, 844], [640, 900], [810, 1080], [1100, 800], [1440, 900], [1920, 1080]]) {
+  for (const [w, h] of [[390, 844], [640, 900], [800, 800], [810, 1080], [860, 800], [861, 800], [1100, 800], [1440, 900], [1920, 1080]]) {
     await H.p.setViewportSize({ width: w, height: h }); await S.sleep(900);
     const exp = P(w, h); const L = layout(w, h, 0);
     const idx = await openHistory();

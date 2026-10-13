@@ -1,3 +1,4 @@
+// A-1131 render pin: defer Invite auth presentation before teardown; auth/money bodies unchanged.
 // A-667 [REENTRY FLOW · RETRY + CONTEXTUAL ACTIONS] — regression contract.
 //   node app/test/a667-reentry-retry-contextual.mjs                    (Part N + Part B)
 //   A667_NODE_ONLY=1 node app/test/a667-reentry-retry-contextual.mjs   (Part N only — no port/network)
@@ -449,7 +450,7 @@ await check("C8 nothing on load/render/timeout: Make new/Invite never start crea
     if (fn !== "startPiggyOpen") assert.equal(/openPiggy\(|createPasskeyWithPrfOutput\(|credentials\.create/.test(b), false, `${fn} creates`);
   }
   assert.equal(/startPiggyOpen\(/.test(stripComments(fnBody("renderReceived"))), false, "render of Invite does not open");
-  assert.ok(/setInvitePhase\("checking"\);\s*const out = await startPiggyOpen\(\);/.test(stripComments(fnBody("openInvite"))), "Invite tap starts the passkey branch immediately");
+  assert.ok(/setInvitePhase\("checking"\);\s*return withInviteAuthPresentation\(async \(\) => \{\s*const out = await startPiggyOpen\(\);/.test(stripComments(fnBody("openInvite"))), "Invite tap starts the passkey branch immediately");
 });
 
 await check("C9 separation: marker → Check Piggy only · markerless → Make new only · reentry lock → Try again only; three distinct ids, one each", async () => {
@@ -480,7 +481,7 @@ await check("P1 byte-identical pins: requestPrf / loginCheckingMarkup (security-
   // Full sha256 pins, split into two halves only so the repo secret hook does not read them as keys (values unchanged).
   assert.equal(sha(fnBody1051("requestPrf")), "766fc57ed63b6009feb116105bdc73cc" + "0c2cebff74ea614c02c48df6b935a321", "requestPrf");
   assert.equal(sha(fnBody1051("loginCheckingMarkup")), "dcec88389ae4385ad03e7d4645cd7704" + "6eb95b7762695d2d59e96a8844772f91", "loginCheckingMarkup");
-  assert.equal(sha(fnBody1051("render")), "866133cf607110939b5ce2b05ad9ff25" + "3ee7ab77f8448b3977faa974a9d3e27c", "render");
+  assert.equal(sha(fnBody1051("render")), "521db6368b3a331d44eb1287883319905c2a4f98c9148331df4adf698bbf6dd4", "render");
   const want = { checkPiggy: PIN.checkPiggy, recoverPiggy: PIN.recoverPiggy, openPiggy: PIN.openPiggy, startPiggyOpen: PIN.startPiggyOpen, isCancelledAuthError: PIN.isCancelledAuthError, appLockSurface: PIN.appLockSurface, lockAppAfterIdle: PIN.lockAppAfterIdle, getRpId: PIN.getRpId };
   const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha(fnBody1051(n)).slice(0, 16)]));
   deq(got, want);

@@ -138,12 +138,21 @@ async function runUI12(w, hh) {
 async function runBrowser() {
   const H = await import("./helpers/a803-browser.mjs");
   if (!H.harnessPresent()) { console.log("SKIP browser - local harness absent"); return; }
+  const sizes = process.env.A841_SIZES
+    ? process.env.A841_SIZES.split(" ").map(s => s.split("x").map(Number))
+    : [[390, 844], [810, 1080], [1440, 900]];
+  if (process.env.A841_ONLY_NAME === "1") {
+    for (const [w, hh] of sizes) await runUI12(w, hh);
+    return;
+  }
   const { sleep } = H;
-  const h = await H.launch();
+  const h = await H.launch({ forkMode: true });
   const p = h.p;
   try {
     await h.seedSolo();
     await p.setViewportSize({ width: 1440, height: 900 }); await p.reload({ waitUntil: "networkidle" }); await sleep(600); await h.unlock(); await h.waitScene(["sendstay"], 9000); await sleep(1500);
+    if (await p.locator("#stayButton").isVisible()) { await p.locator("#stayButton").click(); await sleep(1500); }
+    await p.waitForSelector('.homeLiving .homeAmbient__idle #eye_L', {timeout:5000});
     // ── UI-27 runtime: 9 s series of eye height, ink bottom, scaleY ──
     const series = await p.evaluate(async () => {
       const out = []; const t0 = performance.now();
@@ -171,11 +180,13 @@ async function runBrowser() {
     save("ui27_summary.json", { blinks, dBottom, scaleY: [Math.min(...sys), Math.max(...sys)] });
     // reduced motion: static
     await p.emulateMedia({ reducedMotion: "reduce" }); await p.reload({ waitUntil: "networkidle" }); await sleep(600); await h.unlock(); await h.waitScene(["sendstay"], 9000); await sleep(1500);
+    if (await p.locator("#stayButton").isVisible()) { await p.locator("#stayButton").click(); await sleep(1500); }
     const red = await p.evaluate(async () => { const w = document.querySelector(".homeLiving__breath"); const a = [w?.style.transform || "", getComputedStyle(document.querySelector(".homeLiving")).visibility]; await new Promise((r) => setTimeout(r, 2500)); a.push(w?.style.transform || ""); return a; });
     await check_("UI-27 reduced motion: layer visible, no breath transform, identical 2.5 s apart", () => { assert.equal(red[0], ""); assert.equal(red[2], ""); assert.equal(red[1], "visible"); });
     await p.emulateMedia({ reducedMotion: "no-preference" });
-  } finally { await h.close?.(); }
-  for (const [w, hh] of [[390, 844], [810, 1080], [1440, 900]]) await runUI12(w, hh);
+  } catch (e) { fail++; console.log("FAIL UI-27 browser setup/measurement:", e.message.split("\n")[0]); }
+  finally { await h.close?.(); }
+  for (const [w, hh] of sizes) await runUI12(w, hh);
 }
 async function check_(name, fn) { await check(name, fn); }
 if (process.env.ARASO_TEST_BROWSER === "1") await runBrowser(); else console.log("SKIP browser sections (ARASO_TEST_BROWSER=1)");

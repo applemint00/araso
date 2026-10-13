@@ -51,7 +51,8 @@ await check("N1 read-only files stay byte-identical to the card's BEFORE hash (c
   // [A-891 RE-PIN] return-view.js changed only for UI-19 (folder hit, "open the file" text hidden). pre-A-891 baseline: before["app/src/return-view.js"] (c44d2866…4ac6)
   // [A-912 RE-PIN, Cowork-approved] chog-home.js adds settleChogOneLine() + one MutationObserver (one Chog speech line). pre-A-912 baseline: chog-home.js 1c15f704a1f1294ed68d21b796985db17bd423f4a9256b30ea9a154ead9828e3
   // [A-920 RE-PIN] return-view.js adds the Return Chog drop (RETURN_GEOMETRY.chogDrop, mock img_25-27). pre-A-920 baseline: return-view.js c01be5d750dadf0fdc787a02f1ff328205b4818013d3f6df924c435671b47605
-  const A845 = { "app/src/chog-home.js": "a9b1702853d2adfd60dac4e748ed185bc878487fe9d3c09975e5675b3c9a2ca8", "app/src/return-view.js": "9e691c94360ba5275393ee7483bd5e994b739f6a5a317aa0ad38cb176f309221" };
+  // A-1129 Owner-authorized Return adapter: settle-driven translation, unchanged size/renderer; return-stage-continuity.mjs and continuous frame evidence.
+  const A845 = { "app/src/chog-home.js": "a9b1702853d2adfd60dac4e748ed185bc878487fe9d3c09975e5675b3c9a2ca8", "app/src/return-view.js": "1d65b80327075088e735ecffca50ad94a2954dcc62569dff37a2884970ba6340" };
   for (const p of ["app/src/chog-home.js", "app/src/return-view.js"]) assert.equal(sha(readFileSync(path.join(REPO, p))), A845[p] ?? before[p], p);
 });
 
@@ -120,7 +121,7 @@ await check("N6 Receipt constants the two-tap flow and the rail contract depend 
 
 await check("N7 Invite: crossing the 900 boundary carries phase + each layer's animation clock through the re-render; no timer is created/cleared; fitInvite stays self-contained for the a697 vm cut", () => {
   const fit = strip(fnSrc(MAIN, "fitInvite"));
-  assert.match(fit, /typeof carryInviteTimelineAcross === "function"\) carryInviteTimelineAcross\(render\);\s*else render\(\);/);
+  assert.match(fit, /typeof carryInviteTimelineAcross === "function"\) carryInviteTimelineAcross\(\(\) => \{/);
   const carry = strip(fnSrc(MAIN, "carryInviteTimelineAcross"));
   assert.equal(/setTimeout|clearTimeout|inviteTimers|clearInviteTimers/.test(carry), false);
   assert.match(carry, /setInvitePhase\(phase\);/);

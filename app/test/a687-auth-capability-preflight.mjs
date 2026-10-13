@@ -143,7 +143,7 @@ for (const [label, window, navigator, unsupported] of CASES) {
   check("unlockApp: preflight precedes requestPrf (same sync chain)", u.indexOf("webAuthnUnsupported(") > 0 && u.indexOf("webAuthnUnsupported(") < u.indexOf("requestPrf("));
   check("startPiggyOpen/render untouched by preflight", !/webAuthnUnsupported/.test(cutFn("startPiggyOpen", true)) && !/webAuthnUnsupported/.test(cutFn("render")));
   check("unsupported error is not a cancellation (name is not NotAllowedError)", /unsupported\.name = "WebAuthnUnsupported"/.test(MAIN));
-  check("openInvite routes to startPiggyOpen in the tap call stack", /setInvitePhase\("checking"\);\s*const out = await startPiggyOpen\(\);/.test(cutFn("openInvite", true)));
+  check("openInvite routes to startPiggyOpen in the tap call stack", /setInvitePhase\("checking"\);\s*return withInviteAuthPresentation\(async \(\) => \{\s*const out = await startPiggyOpen\(\);/.test(cutFn("openInvite", true)));
   // [A-698 M3 re-pin] was: sendPiggyOnce had NO webAuthnUnsupported. Now the Send recovery block (and only it) calls it
   // exactly once, before beginAuthAttempt("send") and before any await; finishTrip stays untouched.
   {

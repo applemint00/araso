@@ -25,7 +25,7 @@ export const JAR_CENTRE_PROBE = `(() => { const jar = document.querySelector("#a
 const { launch, sleep, REPO } = await import("./helpers/a803-browser.mjs");
 const OUT = testOutDir("a905-money-browser", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A905_money_tab_jar/browser
 mkdirSync(OUT, { recursive: true });
-const SIZES = [[390, 844], [810, 1080], [1440, 900]];
+const SIZES = process.env.ARASO_PHONE_AUDIT === "1" ? [[375, 667], [390, 844], [430, 932]] : [[390, 844], [810, 1080], [1440, 900]];
 const MIN_TAP = 44;
 const OUT_ADDR = "0x1111111111111111111111111111111111111111";
 

@@ -1,3 +1,4 @@
+// A-1131 render pin: defer Invite auth presentation before teardown; auth/money bodies unchanged.
 // A-642 Lane V (absorbs A-640) — mobile reentry visual integration contract.
 // Checks, from source only (no browser):
 //   V1–V4  LOGIN_CHECKING waiting look = reentry_preview.html §1 mobile composition, built from existing parts
@@ -204,7 +205,7 @@ check("V8 A-633 auth/session/reconcile/return code byte-identical to the A-633 b
     // [A-893b re-pin · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로", Cowork standing permission INBOX :74201] Away-slot pending wording only.
     // pre-A-893b baseline: awayRestoreLineMarkup 027535c3b9c99afb ("still out.").
     awayRestoreLineMarkup: "960d811270c73c0d", renderAuthCard: "6f1694a9613c1890", mountInviteChog: "f894db5c8e334665",
-    arasoBrandMarkup: "2916af023287cf7f", render: "866133cf60711093",
+    arasoBrandMarkup: "2916af023287cf7f", render: "521db6368b3a331d",
   };
   const PRE1051 = restorePreA1051(MAIN); // [A-1051 RE-PIN] pre-A-1051: fnBody(n) on MAIN
   const got = Object.fromEntries(Object.keys(want).map((n) => [n, sha16(fnBody(n, PRE1051))]));

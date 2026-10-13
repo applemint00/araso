@@ -71,7 +71,7 @@ const FNS = [
   "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "openPiggy", "startPiggyOpen", "checkPiggy",
   "hasPlayedBirth", "readPiggyName", "hasReceivedPiggy",
   // the REAL Invite Open path: #inviteFaceButton → openInvite → startPiggyOpen in the same tap call stack
-  "clearInviteTimers", "playInviteTimelineAfterAuth", "openInvite",
+  "clearInviteTimers", "withInviteAuthPresentation", "playInviteTimelineAfterAuth", "openInvite",
 ].map(fnBody).join("\n");
 const INVITE_TIMELINE_SRC = (MAIN.match(/const INVITE_TIMELINE = \[[\s\S]*?\];/) || [])[0];
 const FRESH_FLAG = /const FRESH_DEVICE_RECOVERY_FIRST = (true|false);/.exec(MAIN)?.[1] === "true";
@@ -155,7 +155,7 @@ function freshDevice({ name = "" } = {}) {
   };
   vm.createContext(ctx);
   vm.runInContext(`let activeSession = null; let activeAccount = null; let idleTimer = null; let signerExpiryTimer = null; let authAttempt = null;
-let platformAuthInflight = null; let lateCreatedCredential = null; let bornPiggyPending = null; let inviteTimers = []; let lastGiftClaimSettlement = null;
+let platformAuthInflight = null; let lateCreatedCredential = null; let bornPiggyPending = null; let inviteTimers = []; let inviteAuthPresentation = false; let lastGiftClaimSettlement = null;
 ${INVITE_TIMELINE_SRC}
 ${FNS}
 this.api = { startPiggyOpen, hasPlayedBirth, openInvite };`, ctx);

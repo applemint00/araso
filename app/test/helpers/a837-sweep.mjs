@@ -1,4 +1,5 @@
-import {createResponsiveLayout} from "../../src/responsive-layout.js";
+import {CHOG_HOME_GEOMETRY} from '../../src/chog-home.js';
+import {createResponsiveLayout,responsiveFrame} from "../../src/responsive-layout.js";
 // [A-837] Second / Name / Return v10 measurement + sweep helper (A-835 items 1-5, 8). Reuses the A-819 browser scaffold.
 //   CLI (local browser + vite port; run unsandboxed, one at a time):
 //     ARASO_TEST_BROWSER=1 node app/test/helpers/a837-sweep.mjs snapshot <outDir> [w,h ...]
@@ -28,7 +29,7 @@ function fnSrc(src, name) {
 
 /** The pure scene layouts from main.js evaluated in a vm: { L, nameSceneLayout, returnLayout }. */
 export function sceneOracle(main = readFileSync(MAIN_PATH, "utf8")) {
-  const ctx = { Math, createResponsiveLayout, resolveCssLengthVarPx:()=>0, window: { innerWidth: 1440, innerHeight: 900 } };
+  const ctx = { CHOG_HOME_GEOMETRY, Math, createResponsiveLayout, responsiveFrame, resolveCssLengthVarPx:()=>0, window: { innerWidth: 1440, innerHeight: 900 } };
   vm.createContext(ctx);
   const consts = ["HK_STAGE_W", "HK_SIDE_M", "HK_BOTTOM", "HK_CAP", "HK_PAPER_H_PER_W", "HK_CARD_REF_W", "HK_F_PORTRAIT", "HK_F_LANDSCAPE", "HK_INK_L", "HK_INK_R", "HK_INK_FOOT", "HK_INK_TOP",
     "NAME_CARD_BOARD_W", "NAME_CARD_BOARD_CX", "NAME_CARD_BOARD_TOP", "NAME_PEEK_CONTACT_X", "NAME_PEEK_VISIBLE", "NAME_RIG_RATIO", "NAME_CHOG_BOX_W", "NAME_CHOG_BOX_H_PX", "HOME_CHOG_INK_W", "HOME_CHOG_FOOT_GAP",

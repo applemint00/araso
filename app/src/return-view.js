@@ -144,9 +144,9 @@ export function mountReturnView(opts) {
   // in main.js's mountReturn()/mountSecondReturn(), already wraps #returnChogHop/#returnName and
   // returns `{ ...fit, floor }`, floor = null when neither applies — a strict no-op there, byte-
   // identical to the pre-A-656 plain fit, e.g. every measured web width).
-  const fit = () => {
+  const fit = (motion = null) => {
     const s = Math.min(window.innerWidth / BOARD_W, window.innerHeight / BOARD_H);
-    const info = fitBoard();
+    const info = fitBoard(motion);
     const floor = info && info.floor;
     if (floor) {
       const k = floor.k;
@@ -154,8 +154,11 @@ export function mountReturnView(opts) {
       const top = info.top + s * HOME_FLOOR * (1 - k) + floor.nudgeViewportY;
       const effW = BOARD_W * s * k;
       const effH = BOARD_H * s * k;
-      canvas.width = Math.round(effW * (window.devicePixelRatio || 1));
-      canvas.height = Math.round(effH * (window.devicePixelRatio || 1));
+      const pixelW = Math.round(effW * (window.devicePixelRatio || 1));
+      const pixelH = Math.round(effH * (window.devicePixelRatio || 1));
+      // Translation during a live frame must not clear the already drawn canvas.
+      if (canvas.width !== pixelW) canvas.width = pixelW;
+      if (canvas.height !== pixelH) canvas.height = pixelH;
       canvas.style.width = `${effW}px`;
       canvas.style.height = `${effH}px`;
       canvas.style.left = `${left}px`;
@@ -168,13 +171,15 @@ export function mountReturnView(opts) {
       canvas.style.left = "";
       canvas.style.top = "";
       canvas.style.transform = "";
-      canvas.width = Math.round(BOARD_W * s * (window.devicePixelRatio || 1));
-      canvas.height = Math.round(BOARD_H * s * (window.devicePixelRatio || 1));
+      const pixelW = Math.round(BOARD_W * s * (window.devicePixelRatio || 1));
+      const pixelH = Math.round(BOARD_H * s * (window.devicePixelRatio || 1));
+      if (canvas.width !== pixelW) canvas.width = pixelW;
+      if (canvas.height !== pixelH) canvas.height = pixelH;
       canvas.style.width = `${BOARD_W * s}px`;
       canvas.style.height = `${BOARD_H * s}px`;
     }
   };
-  fit();
+  fit(play ? null : { settle: 1 });
 
   if (!play) { onIdleEnter(); return null; }
 
@@ -285,11 +290,17 @@ export function mountReturnView(opts) {
   // 잡아 두면(아래 received) 화면 쪽(main.js)이 mount-time 정적 문구 대신 이 실제 수령
   // 신호로 checking/coming 발화를 켤 수 있다 — 이 파일은 문구 자체를 모른다(§1 계약).
   let received = false;
+  let fittedSettle = 0;
   function onFrame(meta) {
     lastFrame = meta;
+    if (meta && meta.settle !== fittedSettle) {
+      fittedSettle = meta.settle;
+      fit(meta);
+    }
     if (meta && meta.chogOwner === "canvas") received = true;
     placePaper(meta);
     placeChog(meta);
+    placeFolderHit();
   }
 
   // [A-681 D] Rendered-paper aspect for the mobile rail target (see piggy-return.js receiptRailTarget).
@@ -366,7 +377,7 @@ export function mountReturnView(opts) {
   });
   onCleanup(() => playback.stop());
 
-  listen(window, "resize", () => { fit(); playback.redraw(); placePaper(lastFrame); placeFolderHit(); });
+  listen(window, "resize", () => { fit(lastFrame); playback.redraw(); placePaper(lastFrame); placeFolderHit(); });
 
   // ---- 입력 — 한 사용자 입력에 한 gate --------------------------------
   // [A-322 교정 6] click 과 keydown 을 둘 다 걸면 button 의 기본 활성화와 겹쳐

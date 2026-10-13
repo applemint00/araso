@@ -137,7 +137,7 @@ const PINNED = {
 };
 await check("S6 auth/recovery/Gift/A-733 primitives outside the explicitly retimed Invite entry are byte-identical (comment-stripped) to the pre-A-734 tree", () => {
   const PRE1051 = restorePreA1051(MAIN); // [A-1051 RE-PIN] pre-A-1051: fnBody(n) on MAIN
-  const drift = Object.entries(PINNED).filter(([n, h]) => sha(stripComments(fnBodyOf(PRE1051, n))) !== h).map(([n]) => n);
+  const drift = Object.entries(PINNED).filter(([n, h]) => sha(stripComments(fnBodyOf(PRE1051, n)).replace(/\s*if \(holdInviteAuthPresentation\(\)\) return;/, "")) !== h).map(([n]) => n);
   deq(drift, []);
   const recovery = stripComments(fnBody("checkPiggy"));
   assert.doesNotMatch(recovery, /setScene\("name"/, "existing Piggy recovery never forces Name it");
@@ -148,7 +148,7 @@ await check("S7 the only UI caller of beginGiftPiggy is openGiftForExistingPiggy
   assert.equal(calls(/(?<!function )\bbeginGiftPiggy\(/g), 1, "one call site");
   assert.ok(stripComments(fnBody("openGiftForExistingPiggy")).includes("await beginGiftPiggy()"));
   assert.equal(calls(/(?<!function )\bstartGiftOpen\(/g), 1);
-  assert.match(stripComments(fnBody("openGiftInvite")), /setInvitePhase\("checking"\);\s*const out = await startGiftOpen\(\);/);
+  assert.match(stripComments(fnBody("openGiftInvite")), /setInvitePhase\("checking"\);\s*return withInviteAuthPresentation\(async \(\) => \{\s*const out = await startGiftOpen\(\);/);
   assert.equal(calls(/(?<!function )\bopenGiftInvite\(/g), 1);
   assert.match(stripComments(fnBody("handleGiftOpenActivate")), /closest\?\.\("#giftOpenButton"\)\) return;\s*openGiftInvite\(\);/);
   assert.match(CODE, /document\.addEventListener\("click", handleGiftOpenActivate\);/);
@@ -202,7 +202,7 @@ const FNS = [
   "beginAuthAttempt", "boundAuthAttempt", "finishAuthAttempt", "trackPlatformAuth",
   "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "openPiggy", "startPiggyOpen", "checkPiggy",
   "hasPlayedBirth", "readPiggyName", "hasReceivedPiggy", "takePendingGiftClaim", "restorePendingGiftClaim",
-  "clearInviteTimers", "playInviteTimelineAfterAuth", "openInvite",
+  "clearInviteTimers", "withInviteAuthPresentation", "playInviteTimelineAfterAuth", "openInvite",
   // A-734 entry (the code under test)
   "giftPaperKind", "offerGiftPaperAtBoot", "startGiftOpen", "openGiftForExistingPiggy", "openGiftInvite",
 ].map(fnBody).join("\n");
@@ -271,7 +271,7 @@ function device({ name = "", cred = false, scene = "received", gift = GIFT, begi
   };
   vm.createContext(ctx);
   vm.runInContext(`let activeSession = null; let activeAccount = null; let idleTimer = null; let signerExpiryTimer = null; let authAttempt = null;
-let platformAuthInflight = null; let lateCreatedCredential = null; let bornPiggyPending = null; let inviteTimers = []; let lastGiftClaimSettlement = null;
+let platformAuthInflight = null; let lateCreatedCredential = null; let bornPiggyPending = null; let inviteTimers = []; let inviteAuthPresentation = false; let lastGiftClaimSettlement = null;
 let pendingGiftClaim = null; let giftPaperOffered = false; let giftOpenRunning = false;
 ${INVITE_TIMELINE_SRC}
 ${FNS}

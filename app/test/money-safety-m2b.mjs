@@ -1,3 +1,4 @@
+// A-1131 render pin: defer Invite auth presentation before teardown; auth/money bodies unchanged.
 // [A-707 MONEY SAFETY M2-BETA · FIRST PRE-BROADCAST] node-only failure-injection contract.
 //   node app/test/money-safety-m2b.mjs
 //   M2B_FORK_RPC=http://127.0.0.1:8545 node app/test/money-safety-m2b.mjs   (optional: extra local-fork transaction-format parity; anvil --chain-id 10143)
@@ -1015,7 +1016,7 @@ await check("H4 the raw signed transaction is never persisted or logged: no stor
 });
 await check("H5 pinned functions untouched by this card: classifySendPending / reconcileSendPending / reconciledSendReceipt / readSendPending / writeSendPending / commitSendSuccess / finishTrip / render keep their A-699 hashes", async () => {
   const sha16 = (x) => createHash("sha256").update(x).digest("hex").slice(0, 16);
-  const want = { classifySendPending: "2389cf76d2658fd6", reconcileSendPending: "1caf49b6a16b09df", readSendPending: "065bbae2d4bb516e", commitSendSuccess: "9d3ac854b6df8ff3", finishTrip: "60edd8708e77d531", reconciledSendReceipt: "1de55c29816852f7", render: "866133cf60711093" };
+  const want = { classifySendPending: "2389cf76d2658fd6", reconcileSendPending: "1caf49b6a16b09df", readSendPending: "065bbae2d4bb516e", commitSendSuccess: "9d3ac854b6df8ff3", finishTrip: "60edd8708e77d531", reconciledSendReceipt: "1de55c29816852f7", render: "521db6368b3a331d" };
   for (const [name, h] of Object.entries(want)) assert.equal(sha16(fnBody(name)), h, name);
 });
 

@@ -20,7 +20,7 @@ export const harnessPresent = () => existsSync(privatePath("ops/harness/package.
 // [A-950] fork-profile mode (STALE_TESTS.md class (a)): launch({ forkMode: true }) boots the local dev server with the dummy fork config and stores
 // journey "2" before the app loads (helpers/fork-mode.mjs), so the Second UI can open (A-948: level >= 2 AND fork profile). Default off = the
 // unchanged testnet dev server. On the fork profile the storage scope is "monad-fork" and the testnet legacy receipts are not read.
-export async function launch({ forkMode = false } = {}) {
+export async function launch({ forkMode = false, recordVideo } = {}) {
   if (FORK_MODE_OFF) forkMode = false; // A950_FORK_MODE=0: the forkMode-off regression run (helpers/fork-mode.mjs)
   const { chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright");
   let server = null, BASE = process.env.A803_BASE_URL || "";
@@ -33,7 +33,7 @@ export async function launch({ forkMode = false } = {}) {
     BASE = `http://localhost:${port}/`;
   }
   const browser = await chromium.launch({ headless: true });
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...(recordVideo ? { recordVideo } : {}) });
   if (forkMode) await context.addInitScript(FORK_MODE_INIT);
   await context.route("**/*", (route) => { const u = new URL(route.request().url()); if (u.hostname !== "127.0.0.1" && u.hostname !== "localhost") return route.abort(); return route.continue(); });
   if (forkMode) await forkRpcStub(context); // [A-974] fork RPC reads + the fork entry status answered locally (registered after the catch-all: the later route wins). pre-A-974: none
@@ -65,7 +65,7 @@ export async function launch({ forkMode = false } = {}) {
     assert.equal(await waitScene(["sendstay"], 8000), "sendstay"); await sleep(4000);
   };
   // birth + naming -> a single-Piggy Home (sendstay)
-  const seedSolo = async (name = "Honeybun") => {
+  const seedSolo = async (name = "Honeybun", { stay = true } = {}) => {
     await p.goto(BASE, { waitUntil: "networkidle" });
     for (let a = 0; a < 4; a += 1) {
       if (await p.locator("#inviteFaceButton").count()) await p.locator("#inviteFaceButton").click().catch(() => {});
@@ -82,7 +82,7 @@ export async function launch({ forkMode = false } = {}) {
     await p.locator("#piggyNameInput").fill(name); await sleep(150);
     await p.evaluate(() => document.querySelector("#nameForm").requestSubmit());
     await waitScene(["sendstay"], 10000); await sleep(4500);
-    if (await p.locator("#stayButton").count()) { await p.evaluate(() => document.querySelector("#stayButton")?.click()); await sleep(700); }
+    if (stay && await p.locator("#stayButton").count()) { await p.evaluate(() => document.querySelector("#stayButton")?.click()); await sleep(700); }
   };
   // closed First + confirmed Second so "+ Piggy" is offered, then a second Piggy -> 2 real Piggies
   const seedMulti = async (second = "Mochi") => {

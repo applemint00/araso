@@ -265,9 +265,9 @@ async function runBrowser() {
     const shots = process.env.A897_SHOTS || "";
     if (shots) mkdirSync(shots, { recursive: true });
     browser = await chromium.launch({ headless: true });
-    for (const [w, h] of [[390, 844], [1440, 900]]) await stampRun(browser, `http://localhost:${port}/`, shots, w, h, false);
+    for (const [w, h] of (process.env.ARASO_PHONE_AUDIT === "1" ? [[375, 667], [390, 844], [430, 932]] : [[390, 844], [1440, 900]])) await stampRun(browser, `http://localhost:${port}/`, shots, w, h, false);
     await stampRun(browser, `http://localhost:${port}/`, shots, 390, 844, true);
-    for (const [w, h] of [[390, 844], [1440, 900]]) await unnamedRun(browser, `http://localhost:${port}/`, shots, w, h);
+    for (const [w, h] of (process.env.ARASO_PHONE_AUDIT === "1" ? [[375, 667], [390, 844], [430, 932]] : [[390, 844], [1440, 900]])) await unnamedRun(browser, `http://localhost:${port}/`, shots, w, h);
   } finally {
     if (browser) await browser.close().catch(() => {});
     try { server.kill("SIGTERM"); } catch {}
@@ -368,7 +368,8 @@ async function unnamedRun(browser, BASE, shots, W, H) {
       assert.ok(row.fs >= 20, `row inherits the name font (${row.fs}px), not the 16px button default`);
     });
     if (shots) await p.screenshot({ path: path.join(shots, `a897_unnamed_${W}_row.png`) });
-    await p.locator('#a897fx [data-name-fill="underline"]').click();
+    // A-1133: current product opens name entry from the pen, not the underline.
+    await p.locator('#a897fx [data-name-pen]').click();
     await check(`B3b [${tag}] tap -> in-place input focused (Name-it grammar), save disabled until text, Enter saves once with the typed name`, async () => {
       assert.equal(await p.evaluate(() => document.activeElement?.className), "homePaper__nameInput");
       assert.equal(await p.evaluate(() => document.querySelector(".homePaper__nameSave").disabled), true);

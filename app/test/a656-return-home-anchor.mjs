@@ -130,7 +130,7 @@ await check("N7 decision 4 — Return wraps #returnChogHop + #returnName (not #c
   assert.match(mountReturn, /fitBoard: returnFitBoard,/);
   const rfb = fnBody("returnFitBoard");
   assert.match(rfb, /const fit = fitHomeBoard\(\);/);
-  assert.match(rfb, /const plan = applyHomeFloorToReturnCluster\(fit, dx\);/);
+  assert.match(rfb, /const plan = applyHomeFloorToReturnCluster\(fit, dx, dy\);/);
   assert.match(rfb, /computeHomeFloorViewportNudge\(plan, fit\.s\) \|\| keyframeCanvasFloor\(fit\)/);
   const mountSecondReturn = fnBody("mountSecondReturn");
   // pre-A-837 baseline: assert.match(mountSecondReturn, /const plan = applyHomeFloorToReturnCluster\(fit\);/);
@@ -138,7 +138,7 @@ await check("N7 decision 4 — Return wraps #returnChogHop + #returnName (not #c
 });
 
 await check("N8 decision 4 — the Return canvas resizes/repositions with the SAME A-607 canon-K formula the First Job work canvas uses (return-view.js)", () => {
-  assert.match(RETURN_VIEW, /const info = fitBoard\(\);/);
+  assert.match(RETURN_VIEW, /const info = fitBoard\(motion\);/);
   assert.match(RETURN_VIEW, /const floor = info && info\.floor;/);
   assert.match(RETURN_VIEW, /const left = info\.left \+ s \* HOME_CENTER \* \(1 - k\) \+ floor\.nudgeViewportX;/);
   assert.match(RETURN_VIEW, /const top = info\.top \+ s \* HOME_FLOOR \* \(1 - k\) \+ floor\.nudgeViewportY;/);

@@ -17,6 +17,19 @@ function transformLayout(L,F,w,h){
  return out;
 }
 export function createResponsiveLayout(layout){
+ const soloCache=new Map();
+ function solo(w,h){
+  if(!soloCache.has(h)){
+   const widths=Array.from({length:1051},(_,i)=>layout(i+390,h).cardW);
+   let limit=Infinity;
+   for(let i=widths.length-1;i>=0;i--){limit=Math.min(limit,widths[i]);widths[i]=limit;}
+   if(soloCache.size>=8)soloCache.delete(soloCache.keys().next().value);
+   soloCache.set(h,widths);
+  }
+  const widths=soloCache.get(h),x=clamp(w-390,0,1050),i=Math.floor(x);
+  const cap=widths[i]+((widths[Math.min(i+1,1050)]-widths[i])*(x-i));
+  return layout(w,h,cap*Math.min(1,w/390));
+ }
  const before=(w,h)=>{const L=layout(w,h);return {L,cardW:L.cardW,cardH:L.cardH,top:L.cardY,homeLeft:L.cardX,histLeft:L.cardX,histRight:L.cardX+L.cardW,mode:'stacked',overlap:L.cardW};};
 const cache=new Map();
 function rawJoint(w,h,rho=220/335){
@@ -68,6 +81,9 @@ function joint(w,h,rho=220/335){
   let limit=Infinity;
   const caps=rows.map(p=>p.cardW);
   for(let i=caps.length-1;i>=0;i--){limit=Math.min(limit,caps[i]);caps[i]=limit;}
+  // Opening a side lane cannot release a whole size step at once. This
+  // remains inside the feasible envelope and below the 1% step contract.
+  for(let i=1;i<caps.length;i++)caps[i]=Math.min(caps[i],caps[i-1]+.5);
   // Piecewise linear growth between the phone and desktop reference widths,
   // clipped by a nondecreasing feasible envelope. Both terms never decrease.
   const start=caps[0],desktop=caps[1440-390];
@@ -88,10 +104,10 @@ function joint(w,h,rho=220/335){
 }
 
  return {
-  layout(w,h){const F=responsiveFrame(w,h);return transformLayout(layout(F.width,F.height),F,w,h);},
+  layout(w,h){const F=responsiveFrame(w,h);return transformLayout(solo(F.width,F.height),F,w,h);},
   history(w,h){
    const F=responsiveFrame(w,h),p=F.width<390?before(F.width,F.height):joint(F.width,F.height);
-   const L=transformLayout(p.L,F,w,h),homeLeft=p.homeLeft*F.scale+F.x,histLeft=p.histLeft*F.scale+F.x;
+   const L=transformLayout(solo(F.width,F.height),F,w,h),homeLeft=p.homeLeft*F.scale+F.x,histLeft=p.histLeft*F.scale+F.x;
    const cardW=p.cardW*F.scale,cardH=p.cardH*F.scale,overlap=Math.max(0,homeLeft+cardW-histLeft);
    return {...p,L,cardW,cardH,top:p.top*F.scale+F.y,homeLeft,histLeft,histRight:histLeft+cardW,
     homeDx:homeLeft-L.cardX,gap:(p.signedGap??-p.cardW)*F.scale,signedGap:(p.signedGap??-p.cardW)*F.scale,overlap,

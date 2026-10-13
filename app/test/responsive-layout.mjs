@@ -1,17 +1,23 @@
+import {CHOG_HOME_GEOMETRY} from '../src/chog-home.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import {createResponsiveLayout,responsiveFrame} from '../src/responsive-layout.js';
 const src=fs.readFileSync(new URL('../src/main.js',import.meta.url),'utf8');
 const core=src.slice(src.indexOf('const HK_STAGE_W ='),src.indexOf('let responsiveSolver ='));
-const context=vm.createContext({Math});
+const context=vm.createContext({Math,CHOG_HOME_GEOMETRY});
 vm.runInContext('const HOME_SEAT_W=150, HOME_SEAT_H=150*551/528, HOME_CENTER=1041, HOME_SEAT_L=1041-.4991*150;\n'+core+'\nthis.base=homeKeyframeLayoutBase;',context);
-const solver=createResponsiveLayout(context.base);
+const solver=createResponsiveLayout((w,h,limit)=>context.base(w,h,0,limit));
 let checked=0;
 for(const h of[568,659,800,844,900,1080,1440]){
- let prev=null;
+ let prev=null, prevSolo=null;
  for(let w=390;w<=2560;w++){
+  const solo=solver.layout(w,h);
+  if(prevSolo) assert.ok(solo.cardW>=prevSolo.cardW-1e-5,`${w}x${h} solo shrinking`);
+  prevSolo=solo;
   const p=solver.history(w,h);
+  assert.equal(p.L.cardW,solo.cardW,`${w}x${h} History must start from the rendered solo scale`);
+  assert.equal(p.L.cardX,solo.cardX,`${w}x${h} History must start from the rendered solo position`);
   assert.ok(Number.isFinite(p.cardW)&&p.cardW>0);
   assert.ok(p.homeLeft>=-.5&&p.histRight<=w+.5&&p.top>=-.5&&p.top+p.cardH<=h+.5,`${w}x${h} bounds`);
   if(w>=641){
@@ -23,6 +29,7 @@ for(const h of[568,659,800,844,900,1080,1440]){
  }
 }
 const a=solver.history(1440,900),b=solver.history(1940,1200),c=solver.history(2560,1400);
+for(const w of [390,393]) assert.equal(solver.layout(w,659).cardW,solver.layout(w,900).cardW,'Phone width must not grow when Safari toolbar height changes');
 assert.equal(a.cardW,376.5);
 for(const k of['cardW','cardH','signedGap']){assert.equal(b[k],a[k]*1.05);assert.equal(c[k],b[k]);}
 assert.equal(c.homeLeft-b.homeLeft,(2560-1940)/2);

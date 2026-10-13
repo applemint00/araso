@@ -1,3 +1,4 @@
+// A-1131 render pin: defer Invite auth presentation before teardown; auth/money bodies unchanged.
 // A-669 [AUTH HARDENING · PRE-NEXT GAP CLOSE] — node-only regression contract.
 //   node app/test/a669-auth-hardening.mjs
 //
@@ -77,7 +78,7 @@ const PRE = {
   // [A-896 re-pin, named reason: 99e M-L-2 Owner 60 s signer margin] ONE entry check (wall-clock signerSince) before the existing recover branch; recover path itself unchanged.
   // pre-A-896 baseline: sendPiggyOnce 01ee727da9fc2def3d057d939c42b9cf69a95ace97f4c9af81500bd3fef9646b [A-896 R1 re-pin: + monotonic performance.now stamp/check; prior A-896 value was the old pin]
   sendPiggyOnceA896: "0120bd9896880837" + "c5fbb0e10a47b73e" + "fedeff3b9077f987" + "7cbaae82b4e7955e",
-  render: "866133cf60711093" + "9b5ce2b05ad9ff25" + "3ee7ab77f8448b39" + "77faa974a9d3e27c",
+  render: "521db6368b3a331d44eb1287883319905c2a4f98c9148331df4adf698bbf6dd4",
 };
 
 // ═══ shared device harness (a667 shape) + real idle/lock/activity functions ════════════════════

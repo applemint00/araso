@@ -15,7 +15,7 @@ if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a911 browser pa
 const { launch, sleep, REPO } = await import("./helpers/a803-browser.mjs");
 const OUT = testOutDir("a911-own-screens-browser", process.argv[2]); // [A-932] pre-A-932 baseline default: receipts/A911_own_screens/browser
 mkdirSync(OUT, { recursive: true });
-const SIZES = [{ id: "390", w: 390, h: 844 }, { id: "810", w: 810, h: 1080 }, { id: "1440", w: 1440, h: 900 }, { id: "390i", w: 390, h: 844, top: 59, bottom: 34 }];
+const SIZES = process.env.ARASO_PHONE_AUDIT === "1" ? [{id:"375",w:375,h:667},{id:"390",w:390,h:844},{id:"430",w:430,h:932},{id:"390i",w:390,h:844,top:59,bottom:34}] : [{ id: "390", w: 390, h: 844 }, { id: "810", w: 810, h: 1080 }, { id: "1440", w: 1440, h: 900 }, { id: "390i", w: 390, h: 844, top: 59, bottom: 34 }];
 const OUT_ADDR = "0x1111111111111111111111111111111111111111";
 const frames = {};
 const stepErrors = [];
