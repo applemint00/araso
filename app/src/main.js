@@ -1573,6 +1573,8 @@ async function openPiggy() {
   let giftAttempted = false;
   let committed = false;
   const createStage = { value: "unknown" };
+  let a1210Invite = null;
+  try { a1210Invite = readForkInvite(safeLocalStorage()); } catch { /* unknown entry: no retry authorization */ }
 
   try {
     const creating = a1202CreatePasskey({
@@ -1663,6 +1665,14 @@ async function openPiggy() {
     state.authCancelled = isCancelledAuthError(error);
     if (!committed && createStage.value === "cancelled" && !platformAuthInflight && !lateCreatedCredential) {
       try { sessionStorage.removeItem("araso.publicCreateAttempt.v1"); } catch { /* retain recovery-first */ }
+      // A1210: only this invite's confirmed create rejection permits another explicit create.
+      // Keep the metadata attempt consumed; freshCreate is consumed before the next ceremony.
+      try {
+        if (!giftIntent && a1210Invite && readForkInvite(safeLocalStorage()) === a1210Invite) {
+          sessionStorage.setItem(a1158AttemptKey(a1210Invite), "attempted");
+          sessionStorage.setItem("araso.freshCreate.v1." + keccak256(new TextEncoder().encode(a1210Invite)), "ready");
+        }
+      } catch { /* no persisted retry: retain recovery-first */ }
     }
     recordSafeError("open", error);
     setScene("birth", "Piggy could not open here.", "");
