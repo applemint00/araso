@@ -14231,10 +14231,9 @@ function a1160PublicEntryOpen() {
 function a1160TakePublicCreate() {
   try {
     if (authAttempt || platformAuthInflight || lateCreatedCredential) return false;
-    const key = "araso.publicCreateAttempt.v1";
-    if (sessionStorage.getItem(key)) return false;
-    sessionStorage.setItem(key, "attempted");
-    return sessionStorage.getItem(key) === "attempted";
+    // A1200: a cancelled/failed create must leave the next explicit tap able to create.
+    // Persisted identity is checked first by startPiggyOpen; in-flight guards stay above.
+    return true;
   } catch { return false; }
 }
 async function a1160RefreshPublicEntry() {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {launch,harnessPresent} from './helpers/a803-browser.mjs';
 if(!harnessPresent()){console.log('SKIP browser harness unavailable');process.exit(0)}
 const d=await launch();let reply={ok:true,bound:false},reads=0,pass=0;
-await d.context.route('**/api/fork-entry',async route=>{reads++;assert.deepEqual(route.request().postDataJSON(),{action:'invite_state'});assert.ok(route.request().headers()['x-araso-invite']);if(reply===null)return route.abort();return route.fulfill({json:reply})});
+await d.context.route('**/api/fork-entry',async route=>{if(route.request().postDataJSON()?.action==='public_state')return route.fulfill({json:{ok:true,publicEntry:false}});reads++;assert.deepEqual(route.request().postDataJSON(),{action:'invite_state'});assert.ok(route.request().headers()['x-araso-invite']);if(reply===null)return route.abort();return route.fulfill({json:reply})});
 await d.context.addInitScript(()=>{
  window.authCounts={get:0,create:0,gesture:false};if(!navigator.credentials)return;
  const create=navigator.credentials.create.bind(navigator.credentials);
