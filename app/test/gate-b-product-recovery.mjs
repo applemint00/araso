@@ -121,6 +121,8 @@ function device({ adapter = null } = {}) {
   const seenSalts = [];
   const client = fakeClient();
   const ctx = {
+    // A1153 chain recovery is covered by its own unit + Chromium tests.
+    restoreRecoveredFirstJourney: async () => {},
     state, console, Buffer, Map, String, Array, Date, JSON,
     isMeraError, getEvmAddress, createSecp256k1SigningSession,
     registerControlledPiggy, recoverProductList, prfSaltFromHex,

@@ -1017,7 +1017,12 @@ await check("H4 the raw signed transaction is never persisted or logged: no stor
 await check("H5 pinned functions untouched by this card: classifySendPending / reconcileSendPending / reconciledSendReceipt / readSendPending / writeSendPending / commitSendSuccess / finishTrip / render keep their A-699 hashes", async () => {
   const sha16 = (x) => createHash("sha256").update(x).digest("hex").slice(0, 16);
   const want = { classifySendPending: "2389cf76d2658fd6", reconcileSendPending: "1caf49b6a16b09df", readSendPending: "065bbae2d4bb516e", commitSendSuccess: "9d3ac854b6df8ff3", finishTrip: "60edd8708e77d531", reconciledSendReceipt: "1de55c29816852f7", render: "521db6368b3a331d" };
-  for (const [name, h] of Object.entries(want)) assert.equal(sha16(fnBody(name)), h, name);
+  for (const [name, h] of Object.entries(want)) {
+    // A1153 explicitly adds account-scoped completion. Its outcome behavior is exercised in
+    // a1153-first-state; keep the entire prior finishTrip body pinned apart from that one addition.
+    const body = name === "finishTrip" ? fnBody(name).replace('  if (state.firstJourneyRecovery) saveRecoveredFirst(localStorage, state.address, "has");\n', '') : fnBody(name);
+    assert.equal(sha16(body), h, name);
+  }
 });
 
 // ═══ [A-756 H-1] stale second tab after a FINISHED First (99d_SECURITY_REVIEW H-1) ══════════════════════════════════════════════

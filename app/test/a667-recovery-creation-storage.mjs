@@ -96,6 +96,8 @@ function device({ stored = true, credentialOnly = false, throwOn = null, indexTh
   const pending = { get: [], create: [] };
   const injected = { throwOn };
   const ctx = {
+    // A1153 chain recovery is covered by its own unit + Chromium tests.
+    restoreRecoveredFirstJourney: async () => {},
     console, Uint8Array, JSON, Promise, Error, Map,
     Date: { now: clock.now },
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,

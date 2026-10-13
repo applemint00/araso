@@ -109,6 +109,8 @@ function freshDevice({ name = "" } = {}) {
   };
   const board = { dataset: { phase: "closed" } };
   const ctx = {
+    // A1153 chain recovery is covered by its own unit + Chromium tests.
+    restoreRecoveredFirstJourney: async () => {},
     console, Uint8Array, JSON, Promise, Error, Map,
     Date: { now: () => now },
     setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { at: now + ms, fn }); return id; },

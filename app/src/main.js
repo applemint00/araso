@@ -82,6 +82,7 @@ import { readTxEvidence } from "./receipt-evidence-reader.js";
 import { registerA995InlineFace, syncA995GiftEyes } from "./a995-eye-look.js";
 import { mountA995bLoadingPiggy } from "./a995b-loading-piggy.js";
 import { evidenceStoreKey } from "./receipt-evidence-store.js";
+import { readRecoveredFirst, saveRecoveredFirst, recoveredFirstVerdict } from "./first-journey-recovery.js";
 // ── [A-887] end imports ──
 // ── [A-897] P2 imports (stamp scene · unnamed tap-to-fill) ──
 import { promotionStampMarkup, mountPromotionStamp } from "./promotion-stamp.js";
@@ -1964,6 +1965,7 @@ async function checkPiggy() {
     // [A-667 R2] 받음 표시는 보조 표식이다 — 신원(credential·address)은 recoverPiggy 가 이미 한 덩어리로 저장했다.
     // 이 쓰기 하나가 실패했다고 되찾은 Piggy 를 "못 찾음" 으로 바꾸고 서명자를 남기지 않는다.
     try { localStorage.setItem(PIGGY_RECEIVED_KEY, "1"); } catch { /* credential 표식만으로 충분 */ }
+    await restoreRecoveredFirstJourney(() => attempt.live);
     if (!finishAuthAttempt(attempt)) return { ok: false, cancelled: false, reason: "superseded" };
     released = true;
     state.authPhase = "idle";
@@ -2548,6 +2550,7 @@ function finishTrip(trip) {
     }
   }
   state.tripClosed = true;
+  if (state.firstJourneyRecovery) saveRecoveredFirst(localStorage, state.address, "has");
   try {
     localStorage.setItem(TRIP_CLOSED_KEY, "1");
   } catch {
@@ -2705,6 +2708,7 @@ function holdSendTabLock() {
 function firstTripClosedShared() {
   try {
     if (typeof state === "object" && state && state.tripClosed === true) return true;
+    if (state.firstJourneyRecovery) return readRecoveredFirst(localStorage, state.address)?.verdict !== "none";
     const closedKey = typeof TRIP_CLOSED_KEY === "string" ? TRIP_CLOSED_KEY : "araso.tripClosed";
     if (localStorage.getItem(closedKey) === "1") return true;
     const legacyTx = localStorage.getItem("araso.txHash");
@@ -15608,6 +15612,59 @@ async function a897GiftOpenPromotion() {
 // ("has" -> Second · "none" -> First Journey · null -> not promoted). Memory mirror only; the index row is the record. (The Name-it rule lives in computeInitialScene.)
 state.promotionVerdict = a897PromotionVerdict();
 // ── [A-897] end P1 ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// [A-1153] Recovery is not first arrival: restore the recovered account's First state before Home.
+// This reader is testnet-only. The separate Gift promotion reader/config above is unchanged.
+function applyRecoveredFirstJourney(row) {
+  state.firstJourneyRecovery = row;
+  state.tripClosed = row.verdict === "has";
+  state.sendCardVisible = row.verdict === "none" && !readSendPending();
+  state.homeQuietForExplore = state.tripClosed && !state.secondJourneyCompletedOnce;
+}
+
+async function restoreRecoveredFirstJourney(isCurrent) {
+  if (!LEGACY_TESTNET_PATH) return;
+  const address = state.address;
+  const beforeLegacy = [localStorage.getItem(TRIP_CLOSED_KEY), localStorage.getItem("araso.txHash")];
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  let verdict = "unknown";
+  try {
+    const rpc = async (method, params) => {
+      const response = await fetch(MONAD_TESTNET_RPC, { method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: controller.signal });
+      const body = await response.json();
+      if (!response.ok || body.error) throw new Error("first_recovery_read_failed");
+      return body.result;
+    };
+    const evidence = await readFirstJourneyEvidence({ rpc, address, shmon: SHMON_ADDRESS, chainId: MONAD_TESTNET.id,
+      depositWei: SEND_AMOUNT, localHashes: a897LocalFirstHashes() });
+    const pendingNonce = evidence.verdict === "none_confirmed" ? await rpc("eth_getTransactionCount", [address, "pending"]) : null;
+    verdict = recoveredFirstVerdict(evidence, pendingNonce);
+  } catch { /* UNKNOWN never opens Send */ }
+  finally { clearTimeout(timer); }
+  if (!isCurrent() || state.address !== address) return;
+  // A concurrent old tab completing while the read was in flight must not be snapshotted as "none".
+  if (verdict === "none" && ((localStorage.getItem(TRIP_CLOSED_KEY) === "1" && beforeLegacy[0] !== "1")
+    || (localStorage.getItem("araso.txHash") && localStorage.getItem("araso.txHash") !== beforeLegacy[1]))) verdict = "unknown";
+  applyRecoveredFirstJourney(saveRecoveredFirst(localStorage, address, verdict));
+  // Same-account indexed name only; don't invent a name or replace an existing local one.
+  if (!readPiggyName()) {
+    try {
+      const row = loadMyPiggiesIndex(safeLocalStorage(), RUNTIME_CHAIN_SCOPE).index.piggies
+        .find(p => String(p.address).toLowerCase() === address.toLowerCase() && !p.sequence);
+      if (row?.name) localStorage.setItem(PIGGY_NAME_KEY, row.name);
+    } catch { /* name remains unknown */ }
+  }
+}
+
+if (LEGACY_TESTNET_PATH && state.credential && state.address) {
+  const recoveredFirst = readRecoveredFirst(localStorage, state.address);
+  if (recoveredFirst) {
+    applyRecoveredFirstJourney(recoveredFirst);
+    if (state.scene === "name") state.scene = "sendstay";
+  }
+}
 
 // [A-699 M2-alpha R4] 앱 잠금이 없는 표면(웹 641+ · 인증 불가 origin)에서도 First Send 미확정 기록이 있으면 같은 읽기 전용
 // 조회를 건다 — 예전엔 아래 잠금 블록(≤640)에서만 돌아서, 그 밖의 표면은 영원히 확인 없이 잠겨 있었다. 목적지는 같은 Away
