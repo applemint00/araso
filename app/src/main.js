@@ -3904,13 +3904,12 @@ async function refreshSecondLaneCandidates() {
 }
 
 // ── [A-851] Home wait + in-app bell ───────────────────────────────────────────────────────────────────────────────
-// After Home is chosen from a candidates card with nothing go-able, Home re-checks with the same read (no new data
-// source) when it is entered and when the app becomes visible again — never on a timer. If a picked-lane candidate
-// has become readable and go-able, the existing bell asset rings once per candidate id this session (memory only);
-// tapping it calls openSecondJourneyExplore(). In-app only: no OS notification, no scheduling, no auto-open.
+// A1182 newest-wins: boot/foreground grants one Home notification opportunity. The existing candidate
+// read stays read-only; a go-able result rings the existing bell and opens Paper without a tap.
+// Test-period completed/draft stand-ins join this same path. No polling, selection or financial execution.
 const secondBellRung = new Set();
 let secondHomeRecheckBusy = false;
-let secondVisibilityArmed = false;
+
 
 function markSecondWaitingForPlace() {
   const sj = state.secondJourney;
@@ -3954,70 +3953,81 @@ async function secondHomeRecheckRead(eventId) {
 }
 
 async function recheckSecondCandidatesOnHome() {
-  if (secondHomeRecheckBusy || !secondHomeRecheckAllowed()) return;
+  if (secondHomeRecheckBusy === a1182OpenId || !secondHomeRecheckAllowed() || !a1182HomeVisible() || !a1172BellVisit) return;
   const sj = state.secondJourney;
-  secondHomeRecheckBusy = true;
+  const openId = a1182OpenId;
+  secondHomeRecheckBusy = openId;
   try {
     try { await sj.waitBaseline; } catch { /* baseline failure = nothing marked */ }
     const fresh = await secondHomeGoableIds(sj, secondBellRung);
-    if (state.secondJourney !== sj || !secondHomeRecheckAllowed()) return;
+    if (openId !== a1182OpenId || state.secondJourney !== sj || !secondHomeRecheckAllowed() || !a1182HomeVisible() || !a1172BellVisit) return;
     if (!fresh.length) return;
     secondBellRung.add(fresh[0]);
     sj.bellCandidateId = fresh[0];
-    mountSecondHomeBell();
+    a1172ArmBell();
   } catch {
     console.info("[A-851] Home re-check UNKNOWN — no candidate");
   } finally {
-    secondHomeRecheckBusy = false;
+    if (secondHomeRecheckBusy === openId) secondHomeRecheckBusy = false;
   }
 }
 
 function mountSecondHomeBell() {
   const sj = state.secondJourney;
-  if ((!sj.bellCandidateId && !(import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellReady())) || state.scene !== "sendstay" || state.sendCardVisible) return;
+  if (!a1182HomeVisible() || a1182ConsumedOpen === a1182OpenId || !a1172BellVisit) return;
+  if (!sj.bellCandidateId && !(import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEligible())) return;
   const stage = document.querySelector('.stage[data-scene="sendstay"]');
   if (!stage || stage.querySelector("#secondHomeBell")) return;
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.id = "secondHomeBell";
-  btn.className = "secondHomeBell";
-  btn.setAttribute("aria-label", "bell");
-  btn.innerHTML = '<img src="/card/crayon-bell.svg" alt="" draggable="false" />';
-  btn.addEventListener("click", () => {
-    if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1") a1172ConsumeBell();
-    sj.bellCandidateId = null;
-    sj.waitingForPlace = false;
-    btn.remove();
-    openSecondJourneyExplore();
-    if (state.scene === "explore" && sj.selectedIds.length && sj.step !== "candidates") {
-      sj.step = "candidates";
-      render();
-    }
-  });
-  stage.appendChild(btn);
+  const bell = document.createElement("div");
+  bell.id = "secondHomeBell";
+  bell.className = "secondHomeBell";
+  bell.setAttribute("aria-label", "bell");
+  bell.innerHTML = '<img src="/card/crayon-bell.svg" alt="" draggable="false" />';
+  stage.appendChild(bell);
+  a1182ConsumedOpen = a1182OpenId; // before the asynchronous server/open path; never retry automatically
+  a1172ConsumeBell();
+  sj.bellCandidateId = null;
+  sj.waitingForPlace = false;
+  openSecondJourneyExplore({ bellOpenId: a1182OpenId }); // existing fork gate + candidates/draft restore; no selection or money action
 }
 
-// Called once per Home settle: draws a pending bell, re-checks on entry, and re-checks when the app is visible again.
+// A1182: one Home opportunity per app open, not each in-app return to Home.
 function armSecondHomeWait() {
-  if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1") a1172ArmBell();
-  mountSecondHomeBell();
-  recheckSecondCandidatesOnHome();
-  if (secondVisibilityArmed) return; // one listener per scene, however many times settle runs
-  secondVisibilityArmed = true;
-  onSceneTeardown(() => { secondVisibilityArmed = false; });
-  sceneListener(document, "visibilitychange", () => {
-    if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEnabled()) {
-      if (a1172BellVisit?.ready && !state.secondJourney.bellCandidateId) document.querySelector("#secondHomeBell")?.remove();
-      a1172ResetBell();
-      if (document.visibilityState === "visible") a1172ArmBell();
-    }
-    if (document.visibilityState === "visible") recheckSecondCandidatesOnHome();
-  });
+  a1182ObserveOpen();
+  if (!a1182HomeVisible()) return;
+  const firstHome = a1182HomeOpen !== a1182OpenId;
+  if (firstHome) a1182HomeOpen = a1182OpenId;
+  a1172ArmBell(firstHome);
+  if (firstHome) recheckSecondCandidatesOnHome();
 }
 
-// [A-1172] Test-period repeat invitation only. @EXPIRES_WITH: A-1172
-// Remove this opt-in when the tester period closes; it never asserts candidate evidence.
+// [A-1172] Test-period candidate stand-in only. @EXPIRES_WITH: A-1172
+// A1182 lifecycle also handles real A851 candidates when the test flag is off.
 let a1172BellVisit = null;
+let a1182OpenId = 1;
+let a1182HomeOpen = 0;
+let a1182ConsumedOpen = 0;
+let a1182VisibilityArmed = false;
+function a1182HomeVisible() {
+  return state.scene === "sendstay" && !state.appLock && !state.sendCardVisible
+    && document.visibilityState === "visible";
+}
+function a1182ObserveOpen() {
+  if (a1182VisibilityArmed) return;
+  a1182VisibilityArmed = true;
+  let visible = document.visibilityState === "visible";
+  // App lifetime, including Away/Return/lock; scene listeners would miss a foreground there.
+  document.addEventListener("visibilitychange", () => {
+    const nextVisible = document.visibilityState === "visible";
+    if (nextVisible === visible) return;
+    visible = nextVisible;
+    a1172ResetBell();
+    document.querySelector("#secondHomeBell")?.remove();
+    if (!visible) return;
+    a1182OpenId += 1;
+    if (a1182HomeVisible() && homeChog) armSecondHomeWait();
+  });
+}
 function a1172BellEnabled() {
   return import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1"
     && onForkProfile(CHAIN_PROFILE)
@@ -4025,42 +4035,31 @@ function a1172BellEnabled() {
 }
 function a1172BellEligible() {
   return a1172BellEnabled() && (state.secondJourneyCompletedOnce === true || !!loadSecondJourneyDraft(safeLocalStorage(), secondJourneyScope()).draft)
-    && state.scene === "sendstay" && !state.appLock && !state.sendCardVisible
-    && document.visibilityState === "visible";
+    && a1182HomeVisible();
 }
 function a1172ResetBell() {
   if (a1172BellVisit) clearTimeout(a1172BellVisit.timer);
-  a1172BellVisit = null;
-}
-function a1172BellReady() {
-  return a1172BellEligible() && a1172BellVisit?.sj === state.secondJourney
-    && a1172BellVisit.address === state.address && a1172BellVisit.ready === true;
+  a1172BellVisit = null; // keep consumed/open markers across scene changes
 }
 function a1172ConsumeBell() {
-  if (!a1172BellEnabled() || !a1172BellVisit) return;
-  clearTimeout(a1172BellVisit.timer);
-  a1172BellVisit.rung = true;
-  a1172BellVisit.ready = false;
+  if (a1172BellVisit) clearTimeout(a1172BellVisit.timer);
 }
-function a1172ArmBell() {
-  if (!a1172BellEligible()) { a1172ResetBell(); return; }
-  if (a1172BellVisit?.sj !== state.secondJourney || a1172BellVisit.address !== state.address) a1172ResetBell();
-  if (!a1172BellVisit) a1172BellVisit = {
-    sj: state.secondJourney, address: state.address,
-    due: Date.now() + 20_000 + Math.floor(Math.random() * 70_001),
-    rung: false, ready: false, timer: null,
+function a1172ArmBell(firstHome = false) {
+  if (!a1182HomeVisible() || a1182ConsumedOpen === a1182OpenId) { a1172ResetBell(); return; }
+  if (a1172BellVisit && (a1172BellVisit.sj !== state.secondJourney || a1172BellVisit.address !== state.address)) a1172ResetBell();
+  if (!a1172BellVisit && firstHome) a1172BellVisit = {
+    sj: state.secondJourney, address: state.address, openId: a1182OpenId,
+    due: Date.now() + HOME_FIRST_JOURNEY_CARD_MS, timer: null,
   };
   const visit = a1172BellVisit;
+  if (!visit) return;
   clearTimeout(visit.timer);
-  if (state.secondJourney.bellCandidateId) visit.rung = true; // existing A-851 bell wins
-  if (visit.rung) return;
+  if (!visit.sj.bellCandidateId && !(import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEligible())) return;
   visit.timer = setTimeout(() => {
-    if (a1172BellVisit !== visit || !a1172BellEligible() || visit.sj !== state.secondJourney || visit.address !== state.address) return;
-    visit.rung = true;
-    visit.ready = true;
+    if (a1172BellVisit !== visit || visit.openId !== a1182OpenId || !a1182HomeVisible() || visit.sj !== state.secondJourney || visit.address !== state.address) return;
     mountSecondHomeBell();
   }, Math.max(0, visit.due - Date.now()));
-  onSceneTeardown(() => clearTimeout(visit.timer)); // same-Home render keeps deadline and rung
+  onSceneTeardown(() => clearTimeout(visit.timer));
 }
 
 // [A-791] A-762 routing consumed as evidence. The reader result is routed per protocol (routeSecondCurrentRead) and each
@@ -14467,6 +14466,7 @@ if (A974_FORK) {
     const scene = state.scene;
     a974AskEntry().then((ok) => {
       if (state.scene !== scene) return; // the user moved on while the server answered: nothing opens
+      if (args[0]?.bellOpenId != null && (args[0].bellOpenId !== a1182OpenId || !a1182HomeVisible())) return;
       if (ok) a974OpenForkExplore(); else a974PrevOpen(...args);
     }, () => {});
   };
@@ -15408,7 +15408,8 @@ function resetRecordsForFullRender() {
 }
 
 function render() {
-  if (import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEnabled() && !a1172BellEligible()) a1172ResetBell();
+  a1182ObserveOpen();
+  if (!a1182HomeVisible()) a1172ResetBell();
   // A-1131: do not mount a checking card / start Hatch before the envelope timeline.
   // Failure/cancel and the app-lock surface are never suppressed.
   if (holdInviteAuthPresentation()) return;

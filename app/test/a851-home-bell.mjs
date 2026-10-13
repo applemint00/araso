@@ -84,8 +84,8 @@ await check("N2 source: no timer / poll / OS notification / service worker / net
   assert.equal(/openSecondJourneyExplore/.test(stripComments(fnBody("armSecondHomeWait")) + stripComments(fnBody("recheckSecondCandidatesOnHome"))), false, "re-check never opens Second by itself");
   assert.match(stripComments(fnBody("secondHomeRecheckRead")), /if \(LOCAL_DEV_ENTRY\) \{[\s\S]*LOCAL_TEST_SECOND_LANE_READ_HOOK/);
   assert.equal(/@DEV_ONLY/.test(code), false);
-  assert.match(stripComments(fnBody("armSecondHomeWait")), /visibilitychange/);
-  assert.match(stripComments(fnBody("armSecondHomeWait")), /if \(secondVisibilityArmed\) return;[\s\S]*sceneListener\(document, "visibilitychange"/, "visibility listener registered once per scene");
+  assert.match(stripComments(fnBody("a1182ObserveOpen")), /visibilitychange/);
+  assert.match(stripComments(fnBody("a1182ObserveOpen")), /if \(a1182VisibilityArmed\) return;[\s\S]*document.addEventListener\("visibilitychange"/, "one app-lifetime foreground observer");
   assert.match(stripComments(fnBody("markSecondWaitingForPlace")), /secondBellRung\.add\(id\)/, "go-able at click time counts as already rung");
   // bell: aria-label "bell", the existing asset, no visible text
   const bell = stripComments(fnBody("mountSecondHomeBell"));
@@ -93,7 +93,7 @@ await check("N2 source: no timer / poll / OS notification / service worker / net
   assert.match(bell, /\/card\/crayon-bell\.svg/);
   assert.equal(/textContent|innerText/.test(bell), false);
   assert.match(stripComments(fnBody("recheckSecondCandidatesOnHome")), /secondBellRung\.add\(/);
-  assert.match(stripComments(fnBody("mountSecondHomeBell")), /openSecondJourneyExplore\(\)/);
+  assert.match(stripComments(fnBody("mountSecondHomeBell")), /openSecondJourneyExplore\(/);
   assert.match(STYLE, /@media \(prefers-reduced-motion: no-preference\) \{\s*\.secondHomeBell \{ animation: secondHomeBellRing/);
   assert.equal(/animation:/.test(STYLE.match(/\n\.secondHomeBell \{[^}]*\}/)[0]), false, "base rule has no animation: reduced motion = still bell");
 });
@@ -187,7 +187,16 @@ async function browserRun(browser, BASE) {
   };
   const step = () => p.evaluate(() => document.querySelector("#exploreForm") ? "interests" : document.querySelector("#secondSendButton") ? "readiness" : document.querySelector("#secondOkButton") ? "candidates" : document.querySelector("#secondJourneyCard") ? "note" : null);
   const bells = () => p.evaluate(() => [...document.querySelectorAll("#secondHomeBell")].map((b) => ({ label: b.getAttribute("aria-label"), text: b.textContent.trim(), img: b.querySelector("img")?.getAttribute("src") })));
-  const becomeVisible = async () => { await p.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); await sleep(500); };
+  const becomeVisible = async () => {
+    await p.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "hidden" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      Object.defineProperty(document, "visibilityState", { configurable: true, value: "visible" });
+      document.dispatchEvent(new Event("visibilitychange"));
+      delete document.visibilityState;
+    });
+    await sleep(500);
+  };
   const NOW_ISO = new Date().toISOString();
   const installHook = (mode) => p.evaluate(([m, nowIso]) => {
     window.__a851Calls = 0;
@@ -267,26 +276,25 @@ async function browserRun(browser, BASE) {
     assert.deepEqual(await bells(), []);
   });
 
-  await check("B4 a candidate appears (readable + go-able): bell rings on Home once; aria-label bell, no visible text, existing asset", async () => {
+  await check("B4 A1182: candidate appears on foreground -> existing bell notification -> automatic Paper, no tap", async () => {
+    await p.evaluate(() => {
+      window.__a1182Bells = [];
+      new MutationObserver(rows => { for (const row of rows) for (const el of row.addedNodes) {
+        if (el.id === "secondHomeBell") window.__a1182Bells.push({ label: el.getAttribute("aria-label"), text: el.textContent.trim(), img: el.querySelector("img")?.getAttribute("src") });
+      } }).observe(document.body, { childList: true, subtree: true });
+    });
     await installHook("one");
     await becomeVisible();
-    assert.equal(await calls(), 1);
-    const b = await bells();
-    assert.equal(b.length, 1);
-    assert.deepEqual(b[0], { label: "bell", text: "", img: "/card/crayon-bell.svg" });
-    await becomeVisible(); await becomeVisible();
-    assert.equal((await bells()).length, 1, "still one bell");
-    assert.equal(await scene(), "sendstay", "never auto-opens");
+    assert.equal(await waitScene(["explore"], 4000), "explore");
+    assert.deepEqual(await p.evaluate(() => window.__a1182Bells), [{ label: "bell", text: "", img: "/card/crayon-bell.svg" }]);
     assert.deepEqual(errors, []);
   });
 
-  await check("B5 tap the bell: Second candidates card reopens showing the candidate; nothing picked or sent", async () => {
-    await mustTap("#secondHomeBell", "bell");
-    assert.equal(await waitScene(["explore"], 4000), "explore");
+  await check("B5 automatic Paper shows candidates; nothing picked or sent", async () => {
     await sleep(2500);
     assert.equal(await step(), "candidates");
     const rows = await p.evaluate(() => [...document.querySelectorAll(".secondJourney__pick")].map((b) => ({ id: b.dataset.destinationId, picked: b.classList.contains("is-picked") })));
-    assert.ok(rows.some((r) => r.id === "euler-k3-weth") && rows.every((r) => !r.picked)); // [A-950-b] A-977 Grow row; pre-A-977: aave-usdc
+    assert.ok(rows.some((r) => r.id === "euler-k3-weth") && rows.every((r) => !r.picked));
     assert.equal(await p.evaluate(() => document.querySelector("#secondOkButton").disabled), true);
     assert.equal(net.tx, 0);
   });
