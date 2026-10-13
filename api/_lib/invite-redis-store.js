@@ -72,6 +72,13 @@ export function createUpstashInviteStore({ cmd, prefix = ARASO_REDIS_PREFIX, max
     },
     lookup,
     /** testerId for a usable token: bound (any age) or unbound and not expired. */
+    // Read-only canonical binding for signed public re-entry on a device without the invite.
+    async testerForPiggy(address) {
+      const piggy = typeof address === "string" ? address.toLowerCase() : "";
+      if (!ADDR_RE.test(piggy)) return null;
+      const value = await cmd("GET", invitePiggyKey(prefix, piggy));
+      return typeof value === "string" && /^[a-z0-9][a-z0-9._:-]{0,63}$/.test(value) ? value : null;
+    },
     async testerFor(token) {
       const r = await lookup(token);
       if (!r) return null;

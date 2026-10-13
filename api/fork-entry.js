@@ -16,6 +16,8 @@ import { forkAdminClientFromEnv, guardOrigin } from "./_lib/fork-grant-client.js
 import { createMemoryForkLedgerStore } from "./_lib/fork-ledger-store-contract.js";
 import { inviteStoreFromEnv } from "./_lib/invite-redis-store.js";
 
+import { publicEntryConfig } from "./_lib/public-entry.js";
+
 export const FORK_ENTRY_MAX_BODY = 8 * 1024;
 export const FORK_INVITE_HEADER = "x-araso-invite";
 export const FORK_ENTRY_ENV = Object.freeze({
@@ -30,6 +32,7 @@ const DEFAULT_TESTNET_RPC = "https://testnet-rpc.monad.xyz";
 const GRANT_VERSION_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const INVITE_REFUSALS = new Set(["not_invited", "invite_not_bound", "invite_bound_to_other_piggy", "piggy_bound_to_other_tester"]);
 const ACTION_FIELDS = Object.freeze({
+  public_state: ["action"],
   invite_state: ["action"],
   challenge: ["action", "piggyAddress"],
   enter: ["action", "nonce", "signature", "piggyAddress", "journey1"],
@@ -68,10 +71,10 @@ async function readBody(req) {
 }
 
 /** Handler over an injected service (tests + the local server). allowedOrigins = code-only list of local dev origins. */
-export function createForkEntryHandler({ service, inviteStore = null, now = () => Date.now(), allowedOrigins = [] } = {}) {
+export function createForkEntryHandler({ service, inviteStore = null, publicEntry = null, now = () => Date.now(), allowedOrigins = [] } = {}) {
   return async function handler(req, res) {
     if (req.method !== "POST") return respond(res, 405, { ok: false, reason: "method_not_allowed" });
-    if (!service && !inviteStore) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
+    if (!service && !inviteStore && !publicEntry) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
     const headers = req.headers ?? {};
     const originProblem = forkEntryOriginProblem(headers, allowedOrigins);
     if (originProblem) return respond(res, 403, { ok: false, reason: "origin_refused" });
@@ -82,6 +85,7 @@ export function createForkEntryHandler({ service, inviteStore = null, now = () =
     const action = typeof b.action === "string" && Object.prototype.hasOwnProperty.call(ACTION_FIELDS, b.action) ? b.action : null;
     if (!action) return respond(res, 400, { ok: false, reason: "bad_action" });
     if (Object.keys(b).some((k) => !ACTION_FIELDS[action].includes(k))) return respond(res, 400, { ok: false, reason: "unexpected_field" });
+    if (action === "public_state") return respond(res, 200, { ok: true, publicEntry: publicEntry?.enabled === true && publicEntry.cap > 0 });
     const inviteToken = typeof headers[FORK_INVITE_HEADER] === "string" ? headers[FORK_INVITE_HEADER] : null;
     // First-journey metadata only. No bind, grant, identity disclosure or Journey 2 release-gate change.
     if (action === "invite_state") {
@@ -154,7 +158,7 @@ export function productionForkEntryServiceFromEnv(env = process.env, { fetchImpl
   const admin = forkAdminClientFromEnv(env, fetchImpl);
   if (!parts || !admin || !appOriginOk(appOrigin) || !publicRpcUrl || !testnetRpcUrl || typeof grantVersion !== "string" || !GRANT_VERSION_RE.test(grantVersion)) return null;
   const service = createForkEntryService({
-    config: { invites: parts.invites, appOrigin, grantVersion },
+    config: { invites: parts.invites, appOrigin, grantVersion, publicEntry: parts.publicEntry, publicBudget: parts.publicBudget },
     store: parts.store,
     challenges: parts.challenges,
     admin,
@@ -178,7 +182,7 @@ let defaultHandler = null;
 export default async function handler(req, res) {
   if (!defaultHandler) {
     const appOrigin = appOriginOk(process.env[FORK_ENTRY_ENV.appOrigin]) ? process.env[FORK_ENTRY_ENV.appOrigin] : null;
-    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), inviteStore: inviteStoreFromEnv(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
+    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), inviteStore: inviteStoreFromEnv(process.env), publicEntry: publicEntryConfig(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
   }
   return defaultHandler(req, res);
 }

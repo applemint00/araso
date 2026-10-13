@@ -80,7 +80,7 @@ export function challengeTextOk(message, { origin, piggyAddress, nonce, expiresA
 
 async function post(fetchImpl, url, invite, body) {
   try {
-    const res = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json", "x-araso-invite": invite }, body: JSON.stringify(body), credentials: "omit", cache: "no-store" });
+    const res = await fetchImpl(url, { method: "POST", headers: { "content-type": "application/json", ...(invite ? { "x-araso-invite": invite } : {}) }, body: JSON.stringify(body), credentials: "omit", cache: "no-store" });
     let j = null; try { j = await res.json(); } catch { j = null; }
     return { status: res.status, body: j && typeof j === "object" ? j : null };
   } catch { return { status: 0, body: null }; }
@@ -90,9 +90,9 @@ async function post(fetchImpl, url, invite, body) {
  * requestForkEntry → { allowed: true, forkInstanceId } | { allowed: false, reason }. signMessage(text) = the live Piggy signer.
  * Order: challenge → shape check → sign → enter. The server verifies, reads Journey 1, records the entry and tops up.
  */
-export async function requestForkEntry({ fetchImpl = globalThis.fetch, url = FORK_ENTRY_PATH, invite, piggyAddress, signMessage, journey1, origin = globalThis.location?.origin, now = () => Date.now() } = {}) {
+export async function requestForkEntry({ fetchImpl = globalThis.fetch, url = FORK_ENTRY_PATH, invite, publicEntry = false, piggyAddress, signMessage, journey1, origin = globalThis.location?.origin, now = () => Date.now() } = {}) {
   const piggy = low(piggyAddress);
-  if (!invite) return { allowed: false, reason: "no_invite" };
+  if (!invite && publicEntry !== true) return { allowed: false, reason: "no_invite" };
   if (!ADDR_RE.test(piggy)) return { allowed: false, reason: "no_piggy" };
   if (typeof signMessage !== "function") return { allowed: false, reason: "no_live_signer" };
   if (!journey1 || !HASH_RE.test(low(journey1.depositTxHash)) || !HASH_RE.test(low(journey1.redeemTxHash))) return { allowed: false, reason: "no_journey1" };
@@ -111,9 +111,9 @@ export async function requestForkEntry({ fetchImpl = globalThis.fetch, url = FOR
 }
 
 /** Fresh server re-check (never cached). The fork instance this page booted with must be the server's current one. */
-export async function checkForkPermission({ fetchImpl = globalThis.fetch, url = FORK_ENTRY_PATH, invite, piggyAddress, forkInstanceId } = {}) {
+export async function checkForkPermission({ fetchImpl = globalThis.fetch, url = FORK_ENTRY_PATH, invite, publicEntry = false, piggyAddress, forkInstanceId } = {}) {
   const piggy = low(piggyAddress);
-  if (!invite) return { allowed: false, reason: "no_invite" };
+  if (!invite && publicEntry !== true) return { allowed: false, reason: "no_invite" };
   if (!ADDR_RE.test(piggy)) return { allowed: false, reason: "no_piggy" };
   if (typeof forkInstanceId !== "string" || forkInstanceId.trim() === "") return { allowed: false, reason: "no_fork_instance" };
   const s = await post(fetchImpl, url, invite, { action: "status", piggyAddress: piggy, forkInstanceId: low(forkInstanceId) });

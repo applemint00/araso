@@ -71,6 +71,7 @@ function harness({ auth = null, allowed = true, live = false } = {}) {
     isAllowedPiggyRpId: () => true, webAuthnUnsupported: () => false, storedPrfSalt: () => null,
     forkEntryUrl: () => '/api/fork-entry', readForkInvite: () => 'test-invite', readReceipts: () => [], journey1Pointers: () => ({}),
     requestForkEntry: async () => { events.push('entry'); return { allowed }; },
+    a1160PublicEntryOpen: () => false,
     a956SwitchJourney: () => events.push('switch'),
     a956ForkMoneyAllowed: async () => { events.push('server'); return allowed; },
     fork: { publicClient: { getBlockNumber: async () => { events.push('block'); return 1n; } }, chain: {}, transport: {}, read: {} },

@@ -5,7 +5,7 @@
 // concurrent callers really interleave BETWEEN commands (never inside one). Limits: the Lua itself is not executed here (no Lua in this
 // environment) — the mirrors follow the scripts line by line; real-Redis execution = Owner's resource (RECEIPT open item).
 // Lives in app/test/helpers/ so app/test/run-all.mjs never runs it as a suite.
-import { GRANT_CAS_LUA, GRANT_RELEASE_LUA, GRANT_RESERVE_LUA } from "../../../api/_lib/grant-redis-store.js";
+import { GRANT_CAS_LUA, GRANT_RELEASE_LUA, GRANT_RESERVE_LUA, PUBLIC_GRANT_RESERVE_LUA } from "../../../api/_lib/grant-redis-store.js";
 import { INVITE_BIND_LUA, INVITE_ISSUE_LUA } from "../../../api/_lib/invite-redis-store.js";
 import { FORK_PUT_IF_ABSENT_LUA } from "../../../api/_lib/fork-ledger-redis-store.js";
 import { CHALLENGE_TAKE_LUA } from "../../../api/_lib/fork-auth.js";
@@ -37,6 +37,14 @@ export function fakeUpstash({ url = FAKE_KV_URL, token = FAKE_KV_TOKEN, jitter =
       if (exists(K[0]) === 1) return 0;
       if (num(get(K[1])) >= Number(A[0])) return -1;
       str.set(K[0], A[1]); str.set(K[1], String(num(get(K[1])) + 1)); return 1;
+    }]],
+    [PUBLIC_GRANT_RESERVE_LUA, ["grant.publicReserve", (K, A) => {
+      if (exists(K[0]) === 1) return 0;
+      const invited = exists(K[2]) === 1, counter = invited ? K[1] : K[3], cap = Number(invited ? A[0] : A[2]);
+      if (!Number.isSafeInteger(cap) || cap < 1) return -2;
+      if (num(get(counter)) >= cap) return -1;
+      str.set(K[0], JSON.stringify({ ...JSON.parse(A[1]), publicBudget: !invited }));
+      str.set(counter, String(num(get(counter)) + 1)); return 1;
     }]],
     [GRANT_CAS_LUA, ["grant.cas", (K, A) => { if (get(K[0]) !== A[0]) return 0; str.set(K[0], A[1]); return 1; }]],
     [GRANT_RELEASE_LUA, ["grant.release", (K, A) => { if (get(K[0]) !== A[0]) return 0; str.set(K[0], A[1]); str.set(K[1], String(num(get(K[1])) - 1)); return 1; }]],

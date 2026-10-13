@@ -12,6 +12,7 @@
 // The first COMPLETE pair wins (KV first, like the Gift store); halves are never mixed. Neither pair = no store = 503 (fail-closed).
 // No value, token or URL is ever logged or put into an error message.
 import crypto from "node:crypto";
+import { publicEntryConfig } from "./public-entry.js";
 import { DEFAULT_EPOCH, GRANT_STORE_CONTRACT_V1, decideRelease, decideSettle, isValidEpoch, isValidIdentity, normalizeReserveRequest } from "./grant-store-contract.js";
 
 export const UPSTASH_ENV_PAIRS = Object.freeze([
@@ -74,13 +75,23 @@ export const GRANT_CAS_LUA = "if redis.call('get',KEYS[1])~=ARGV[1] then return 
 // KEYS[1]=row KEYS[2]=active count · ARGV[1]=expected old ARGV[2]=new (released) -> 1 released (count -1) · 0 the row changed meanwhile
 export const GRANT_RELEASE_LUA = "if redis.call('get',KEYS[1])~=ARGV[1] then return 0 end redis.call('set',KEYS[1],ARGV[2]) redis.call('decr',KEYS[2]) return 1";
 
+// Shared address row across both budgets: binding and cap selection happen in the SAME EVAL.
+// KEYS = row, invited count, binding, public count; ARGV = invited cap, row JSON, public cap.
+export const PUBLIC_GRANT_RESERVE_LUA = "if redis.call('exists',KEYS[1])==1 then return 0 end "
+  + "local invited=redis.call('exists',KEYS[3])==1 local counter=KEYS[4] local cap=tonumber(ARGV[3]) "
+  + "if invited then counter=KEYS[2] cap=tonumber(ARGV[1]) end "
+  + "if not cap or cap<1 then return -2 end "
+  + "local n=tonumber(redis.call('get',counter) or '0') if n>=cap then return -1 end "
+  + "local row=cjson.decode(ARGV[2]) row.publicBudget=not invited "
+  + "redis.call('set',KEYS[1],cjson.encode(row)) redis.call('incr',counter) return 1";
+const publicCountKey = (prefix, epoch) => `${prefix}:grant:${epoch}:public:n`;
 const CAS_TRIES = 8;
 
 /**
  * createUpstashGrantStore({ cmd, prefix, requireBinding }) -> full A-870 grant store.
  * requireBinding (default true) = only invite-bound addresses can reserve (reason "not_allowlisted"). The conformance harness runs with false.
  */
-export function createUpstashGrantStore({ cmd, prefix = ARASO_REDIS_PREFIX, requireBinding = true, now = () => Date.now(), randomId = () => `g${crypto.randomBytes(16).toString("hex")}` } = {}) {
+export function createUpstashGrantStore({ cmd, prefix = ARASO_REDIS_PREFIX, requireBinding = true, publicEntry = null, now = () => Date.now(), randomId = () => `g${crypto.randomBytes(16).toString("hex")}` } = {}) {
   if (typeof cmd !== "function") return null;
   const load = async (epoch, identity) => {
     const raw = await cmd("GET", rowKey(prefix, epoch, identity));
@@ -120,7 +131,9 @@ export function createUpstashGrantStore({ cmd, prefix = ARASO_REDIS_PREFIX, requ
       if (!n) throw new Error("invalid reserve request"); // judgement impossible = throw (handler 503)
       const reservationId = randomId();
       const row = JSON.stringify({ epoch: n.epoch, identity: n.identity, reservationId, outcome: null, released: false, at: now() });
-      const r = Number(await cmd("EVAL", GRANT_RESERVE_LUA, 3, rowKey(prefix, n.epoch, n.identity), countKey(prefix, n.epoch), invitePiggyKey(prefix, n.identity), n.globalCap, row, requireBinding === true ? "1" : "0"));
+      const r = Number(publicEntry?.enabled === true
+        ? await cmd("EVAL", PUBLIC_GRANT_RESERVE_LUA, 4, rowKey(prefix, n.epoch, n.identity), countKey(prefix, n.epoch), invitePiggyKey(prefix, n.identity), publicCountKey(prefix, n.epoch), n.globalCap, row, publicEntry.cap)
+        : await cmd("EVAL", GRANT_RESERVE_LUA, 3, rowKey(prefix, n.epoch, n.identity), countKey(prefix, n.epoch), invitePiggyKey(prefix, n.identity), n.globalCap, row, requireBinding === true ? "1" : "0"));
       if (r === 1) return { ok: true, reservationId };
       if (r === 0) return { ok: false, reason: "duplicate" };
       if (r === -1) return { ok: false, reason: "cap_reached" };
@@ -138,7 +151,7 @@ export function createUpstashGrantStore({ cmd, prefix = ARASO_REDIS_PREFIX, requ
         if (rec.released === true) return { ok: true }; // already released: no second DECR
         const d = decideRelease(rec);
         if (!d.ok) return d;
-        if (Number(await cmd("EVAL", GRANT_RELEASE_LUA, 2, rowKey(prefix, epoch, identity), countKey(prefix, epoch), raw, JSON.stringify({ ...rec, released: true }))) === 1) return { ok: true };
+        if (Number(await cmd("EVAL", GRANT_RELEASE_LUA, 2, rowKey(prefix, epoch, identity), rec.publicBudget === true ? publicCountKey(prefix, epoch) : countKey(prefix, epoch), raw, JSON.stringify({ ...rec, released: true }))) === 1) return { ok: true };
       }
       throw new Error("GRANT_STORE_CONTENTION");
     },
@@ -150,7 +163,7 @@ export function upstashGrantBackendFromEnv(env = process.env, { fetchImpl = glob
   const cfg = readUpstashEnv(env);
   if (!cfg) throw new Error("UPSTASH_NOT_CONFIGURED");
   const cmd = createUpstashRest({ url: cfg.url, token: cfg.token, fetchImpl });
-  const store = cmd ? createUpstashGrantStore({ cmd }) : null;
+  const store = cmd ? createUpstashGrantStore({ cmd, publicEntry: publicEntryConfig(env) }) : null;
   if (!store) throw new Error("UPSTASH_NOT_CONFIGURED");
   return { store, policy: { globalCap: UPSTASH_GRANT_DEFAULTS.globalCap, epoch: UPSTASH_GRANT_DEFAULTS.epoch } };
 }

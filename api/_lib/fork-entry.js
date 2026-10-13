@@ -8,12 +8,13 @@
 // Order (A-952 "Order card E calls"): entry check → top-up grant → [step evidence → verdict → stamp → reward] (completion = slot + tests only,
 // closed unless config.completionOpen === true and a server-config rewardCampaignVersion exists; no payout anywhere).
 import { appOriginOk, verifyChallenge, issueChallengeAsync, createRedisChallengeStore } from "./fork-auth.js"; // [A-960] async issue (Redis challenge store)
-import { createUpstashRest, readUpstashEnv } from "./grant-redis-store.js"; // [A-960]
+import { createUpstashRest, readUpstashEnv, GRANT_RESERVE_LUA, ARASO_REDIS_PREFIX } from "./grant-redis-store.js"; // [A-960]
 import { createUpstashInviteStore } from "./invite-redis-store.js"; // [A-960]
 import { createUpstashForkLedgerStore } from "./fork-ledger-redis-store.js"; // [A-960]
 import {
   ENTRY_ASSETS, FORK_LEDGER_SCHEMA, VERDICT, entryKey, entryPiggyKey, entryPiggyRecord, entryRecord, evidenceRecord, journey1UseRecord, journeyVerdict, rewardLedgerApply, stampRecord, topupRecord,
 } from "./fork-ledger-contract.js";
+import { publicEntryConfig } from "./public-entry.js";
 import { isForkGrantAsset } from "./fork-grant-client.js";
 
 // Journey 1 = the First Journey on Monad testnet: shMON deposit(assets, receiver) → redeem(shares, receiver, owner), both sent by the Piggy.
@@ -101,7 +102,13 @@ export function createForkEntryService({ config, store, challenges, admin, testn
   const grantable = (a) => ENTRY_ASSETS.includes(a) && isForkGrantAsset(a);
   const assets = Array.isArray(config?.grantAssets) && config.grantAssets.length ? config.grantAssets.filter(grantable) : ENTRY_ASSETS.filter(grantable);
   const grantVersion = typeof config?.grantVersion === "string" && /^[a-z0-9][a-z0-9._-]{0,31}$/.test(config.grantVersion) ? config.grantVersion : null;
-  const tester = (token) => (config?.invites && typeof config.invites.testerFor === "function" ? config.invites.testerFor(token) : null);
+  const publicId = piggy => `public:${low(piggy)}`;
+  const tester = async (token, piggy) => {
+    if (token) return config?.invites?.testerFor?.(token) ?? null; // bad token never downgrades to public
+    if (config?.publicEntry?.enabled !== true || !ADDR_RE.test(low(piggy))) return null;
+    const bound = await config?.invites?.testerForPiggy?.(low(piggy));
+    return bound || publicId(piggy);
+  };
   const expired = () => typeof config?.entryNotAfter === "number" && now() > config.entryNotAfter;
   const refuse = (reason, extra = {}) => ({ ok: true, allowed: false, reason, ...extra });
   const ready = () => !!(store && challenges && admin && grantVersion && appOriginOk(config?.appOrigin));
@@ -150,7 +157,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
     async challenge({ inviteToken, piggyAddress }) {
       try {
         if (!ready()) return { ok: false, status: 503, reason: "entry_unavailable" };
-        const testerId = await tester(inviteToken); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
+        const testerId = await tester(inviteToken, piggyAddress); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
         if (expired()) return refuse("entry_expired");
         const inst = await currentInstance(); if (!inst) return { ok: false, status: 503, reason: "fork_unavailable" };
         const c = await issueChallengeAsync({ store: challenges, uri: config.appOrigin, chainId: inst.chainId, testerId, piggyAddress, forkInstanceId: inst.forkInstanceId, now: now() });
@@ -163,7 +170,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
     async enter({ inviteToken, nonce, signature, piggyAddress, journey1 }) {
       try {
         if (!ready()) return { ok: false, status: 503, reason: "entry_unavailable" };
-        const testerId = await tester(inviteToken); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
+        const testerId = await tester(inviteToken, piggyAddress); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
         const proof = await verifyChallenge({ store: challenges, nonce, signature, testerId, piggyAddress, now: now() });
         if (!proof.ok) return refuse(proof.reason);
         if (expired()) return refuse("entry_expired");
@@ -172,13 +179,19 @@ export function createForkEntryService({ config, store, challenges, admin, testn
         if (inst.forkInstanceId !== proof.record.forkInstanceId) return refuse("fork_instance_changed", { reenter: true });
         // [A-960] [review fix: after the fork-instance check, so a refused stale-instance request binds nothing] Redis invites (bind present): the invite is bound once to the first Piggy that proves control (보충 7) — here, or earlier
         // at the first grant. Bound to another Piggy / this Piggy bound to another tester / expired-unbound = no entry. Memory table = no bind.
-        if (typeof config?.invites?.bind === "function") {
+        if (inviteToken && typeof config?.invites?.bind === "function") {
           const b = await config.invites.bind({ token: inviteToken, piggyAddress: piggy });
           if (!b || b.ok !== true) return refuse(b?.status || "invite_not_bound");
         }
         const j = journey1 && typeof journey1 === "object" ? journey1 : {};
         const j1 = await verifyJourney1({ rpc: testnetRpc, piggyAddress: piggy, depositTxHash: j.depositTxHash, redeemTxHash: j.redeemTxHash });
         if (!j1.ok) return refuse(j1.reason);
+        // Reserve one public top-up bundle only after signature + server Journey1 verification.
+        // Durable/global cap across workers and fork instances; failures never refund automatically.
+        if (testerId === publicId(piggy)) {
+          const budget = await config.publicBudget?.reserve({ forkInstanceId: inst.forkInstanceId, piggyAddress: piggy });
+          if (!budget?.ok) return refuse(budget?.reason || "public_cap_closed");
+        }
         const er = entryRecord({ forkInstanceId: inst.forkInstanceId, testerId, piggyAddress: piggy, journey1DepositTxHash: j1.depositTxHash, journey1RedeemTxHash: j1.redeemTxHash, journey1BlockNumber: j1.blockNumber });
         if (!er.ok) return refuse("entry_invalid");
         // [A-956 review fix 1] claim order (each = one SET NX): Journey 1 tx rows (one tester per tx, any instance) → the Piggy row
@@ -213,7 +226,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
     async status({ inviteToken, piggyAddress, forkInstanceId }) {
       try {
         if (!ready()) return { ok: false, status: 503, reason: "entry_unavailable" };
-        const testerId = await tester(inviteToken); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
+        const testerId = await tester(inviteToken, piggyAddress); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
         const piggy = low(piggyAddress); if (!ADDR_RE.test(piggy)) return refuse("bad_piggy");
         const inst = await currentInstance(); if (!inst) return { ok: false, status: 503, reason: "fork_unavailable" };
         if (low(forkInstanceId) !== inst.forkInstanceId) return refuse("fork_instance_changed", { reenter: true });
@@ -281,5 +294,18 @@ export function upstashForkEntryParts(env = process.env, { fetchImpl = globalThi
   const invites = createUpstashInviteStore({ cmd });
   const challenges = createRedisChallengeStore({ cmd });
   const store = createUpstashForkLedgerStore({ cmd });
-  return invites && challenges && store ? { invites, challenges, store } : null;
+  const publicEntry = publicEntryConfig(env);
+  const publicBudget = {
+    async reserve({ forkInstanceId, piggyAddress }) {
+      if (!publicEntry.enabled || publicEntry.cap < 1 || !ID_RE.test(forkInstanceId) || !ADDR_RE.test(piggyAddress)) return { ok: false, reason: "public_cap_closed" };
+      const r = Number(await cmd("EVAL", GRANT_RESERVE_LUA, 3,
+        `${ARASO_REDIS_PREFIX}:public-fork:r:${forkInstanceId}:${piggyAddress}`,
+        `${ARASO_REDIS_PREFIX}:public-fork:n`, `${ARASO_REDIS_PREFIX}:public-fork:unused`,
+        publicEntry.cap, "reserved", "0"));
+      if (r === 1 || r === 0) return { ok: true };
+      if (r === -1) return { ok: false, reason: "public_cap_reached" };
+      throw new Error("PUBLIC_BUDGET_BAD_REPLY");
+    },
+  };
+  return invites && challenges && store ? { invites, challenges, store, publicEntry, publicBudget } : null;
 }

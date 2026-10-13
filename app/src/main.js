@@ -1887,6 +1887,9 @@ async function startPiggyOpen() {
   if (readCredential() || hasReceivedPiggy() || state.address) {
     return checkPiggy();
   }
+  if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && !readForkInvite(safeLocalStorage())) {
+    return a1160TakePublicCreate() ? openPiggy() : checkPiggy();
+  }
   if (typeof a1158TakeUnboundInvite === "function" && a1158TakeUnboundInvite()) return openPiggy();
   // Keep the next explicit choice through reloads of this tab's invite entry.
   // Store only a token fingerprint, never another copy of the invite secret.
@@ -5865,9 +5868,9 @@ function inviteWide(gift = null) {
   `;
 }
 
-// [A-1159] Build switch only. A display label (?i=) is not an invitation token.
+// [A-1159/A-1160] Server public flag. A display label (?i=) is not an invitation token.
 function inviteOnlyEntry() {
-  return RELEASE_LEVEL === 1 && !readForkInvite(safeLocalStorage()) && !readCredential() && !hasReceivedPiggy() && !state.address;
+  return !a1160PublicEntryOpen() && !readForkInvite(safeLocalStorage()) && !readCredential() && !hasReceivedPiggy() && !state.address;
 }
 
 function renderInviteOnly() {
@@ -14121,7 +14124,7 @@ let a956EntryBusy = false;
 async function a956ForkMoneyAllowed() {
   if (!onForkProfile(CHAIN_PROFILE)) return false;
   try {
-    const r = await checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), piggyAddress: state.address, forkInstanceId: CHAIN_PROFILE.forkInstanceId });
+    const r = await checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), publicEntry: a1160PublicEntryOpen(), piggyAddress: state.address, forkInstanceId: CHAIN_PROFILE.forkInstanceId });
     return r.allowed === true;
   } catch { return false; }
 }
@@ -14171,7 +14174,7 @@ async function a956Enter() {
         return await account.signMessage({ message });
       } finally { a956Signing -= 1; }
     };
-    const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), piggyAddress: piggy, journey1: journey1Pointers(readReceipts()), signMessage });
+    const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), publicEntry: a1160PublicEntryOpen(), piggyAddress: piggy, journey1: journey1Pointers(readReceipts()), signMessage });
     if (r.allowed === true && state.scene === "sendstay" && !state.appLock && activeAccount === account) a956SwitchJourney(2);
     else console.debug("fork_entry", typeof r.reason === "string" && /^[a-z_]+$/.test(r.reason) ? r.reason : "refused");
   } catch (error) {
@@ -14199,7 +14202,7 @@ async function a956Enter() {
   a891ArmPostFileQuietHome = (...args) => {
     if (!entryOpen()) return a956BaseArm(...args);
     a891CueChog = null;
-    if (state.secondJourneyCompletedOnce || !readForkInvite() || !journey1Pointers(readReceipts())) return undefined;
+    if (state.secondJourneyCompletedOnce || (!readForkInvite() && !a1160PublicEntryOpen()) || !journey1Pointers(readReceipts())) return undefined;
     const arm = () => {
       if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || !homeChog) return;
       if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }
@@ -14221,6 +14224,34 @@ async function a956Enter() {
   };
 }
 // ── [A-956] end Journey 2 entry ──
+// A1160: one server switch, read before any tap. Unknown/closed remains invite-only.
+function a1160PublicEntryOpen() {
+  return RELEASE_LEVEL >= 2 && state.publicEntryOpen === true;
+}
+function a1160TakePublicCreate() {
+  try {
+    if (authAttempt || platformAuthInflight || lateCreatedCredential) return false;
+    const key = "araso.publicCreateAttempt.v1";
+    if (sessionStorage.getItem(key)) return false;
+    sessionStorage.setItem(key, "attempted");
+    return sessionStorage.getItem(key) === "attempted";
+  } catch { return false; }
+}
+async function a1160RefreshPublicEntry() {
+  state.publicEntryOpen = false;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch("/api/fork-entry", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "public_state" }), cache: "no-store", signal: controller.signal });
+    const out = response.ok ? await response.json() : null;
+    if (out?.ok === true && out.publicEntry === true && RELEASE_LEVEL >= 2) {
+      state.publicEntryOpen = true;
+      render(); // metadata only; no authentication, selection or payment
+    }
+  } catch { /* fail closed */ } finally { clearTimeout(timer); }
+}
+
 // ── [A-960] invite link → first grant. One block; the code above and below is unchanged. ──────────────────────────────────────────────
 // Boot: `#invite=<secret>` leaves the address bar right here — before the Gift fragment read further down, which therefore still sees an
 // unchanged `#g=…&t=…&v=…` — and is kept on this device (fork-entry-client.js FORK_INVITE_KEY, the slot the Journey 2 entry already reads).
@@ -14291,6 +14322,7 @@ async function a960BindInvite(address) {
   };
 }
 // ── [A-960] end invite link → first grant ──
+void a1160RefreshPublicEntry();
 // ── [A-966] Gift on the shared fork (record source · sponsored claim · create step). One block; the code above and below is unchanged. ────────────
 // Off the fork nothing here runs (A966_FORK_GIFT = null): the testnet / mainnet Gift paths stay exactly as they are (mainnet Gift stays OFF, the
 // GIFT_RECORD_CONFIG / GIFT_CLAIM_SUBMIT_CONFIG / A915_GIFT_CREATE_CONFIG literals stay null). On the fork profile (release level ≥ 2, journeyFeatureOpen

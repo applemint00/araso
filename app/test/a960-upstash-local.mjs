@@ -414,6 +414,36 @@ await check("Gift KV store untouched (byte-equal to the pre-fork baseline de8c9c
   const BASE_KV_STORE_SHA256 = "6c372aed4094981c3dadd2410e41cd28e9bfff4e4af2d52b5b6d9815e5216346";
   assert.equal(createHash("sha256").update(readFileSync(path.join(REPO, "api/_lib/gift-sponsor-kv-store.js"), "utf8")).digest("hex"), BASE_KV_STORE_SHA256);
 });
+// A1160: real grant handler and real durable adapter, fake RPC/Redis only.
+await check("A1160 public grant200 -> duplicate; public cap independent of invited20", async () => {
+  const kv = fakeUpstash(), p = parts(kv, { grant: { publicEntry: { enabled: true, cap: 1 } } }), h = handlerOn(p);
+  const a = piggyKey(), b = piggyKey(), invited = piggyKey();
+  assert.equal((await call(h, { address: a.address })).statusCode, 200);
+  assert.equal((await call(h, { address: a.address })).body.error, "already funded");
+  assert.equal((await call(h, { address: b.address })).body.error, "grant cap reached");
+  const t = await issue(p); assert.equal((await bindVia(h, t.token, invited)).statusCode, 200);
+  assert.equal((await call(h, { address: invited.address })).statusCode, 200);
+  // Binding an already public-funded address cannot create another grant row.
+  const t2 = await issue(p); await bindVia(h, t2.token, a);
+  assert.equal((await call(h, { address: a.address })).body.error, "already funded");
+});
+await check("A1160 public cap concurrent workers, closed/invalid config and budget-correct release", async () => {
+  const { publicEntryConfig } = await import('../../api/_lib/public-entry.js');
+  for (const raw of [undefined, '', '0', '-1', '1.5', '1e3', '9007199254740992']) assert.equal(publicEntryConfig({ ARASO_PUBLIC_ENTRY:'1', ARASO_PUBLIC_GRANT_CAP:raw }).cap, 0);
+  assert.equal(publicEntryConfig(Object.create({ ARASO_PUBLIC_ENTRY:'1' })).enabled, false);
+  const kv = fakeUpstash(), conf = { publicEntry: { enabled: true, cap: 2 } };
+  const stores = [parts(kv, { grant:conf }).grant, parts(kv, { grant:conf }).grant];
+  const addresses = Array.from({length:10}, () => piggyKey().address.toLowerCase());
+  const out = await Promise.all(addresses.map((identity,i) => stores[i%2].reserve({ identity, globalCap:20 })));
+  assert.equal(out.filter(r=>r.ok).length, 2);
+  const i = out.findIndex(r=>r.ok), req = { identity:addresses[i], reservationId:out[i].reservationId };
+  await stores[0].settle({...req,outcome:'aborted_before_send'});
+  assert.equal((await stores[0].release(req)).ok,true);
+  assert.equal((await stores[1].reserve({identity:piggyKey().address.toLowerCase(),globalCap:20})).ok,true);
+  assert.equal((await stores[0].reserve({identity:addresses[i],globalCap:20})).reason,'duplicate');
+  const closed=parts(fakeUpstash(),{grant:{publicEntry:{enabled:true,cap:0}}});
+  assert.equal((await closed.grant.reserve({identity:addresses[0],globalCap:20})).reason,'not_allowlisted');
+});
 offMain();
 await check("network 0", () => { assert.equal(netCalls, 0); });
 console.info(`\nA-960 upstash local: ${pass} PASS / ${fail} FAIL`);

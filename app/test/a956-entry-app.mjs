@@ -227,7 +227,7 @@ await check("4/8 block content: no new screen/copy/scene · no Explore · no Jou
 // Run the block itself with stubs (imports → the real client; switchJourney + the server = in-process). import.meta.env → FORK_ENV.
 function loadBlock(over = {}) {
   const body = block.replace(/^import [^\n]*\n/gm, "").replace(/import\.meta\.env/g, "__env");
-  const names = ["CHAIN_PROFILE", "state", "readReceipts", "activeAccount", "RELEASE_LEVEL", "sendInFlight", "readSendPending", "requestMoneyPermission", "proveFundingTargetControl", "settleBoundGiftClaim", "a891ArmPostFileQuietHome", "a891HomeChogTap", "a891CueChog", "a891FirstArrivalHold", "homeChog", "sceneTimeout", "HOME_FIRST_JOURNEY_CARD_MS", "POST_FILE_QUIET_HOME_MS", "isAllowedPiggyRpId", "webAuthnUnsupported", "requestPrf", "storedPrfSalt", "activateSigningSession", "endSignerSession", "isCancelledAuthError"];
+  const names = ["a1160PublicEntryOpen", "CHAIN_PROFILE", "state", "readReceipts", "activeAccount", "RELEASE_LEVEL", "sendInFlight", "readSendPending", "requestMoneyPermission", "proveFundingTargetControl", "settleBoundGiftClaim", "a891ArmPostFileQuietHome", "a891HomeChogTap", "a891CueChog", "a891FirstArrivalHold", "homeChog", "sceneTimeout", "HOME_FIRST_JOURNEY_CARD_MS", "POST_FILE_QUIET_HOME_MS", "isAllowedPiggyRpId", "webAuthnUnsupported", "requestPrf", "storedPrfSalt", "activateSigningSession", "endSignerSession", "isCancelledAuthError"];
   const env = { ...over };
   const src = `${names.map((n) => `let ${n} = E.${n};`).join("\n")}\nconst { checkForkPermission, forkEntryOpen, forkEntryUrl, journey1Pointers, onForkProfile, readForkInvite, requestForkEntry, registerJourneySwitchBusyProbe, a956SwitchJourney, __env } = E;\n${body}\nreturn { get: (n) => eval(n), set: (n, v) => { switch (n) { ${names.map((n) => `case "${n}": ${n} = v; break;`).join(" ")} } }, enter: () => a956Enter(), allowed: () => a956ForkMoneyAllowed() };`;
   return new Function("E", src)(env);
@@ -247,7 +247,7 @@ function harness({ profile = TESTNET, level = 2, signer = PIGGY, invite = TOKEN,
     a891ArmPostFileQuietHome: () => { calls.baseArm += 1; }, a891HomeChogTap: () => { calls.baseTap += 1; }, a891CueChog: null, a891FirstArrivalHold: null,
     homeChog: chog, sceneTimeout: (fn) => timers.push(fn), HOME_FIRST_JOURNEY_CARD_MS: 1200, POST_FILE_QUIET_HOME_MS: 8000,
     checkForkPermission: C.checkForkPermission, forkEntryOpen: C.forkEntryOpen, forkEntryUrl: C.forkEntryUrl, journey1Pointers: C.journey1Pointers, onForkProfile: C.onForkProfile, readForkInvite: C.readForkInvite, requestForkEntry: C.requestForkEntry,
-    isAllowedPiggyRpId: () => true, webAuthnUnsupported: () => false, storedPrfSalt: () => null,
+    a1160PublicEntryOpen: () => false, isAllowedPiggyRpId: () => true, webAuthnUnsupported: () => false, storedPrfSalt: () => null,
     requestPrf: (pinned) => { calls.get += 1; assert.equal(pinned.credentialId, "stored-passkey"); return auth?.request?.() ?? Promise.resolve({ credentialId: pinned.credentialId, prfOutput: new Uint8Array(32) }); },
     activateSigningSession: (prf, options) => { assert.equal(options.persistAddress, false); const account = auth?.account || PIGGY; B.set("activeAccount", account); return { account, address: account.address }; },
     endSignerSession: () => { calls.ended += 1; B.set("activeAccount", null); },
