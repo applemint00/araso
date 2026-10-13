@@ -39,7 +39,7 @@ for(const level of ['1','2']){
   }else{
    await d.p.goto(d.BASE,{waitUntil:'networkidle'});assert.equal(await d.p.locator('.inviteOnly').count(),1);assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{get:0,create:0});pass++;
    publicOpen=true;await d.p.reload({waitUntil:'networkidle'});assert.equal(await d.p.locator('.inviteOnly').count(),0);
-   await d.p.evaluate(()=>{window.cancelNextCreate=true;sessionStorage.setItem('araso.publicCreateAttempt.v1','attempted')});
+   await d.p.evaluate(()=>{window.cancelNextCreate=true});
    await d.p.locator('#inviteFaceButton').click();await d.p.waitForSelector('#authTryAgainButton');assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{get:0,create:1});
    await d.p.locator('#authTryAgainButton').click();
    await d.p.locator('#inviteFaceButton').click();await d.p.waitForSelector('[data-scene="hatch"], [data-scene="name"]',{timeout:20000});assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{get:0,create:2});pass++;

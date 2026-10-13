@@ -1490,6 +1490,45 @@ function noteRecoverFailure() {
   if (state.recoverFailures >= 2) state.noPiggy = true;
 }
 
+// A1202: observe the create ceremony separately from Mera's later PRF assertion.
+// Mera invokes create synchronously; restore the browser method before returning its promise.
+function a1202CreatePasskey(options, stage) {
+  const observe = (create, receiver) => (...args) => {
+    stage.value = "pending";
+    try {
+      return Promise.resolve(create.apply(receiver, args)).then(value => {
+        stage.value = "created";
+        return value;
+      }, error => {
+        stage.value = error?.name === "NotAllowedError" ? "cancelled" : "unknown";
+        throw error;
+      });
+    } catch (error) {
+      stage.value = error?.name === "NotAllowedError" ? "cancelled" : "unknown";
+      throw error;
+    }
+  };
+  if (options.webAuthnClient) {
+    const client = options.webAuthnClient;
+    return createPasskeyWithPrfOutput({ ...options, webAuthnClient: {
+      createCredential: observe(client.createCredential, client),
+      getCredential: (...args) => client.getCredential(...args),
+    } });
+  }
+  const credentials = globalThis.navigator?.credentials;
+  if (!credentials || typeof credentials.create !== "function") return createPasskeyWithPrfOutput(options);
+  const own = Object.getOwnPropertyDescriptor(credentials, "create");
+  const wrapped = observe(credentials.create, credentials);
+  try {
+    Object.defineProperty(credentials, "create", { configurable: true, writable: true, value: wrapped });
+  } catch { return createPasskeyWithPrfOutput(options); } // no stage evidence: retain marker
+  try { return createPasskeyWithPrfOutput(options); }
+  finally {
+    if (own) Object.defineProperty(credentials, "create", own);
+    else delete credentials.create;
+  }
+}
+
 async function openPiggy() {
   if (!isAllowedPiggyRpId()) {
     // [A-389 §3] 지원되지 않는 origin — 실패/취소로 위장하지 않고 실제 이유(state.detail)를
@@ -1533,16 +1572,17 @@ async function openPiggy() {
   const giftPreExisting = giftIntent ? knownPiggyAddresses() : null;
   let giftAttempted = false;
   let committed = false;
+  const createStage = { value: "unknown" };
 
   try {
-    const creating =createPasskeyWithPrfOutput({
+    const creating = a1202CreatePasskey({
       rp: { id: getRpId(), name: "Araso" },
       user: { name: "araso-owner", displayName: "Araso" },
       timeout: 120_000,
       // LOCAL_ONLY. 둘 다 잠금이 걸리면 빈 객체 → 기존 경로·기본 salt 그대로.
       ...localTestWebAuthnOption(),
       ...localTestPrfSaltOption(),
-    });
+    }, createStage);
     // [A-667 R5] 시간이 다 된(또는 bfcache 복원으로 만료된) 뒤 늦게 온 생성 성공: 화면·서명자·저장 0, PRF 는 지운다.
     // 남는 부작용(정직 기록): 플랫폼에는 패스키가 **이미 만들어져** 있다. 그래서 이번 세션의 다음 Open 이 곧바로 또
     // 만들지 않도록 find-first 를 다시 켠다(freshRecoveryTried=false, 메모리만) — 다음 Open 은 먼저 그 패스키를 찾는다.
@@ -1621,6 +1661,9 @@ async function openPiggy() {
     if (giftIntent && !giftAttempted) restorePendingGiftClaim(giftIntent);
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
+    if (!committed && createStage.value === "cancelled" && !platformAuthInflight && !lateCreatedCredential) {
+      try { sessionStorage.removeItem("araso.publicCreateAttempt.v1"); } catch { /* retain recovery-first */ }
+    }
     recordSafeError("open", error);
     setScene("birth", "Piggy could not open here.", "");
   }
@@ -1888,7 +1931,13 @@ async function startPiggyOpen() {
     return checkPiggy();
   }
   if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && !readForkInvite(safeLocalStorage())) {
-    return a1160TakePublicCreate() ? openPiggy() : checkPiggy();
+    if (a1160TakePublicCreate()) return openPiggy();
+    const result = await checkPiggy();
+    // Same explicit retry contract as invite recovery; blocked/late attempts cannot authorize create.
+    if (result?.ok === false && result.cancelled === true && !result.reason && !authAttempt && !platformAuthInflight && !lateCreatedCredential) {
+      try { sessionStorage.removeItem("araso.publicCreateAttempt.v1"); } catch { /* retain recovery-first */ }
+    }
+    return result;
   }
   if (typeof a1158TakeUnboundInvite === "function" && a1158TakeUnboundInvite()) return openPiggy();
   // Keep the next explicit choice through reloads of this tab's invite entry.
@@ -14231,9 +14280,10 @@ function a1160PublicEntryOpen() {
 function a1160TakePublicCreate() {
   try {
     if (authAttempt || platformAuthInflight || lateCreatedCredential) return false;
-    // A1200: a cancelled/failed create must leave the next explicit tap able to create.
-    // Persisted identity is checked first by startPiggyOpen; in-flight guards stay above.
-    return true;
+    const key = "araso.publicCreateAttempt.v1";
+    if (sessionStorage.getItem(key)) return false;
+    sessionStorage.setItem(key, "attempted");
+    return sessionStorage.getItem(key) === "attempted";
   } catch { return false; }
 }
 async function a1160RefreshPublicEntry() {
