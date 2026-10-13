@@ -14024,6 +14024,7 @@ const A891_FILED_LINE_HOLD_MS = A891_TAP_CUE_TIMING.holdMs;
 const A891_SECOND_INTRO_TO_PAPER_MS = HOME_FIRST_JOURNEY_CARD_MS;
 const SECOND_INTRO_SEEN_KEY = scopedSecondKey("araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
 let a891FirstArrivalHold = null; // { t } silent frame clock of the removed first-arrival cue (keeps the First Send reveal timing)
+let a1206SwitchIntroPending = false; // UI-only boot handoff; consumed once by the existing CG-05 intro
 let a891CueChog = null;          // the Home Chog instance that is currently showing the post-file "tap me!"
 
 function a891SecondIntroSeen() {
@@ -14098,7 +14099,13 @@ function a891AfterFiling(returnView, valid) {
 // CG-04: called from mountHome() settle() when homeQuietForExplore was set (after filing, or a revisit with First done).
 function a891ArmPostFileQuietHome() {
   a891CueChog = null;
-  if (state.secondJourneyCompletedOnce || a891SecondIntroSeen()) return; // once per user · Second done = quiet Home only
+  if (state.secondJourneyCompletedOnce || a891SecondIntroSeen()) { a1206SwitchIntroPending = false; return; } // once per user
+  if (a1206SwitchIntroPending && !state.appLock && state.scene === "sendstay" && homeChog) {
+    a1206SwitchIntroPending = false;
+    a891CueChog = homeChog;
+    a891HomeChogTap(); // A1206 Owner: switch boot starts the existing CG-05 without a tap cue.
+    return;
+  }
   const arm = () => {
     if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || !homeChog) return;
     // Same deferral as the old revealExplorePaper: History open (and, here, a pinned Home pad) waits; nothing is skipped.
@@ -14109,7 +14116,7 @@ function a891ArmPostFileQuietHome() {
 }
 
 // CG-05 intro: the opening tap on the post-file cue. chog-home.js toggle() already hid the cue; the intro answers the tap, so the
-// Home pad it just pinned is closed again before it draws. No auto-advance without this tap (Cowork answer 2026-10-08).
+// Home pad is closed before it draws. A1206 Owner 2026-10-14: one-use switch boot may also start this intro automatically.
 function a891HomeChogTap() {
   a891FirstArrivalHold = null; // a real Chog tap ended the old first-arrival cue (hideTapCue → hold 0); the silent hold does the same
   const chog = a891CueChog;
@@ -14167,7 +14174,7 @@ if (typeof document !== "undefined") {
 // re-entry needed). Refused = nothing happens (screen unchanged, execution only). New fork execution paths must await a956ForkMoneyAllowed().
 // switchJourney refuses while a signature is in progress or a tx is unconfirmed (journey-switch.js + the probe registered here).
 import { checkForkPermission, forkEntryOpen, forkEntryUrl, journey1Pointers, onForkProfile, readForkInvite, requestForkEntry } from "./fork-entry-client.js";
-import { registerJourneySwitchBusyProbe, switchJourney as a956SwitchJourney } from "./journey-switch.js";
+import { consumeJourneySwitchUnlock, registerJourneySwitchBusyProbe, switchJourney as a956SwitchJourney } from "./journey-switch.js";
 let a956Signing = 0;
 let a956EntryBusy = false;
 async function a956ForkMoneyAllowed() {
@@ -14255,9 +14262,15 @@ async function a956Enter() {
     const arm = () => {
       if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || !homeChog) return;
       if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }
+      if (state.appLock) return;
+      if (activeAccount && String(activeAccount.address || "").toLowerCase() === String(state.address || "").toLowerCase()) {
+        void a956Enter();
+        return;
+      }
       if (homeChog.startTapCue?.()) a891CueChog = homeChog;
     };
-    sceneTimeout(arm, POST_FILE_QUIET_HOME_MS);
+    if (activeAccount && String(activeAccount.address || "").toLowerCase() === String(state.address || "").toLowerCase()) arm();
+    else sceneTimeout(arm, POST_FILE_QUIET_HOME_MS);
     return undefined;
   };
   const a956BaseTap = a891HomeChogTap;
@@ -16003,7 +16016,13 @@ if (state.credential && state.scene === "sendstay" && LEGACY_TESTNET_PATH && !ap
 // LOGIN_CHECKING 으로 연다 — 부팅 때 WebAuthn 호출 0(사용자가 Chog 를 눌러야 한다). 첫 Invite·새 기기·
 // 웹(641+)·인증 불가 origin 은 지금 그대로다. First Send 미확정 기록이 있으면 목적지는 Away(checking…)이고,
 // 그 hash 의 결과를 **공개 읽기로만** 잠금과 병렬로 조회한다(reconcileSendPending — 서명·전송 0).
-if (state.credential && (state.scene === "name" || state.scene === "sendstay") && appLockSurface()) {
+const a1206SwitchUnlocked = consumeJourneySwitchUnlock() && onForkProfile(CHAIN_PROFILE); // read and delete even on non-lock surfaces
+if (a1206SwitchUnlocked && state.credential && state.scene === "sendstay" && onForkProfile(CHAIN_PROFILE)) {
+  a1206SwitchIntroPending = true;
+  state.homeQuietForExplore = true;
+  touchAppSession(); // same ten-minute idle lock; signer still absent after reload
+}
+if (!a1206SwitchUnlocked && state.credential && (state.scene === "name" || state.scene === "sendstay") && appLockSurface()) {
   const bootPending = state.scene === "sendstay" && LEGACY_TESTNET_PATH ? readSendPending() : null;
   if (bootPending) {
     state.scene = "away";

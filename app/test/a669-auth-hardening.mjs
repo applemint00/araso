@@ -114,7 +114,7 @@ const DEVICE_FNS = [
   "appLockSurface", "lockAppAfterIdle", "handleTrustedAppActivity",
   "namedAuthError", "identityStorageKeys", "snapshotIdentity", "restoreIdentity", "commitIdentity",
   "beginAuthAttempt", "boundAuthAttempt", "expireStaleAuthState", "finishAuthAttempt", "invalidateLiveAuthAttempt", "trackPlatformAuth",
-  "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "openPiggy", "startPiggyOpen", "checkPiggy",
+  "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "a1202CreatePasskey", "openPiggy", "startPiggyOpen", "checkPiggy",
 ].map(fnBody).join("\n");
 
 function device({ stored = true, width = 390 } = {}) {

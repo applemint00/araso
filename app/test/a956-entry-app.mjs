@@ -258,14 +258,15 @@ function harness({ profile = TESTNET, level = 2, signer = PIGGY, invite = TOKEN,
 }
 const runTimers = () => { while (timers.length) timers.shift()(); };
 const settle = () => new Promise((r) => setTimeout(r, 30));
-await check("4 root testnet level 2: quiet Home arms the existing cue → tap → server (allowed) → switchJourney(2); intro/Explore never run; no storage write", async () => {
+await check("A1206 root testnet level 2: Home settle immediately enters with signer, no tap/timer/get; no intro storage write", async () => {
   const S = server(); const j1 = S.addJ1(P, 300);
   const T = harness({ receipts: [{ ...j1 }], fetchImpl: S.fetchImpl });
-  T.B.get("a891ArmPostFileQuietHome")(); runTimers();
-  assert.equal(T.calls.cue, 1); assert.equal(T.calls.baseArm, 0); assert.equal(T.B.get("a891CueChog"), T.chog);
   const before = JSON.stringify([...T.store.m]);
-  T.B.get("a891HomeChogTap")(); await settle(); for (let i = 0; i < 20 && !T.calls.switched; i += 1) await settle();
-  assert.equal(T.calls.switched, 1); assert.equal(T.calls.baseTap, 0, "Second intro path not taken"); assert.equal(T.calls.closed, 1);
+  timers.length = 0;
+  T.B.get("a891ArmPostFileQuietHome")();
+  assert.equal(timers.length, 0); assert.equal(T.calls.cue, 0); assert.equal(T.calls.get, 0); assert.equal(T.calls.baseArm, 0);
+  await settle(); for (let i = 0; i < 20 && !T.calls.switched; i += 1) await settle();
+  assert.equal(T.calls.switched, 1); assert.equal(T.calls.baseTap, 0, "Second intro path not taken"); assert.equal(T.calls.closed, 0);
   assert.equal(JSON.stringify([...T.store.m]), before, "no storage written by the block (intro-seen key untouched)");
   assert.equal(S.st.topups, 4); // pre-A-959: 2 (MON + USDC)
 });
@@ -289,6 +290,8 @@ await check("A-1165 expired signer: one pinned get in the tap, one entry, then s
   const S = server(); const j1 = S.addJ1(P, 600);
   const T = harness({ signer: null, receipts: [j1], fetchImpl: S.fetchImpl });
   T.B.get("a891ArmPostFileQuietHome")(); runTimers();
+  assert.equal(T.calls.cue, 1, "no signer retains the tap fallback");
+  assert.equal(T.calls.get, 0, "arming never starts authentication");
   T.B.get("a891HomeChogTap")();
   assert.equal(T.calls.get, 1, "get begins synchronously in the tap");
   for (let i = 0; i < 20 && !T.calls.switched; i += 1) await settle();

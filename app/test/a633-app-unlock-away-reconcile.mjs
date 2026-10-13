@@ -109,7 +109,8 @@ await check("A4b the only readContract call in reconcile is ERC-20 style balance
 });
 await check("A5 boot: lock only on the mobile/app surface for a stored credential with a Name/Home destination; boot calls no WebAuthn", () => {
   const b = stripComments(BOOT_SRC);
-  assert.ok(/if \(state\.credential && \(state\.scene === "name" \|\| state\.scene === "sendstay"\) && appLockSurface\(\)\)/.test(b));
+  // A1206 Owner: valid one-use Journey2 handoff bypasses this lock; all other boot guards stay.
+  assert.ok(/if \(!a1206SwitchUnlocked && state\.credential && \(state\.scene === "name" \|\| state\.scene === "sendstay"\) && appLockSurface\(\)\)/.test(b));
   for (const bad of ["unlockApp(", "requestPrf(", "checkPiggy(", "recoverPiggy(", "startPiggyOpen(", "openPiggy("]) assert.equal(b.includes(bad), false, `boot contains ${bad}`);
   const surf = stripComments(fnBody("appLockSurface"));
   assert.ok(surf.includes("window.innerWidth <= 640 && isAllowedPiggyRpId()"));
