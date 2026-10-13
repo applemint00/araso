@@ -221,33 +221,38 @@ await check("4/8 block content: no new screen/copy/scene · no Explore · no Jou
   for (const bad of [/textContent|innerHTML|a891ChogSay|setScene\(|render\(|createElement/, /openSecondJourneyExplore|SECOND_INTRO_SEEN_KEY/, /localStorage\.(setItem|removeItem)|sessionStorage/, /\/admin|ARASO_FORK_ADMIN|anvil_|127\.0\.0\.1/, /\breleaseAllows\(/, /journeyFeatureOpen\(/]) assert.doesNotMatch(code, bad);
   assert.equal([...MAIN.replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "").matchAll(/journeyFeatureOpen\("(second|afterSecond|gift)", \{ level: RELEASE_LEVEL, profile: CHAIN_PROFILE \}\)/g)].length, 4, "a948 pin"); // [A-974 re-pin] counted outside the later [A-974] block (its one "second" call: a974 test). pre-A-974: MAIN
   assert.equal(/\breleaseAllows\(/.test(MAIN.replace(/\/\/[^\n]*/g, "")), false, "a948 pin");
-  const quoted = [...code.matchAll(/"([^"\n]*)"/g)].map((m) => m[1]).filter((s) => s !== "" && !s.startsWith("./"));
-  assert.deepEqual([...new Set(quoted)].sort(), ["sendstay", "signer_changed"].sort(), "no user-facing string literal in the block");
+  assert.doesNotMatch(code, /setScene\(|render\(|textContent|innerHTML/, "no user-facing copy in the block");
 });
 
 // Run the block itself with stubs (imports → the real client; switchJourney + the server = in-process). import.meta.env → FORK_ENV.
 function loadBlock(over = {}) {
   const body = block.replace(/^import [^\n]*\n/gm, "").replace(/import\.meta\.env/g, "__env");
-  const names = ["CHAIN_PROFILE", "state", "readReceipts", "activeAccount", "RELEASE_LEVEL", "sendInFlight", "readSendPending", "requestMoneyPermission", "proveFundingTargetControl", "settleBoundGiftClaim", "a891ArmPostFileQuietHome", "a891HomeChogTap", "a891CueChog", "a891FirstArrivalHold", "homeChog", "sceneTimeout", "HOME_FIRST_JOURNEY_CARD_MS", "POST_FILE_QUIET_HOME_MS"];
+  const names = ["CHAIN_PROFILE", "state", "readReceipts", "activeAccount", "RELEASE_LEVEL", "sendInFlight", "readSendPending", "requestMoneyPermission", "proveFundingTargetControl", "settleBoundGiftClaim", "a891ArmPostFileQuietHome", "a891HomeChogTap", "a891CueChog", "a891FirstArrivalHold", "homeChog", "sceneTimeout", "HOME_FIRST_JOURNEY_CARD_MS", "POST_FILE_QUIET_HOME_MS", "isAllowedPiggyRpId", "webAuthnUnsupported", "requestPrf", "storedPrfSalt", "activateSigningSession", "endSignerSession", "isCancelledAuthError"];
   const env = { ...over };
   const src = `${names.map((n) => `let ${n} = E.${n};`).join("\n")}\nconst { checkForkPermission, forkEntryOpen, forkEntryUrl, journey1Pointers, onForkProfile, readForkInvite, requestForkEntry, registerJourneySwitchBusyProbe, a956SwitchJourney, __env } = E;\n${body}\nreturn { get: (n) => eval(n), set: (n, v) => { switch (n) { ${names.map((n) => `case "${n}": ${n} = v; break;`).join(" ")} } }, enter: () => a956Enter(), allowed: () => a956ForkMoneyAllowed() };`;
   return new Function("E", src)(env);
 }
 const timers = [];
-function harness({ profile = TESTNET, level = 2, signer = PIGGY, invite = TOKEN, receipts, fetchImpl, address = P, stubs = {} } = {}) {
-  const calls = { switched: 0, baseArm: 0, baseTap: 0, money: 0, cue: 0, closed: 0 };
+function harness({ profile = TESTNET, level = 2, signer = PIGGY, invite = TOKEN, receipts, fetchImpl, address = P, credential = { credentialId: "stored-passkey" }, auth, stubs = {} } = {}) {
+  const calls = { switched: 0, baseArm: 0, baseTap: 0, money: 0, cue: 0, closed: 0, get: 0, ended: 0 };
   const store = mkStorage(invite ? { [C.FORK_INVITE_KEY]: invite } : {});
   globalThis.localStorage = store;
   globalThis.fetch = fetchImpl || realFetchTrap;
   const chog = { state: { pinned: false }, startTapCue: () => { calls.cue += 1; return true; }, closeCard: () => { calls.closed += 1; } };
-  const state = { scene: "sendstay", address, receipts: receipts || [], secondJourneyCompletedOnce: false, sendCardVisible: false, recordsCardVisible: false, appLock: null };
-  const B = loadBlock({
+  const state = { scene: "sendstay", address, credential, receipts: receipts || [], secondJourneyCompletedOnce: false, sendCardVisible: false, recordsCardVisible: false, appLock: null };
+  let B;
+  B = loadBlock({
     CHAIN_PROFILE: profile, state, readReceipts: () => state.receipts, activeAccount: signer, RELEASE_LEVEL: level, sendInFlight: false, readSendPending: () => null,
     requestMoneyPermission: async () => { calls.money += 1; }, proveFundingTargetControl: async () => {}, settleBoundGiftClaim: async () => {},
     a891ArmPostFileQuietHome: () => { calls.baseArm += 1; }, a891HomeChogTap: () => { calls.baseTap += 1; }, a891CueChog: null, a891FirstArrivalHold: null,
     homeChog: chog, sceneTimeout: (fn) => timers.push(fn), HOME_FIRST_JOURNEY_CARD_MS: 1200, POST_FILE_QUIET_HOME_MS: 8000,
     checkForkPermission: C.checkForkPermission, forkEntryOpen: C.forkEntryOpen, forkEntryUrl: C.forkEntryUrl, journey1Pointers: C.journey1Pointers, onForkProfile: C.onForkProfile, readForkInvite: C.readForkInvite, requestForkEntry: C.requestForkEntry,
-    registerJourneySwitchBusyProbe, a956SwitchJourney: () => { calls.switched += 1; return true; }, __env: FORK_ENV, ...stubs,
+    isAllowedPiggyRpId: () => true, webAuthnUnsupported: () => false, storedPrfSalt: () => null,
+    requestPrf: (pinned) => { calls.get += 1; assert.equal(pinned.credentialId, "stored-passkey"); return auth?.request?.() ?? Promise.resolve({ credentialId: pinned.credentialId, prfOutput: new Uint8Array(32) }); },
+    activateSigningSession: (prf, options) => { assert.equal(options.persistAddress, false); const account = auth?.account || PIGGY; B.set("activeAccount", account); return { account, address: account.address }; },
+    endSignerSession: () => { calls.ended += 1; B.set("activeAccount", null); },
+    isCancelledAuthError: (error) => error?.name === "NotAllowedError",
+    registerJourneySwitchBusyProbe, a956SwitchJourney: () => { assert.equal(journeySwitchBlocker(store), null, "entry has released the signing probe before switch"); calls.switched += 1; return true; }, __env: FORK_ENV, ...stubs,
   });
   return { B, calls, state, chog, store };
 }
@@ -264,21 +269,69 @@ await check("4 root testnet level 2: quiet Home arms the existing cue → tap �
   assert.equal(JSON.stringify([...T.store.m]), before, "no storage written by the block (intro-seen key untouched)");
   assert.equal(S.st.topups, 4); // pre-A-959: 2 (MON + USDC)
 });
-await check("4 refusals keep the quiet Home: forged Journey 1 / no live signer / signer of another Piggy / server down → no switch, no new state", async () => {
+await check("4 refusals keep the quiet Home: forged Journey 1 / no stored credential / signer of another Piggy / server down → no switch, no new state", async () => {
   const S = server();
   const T1 = harness({ receipts: [{ depositTxHash: h(0xdead), redeemTxHash: h(0xbeef) }], fetchImpl: S.fetchImpl });
   T1.B.get("a891ArmPostFileQuietHome")(); runTimers(); T1.B.get("a891HomeChogTap")(); for (let i = 0; i < 10; i += 1) await settle();
   assert.equal(T1.calls.switched, 0); assert.equal(T1.state.scene, "sendstay"); assert.equal(S.st.topups, 0);
   const j1 = S.addJ1(P, 400);
-  for (const signer of [null, OTHER]) {
-    const T = harness({ receipts: [j1], fetchImpl: S.fetchImpl, signer });
+  for (const over of [{ signer: null, credential: null }, { signer: OTHER }]) {
+    const T = harness({ receipts: [j1], fetchImpl: S.fetchImpl, ...over });
     const n = S.seen.length;
     T.B.get("a891ArmPostFileQuietHome")(); runTimers(); T.B.get("a891HomeChogTap")(); await settle();
-    assert.equal(T.calls.switched, 0); assert.equal(S.seen.length, n, "no request without the Piggy's own live signer (no new passkey)");
+    assert.equal(T.calls.switched, 0); assert.equal(S.seen.length, n, "no request without the Piggy's stored credential or own signer");
   }
   const T3 = harness({ receipts: [j1], fetchImpl: async () => { throw new Error("offline"); } });
   T3.B.get("a891ArmPostFileQuietHome")(); runTimers(); T3.B.get("a891HomeChogTap")(); await settle();
   assert.equal(T3.calls.switched, 0);
+});
+await check("A-1165 expired signer: one pinned get in the tap, one entry, then switch; live signer skips get", async () => {
+  const S = server(); const j1 = S.addJ1(P, 600);
+  const T = harness({ signer: null, receipts: [j1], fetchImpl: S.fetchImpl });
+  T.B.get("a891ArmPostFileQuietHome")(); runTimers();
+  T.B.get("a891HomeChogTap")();
+  assert.equal(T.calls.get, 1, "get begins synchronously in the tap");
+  for (let i = 0; i < 20 && !T.calls.switched; i += 1) await settle();
+  assert.equal(T.calls.switched, 1); assert.equal(T.calls.get, 1);
+  assert.equal(S.seen.filter((v) => v.body.action === "enter").length, 1);
+  const U = harness({ signer: PIGGY, receipts: [j1], fetchImpl: S.fetchImpl });
+  U.B.get("a891ArmPostFileQuietHome")(); runTimers(); U.B.get("a891HomeChogTap")();
+  for (let i = 0; i < 20 && !U.calls.switched; i += 1) await settle();
+  assert.equal(U.calls.get, 0); assert.equal(U.calls.switched, 1);
+});
+await check("A-1165 cancellation and duplicate tap: quiet Home, no request on cancel, one get while pending", async () => {
+  const S = server(); const j1 = S.addJ1(P, 610);
+  let rejectGet;
+  const get = new Promise((_, reject) => { rejectGet = reject; });
+  const T = harness({ signer: null, receipts: [j1], fetchImpl: S.fetchImpl, auth: { request: () => get } });
+  T.B.get("a891ArmPostFileQuietHome")(); runTimers();
+  T.B.get("a891HomeChogTap")(); T.B.enter();
+  assert.equal(T.calls.get, 1); assert.equal(S.seen.length, 0);
+  const cancelled = new Error("cancelled"); cancelled.name = "NotAllowedError"; rejectGet(cancelled);
+  await settle();
+  assert.equal(T.calls.switched, 0); assert.equal(T.state.scene, "sendstay"); assert.equal(S.seen.length, 0);
+});
+await check("A-1165 wrong stored identity and app lock: no server request or switch", async () => {
+  const S = server(); const j1 = S.addJ1(P, 620);
+  const wrong = harness({ signer: null, receipts: [j1], fetchImpl: S.fetchImpl, auth: { account: OTHER } });
+  wrong.B.get("a891ArmPostFileQuietHome")(); runTimers(); wrong.B.get("a891HomeChogTap")(); await settle();
+  assert.equal(wrong.calls.get, 1); assert.equal(wrong.calls.ended, 1);
+  assert.equal(wrong.calls.switched, 0); assert.equal(S.seen.length, 0);
+  const locked = harness({ signer: null, receipts: [j1], fetchImpl: S.fetchImpl });
+  locked.state.appLock = { phase: "waiting" };
+  locked.B.get("a891ArmPostFileQuietHome")(); runTimers(); locked.B.get("a891HomeChogTap")(); await settle();
+  assert.equal(locked.calls.get, 0); assert.equal(locked.calls.switched, 0); assert.equal(S.seen.length, 0);
+});
+await check("A-1165 selected Piggy changes during Face ID: stale result cannot enter", async () => {
+  const S = server(); const j1 = S.addJ1(P, 630);
+  let finishGet;
+  const pending = new Promise((resolve) => { finishGet = resolve; });
+  const T = harness({ signer: null, receipts: [j1], fetchImpl: S.fetchImpl, auth: { request: () => pending } });
+  T.B.get("a891ArmPostFileQuietHome")(); runTimers(); T.B.get("a891HomeChogTap")();
+  T.state.address = OTHER.address;
+  finishGet({ credentialId: "stored-passkey", prfOutput: new Uint8Array(32) });
+  await settle();
+  assert.equal(T.calls.get, 1); assert.equal(T.calls.switched, 0); assert.equal(S.seen.length, 0);
 });
 await check("4 the cue is not armed without an invite or a Journey 1 receipt, nor after Second; level 1 / no fork env → the existing (A-943) path", async () => {
   const j1 = { depositTxHash: h(1), redeemTxHash: h(2) };

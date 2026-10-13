@@ -13993,7 +13993,7 @@ if (typeof document !== "undefined") {
 // arms the existing "tap me!" cue (only when this device holds an invite and a stored Journey 1 receipt with both tx hashes); the tap asks the
 // server (challenge → live Piggy signature → the server reads Journey 1 on chain 10143 → entry + MON/USDC top-up) instead of the Second
 // intro. Allowed → switchJourney(2). Anything else → the quiet Home stays exactly as it is (no new screen, copy or message). No live signer
-// = no attempt (no new passkey prompt). The intro-seen key is not written on this path (Journey 1 storage unchanged).
+// = the stored passkey is asked once in the same Chog tap before entry. The intro-seen key is not written on this path.
 // Fork profile: a fork money entry (Money permission → Face ID) first asks the server again (no cached verdict; a changed fork instance =
 // re-entry needed). Refused = nothing happens (screen unchanged, execution only). New fork execution paths must await a956ForkMoneyAllowed().
 // switchJourney refuses while a signature is in progress or a tx is unconfirmed (journey-switch.js + the probe registered here).
@@ -14009,11 +14009,44 @@ async function a956ForkMoneyAllowed() {
   } catch { return false; }
 }
 async function a956Enter() {
-  const account = activeAccount;
   const piggy = String(state.address || "").toLowerCase();
-  if (a956EntryBusy || !account || String(account.address || "").toLowerCase() !== piggy || state.appLock) return;
+  if (a956EntryBusy) return;
+  if (state.appLock) { console.debug("fork_entry", "locked"); return; }
+  if (!piggy || state.scene !== "sendstay") { console.debug("fork_entry", "unavailable"); return; }
   a956EntryBusy = true;
   try {
+    let account = activeAccount;
+    if (!account) {
+      const pinned = state.credential;
+      if (!pinned?.credentialId || !isAllowedPiggyRpId() || webAuthnUnsupported("get")) {
+        console.debug("fork_entry", "credential_unavailable");
+        return;
+      }
+      // No await, render, or server call precedes this get: iOS keeps the tap gesture.
+      a956Signing += 1;
+      let result;
+      try { result = await requestPrf(pinned, { prfSalt: storedPrfSalt() }); }
+      finally { a956Signing -= 1; }
+      try {
+        if (result.credentialId !== pinned.credentialId || state.credential?.credentialId !== pinned.credentialId || String(state.address || "").toLowerCase() !== piggy || state.appLock || state.scene !== "sendstay") {
+          console.debug("fork_entry", "identity_changed");
+          return;
+        }
+        const restored = activateSigningSession(result.prfOutput, { persistAddress: false });
+        if (String(restored.address).toLowerCase() !== piggy) {
+          endSignerSession();
+          console.debug("fork_entry", "identity_mismatch");
+          return;
+        }
+        account = restored.account;
+      } finally {
+        if (result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
+      }
+    }
+    if (String(account.address || "").toLowerCase() !== piggy || String(state.address || "").toLowerCase() !== piggy || state.appLock) {
+      console.debug("fork_entry", "signer_mismatch");
+      return;
+    }
     const signMessage = async (message) => {
       a956Signing += 1;
       try {
@@ -14022,8 +14055,11 @@ async function a956Enter() {
       } finally { a956Signing -= 1; }
     };
     const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), piggyAddress: piggy, journey1: journey1Pointers(readReceipts()), signMessage });
-    if (r.allowed === true && state.scene === "sendstay" && activeAccount === account) a956SwitchJourney(2);
-  } catch { return; } finally { a956EntryBusy = false; } // a failure = the quiet Home stays
+    if (r.allowed === true && state.scene === "sendstay" && !state.appLock && activeAccount === account) a956SwitchJourney(2);
+    else console.debug("fork_entry", typeof r.reason === "string" && /^[a-z_]+$/.test(r.reason) ? r.reason : "refused");
+  } catch (error) {
+    console.debug("fork_entry", isCancelledAuthError(error) ? "cancelled" : "failed");
+  } finally { a956EntryBusy = false; } // a failure = the quiet Home stays
 }
 {
   const entryOpen = () => forkEntryOpen({ level: RELEASE_LEVEL, profile: CHAIN_PROFILE, env: import.meta.env });
