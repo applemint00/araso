@@ -7228,7 +7228,11 @@ function applyPiggySelection(piggy) {
     return out;
   }
   if (out.invalidate) {
-    endActiveSession();
+    // [A-1183] First selection may adopt the signer just established by unlock.
+    // Still discard old action authority; switching an existing selection ends it.
+    const retainUnlockedSigner = !state.selectedPiggy && !state.appLock && activeSession && activeAccount
+      && String(activeAccount.address).toLowerCase() === String(piggy.address).toLowerCase();
+    if (!retainUnlockedSigner) endActiveSession();
     if (out.revokeNonce) consumedPermissionNonces.add(out.revokeNonce);
     state.moneyIntent = null;
     state.funding = null;
@@ -10300,15 +10304,21 @@ async function a898ProveDestination(paperPiggy) {
 }
 
 // Face ID for the payer Piggy only: derive its signer; the reducer then requires signer == payer (bindSigner).
-async function a898SignerForPayer(piggy) {
-  const { request, error } = authRequestForPiggy(piggy);
+async function a898SignerForPayer(piggy, { allowDeviceCredential = false } = {}) {
+  // [A-1183] Only the fork Job caller may recover the legacy single Piggy with
+  // the device pin. An existing (even invalid) locator never falls back.
+  const devicePin = allowDeviceCredential && piggy && !piggy.locator && onForkProfile(CHAIN_PROFILE)
+    && String(piggy.address).toLowerCase() === String(state.address).toLowerCase()
+    ? state.credential : null;
+  const { request, error } = authRequestForPiggy(devicePin ? { ...piggy, locator: devicePin } : piggy);
   if (error || state.appLock) { console.debug("payer_auth", "unavailable"); return { ok: false, reason: error || "locked" }; }
   if (activeAccount && String(activeAccount.address).toLowerCase() === String(piggy.address).toLowerCase()) return { ok: true, signerAddress: activeAccount.address };
   const identity = state.address;
   let result = null;
   try {
-    result = await requestPrf(request.credential, { prfSalt: request.prfSalt ?? null });
-    if (state.appLock || state.address !== identity || result.credentialId !== request.credential.credentialId) {
+    result = await requestPrf(request.credential, { prfSalt: devicePin ? storedPrfSalt() : (request.prfSalt ?? null) });
+    if (state.appLock || state.address !== identity || result.credentialId !== request.credential.credentialId
+      || (devicePin && state.credential?.credentialId !== devicePin.credentialId)) {
       console.debug("payer_auth", "changed");
       return { ok: false, reason: "identity_changed" };
     }
@@ -14635,7 +14645,7 @@ if (A977_FORK) {
       if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) { console.debug("fork_send", "unavailable"); return; }
       // No server await or render before the pinned get: keep the click gesture.
       if (!activeAccount || a977Lower(activeAccount.address) !== a977Lower(piggy.address)) {
-        const signer = await a898SignerForPayer(piggy);
+        const signer = await a898SignerForPayer(piggy, { allowDeviceCredential: true });
         if (!signer.ok) { console.debug("fork_send", "auth_failed"); return; }
       }
       const account = activeAccount;
