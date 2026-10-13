@@ -5919,7 +5919,7 @@ function inviteWide(gift = null) {
 
 // [A-1159/A-1160] Server public flag. A display label (?i=) is not an invitation token.
 function inviteOnlyEntry() {
-  return !a1160PublicEntryOpen() && !readForkInvite(safeLocalStorage()) && !readCredential() && !hasReceivedPiggy() && !state.address;
+  return !a1160PublicEntryOpen() && !a1209EntryInvite() && !readCredential() && !hasReceivedPiggy() && !state.address;
 }
 
 function renderInviteOnly() {
@@ -14315,21 +14315,44 @@ async function a1160RefreshPublicEntry() {
 }
 
 // ── [A-960] invite link → first grant. One block; the code above and below is unchanged. ──────────────────────────────────────────────
-// Boot: `#invite=<secret>` leaves the address bar right here — before the Gift fragment read further down, which therefore still sees an
-// unchanged `#g=…&t=…&v=…` — and is kept on this device (fork-entry-client.js FORK_INVITE_KEY, the slot the Journey 2 entry already reads).
+// Boot: retain the invite in memory/URL until storage readback succeeds and the first frame has painted.
+// Only invite is removed; any Gift fragment is preserved byte-for-byte.
 // Grant: requestGrant() first binds the invite to the live Piggy (server challenge → live signer signature, no new passkey prompt → bind),
 // once per Piggy on this device, then asks for the grant exactly as before. Binding failure is silent; the server decides the grant.
 // No screen, no copy, no new scene. The local harness (__HARNESS_NO_GRANT__) is untouched.
 import { bindInviteBeforeGrant as a960BindInviteBeforeGrant, inviteBoundFor as a960InviteBoundFor, markInviteBound as a960MarkInviteBound, readForkInvite as a960ReadInvite, storeInvite as a960StoreInvite, takeInviteFromHash as a960TakeInviteFromHash } from "./fork-entry-client.js";
+// [A-1209] Entry fallback is UI-only; server invite validation/binding is unchanged.
+let a1209Invite = null;
+function a1209EntryInvite() {
+  try {
+    const token = a960TakeInviteFromHash(location.hash).token || a1209Invite;
+    if (token) {
+      a1209Invite = token;
+      a960StoreInvite(token, safeLocalStorage()); // retry if storage was temporarily unavailable
+      return token;
+    }
+  } catch { /* stored invite is still usable */ }
+  return a960ReadInvite(safeLocalStorage());
+}
 try {
   if (typeof location !== "undefined" && typeof history !== "undefined" && typeof location.hash === "string" && location.hash.length > 1) {
-    const a960Taken = a960TakeInviteFromHash(location.hash);
-    if (a960Taken.found) {
-      if (a960Taken.token) a960StoreInvite(a960Taken.token, safeLocalStorage());
-      history.replaceState(null, "", location.pathname + location.search + a960Taken.hash);
+    const originalHash = location.hash;
+    const a960Taken = a960TakeInviteFromHash(originalHash);
+    if (a960Taken.token) {
+      a1209Invite = a960Taken.token;
+      const stored = a960StoreInvite(a960Taken.token, safeLocalStorage());
+      if (stored && a960ReadInvite(safeLocalStorage()) === a960Taken.token) {
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          try {
+            if (location.hash === originalHash && a960ReadInvite(safeLocalStorage()) === a960Taken.token) {
+              history.replaceState(null, "", location.pathname + location.search + a960Taken.hash);
+            }
+          } catch { /* retain the link when cleanup is unavailable */ }
+        }));
+      }
     }
   }
-} catch {} // no-op: the app boots exactly as before
+} catch {} // failed persistence keeps the link and the in-memory entry fallback
 // [A-1158] Read before the tap; never await the server in the WebAuthn gesture.
 // The one-use hint is bound to this token and this tab, not an authorization to bind/fund.
 let a1158UnboundInvite = null;

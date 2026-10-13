@@ -8,7 +8,7 @@ function fn(name){const m=new RegExp(`^(?:async )?function ${name}\\(`,'m').exec
 function rig({level=2,reply={ok:true,publicEntry:true},identity=false,createReply={ok:true}}={}){
  const calls={fetch:0,create:0,get:0,render:0},map=new Map();
  const c={RELEASE_LEVEL:level,state:{address:identity?'existing':''},authAttempt:null,platformAuthInflight:null,lateCreatedCredential:null,AbortController,setTimeout,clearTimeout,
-  sessionStorage:{getItem:k=>map.get(k),setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)},readForkInvite:()=>null,safeLocalStorage:()=>null,readCredential:()=>null,hasReceivedPiggy:()=>false,
+  sessionStorage:{getItem:k=>map.get(k),setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)},readForkInvite:()=>null,a1209EntryInvite:()=>null,safeLocalStorage:()=>null,readCredential:()=>null,hasReceivedPiggy:()=>false,
   fetch:async(url,options)=>{calls.fetch++;assert.equal(url,'/api/fork-entry');assert.deepEqual(JSON.parse(options.body),{action:'public_state'});if(reply===null)throw Error('offline');return {ok:true,json:async()=>reply}},
   openPiggy:()=>{calls.create++;return Promise.resolve(createReply)},checkPiggy:()=>{calls.get++;return Promise.resolve({ok:false})},render:()=>{calls.render++},
  };

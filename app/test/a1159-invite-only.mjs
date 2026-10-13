@@ -8,7 +8,7 @@ for(const row of [
  {level:1,blocked:true}, {level:1,invite:'valid',blocked:false}, {level:1,credential:{},blocked:false},
  {level:1,received:true,blocked:false}, {level:1,address:'existing',blocked:false}, {level:2,blocked:true}, {level:2,publicOpen:true,blocked:false},
 ]){
- const c=vm.createContext({RELEASE_LEVEL:row.level,readForkInvite:()=>row.invite??null,safeLocalStorage:()=>null,readCredential:()=>row.credential??null,hasReceivedPiggy:()=>!!row.received,a1160PublicEntryOpen:()=>row.level>=2 && row.publicOpen===true,state:{address:row.address??null}});
+ const c=vm.createContext({RELEASE_LEVEL:row.level,a1209EntryInvite:()=>row.invite??null,safeLocalStorage:()=>null,readCredential:()=>row.credential??null,hasReceivedPiggy:()=>!!row.received,a1160PublicEntryOpen:()=>row.level>=2 && row.publicOpen===true,state:{address:row.address??null}});
  assert.equal(vm.runInContext(`(${fn('inviteOnlyEntry')})()`,c),row.blocked);pass++;
 }
 const markup=vm.runInNewContext(`(${fn('renderInviteOnly')})()`);
