@@ -1882,6 +1882,7 @@ async function startPiggyOpen() {
   if (readCredential() || hasReceivedPiggy() || state.address) {
     return checkPiggy();
   }
+  if (typeof a1158TakeUnboundInvite === "function" && a1158TakeUnboundInvite()) return openPiggy();
   // Keep the next explicit choice through reloads of this tab's invite entry.
   // Store only a token fingerprint, never another copy of the invite secret.
   let retryKey = null;
@@ -14062,6 +14063,41 @@ try {
     }
   }
 } catch {} // no-op: the app boots exactly as before
+// [A-1158] Read before the tap; never await the server in the WebAuthn gesture.
+// The one-use hint is bound to this token and this tab, not an authorization to bind/fund.
+let a1158UnboundInvite = null;
+function a1158AttemptKey(invite) {
+  return "araso.inviteCreateAttempt.v1." + keccak256(new TextEncoder().encode(invite));
+}
+async function a1158PrefetchInvite() {
+  a1158UnboundInvite = null;
+  try {
+    const invite = a960ReadInvite(safeLocalStorage());
+    if (!invite || readCredential() || hasReceivedPiggy() || state.address || sessionStorage.getItem(a1158AttemptKey(invite))) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch("/api/fork-entry", { method: "POST", headers: { "content-type": "application/json", "x-araso-invite": invite }, body: JSON.stringify({ action: "invite_state" }), cache: "no-store", signal: controller.signal });
+      const out = response.ok ? await response.json() : null;
+      if (out?.ok === true && out.bound === false && a960ReadInvite(safeLocalStorage()) === invite && !state.freshRecoveryTried && !authAttempt && !platformAuthInflight) {
+        a1158UnboundInvite = { invite, until: Date.now() + 30000 };
+      }
+    } finally { clearTimeout(timer); }
+  } catch { /* unknown/offline keeps find-first */ }
+}
+function a1158TakeUnboundInvite() {
+  const hint = a1158UnboundInvite;
+  a1158UnboundInvite = null;
+  try {
+    if (!hint || hint.until <= Date.now() || hint.invite !== a960ReadInvite(safeLocalStorage()) || authAttempt || platformAuthInflight || lateCreatedCredential) return false;
+    const key = a1158AttemptKey(hint.invite);
+    if (sessionStorage.getItem(key)) return false;
+    // Persist before create, so uncertain/late creation cannot bypass recovery after reload.
+    sessionStorage.setItem(key, "attempted");
+    return sessionStorage.getItem(key) === "attempted";
+  } catch { return false; }
+}
+void a1158PrefetchInvite();
 async function a960BindInvite(address) {
   try {
     const storage = safeLocalStorage();

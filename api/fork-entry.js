@@ -3,6 +3,7 @@
 // stays closed with 503. This module never logs env values, invite tokens or HMAC material.
 //
 // Body (JSON, ≤ 8 KiB) — { action, ... }; the invite token rides in the `x-araso-invite` header (never in the body, never logged):
+//   invite_state {}                                                      → { ok, bound } (read-only first-journey hint)
 //   challenge  { piggyAddress }                                            → { nonce, message, expiresAt }
 //   enter      { nonce, signature, piggyAddress, journey1:{ depositTxHash, redeemTxHash } } → { allowed, forkScope, forkInstanceId, grants }
 //   status     { piggyAddress, forkInstanceId }                            → { allowed, reason?, reenter? }   (re-check before fork money)
@@ -13,6 +14,7 @@ import { appOriginOk, createInviteTable, createMemoryChallengeStore } from "./_l
 import { createForkEntryService, jsonRpc, upstashForkEntryParts } from "./_lib/fork-entry.js";
 import { forkAdminClientFromEnv, guardOrigin } from "./_lib/fork-grant-client.js";
 import { createMemoryForkLedgerStore } from "./_lib/fork-ledger-store-contract.js";
+import { inviteStoreFromEnv } from "./_lib/invite-redis-store.js";
 
 export const FORK_ENTRY_MAX_BODY = 8 * 1024;
 export const FORK_INVITE_HEADER = "x-araso-invite";
@@ -28,6 +30,7 @@ const DEFAULT_TESTNET_RPC = "https://testnet-rpc.monad.xyz";
 const GRANT_VERSION_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const INVITE_REFUSALS = new Set(["not_invited", "invite_not_bound", "invite_bound_to_other_piggy", "piggy_bound_to_other_tester"]);
 const ACTION_FIELDS = Object.freeze({
+  invite_state: ["action"],
   challenge: ["action", "piggyAddress"],
   enter: ["action", "nonce", "signature", "piggyAddress", "journey1"],
   status: ["action", "piggyAddress", "forkInstanceId"],
@@ -65,10 +68,10 @@ async function readBody(req) {
 }
 
 /** Handler over an injected service (tests + the local server). allowedOrigins = code-only list of local dev origins. */
-export function createForkEntryHandler({ service, allowedOrigins = [] } = {}) {
+export function createForkEntryHandler({ service, inviteStore = null, now = () => Date.now(), allowedOrigins = [] } = {}) {
   return async function handler(req, res) {
     if (req.method !== "POST") return respond(res, 405, { ok: false, reason: "method_not_allowed" });
-    if (!service) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
+    if (!service && !inviteStore) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
     const headers = req.headers ?? {};
     const originProblem = forkEntryOriginProblem(headers, allowedOrigins);
     if (originProblem) return respond(res, 403, { ok: false, reason: "origin_refused" });
@@ -80,6 +83,17 @@ export function createForkEntryHandler({ service, allowedOrigins = [] } = {}) {
     if (!action) return respond(res, 400, { ok: false, reason: "bad_action" });
     if (Object.keys(b).some((k) => !ACTION_FIELDS[action].includes(k))) return respond(res, 400, { ok: false, reason: "unexpected_field" });
     const inviteToken = typeof headers[FORK_INVITE_HEADER] === "string" ? headers[FORK_INVITE_HEADER] : null;
+    // First-journey metadata only. No bind, grant, identity disclosure or Journey 2 release-gate change.
+    if (action === "invite_state") {
+      try {
+        if (!inviteStore) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
+        const row = await inviteStore.lookup(inviteToken);
+        if (!row || (row.piggy === "" && !(row.expiresAt > now()))) return respond(res, 403, { ok: false, reason: "not_invited" });
+        if (row.piggy !== "" && !/^0x[0-9a-f]{40}$/.test(row.piggy)) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
+        return respond(res, 200, { ok: true, bound: row.piggy !== "" });
+      } catch { return respond(res, 503, { ok: false, reason: "entry_unavailable" }); }
+    }
+    if (!service) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
     const out = await service[action]({ ...b, inviteToken });
     if (!out || out.ok !== true) return respond(res, out?.status || 503, { ok: false, reason: out?.reason || "entry_unavailable" });
     const { ok: _ok, status: _s, ...rest } = out;
@@ -164,7 +178,7 @@ let defaultHandler = null;
 export default async function handler(req, res) {
   if (!defaultHandler) {
     const appOrigin = appOriginOk(process.env[FORK_ENTRY_ENV.appOrigin]) ? process.env[FORK_ENTRY_ENV.appOrigin] : null;
-    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
+    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), inviteStore: inviteStoreFromEnv(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
   }
   return defaultHandler(req, res);
 }

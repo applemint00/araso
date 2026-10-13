@@ -480,17 +480,15 @@ async function freshDeviceRun(browser, BASE, { label, name }) {
     deq([m.cred, m.addr, m.recv], [true, true, true], "existing Piggy adopted");
     assert.equal((await d.p.evaluate(() => localStorage.getItem("araso.address"))).toLowerCase(), address.toLowerCase(), "same Piggy (same address as before the wipe)");
     if (name) {
-      // "Same place, same Piggy." semantics on Home = same address (above) + same name on the plain Home, no Send card.
-      // checkPiggy sets ("sendstay", "Piggy is home.", "Same place, same Piggy.") — asserted byte-exact in Part N (N2/N5) —
-      // but plain Home renders message/detail only inside the Send card (renderSendStay: state.sendCardVisible, A-354-b),
-      // so the line is not on screen here. Showing it would be a UI/copy change (forbidden) — reported, not patched.
+      // A-1153: this recovered account has no First transaction, so Home keeps its Send card.
+      // Same address/name and no Hatch/Name remain the recovery invariants.
       const home = await d.p.evaluate(() => ({
         homeName: document.querySelector("#homeName")?.textContent?.trim() ?? null,
         sendCard: !!document.querySelector("#sendCardAnchor"),
         lineVisible: document.body.innerText.includes("Same place, same Piggy."),
       }));
-      deq({ homeName: home.homeName, sendCard: home.sendCard }, { homeName: name, sendCard: false }, `plain Home shows the same Piggy (${JSON.stringify(home)})`);
-      console.log(`      note B2: "Same place, same Piggy." on screen = ${home.lineVisible} (plain Home has no message slot; Part N pins the setScene copy)`);
+      deq({ homeName: home.homeName, sendCard: home.sendCard }, { homeName: name, sendCard: true }, `Home with unused First shows the same Piggy (${JSON.stringify(home)})`);
+      console.log(`      note B2: "Same place, same Piggy." on screen = ${home.lineVisible} (Part N pins the setScene copy)`);
     }
     else {
       assert.equal(await d.p.locator("#piggyNameInput").count(), 0, "UNKNOWN existing name never forces Name it");
