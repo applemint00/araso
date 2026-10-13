@@ -20,9 +20,9 @@ Araso is for people who want to start managing their money but feel overwhelmed 
 - **Journey 1 — Monad Testnet.** The live demo. One real shMON `deposit` → `redeem`
   round trip on Monad Testnet has been recorded and reopened as the same Receipt
   (see [Recorded testnet round trip](#recorded-testnet-round-trip)).
-- **Journey 2 — Mainnet-fork simulation.** The same Piggy address continues on a local
-  fork of Monad mainnet (chain id `31337143`). Nothing in Journey 2 runs on a public
-  network or moves real funds, and it is not part of the live demo.
+- **Journey 2 — Mainnet-fork practice.** The same Piggy address continues on a hosted
+  fork of Monad mainnet (chain id `31337143`) with practice funds. Entry and a Job send
+  have run on the live site; nothing in Journey 2 touches a public network or real funds.
 
 **Why Monad?** Its EVM environment lets Araso connect passkey-based accounts to
 existing contracts through `viem`. Journey 1 performs real shMON
@@ -174,7 +174,9 @@ operations server (the guarded fork RPC and its admin tooling) is not public.
 
 ## Credits & license
 
-Code: **MIT**, see [LICENSE](LICENSE). Third-party fonts, libraries and reused
+Code: **MIT**, see [LICENSE](LICENSE).
+© 2026 applemint. The Araso name, characters (Piggy, Chog) and artwork are not covered by the MIT License and may not be reproduced, modified or used without prior written permission.
+Third-party fonts, libraries and reused
 artwork keep their own licenses.
 
 Built by **applemint00**.
@@ -197,4 +199,4 @@ first commit is dated 2 September 2026.
 **AI tools:** Claude Code and OpenAI Codex assisted implementation, testing, review
 and documentation; the author is responsible for the submitted code.
 
-Demo video not yet linked.
+Demo video: https://youtu.be/vKx5G4YHH0U · Pitch video: https://youtu.be/gz7ChpaHaHY
