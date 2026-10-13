@@ -1882,10 +1882,27 @@ async function startPiggyOpen() {
   if (readCredential() || hasReceivedPiggy() || state.address) {
     return checkPiggy();
   }
-  if (FRESH_DEVICE_RECOVERY_FIRST && !state.freshRecoveryTried) {
-    state.freshRecoveryTried = true;          // 세션 메모리만 — 저장하지 않는다
-    return checkPiggy();
+  // Keep the next explicit choice through reloads of this tab's invite entry.
+  // Store only a token fingerprint, never another copy of the invite secret.
+  let retryKey = null;
+  let createNext = false;
+  try {
+    const invite = localStorage.getItem("araso.forkInvite.v1");
+    const scope = invite ? keccak256(new TextEncoder().encode(invite)) : location.pathname + location.search;
+    retryKey = "araso.freshCreate.v1." + scope;
+    createNext = sessionStorage.getItem(retryKey) === "ready";
+  } catch { /* storage unavailable: retain the existing in-memory choice */ }
+  if (FRESH_DEVICE_RECOVERY_FIRST && !state.freshRecoveryTried && !createNext) {
+    state.freshRecoveryTried = true;
+    const result = await checkPiggy();
+    // Failed/cancelled recovery only; superseded/blocked attempts never authorize creation.
+    if (result?.ok === false && !result.reason && retryKey) {
+      try { sessionStorage.setItem(retryKey, "ready"); } catch { /* same-page retry still works */ }
+    }
+    return result;
   }
+  // Consume before create: a reload during/after an uncertain create must find first again.
+  try { if (retryKey) sessionStorage.removeItem(retryKey); } catch { return checkPiggy(); }
   return openPiggy();
 }
 

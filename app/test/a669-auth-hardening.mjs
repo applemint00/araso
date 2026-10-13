@@ -128,6 +128,8 @@ function device({ stored = true, width = 390 } = {}) {
   const calls = { get: [], create: [], scenes: [], index: [], ended: 0, sessions: 0, errors: [], renders: 0 };
   const pending = { get: [], create: [] };
   const ctx = {
+    // Account-scoped chain restoration is exercised by a1153; this suite isolates auth lifetime.
+    restoreRecoveredFirstJourney: async () => {},
     console, Uint8Array, JSON, Promise, Error, Map,
     Date: { now: clock.now },
     setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,

@@ -169,7 +169,8 @@ for (const [label, window, navigator, unsupported] of CASES) {
   const GUARD = /  \/\/ \[A-687 capability preflight\][\s\S]*?\n  \}\n/;
   // checkPiggy's post-guard hash changed only for the Owner-canon unnamed recovery route (Name -> Home).
   for (const [name, old] of [["checkPiggy", "d050cfb99a53f206"], ["openPiggy", "bb4d577044f8e7b9"], ["unlockApp", "d4167d7c8fbf1f82"]]) {
-    const b = body(name);
+    // A1153 added this tested recovery step; retain the previous body hash everywhere else.
+    const b = body(name).replace('    await restoreRecoveredFirstJourney(() => attempt.live);\n', '');
     check(`${name}: exactly one added guard; body minus guard == pre-A-687 hash ${old}`, (b.match(/A-687 capability preflight/g) || []).length === 1 && sha16(b.replace(GUARD, "")) === old, sha16(b.replace(GUARD, "")));
   }
 }

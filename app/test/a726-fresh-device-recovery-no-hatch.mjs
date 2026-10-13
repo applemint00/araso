@@ -281,7 +281,9 @@ await check("N4 source pins: checkPiggy's success path cannot reach Hatch/hello/
   const rp = stripComments(fnBody("recoverPiggy"));
   for (const bad of ['"hatch"', "openPiggy(", "createPasskeyWithPrfOutput(", "setScene("]) assert.equal(rp.includes(bad), false, `recoverPiggy contains ${bad}`);
   const sp = stripComments(fnBody("startPiggyOpen"));
-  assert.match(sp, /if \(FRESH_DEVICE_RECOVERY_FIRST && !state\.freshRecoveryTried\) \{\s*state\.freshRecoveryTried = true;\s*return checkPiggy\(\);/, "fresh-device branch returns checkPiggy without falling through");
+  // A1156: a cancelled lookup survives reload within this invite; that lookup still never falls through to create.
+  assert.match(sp, /if \(FRESH_DEVICE_RECOVERY_FIRST && !state\.freshRecoveryTried && !createNext\) \{\s*state\.freshRecoveryTried = true;\s*const result = await checkPiggy\(\);/);
+  assert.match(sp, /return result;\s*\}/, "lookup branch returns before openPiggy");
   assert.equal(FRESH_FLAG, true, "FRESH_DEVICE_RECOVERY_FIRST on");
   // Hatch is only ever set by openPiggy (new birth), and only when birth was not yet played.
   const hatchSetters = stripComments(MAIN).match(/setScene\("hatch"/g) || [];

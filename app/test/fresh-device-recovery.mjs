@@ -79,7 +79,7 @@ await check("recovery and its helpers can never create a passkey", () => {
   assert.equal((code.match(/createPasskeyWithPrfOutput\(\{/g) || []).length, 1); // 생성은 openPiggy 한 곳뿐
 });
 
-await check("the switch is explicit and the tried flag is session memory only (never persisted)", () => {
+await check("find-first stays explicit; A1156 persists a separate invite-scoped next choice, not the memory flag", () => {
   assert.match(SLICE, /const FRESH_DEVICE_RECOVERY_FIRST = true;/);
   assert.equal(/localStorage\.setItem\([^)]*fresh/i.test(MAIN), false);
 });
