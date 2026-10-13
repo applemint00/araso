@@ -6776,3 +6776,10 @@ html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-wid
 @media (max-width: 640px) {
   .homeLiving__name { display: none; }
 }
+
+/* [A-1159] The Owner's complete invitation image, uncropped, with two fixed lines. */
+.inviteOnly { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px; }
+.inviteOnly__content { width: min(720px, 100%); text-align: center; }
+.inviteOnly img { display: block; width: 100%; height: auto; }
+.inviteOnly__copy { margin-top: 24px; font: 18px/1.6 Georgia, serif; }
+.inviteOnly p { margin: 0; }

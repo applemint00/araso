@@ -415,7 +415,10 @@ await check("PRF-0 zeroing-only delta: removing exactly the A-669 zeroing lines 
   const adm = bodyOf(INDEX_SRC, "admitSequencedPiggy");
   assert.ok(adm.includes(NEW_ADMIT_BLOCK));
   assert.equal(sha(adm.replace(NEW_ADMIT_BLOCK, OLD_ADMIT_BLOCK)), PRE.admitSequencedPiggy, "admitSequencedPiggy minus zeroing/finally == pre-A-669");
-  assert.equal(sha(fnBody("render")), PRE.render, "render() byte-identical");
+  // A-1159 adds only a static pre-auth screen; retain the original hash for the remaining render body.
+  const inviteOnlyBlock = '  if (inviteOnlyEntry()) {\n    clearInviteTimers();\n    app.innerHTML = renderInviteOnly();\n    return;\n  }\n';
+  assert.equal(fnBody("render").split(inviteOnlyBlock).length, 2, "exactly one A-1159 branch");
+  assert.equal(sha(fnBody("render").replace(inviteOnlyBlock, "")), PRE.render, "render() otherwise byte-identical");
 });
 
 // requestMoneyPermission / proveFundingTargetControl over stubs. `variant` = current text or the stripped pre-A-669 text.

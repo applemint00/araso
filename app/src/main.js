@@ -1879,6 +1879,7 @@ async function settleBoundGiftClaim(binding, claim) {
 }
 
 async function startPiggyOpen() {
+  if (typeof inviteOnlyEntry === "function" && inviteOnlyEntry()) return { ok: false, reason: "invite_only" };
   if (readCredential() || hasReceivedPiggy() || state.address) {
     return checkPiggy();
   }
@@ -5784,6 +5785,20 @@ function inviteWide(gift = null) {
       </div>
     </div>
   `;
+}
+
+// [A-1159] Build switch only. A display label (?i=) is not an invitation token.
+function inviteOnlyEntry() {
+  return RELEASE_LEVEL === 1 && !readForkInvite(safeLocalStorage()) && !readCredential() && !hasReceivedPiggy() && !state.address;
+}
+
+function renderInviteOnly() {
+  return `<section class="inviteOnly" data-scene="invite-only">
+    <div class="inviteOnly__content">
+      <img src="/og-invite.png" width="1200" height="630" alt="" />
+      <div class="inviteOnly__copy"><p>Araso is invite-only for now.</p><p>Opens to everyone at 12:00 KST.</p></div>
+    </div>
+  </section>`;
 }
 
 function renderReceived() {
@@ -15258,6 +15273,11 @@ function render() {
   if (holdInviteAuthPresentation()) return;
   resetRecordsForFullRender();
   teardownScene();
+  if (inviteOnlyEntry()) {
+    clearInviteTimers();
+    app.innerHTML = renderInviteOnly();
+    return;
+  }
   // [A-633 A] 잠긴 동안은 목적지 대신 LOGIN_CHECKING(또는 해제 실패 카드)만 — 목적지 mount·1회용 표 소비 0.
   if (state.appLock) {
     renderAppLock();
@@ -15828,6 +15848,7 @@ function removeTesterIntro() {
 }
 
 function startTesterIntro() {
+  if (inviteOnlyEntry()) return;
   if (!testerIntroPending) return;
   testerIntroPending = false;
   if (state.scene !== "received" || state.appLock) return;
@@ -15873,7 +15894,7 @@ render();
 startTesterIntro();
 // [A-995-b] Same-turn PWA splash -> loading bridge. The browser cannot paint the first render
 // before this module task ends, so the approved 3.6 s overlay remains the first visible surface.
-mountA995bLoadingPiggy();
+if (!inviteOnlyEntry()) mountA995bLoadingPiggy();
 
 // [A-697] Invite fit rides the same debounce as Home (A-666 §2): a real width/orientation change
 // recomputes synchronously (so the wide<->mobile `render()` switch in fitInvite is immediate), an
