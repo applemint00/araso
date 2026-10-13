@@ -1996,7 +1996,7 @@ async function settleBoundGiftClaim(binding, claim) {
 
 async function startPiggyOpen() {
   if (typeof inviteOnlyEntry === "function" && inviteOnlyEntry()) return { ok: false, reason: "invite_only" };
-  if (readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential)) {
+  if (readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential) || (typeof a1214ReadPendingBirth === "function" && a1214ReadPendingBirth())) {
     return checkPiggy();
   }
   if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && !readForkInvite(safeLocalStorage())) {
@@ -6065,7 +6065,7 @@ function renderAuthCard(view = state) {
   //    (Owner 결정 2026-10-02 "같은 포맷으로 버튼은 하나인데 make new"). id 는 기존 #authTryAgainButton 그대로 —
   //    render() 의 기존 배선(→ setScene("received") = Invite)을 byte 동일하게 재사용한다. 거기서 사용자가 Open 을
   //    **다시 눌러야** startPiggyOpen → openPiggy(A-533 의 명시적 새 Piggy 경로)가 돈다. 자동 생성·credential 삭제 0.
-  const recoveryOnly = !view.unlockRetry && !!(readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential));
+  const recoveryOnly = !view.unlockRetry && !!(readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential) || (typeof a1214ReadPendingBirth === "function" && a1214ReadPendingBirth()));
   const body = checking
     ? view.detail || "Face ID may appear once."
     : view.authCancelled
