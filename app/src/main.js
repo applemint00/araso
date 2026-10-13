@@ -14254,7 +14254,7 @@ async function a1158PrefetchInvite() {
       const response = await fetch("/api/fork-entry", { method: "POST", headers: { "content-type": "application/json", "x-araso-invite": invite }, body: JSON.stringify({ action: "invite_state" }), cache: "no-store", signal: controller.signal });
       const out = response.ok ? await response.json() : null;
       if (out?.ok === true && out.bound === false && a960ReadInvite(safeLocalStorage()) === invite && !state.freshRecoveryTried && !authAttempt && !platformAuthInflight) {
-        a1158UnboundInvite = { invite, until: Date.now() + 30000 };
+        a1158UnboundInvite = { invite };
       }
     } finally { clearTimeout(timer); }
   } catch { /* unknown/offline keeps find-first */ }
@@ -14263,7 +14263,7 @@ function a1158TakeUnboundInvite() {
   const hint = a1158UnboundInvite;
   a1158UnboundInvite = null;
   try {
-    if (!hint || hint.until <= Date.now() || hint.invite !== a960ReadInvite(safeLocalStorage()) || authAttempt || platformAuthInflight || lateCreatedCredential) return false;
+    if (!hint || hint.invite !== a960ReadInvite(safeLocalStorage()) || authAttempt || platformAuthInflight || lateCreatedCredential) return false;
     const key = a1158AttemptKey(hint.invite);
     if (sessionStorage.getItem(key)) return false;
     // Persist before create, so uncertain/late creation cannot bypass recovery after reload.

@@ -12,6 +12,7 @@ await d.context.addInitScript(()=>{
 try{
  await d.p.goto(d.BASE+'#invite=synthetic-invite-1158',{waitUntil:'networkidle'});
  assert.equal(reads,1);
+ await d.p.evaluate(()=>{const now=Date.now.bind(Date);Date.now=()=>now()+10*60*1000});
  await d.p.locator('#inviteFaceButton').dblclick();
  await d.p.waitForSelector('[data-scene="hatch"], [data-scene="name"]',{timeout:20000});
  assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{get:0,create:1,gesture:true});assert.equal(reads,1);pass++;
