@@ -55,7 +55,8 @@ await check("code value is never written/displayed: only TESTER_INTRO_CODE_RE.te
   const uses = [...BLOCK_CODE.matchAll(/get\("i"\)/g)].length;
   assert.equal(uses, 1);
   assert.ok(!/\$\{[^}]*get\("i"\)/.test(BLOCK_CODE));
-  assert.match(BLOCK_CODE, /3 of 20/);
+  assert.doesNotMatch(BLOCK_CODE, /testerIntro__num|3 of 20/);
+  assert.doesNotMatch(CSS, /\.testerIntro__num/);
 });
 await check("overlay is not a scene: no setScene / data-scene / Chog markup in intro", () => {
   assert.ok(!/data-scene|chogInviteMarkup|mountInviteChog|data-chog/.test(BLOCK_CODE));
@@ -74,7 +75,6 @@ await check("motion contract constants: 3200 blink, 150 leave, scale .92, -8px, 
   assert.match(css, /background: #161616/);
   assert.ok(!/#151515/.test(css));
   assert.match(css, /"Delicious Handrawn"/);
-  assert.match(css, /"Playfair Display"[\s\S]*font-style: italic/);
   assert.match(css, /prefers-reduced-motion: reduce\) \{\s*\.testerIntro \{ display: none; \}/);
 });
 await check("face paths = piggy_face_peek.svg paths (10 == stand, 2 eyes class=eye), viewBox 170 10 660 600", () => {
@@ -190,11 +190,11 @@ async function partB() {
     await check("?i first device: overlay with copy, Piggy face, 2 eyes, no Chog, no img", async () => {
       assert.equal(await t.page.locator(".testerIntro").count(), 1);
       assert.equal(await t.page.locator(".testerIntro .testerIntro__line").innerText(), "this one's for you");
-      assert.equal(await t.page.locator(".testerIntro .testerIntro__num").innerText(), "3 of 20");
+      assert.equal(await t.page.locator(".testerIntro .testerIntro__num").count(), 0);
       assert.equal(await t.page.locator(".testerIntro svg .eye").count(), 2);
       assert.equal(await t.page.locator(".testerIntro img, .testerIntro [data-chog-invite], .testerIntro canvas").count(), 0);
       const fonts = await t.page.evaluate(() => [...document.querySelectorAll(".testerIntro p")].map((p) => getComputedStyle(p).fontFamily));
-      assert.match(fonts[0], /Delicious Handrawn/); assert.match(fonts[1], /Playfair Display/);
+      assert.equal(fonts.length, 1); assert.match(fonts[0], /Delicious Handrawn/);
       const bg = await t.page.evaluate(() => getComputedStyle(document.querySelector(".testerIntro")).backgroundColor);
       assert.equal(bg, "rgb(22, 22, 22)");
     });

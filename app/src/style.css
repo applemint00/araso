@@ -4695,7 +4695,6 @@ html .secondJourneyCard .secondJourney__picked { margin: 0.6439em 0 0.0920em; li
 }
 .testerIntro.is-closed .testerIntro__face .eye { transform: translate(var(--a995-eye-x, 0px), var(--a995-eye-y, 0px)) scaleY(0.08); }
 .testerIntro__line { margin: 0; font-family: "Delicious Handrawn", cursive; font-size: 28px; line-height: 1.2; }
-.testerIntro__num { margin: 0; font-family: "Playfair Display", serif; font-style: italic; font-size: 14px; opacity: 0.6; }
 .testerIntro.is-leaving { opacity: 0; }
 .testerIntro.is-leaving .testerIntro__inner { transform: scale(0.92) translateY(-8px); }
 @media (prefers-reduced-motion: reduce) {

@@ -16128,7 +16128,7 @@ registerJourneySessionDisposer(endActiveSession); // [A-948] switchJourney drops
 
 // [A-733] TESTER INVITE INTRO — `/?i=<code>` 첫 기기 한정 오버레이. 코드는 표시/라벨 신호일 뿐이다:
 // 접근 게이트 0 · 신원/키/PRF/주소/시퀀스/레지스트리/Receipt/SEQ-5/Gift 입력 0 · 저장 0(저장하는 건 araso.introSeen="1" 하나,
-// 코드 값은 어디에도 쓰지 않는다 — 화면 문구도 고정 "3 of 20"). 얼굴 = reentry 승인 자료
+// 코드 값은 어디에도 쓰지 않는다) — 숫자 줄 없음(Owner 2026-10-14). 얼굴 = reentry 승인 자료
 // piggy_face_dark/piggy_face_peek.svg 의 path 12개(= piggy_assembled_stand.svg 의 path 10개 동일 + 눈 2개 class="eye"),
 // viewBox 170 10 660 600 크롭. 새 그림 0.
 const TESTER_INTRO_SEEN_KEY = "araso.introSeen";
@@ -16192,7 +16192,6 @@ function startTesterIntro() {
     `<div class="testerIntro__inner">` +
     `<svg class="testerIntro__face" viewBox="170 10 660 600" fill="none" aria-hidden="true">${TESTER_PIGGY_FACE_PATHS}</svg>` +
     `<p class="testerIntro__line">this one's for you</p>` +
-    `<p class="testerIntro__num">3 of 20</p>` +
     `</div>`;
   el.style.setProperty("--testerIntroBlink", `${TESTER_INTRO_BLINK_MS}ms`);
   document.body.appendChild(el);
