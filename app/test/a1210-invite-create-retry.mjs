@@ -12,7 +12,7 @@ const key='araso.inviteCreateAttempt.v1.'+fingerprint,retry='araso.freshCreate.v
 function rig(mode,mutate=false){
  const store=new Map([[key,'attempted']]);let creates=0,gets=0;
  const client={createCredential:async()=>{creates++;if(mode==='cancel')throw new DOMException('cancelled','NotAllowedError');if(mode==='unknown')throw Error('transport uncertain');return {credentialId:new Uint8Array([1,2,3]),transports:['internal'],prfEnabled:true,...(mode==='storage'?{prfOutput:new Uint8Array(32)}:{})}},getCredential:async()=>{gets++;throw new DOMException('cancelled','NotAllowedError')}};
- const c={TextEncoder,keccak256,FRESH_DEVICE_RECOVERY_FIRST:true,location:{pathname:'/',search:''},
+ const c={btoa,TextEncoder,keccak256,FRESH_DEVICE_RECOVERY_FIRST:true,location:{pathname:'/',search:''},
  readForkInvite:()=>invite,safeLocalStorage:()=>null,readCredential:()=>null,hasReceivedPiggy:()=>false,
  localStorage:{getItem:()=>invite},checkPiggy:async()=>{gets++;return {ok:false,cancelled:true}},
  createPasskeyWithPrfOutput,isMeraError,Uint8Array,Promise,DOMException,Object,
@@ -31,6 +31,7 @@ let pass=0;
 for(const mode of ['cancel','fallback','unknown']){
  const h=rig(mode);await h.c.openPiggy();
  assert.equal(h.store.get(retry),mode==='cancel'?'ready':undefined,mode);
+ if(mode==='cancel')assert.equal(h.store.get(key),'cancelled');
  const before=h.counts();await h.c.startPiggyOpen();const after=h.counts();
  assert.equal(after.creates-before.creates,mode==='cancel'?1:0,mode);
  assert.equal(after.gets-before.gets,mode==='cancel'?0:1,mode);

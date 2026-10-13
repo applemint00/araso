@@ -10,7 +10,7 @@ const key='araso.publicCreateAttempt.v1';
 function rig(mode){
  const store=new Map([[key,'attempted']]);let creates=0,gets=0;
  const client={createCredential:async()=>{creates++;if(mode==='cancel')throw new DOMException('cancelled','NotAllowedError');if(mode==='unknown')throw Error('transport uncertain');return {credentialId:new Uint8Array([1,2,3]),transports:['internal'],prfEnabled:true,...(mode==='storage'?{prfOutput:new Uint8Array(32)}:{})}},getCredential:async()=>{gets++;throw new DOMException('cancelled','NotAllowedError')}};
- const c={createPasskeyWithPrfOutput,isMeraError,Uint8Array,Promise,DOMException,Object,
+ const c={btoa,createPasskeyWithPrfOutput,isMeraError,Uint8Array,Promise,DOMException,Object,
  state:{},authAttempt:null,platformAuthInflight:null,lateCreatedCredential:null,
  sessionStorage:{getItem:k=>store.get(k),setItem:(k,v)=>store.set(k,v),removeItem:k=>store.delete(k)},
  isAllowedPiggyRpId:()=>true,webAuthnUnsupported:()=>false,getRpId:()=> 'localhost',
@@ -24,21 +24,17 @@ function rig(mode){
 }
 let pass=0;
 for(const [mode,retained] of [['cancel',false],['fallback',true],['unknown',true],['storage',true]]){
- const h=rig(mode);await h.c.openPiggy();assert.equal(h.store.has(key),retained,mode);assert.equal(h.counts().creates,1);if(mode==='fallback')assert.equal(h.counts().gets,1);
+ const h=rig(mode);await h.c.openPiggy();assert.equal(h.store.has(key),retained,mode);assert.equal(h.counts().creates,1);if(mode==='fallback'){assert.equal(h.counts().gets,0);assert.ok(h.c.lateCreatedCredential)};
  pass++;console.log(`PASS ${mode}: marker retained=${retained}`);
 }
-// Actual browser-method interception is synchronous and restores the original method immediately.
-for(const rejects of [true,false]){
- const original=()=>rejects?Promise.reject(new DOMException('cancelled','NotAllowedError')):Promise.resolve({});
- const credentials=Object.create({create:original});const c={navigator:{credentials},Promise,Object,createPasskeyWithPrfOutput:()=>credentials.create()};
+// A1212 injects a client without mutating the browser surface, including frozen credentials.
+for(const frozen of [false,true]){
+ const original=()=>Promise.reject(new DOMException('cancelled','NotAllowedError'));
+ const credentials=frozen?Object.freeze({create:original}):Object.create({create:original});
+ const c={btoa,Uint8Array,navigator:{credentials},Promise,Object,createPasskeyWithPrfOutput};
  vm.createContext(c);vm.runInContext(fn('a1202CreatePasskey'),c);const stage={value:'unknown'};
- const pending=c.a1202CreatePasskey({},stage);assert.equal(stage.value,'pending');assert.equal(credentials.create,original);assert.equal(Object.hasOwn(credentials,'create'),false);
- await pending.catch(()=>{});assert.equal(stage.value,rejects?'cancelled':'created');pass++;
-}
-// A non-writable browser surface leaves the stage unknown and still calls the original SDK path.
-{
- const credentials=Object.freeze({create:()=>Promise.reject(new DOMException('cancelled','NotAllowedError'))});
- const c={navigator:{credentials},Promise,Object,createPasskeyWithPrfOutput:()=>credentials.create()};vm.createContext(c);vm.runInContext(fn('a1202CreatePasskey'),c);
- const stage={value:'unknown'};await c.a1202CreatePasskey({},stage).catch(()=>{});assert.equal(stage.value,'unknown');pass++;
+ const pending=c.a1202CreatePasskey({rp:{id:'localhost',name:'Araso'},user:{name:'owner',displayName:'owner'}},stage);
+ assert.equal(stage.value,'pending');assert.equal(credentials.create,original);
+ await pending.catch(()=>{});assert.equal(stage.value,'cancelled');pass++;
 }
 console.log(`A1202: ${pass} PASS / 0 FAIL / 0 SKIP (SDK+VM, no real credentials)`);

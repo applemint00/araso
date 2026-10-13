@@ -42,7 +42,7 @@ const FNS = [
   "endSignerSession", "endActiveSession", "touchAppSession", "armSignerExpiry", "activateSigningSession",
   "namedAuthError", "identityStorageKeys", "snapshotIdentity", "restoreIdentity", "commitIdentity",
   "beginAuthAttempt", "boundAuthAttempt", "expireStaleAuthState", "finishAuthAttempt", "trackPlatformAuth",
-  "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "openPiggy", "startPiggyOpen", "checkPiggy",
+  "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "a1202CreatePasskey", "openPiggy", "startPiggyOpen", "checkPiggy",
 ].map(fnBody).join("\n");
 
 const KEYS = { cred: "araso.passkey", addr: "araso.address", salt: "araso.prfSalt", recv: "araso.piggyReceived" };

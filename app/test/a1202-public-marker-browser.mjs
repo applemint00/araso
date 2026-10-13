@@ -26,15 +26,16 @@ try {
   await d.p.locator('#inviteFaceButton').click();
   await d.p.waitForFunction(()=>window.authCounts.create===1);
   if(mode==='fallback'){
-   await d.p.waitForSelector('#authTryAgainButton');
-   assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{create:1,get:1});
+   await d.p.waitForSelector('#checkButton');
+   assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{create:1,get:0});
   }
   assert.equal(await d.p.evaluate(()=>sessionStorage.getItem('araso.publicCreateAttempt.v1')),'attempted');
   await d.p.reload({waitUntil:'networkidle'});
   await d.p.locator('#inviteFaceButton').click();await d.p.waitForSelector('#authTryAgainButton');
   assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{create:0,get:1},mode+' reload finds first');
   await d.p.locator('#authTryAgainButton').click();await d.p.locator('#inviteFaceButton').click();
-  await d.p.waitForSelector('[data-scene="hatch"], [data-scene="name"]',{timeout:20000});
+  // A1212: the prior unresolved marker selects enable-only; explicit PRF tap follows.
+  await d.p.waitForSelector('#checkButton',{timeout:20000});
   assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{create:1,get:1},mode+' explicit retry not trapped');
   pass++;console.log('PASS '+mode+' -> reload find -> explicit retry create');
  }

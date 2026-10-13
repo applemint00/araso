@@ -1435,14 +1435,14 @@ async function recoverPiggy(options = {}) {
   // 그 하나로만 묻고, 다른 패스키가 오면 아래 대조에서 거절된다(묶이지 않은 신원 채택 0).
   const pinned = options.pin || state.credential;
   const expectedAddress = typeof state.address === "string" ? state.address : "";
-  const prfSalt = storedPrfSalt();
+  const prfSalt = options.pin?.prfSalt || storedPrfSalt();
   let result;
   try {
     result = await requestPrf(pinned, { prfSalt });
   } catch (error) {
     // 어느 경우에도 새 패스키를 만들지 않는다. localStorage 가 비어도 마찬가지다.
     const mayBeGone = isMeraError(error) && error.code === "PASSKEY_OPERATION_FAILED" && !isCancelledAuthError(error);
-    if (!pinned || !mayBeGone || !isCurrent()) throw error;
+    if (options.pin?.pendingBirth || !pinned || !mayBeGone || !isCurrent()) throw error;
     result = await requestPrf(null, { prfSalt });
   }
   const prfOutput = result.prfOutput;
@@ -1464,6 +1464,7 @@ async function recoverPiggy(options = {}) {
         ...(sameAsPinned && pinned.transports ? { transports: pinned.transports } : {}),
       },
       address,
+      ...(options.pin?.prfSalt ? { prfSaltHex: toHex(options.pin.prfSalt) } : {}),
     });
     // 저장 salt 로 열었으면 그 salt, 아니면 Mera 기본 salt(= locator 에 salt 필드 없음).
     indexControlledPiggy({
@@ -1490,43 +1491,62 @@ function noteRecoverFailure() {
   if (state.recoverFailures >= 2) state.noPiggy = true;
 }
 
-// A1202: observe the create ceremony separately from Mera's later PRF assertion.
-// Mera invokes create synchronously; restore the browser method before returning its promise.
-function a1202CreatePasskey(options, stage) {
-  const observe = (create, receiver) => (...args) => {
-    stage.value = "pending";
-    try {
-      return Promise.resolve(create.apply(receiver, args)).then(value => {
-        stage.value = "created";
-        return value;
-      }, error => {
-        stage.value = error?.name === "NotAllowedError" ? "cancelled" : "unknown";
-        throw error;
-      });
-    } catch (error) {
-      stage.value = error?.name === "NotAllowedError" ? "cancelled" : "unknown";
-      throw error;
-    }
-  };
-  if (options.webAuthnClient) {
-    const client = options.webAuthnClient;
-    return createPasskeyWithPrfOutput({ ...options, webAuthnClient: {
-      createCredential: observe(client.createCredential, client),
-      getCredential: (...args) => client.getCredential(...args),
-    } });
+// A1212: snapshot before any tap writes an attempt marker. An unresolved earlier boot
+// may retry enable-only; this boot's first create retains the normal create-time eval.
+const a1212PriorCreateAttempts = new Set();
+try {
+  for (let i = 0; i < sessionStorage.length; i += 1) {
+    const key = sessionStorage.key(i);
+    if ((key === "araso.publicCreateAttempt.v1" || key?.startsWith("araso.inviteCreateAttempt.v1.")) && sessionStorage.getItem(key) === "attempted") a1212PriorCreateAttempts.add(key);
   }
-  const credentials = globalThis.navigator?.credentials;
-  if (!credentials || typeof credentials.create !== "function") return createPasskeyWithPrfOutput(options);
-  const own = Object.getOwnPropertyDescriptor(credentials, "create");
-  const wrapped = observe(credentials.create, credentials);
+} catch { /* no prior evidence: preserve normal options */ }
+function a1212CreateEnableOnly() {
   try {
-    Object.defineProperty(credentials, "create", { configurable: true, writable: true, value: wrapped });
-  } catch { return createPasskeyWithPrfOutput(options); } // no stage evidence: retain marker
-  try { return createPasskeyWithPrfOutput(options); }
-  finally {
-    if (own) Object.defineProperty(credentials, "create", own);
-    else delete credentials.create;
-  }
+    const invite = readForkInvite(safeLocalStorage());
+    return a1212PriorCreateAttempts.has(invite ? a1158AttemptKey(invite) : "araso.publicCreateAttempt.v1");
+  } catch { return false; }
+}
+
+// A1202/A1212: observe creation independently; never let Mera start an automatic
+// fallback assertion. Credential metadata/salt stay in memory until a fresh tap.
+function a1202CreatePasskey(options, stage, enableOnly = false) {
+  const browserCreate = async request => {
+    const credential = await globalThis.navigator?.credentials?.create({ publicKey: {
+      rp: request.rp, user: request.user, challenge: request.challenge,
+      pubKeyCredParams: request.algorithms.map(alg => ({ type: "public-key", alg })),
+      ...(request.timeout !== undefined ? { timeout: request.timeout } : {}),
+      attestation: request.attestation,
+      authenticatorSelection: { residentKey: request.residentKey, requireResidentKey: true, userVerification: request.userVerification },
+      extensions: { prf: enableOnly ? {} : { eval: { first: request.prfSalt } } },
+    } });
+    if (credential?.type !== "public-key" || !credential.rawId || typeof credential.getClientExtensionResults !== "function") throw new Error("unusable credential");
+    const prf = credential.getClientExtensionResults().prf;
+    return { credentialId: new Uint8Array(credential.rawId), transports: credential.response.getTransports?.(),
+      prfEnabled: prf?.enabled === true, ...(prf?.results?.first ? { prfOutput: new Uint8Array(prf.results.first) } : {}) };
+  };
+  const client = options.webAuthnClient;
+  return createPasskeyWithPrfOutput({ ...options, webAuthnClient: {
+    createCredential: async request => {
+      stage.value = "pending";
+      let created;
+      try { created = await (client ? client.createCredential(request) : browserCreate(request)); }
+      catch (error) { stage.value = error?.name === "NotAllowedError" ? "cancelled" : "unknown"; throw error; }
+      stage.value = "created";
+      if (created.prfOutput === undefined) {
+        stage.pin = {
+          credentialId: btoa(String.fromCharCode(...created.credentialId)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
+          ...(created.transports ? { transports: [...created.transports] } : {}),
+          prfSalt: new Uint8Array(request.prfSalt), pendingBirth: true,
+          prfUnavailable: created.prfEnabled !== true,
+        };
+        const error = new Error(created.prfEnabled === true ? "prf_requires_tap" : "prf_unavailable");
+        error.code = created.prfEnabled === true ? "PRF_REQUIRES_TAP" : "PRF_UNAVAILABLE";
+        throw error; // before Mera can invoke its fallback get
+      }
+      return created;
+    },
+    getCredential: () => { throw new Error("automatic PRF assertion blocked"); },
+  } });
 }
 
 async function openPiggy() {
@@ -1577,6 +1597,8 @@ async function openPiggy() {
   try { a1210Invite = readForkInvite(safeLocalStorage()); } catch { /* unknown entry: no retry authorization */ }
 
   try {
+    // Keep the existing invite marker accurate for a reload during this ceremony.
+    try { if (a1210Invite) sessionStorage.setItem(a1158AttemptKey(a1210Invite), "attempted"); } catch { /* existing storage guard */ }
     const creating = a1202CreatePasskey({
       rp: { id: getRpId(), name: "Araso" },
       user: { name: "araso-owner", displayName: "Araso" },
@@ -1584,7 +1606,7 @@ async function openPiggy() {
       // LOCAL_ONLY. 둘 다 잠금이 걸리면 빈 객체 → 기존 경로·기본 salt 그대로.
       ...localTestWebAuthnOption(),
       ...localTestPrfSaltOption(),
-    }, createStage);
+    }, createStage, typeof a1212CreateEnableOnly === "function" && a1212CreateEnableOnly());
     // [A-667 R5] 시간이 다 된(또는 bfcache 복원으로 만료된) 뒤 늦게 온 생성 성공: 화면·서명자·저장 0, PRF 는 지운다.
     // 남는 부작용(정직 기록): 플랫폼에는 패스키가 **이미 만들어져** 있다. 그래서 이번 세션의 다음 Open 이 곧바로 또
     // 만들지 않도록 find-first 를 다시 켠다(freshRecoveryTried=false, 메모리만) — 다음 Open 은 먼저 그 패스키를 찾는다.
@@ -1598,7 +1620,9 @@ async function openPiggy() {
       if (late && typeof late.credentialId === "string" && late.credentialId) {
         lateCreatedCredential = { credentialId: late.credentialId, ...(Array.isArray(late.transports) && late.transports.length ? { transports: late.transports } : {}) };
       }
-    }, () => {});
+    }, () => {
+      if (!attempt.live && createStage.pin && !state.credential) lateCreatedCredential = createStage.pin;
+    });
     const result = await boundAuthAttempt(attempt, creating);
 
     const credential = {
@@ -1663,18 +1687,22 @@ async function openPiggy() {
     if (giftIntent && !giftAttempted) restorePendingGiftClaim(giftIntent);
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
+    if (!committed && createStage.pin && !state.credential) {
+      lateCreatedCredential = createStage.pin;
+      state.freshRecoveryTried = false;
+    }
     if (!committed && createStage.value === "cancelled" && !platformAuthInflight && !lateCreatedCredential) {
       try { sessionStorage.removeItem("araso.publicCreateAttempt.v1"); } catch { /* retain recovery-first */ }
       // A1210: only this invite's confirmed create rejection permits another explicit create.
       // Keep the metadata attempt consumed; freshCreate is consumed before the next ceremony.
       try {
         if (!giftIntent && a1210Invite && readForkInvite(safeLocalStorage()) === a1210Invite) {
-          sessionStorage.setItem(a1158AttemptKey(a1210Invite), "attempted");
+          sessionStorage.setItem(a1158AttemptKey(a1210Invite), "cancelled");
           sessionStorage.setItem("araso.freshCreate.v1." + keccak256(new TextEncoder().encode(a1210Invite)), "ready");
         }
       } catch { /* no persisted retry: retain recovery-first */ }
     }
-    recordSafeError("open", error);
+    recordSafeError(createStage.pin?.prfUnavailable ? "prf_unavailable" : "open", error);
     setScene("birth", "Piggy could not open here.", "");
   }
 }
@@ -1937,7 +1965,7 @@ async function settleBoundGiftClaim(binding, claim) {
 
 async function startPiggyOpen() {
   if (typeof inviteOnlyEntry === "function" && inviteOnlyEntry()) return { ok: false, reason: "invite_only" };
-  if (readCredential() || hasReceivedPiggy() || state.address) {
+  if (readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential)) {
     return checkPiggy();
   }
   if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && !readForkInvite(safeLocalStorage())) {
@@ -2014,7 +2042,6 @@ async function checkPiggy() {
     // [A-667 R5] 대기 상한 + 시도 토큰: 시간이 다 된 뒤의 늦은 결과는 recoverPiggy 안에서 서명자·저장 전에 버려진다.
     await boundAuthAttempt(attempt, trackPlatformAuth(recoverPiggy({ isCurrent: () => attempt.live, pin })));
     recovered = true;
-    if (pin && lateCreatedCredential === pin) lateCreatedCredential = null;
     clearTimeout(attempt.timer);
     // [A-579 Lane G] 되찾은 Piggy 는 **이미 있던** Piggy 다 — Gift 는 새 Gift Piggy 에만 묶인다(A-567 canon).
     // 그래서 여기서는 claim 을 시도하지 않고 pendingGiftClaim 을 건드리지도 않는다(메모리에 그대로 남는다).
@@ -2050,10 +2077,15 @@ async function checkPiggy() {
     // [A-667 R2] 받음 표시는 보조 표식이다 — 신원(credential·address)은 recoverPiggy 가 이미 한 덩어리로 저장했다.
     // 이 쓰기 하나가 실패했다고 되찾은 Piggy 를 "못 찾음" 으로 바꾸고 서명자를 남기지 않는다.
     try { localStorage.setItem(PIGGY_RECEIVED_KEY, "1"); } catch { /* credential 표식만으로 충분 */ }
-    await restoreRecoveredFirstJourney(() => attempt.live);
+    if (!pin?.pendingBirth) await restoreRecoveredFirstJourney(() => attempt.live);
     if (!finishAuthAttempt(attempt)) return { ok: false, cancelled: false, reason: "superseded" };
     released = true;
+    if (pin && lateCreatedCredential === pin) lateCreatedCredential = null;
     state.authPhase = "idle";
+    if (pin?.pendingBirth && !hasPlayedBirth()) {
+      setScene("hatch");
+      return { ok: true };
+    }
     // 복구는 신규 탄생이 아니다 — 해치·hello·Name it 을 다시 재생하지 않는다.
     // [Owner + gift_card_20261004 README:48, 2026-10-12] 이름 데이터 없음은 새 Piggy가
     // 아니다. 같은 Piggy로 Home에 먼저 복귀하고, 이름은 색인 복구/사용자 수정에 맡긴다.
@@ -5981,7 +6013,7 @@ function renderAuthCard(view = state) {
   //    (Owner 결정 2026-10-02 "같은 포맷으로 버튼은 하나인데 make new"). id 는 기존 #authTryAgainButton 그대로 —
   //    render() 의 기존 배선(→ setScene("received") = Invite)을 byte 동일하게 재사용한다. 거기서 사용자가 Open 을
   //    **다시 눌러야** startPiggyOpen → openPiggy(A-533 의 명시적 새 Piggy 경로)가 돈다. 자동 생성·credential 삭제 0.
-  const recoveryOnly = !view.unlockRetry && !!(readCredential() || hasReceivedPiggy() || state.address);
+  const recoveryOnly = !view.unlockRetry && !!(readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential));
   const body = checking
     ? view.detail || "Face ID may appear once."
     : view.authCancelled
