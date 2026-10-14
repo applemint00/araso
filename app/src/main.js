@@ -5701,6 +5701,7 @@ function fitInvite() {
   board.style.setProperty("--invVh", `${window.innerHeight}px`);
   board.style.setProperty("--invHoleOff", `${f ? inviteHolePhase(board.dataset.kind, f.L, scale) : 0}px`);
   if (typeof fitInviteExplanation === "function") fitInviteExplanation(board, scale);
+  if (typeof fitTrialStamp === "function") fitTrialStamp(board, scale);
 }
 // [A-839 · Cowork U-I1: no shrink] Invite content-group scale, pure. Landscape (wide 1280x800 arrangement) = today's board scale at 1440x900 (1.125) x HomeCard / 377 (1440x900 ~ today's
 // size); portrait (phone 420x840 arrangement) = today's rendered 390x844 phone scale (390/420) x min(HomeCard / 283, fit height (vh / 780 = the board fits the viewport height)).
@@ -5989,6 +5990,27 @@ function fitInviteExplanation(board, scale) {
   copy.style.top = `${(actor.top + actor.height / 2 - paper.top) / scale}px`;
 }
 
+// A-1230: a readable first-journey stamp; Gift and fork profiles never receive it.
+function trialPhaseStamp(place, gift = null) {
+  if (gift || typeof LEGACY_TESTNET_PATH !== "boolean" || !LEGACY_TESTNET_PATH) return "";
+  return `<span class="trialStamp trialStamp--${place}">trial phase · free</span>`;
+}
+function fitTrialStamp(board, scale) {
+  const stamp = board.querySelector(".trialStamp--invite");
+  const envelope = board.querySelector(".invite__envImg--closed");
+  if (!stamp || !envelope || !(scale > 0)) return;
+  const env = envelope.getBoundingClientRect();
+  if (!env.width) return; // retain the closed-envelope anchor during its opening animation
+  stamp.style.left = "0px";
+  stamp.style.top = "0px";
+  const box = stamp.getBoundingClientRect();
+  const wide = board.dataset.kind === "wide";
+  const left = wide ? env.right + 24 : env.left;
+  const top = wide ? env.top + (env.height - box.height) / 2 : env.top - box.height - 12;
+  stamp.style.left = `${(left - box.left) / scale}px`;
+  stamp.style.top = `${(top - box.top) / scale}px`;
+}
+
 // 모바일 아트보드 — Main.dc.html 420×840
 function inviteMobile(gift = null) {
   return `
@@ -6000,6 +6022,7 @@ function inviteMobile(gift = null) {
         <img class="invite__burst" src="/invite/burst@2x.png" alt="" aria-hidden="true" />
         ${inviteFace(!!gift)}
         ${inviteExplanation(gift)}
+        ${trialPhaseStamp("invite", gift)}
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/trail@2x.png" alt="" />
           ${chogInviteMarkup()}
@@ -6021,6 +6044,7 @@ function inviteWide(gift = null) {
         <img class="invite__burst" src="/invite/wide/burst@2x.png" alt="" aria-hidden="true" />
         ${inviteFace(!!gift)}
         ${inviteExplanation(gift)}
+        ${trialPhaseStamp("invite", gift)}
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/wide/trail@2x.png" alt="" />
         </div>
@@ -13886,7 +13910,7 @@ function renderSendStay() {
             terms: [FIRST_SEND_USD_LABEL],
             blocked,
             busy: sendBusy(),
-          }).replace('<div class="sendCard__footer">', `${explain ? '<p class="sendCard__detail sendCard__explain">You sign. Piggy takes your money to work.</p>' : ""}<div class="sendCard__footer">`)}
+          }).replace('<div class="sendCard__footer">', `${trialPhaseStamp("send")}${explain ? '<p class="sendCard__detail sendCard__explain">You sign. Piggy takes your money to work.</p>' : ""}<div class="sendCard__footer">`)}
         </div>
       </div>`
     : "";

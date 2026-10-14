@@ -6807,3 +6807,30 @@ html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-wid
   color: #b88f00;
   white-space: nowrap;
 }
+
+/* A-1230: only the new stamp occupies space; existing actors/cards are unchanged. */
+.trialStamp {
+  --trialScale: var(--invS, 1);
+  --trialFont: 15px;
+  position: absolute;
+  width: max-content;
+  margin: 0;
+  padding: calc(4px / var(--trialScale)) calc(10px / var(--trialScale));
+  border: calc(1.5px / var(--trialScale)) solid currentColor;
+  border-radius: 999px;
+  color: var(--gold);
+  font: italic 400 calc(var(--trialFont) / var(--trialScale)) / 1.2 "Playfair Display", Georgia, serif;
+  white-space: nowrap;
+  transform: rotate(-4deg);
+  pointer-events: none;
+}
+.invite--wide .trialStamp { --trialFont: 22px; }
+.trialStamp--send {
+  --trialScale: calc(0.65 * var(--cardShrink, 1) * var(--fmtS, 1));
+  left: 130px;
+  top: 198px;
+  color: #b88f00;
+}
+@media (min-width: 700px) {
+  .trialStamp--send { --trialFont: 22px; }
+}

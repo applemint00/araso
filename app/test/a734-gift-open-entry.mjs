@@ -429,7 +429,7 @@ await check("N11 the new entry never logs (console 0) and never writes storage o
 
 // ── the REAL Invite markup functions ──────────────────────────────────────────────────────────
 function markupWith(src, { kind = "mobile", gift = null, cred = false } = {}) {
-  const fns = ["inviteHero", "inviteFace", "inviteHoles", ...(/function inviteExplanation\(/.test(src) ? ["inviteExplanation"] : []), "inviteMobile", "inviteWide", "renderReceived"].map((n) => fnBodyOf(src, n)).join("\n");
+  const fns = ["inviteHero", "inviteFace", "inviteHoles", ...(/function trialPhaseStamp\(/.test(src) ? ["trialPhaseStamp"] : []), ...(/function inviteExplanation\(/.test(src) ? ["inviteExplanation"] : []), "inviteMobile", "inviteWide", "renderReceived"].map((n) => fnBodyOf(src, n)).join("\n");
   const hasGiftFns = /function giftPaperKind\(/.test(src);
   const ctx = {
     INVITE_EGG_SVG: "<svg data-egg></svg>", arasoBrandMarkup: () => "<i data-brand></i>", chogInviteMarkup: () => "<i data-chog></i>", wantedInviteKind: () => kind,
