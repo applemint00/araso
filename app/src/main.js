@@ -1229,13 +1229,26 @@ function safeErrorCode(error) {
   const code = raw === undefined || raw === null ? "" : String(raw);
   return /^-?\d{1,6}$/.test(code) || /^[A-Z][A-Z0-9_]{0,39}$/.test(code) ? code : "";
 }
+function safeRpcMessagePrefix(error) {
+  const parts = [];
+  for (let current = error, depth = 0; current && depth < 4; current = current.cause, depth += 1) {
+    for (const key of ["shortMessage", "message", "details"]) {
+      if (typeof current?.[key] === "string") parts.push(current[key].toLowerCase());
+    }
+  }
+  const text = parts.join(" ");
+  if (/insufficient|not enough (?:funds|balance)|exceeds? (?:the )?(?:account )?balance/.test(text)) return "insufficient";
+  if (/nonce|already known|known transaction|replacement transaction|underpriced/.test(text)) return "nonce";
+  if (/fee|maxfeepergas|maxpriorityfeepergas|gas price|base fee/.test(text)) return "fee";
+  return "other";
+}
 function recordSafeError(phase, error) {
   if (typeof track === "function") {
     const sendCode = ({ recover: "auth", grant: "grant", "grant-visibility": "grant", simulate: "simulate", send: "fail" })[phase];
     if (sendCode) track("send", sendCode);
     else track("flow_error", ({ open: "open", unlock: "unlock", "home-money": "home_money", prf_unavailable: "prf_unavailable" })[phase] || "other");
   }
-  const entry = { at: Date.now(), phase, category: safeErrorCategory(error), code: safeErrorCode(error) };
+  const entry = { at: Date.now(), phase, category: safeErrorCategory(error), code: safeErrorCode(error), messagePrefix: safeRpcMessagePrefix(error) };
   try {
     localStorage.setItem(LAST_SEND_ERROR_KEY, JSON.stringify(entry));
   } catch {
@@ -2428,6 +2441,15 @@ function showAwayRestore(kind) {
 }
 
 async function reconcileSendPending(pending, { watch = true } = {}) {
+  if (pending?.stage === "deposit-broadcast" && pending?.phase === "signed") {
+    const cleared = await clearProvenNeverSentDeposit(pending);
+    if (cleared) {
+      state.awayRestore = null;
+      setScene("sendstay", "Piggy can't go out yet.", "");
+      syncSendButton();
+      return { kind: "never-sent" };
+    }
+  }
   let result;
   try {
     result = await classifySendPending(pending);
@@ -3130,6 +3152,76 @@ function clearOwnSendPending(reservation, { unsentHash = null } = {}) {
   }
 }
 
+const DEPOSIT_BROADCAST_ATTEMPTS = 4;
+const DEPOSIT_BROADCAST_RETRY_MS = 1500;
+
+function retryableDepositBroadcastError(error) {
+  for (let current = error, depth = 0; current && depth < 4; current = current.cause, depth += 1) {
+    if (current?.name === "InvalidInputRpcError" || Number(current?.code) === -32000) return true;
+  }
+  return false;
+}
+
+async function broadcastDepositRaw(raw) {
+  let lastError;
+  for (let attempt = 0; attempt < DEPOSIT_BROADCAST_ATTEMPTS; attempt += 1) {
+    try {
+      return await publicClient.sendRawTransaction({ serializedTransaction: raw });
+    } catch (error) {
+      lastError = error;
+      if (!retryableDepositBroadcastError(error) || attempt === DEPOSIT_BROADCAST_ATTEMPTS - 1) throw error;
+      await new Promise((resolve) => setTimeout(resolve, DEPOSIT_BROADCAST_RETRY_MS));
+    }
+  }
+  throw lastError;
+}
+
+function sameSignedDeposit(left, right) {
+  return !!left && !!right &&
+    left.stage === "deposit-broadcast" && left.phase === "signed" && !left.redeemTxHash &&
+    right.stage === left.stage && right.phase === left.phase && !right.redeemTxHash &&
+    String(right.address).toLowerCase() === String(left.address).toLowerCase() &&
+    String(right.depositTxHash).toLowerCase() === String(left.depositTxHash).toLowerCase() &&
+    Number(right.nonce) === Number(left.nonce) && right.reservationId === left.reservationId;
+}
+
+async function proveSignedDepositNeverSent(pending) {
+  if (!pending || !/^0x[0-9a-fA-F]{40}$/.test(String(pending.address)) || !/^0x[0-9a-fA-F]{64}$/.test(String(pending.depositTxHash)) || !Number.isSafeInteger(pending.nonce)) return false;
+  try {
+    await publicClient.getTransactionReceipt({ hash: pending.depositTxHash });
+    return false;
+  } catch (error) {
+    if (error?.name !== "TransactionReceiptNotFoundError") return false;
+  }
+  try {
+    const nonce = await publicClient.getTransactionCount({ address: pending.address, blockTag: "pending" });
+    return Number.isSafeInteger(nonce) && nonce === pending.nonce;
+  } catch {
+    return false;
+  }
+}
+
+async function clearProvenNeverSentDeposit(pending, { reservation = null } = {}) {
+  const clearUnderLock = async () => {
+    const before = readSendPending();
+    if (!sameSignedDeposit(pending, before) || !(await proveSignedDepositNeverSent(before))) return false;
+    const after = readSendPending();
+    if (!sameSignedDeposit(before, after)) return false;
+    localStorage.removeItem(SEND_PENDING_KEY);
+    return readSendPending() === null;
+  };
+  if (reservation) {
+    if (!sendLockHeldBy(reservation) || pending?.reservationId !== reservation.id) return false;
+    return clearUnderLock();
+  }
+  if (!sendLocksCapable()) return false;
+  try {
+    return await navigator.locks.request(SEND_LOCK_NAME, { mode: "exclusive", ifAvailable: true }, async (lock) => lock ? clearUnderLock() : false);
+  } catch {
+    return false;
+  }
+}
+
 // 이 예약의 기록 위에서만 쓴다(서명 hash·nonce 기록). 잠금을 잃었거나 기록이 사라졌거나 다른 예약이면 던진다 → broadcast 전에 멈춘다.
 function writeOwnedSendPending(reservation, entry) {
   assertSendLockHeld(reservation);
@@ -3472,7 +3564,7 @@ async function sendPiggyOnce(markSettling) {
     writeOwnedSendPending(reservation, { stage: "deposit-broadcast", phase: "signed", address: account.address, depositTxHash: depositSigned.hash, nonce: depositSigned.nonce });
     assertSendLockHeld(reservation); // broadcast 직전 재확인 — 잃었으면 보내지 않은 서명 기록만 풀린다(catch, 잠금이 있을 때만)
     unsentDepositHash = null; // 이 줄 아래부터는 broadcast 가 일어났을 수 있다 — 기록을 지우지 않는다.
-    const depositSentHash = await publicClient.sendRawTransaction({ serializedTransaction: depositSigned.raw });
+    const depositSentHash = await broadcastDepositRaw(depositSigned.raw);
     if (String(depositSentHash).toLowerCase() !== depositSigned.hash.toLowerCase()) throw new Error("send_hash_mismatch");
     const depositTxHash = depositSigned.hash;
     markSendPhaseSent(reservation, { stage: "deposit-broadcast", address: account.address, depositTxHash, nonce: depositSigned.nonce });
@@ -3525,6 +3617,8 @@ async function sendPiggyOnce(markSettling) {
       });
   } catch (error) {
     // [A-707] 보내지 않았음이 증명된 기록(예약 · 보내지 않은 서명 기록)만 푼다 — 문구는 풀린 뒤 상태(nothing moved.)를 읽는다. 보냈을 수 있으면 남는다.
+    const signedPending = readSendPending();
+    if (sameSignedDeposit(signedPending, signedPending)) await clearProvenNeverSentDeposit(signedPending, { reservation });
     clearOwnSendPending(reservation, { unsentHash: unsentDepositHash });
     recordSafeError("send", error);
     setScene("sendstay", "Piggy could not get ready.", "");

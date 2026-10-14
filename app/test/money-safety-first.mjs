@@ -163,19 +163,24 @@ const catchingUp = (calls) => calls.scenes.some((s) => s[0] === "away" && s[2] =
 const neverFailedCopy = (calls) => calls.scenes.every((s) => !(s[0] === "sendstay" && /couldn't finish/.test(s[1] || "")));
 
 // ═══ source invariants ═══════════════════════════════════════════════════════════════════════
-await check("S1 pending is removed only in finishTrip (after the receipt save) and the DEV reset — never in commitSendSuccess / sendPiggyOnce / reconcile", () => {
+await check("S1 pending removal sites are exact and evidence-gated", () => {
   // [A-707 M2-beta re-pin, named reason] two more removal sites exist, both compare-and-clear of a record that proves nothing was sent:
   // clearOwnSendPending (this tab's `reserved`, or its just-written signed deposit record whose broadcast call never happened) and
   // sweepStaleSendReservation (a `reserved` record whose owner tab's lifetime lock is provably gone). Every other function still must not clear.
   // [A-707 r2 re-pin, named reason: tab-scoped reservation + lock held through] one more site: promoteSendReservation (runs only inside the
   // exclusive lock) rolls back its OWN just-written `reserved` bytes when the read-back did not verify. It cannot remove any other record.
+  // [A-1260 re-pin, named reason] clearProvenNeverSentDeposit adds one removal site behind: exact signed-record compare,
+  // missing receipt, pending nonce still equal to the signed nonce, and the exclusive send lock.
   const sites = [...MAIN.matchAll(/localStorage\.removeItem\(SEND_PENDING_KEY\)/g)].length;
-  assert.equal(sites, 5, "exactly five removal sites: finishTrip + clearOwnSendPending + sweepStaleSendReservation + promoteSendReservation (own-bytes rollback) + DEV resetLocalTest");
+  assert.equal(sites, 6, "exactly six removal sites, including A-1260 proved-never-sent cleanup");
   assert.ok(/if \(localStorage\.getItem\(SEND_PENDING_KEY\) === reservation\.json\) localStorage\.removeItem\(SEND_PENDING_KEY\)/.test(fnBody("promoteSendReservation")), "promote only removes its own exact bytes");
   assert.ok(/if \(!sendLockHeldBy\(reservation\)\) return false;/.test(fnBody("clearOwnSendPending")), "clearOwnSendPending touches the shared record only while holding the exclusive lock");
   assert.ok(fnBody("finishTrip").includes("localStorage.removeItem(SEND_PENDING_KEY)"));
   assert.ok(fnBody("clearOwnSendPending").includes("localStorage.removeItem(SEND_PENDING_KEY)"));
   assert.ok(fnBody("sweepStaleSendReservation").includes("localStorage.removeItem(SEND_PENDING_KEY)"));
+  assert.ok(fnBody("clearProvenNeverSentDeposit").includes("localStorage.removeItem(SEND_PENDING_KEY)"));
+  assert.ok(/blockTag: "pending"/.test(fnBody("proveSignedDepositNeverSent")), "A-1260 compares the pending nonce, not only latest");
+  assert.ok(/TransactionReceiptNotFoundError/.test(fnBody("proveSignedDepositNeverSent")), "A-1260 requires an absent receipt");
   assert.ok(/stage !== "reserved" && !unsentSigned/.test(fnBody("clearOwnSendPending")), "clearOwnSendPending only clears reserved / proven-unsent-signed");
   assert.ok(/again\.stage !== "reserved"/.test(fnBody("sweepStaleSendReservation")), "the sweep only clears a reserved record");
   for (const name of ["commitSendSuccess", "sendPiggyOnce", "reconcileSendPending", "classifySendPending", "reconciledSendReceipt", "readSendPending", "writeSendPending", "rememberReceipt"]) {
@@ -204,7 +209,7 @@ await check("S4 no new user-visible words: every setScene in the touched functio
   const all = [FINISH_SRC, RECONCILE_SRC, fnBody("commitSendSuccess"), fnBody("rememberReceipt"), fnBody("readSendPending"), fnBody("writeSendPending")].join("\n");
   const strings = [...all.matchAll(/setScene\(([^)]*)\)/g)].map((m) => m[1]);
   assert.ok(strings.length >= 4);
-  for (const s of strings) assert.ok(/"sendstay", "couldn't finish this one\."|"return", "Piggy is home\.", "One tag\."|"away", "Piggy is home\.", "Confirmation is still catching up\."|"filebox"/.test(s), `setScene args: ${s}`);
+  for (const s of strings) assert.ok(/"sendstay", "couldn't finish this one\."|"sendstay", "Piggy can't go out yet\.", ""|"return", "Piggy is home\.", "One tag\."|"away", "Piggy is home\.", "Confirmation is still catching up\."|"filebox"/.test(s), `setScene args: ${s}`);
 });
 
 // ═══ A. storage failure ═════════════════════════════════════════════════════════════════════

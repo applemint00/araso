@@ -79,6 +79,7 @@ const PRE = {
   // [A-896 re-pin, named reason: 99e M-L-2 Owner 60 s signer margin] ONE entry check (wall-clock signerSince) before the existing recover branch; recover path itself unchanged.
   // pre-A-896 baseline: sendPiggyOnce 01ee727da9fc2def3d057d939c42b9cf69a95ace97f4c9af81500bd3fef9646b [A-896 R1 re-pin: + monotonic performance.now stamp/check; prior A-896 value was the old pin]
   sendPiggyOnceA896: "0120bd9896880837" + "c5fbb0e10a47b73e" + "fedeff3b9077f987" + "7cbaae82b4e7955e",
+  sendPiggyOnceA1260: "bb8d23fa7d9ac91b" + "e44da823d23b99ab" + "5deb0f0efe321c73" + "1a76b48fab920b40",
   render: "521db6368b3a331d44eb1287883319905c2a4f98c9148331df4adf698bbf6dd4",
 };
 
@@ -616,9 +617,10 @@ await check("SEQ-5=A fail-closed (A-695): a device with no valid local index can
 });
 
 // ═══ SEND lane — OWNER_INPUT_REQUIRED, left pre-A-669 ══════════════════════════════════════════
-await check("SEND-0 [re-pinned by A-707 M2-beta: reservation + confirm + sign-before-send on top of the A-698 shape] sendPiggyOnce keeps the A-698 shape: shared attempt slot, bounded recovery, appLock guard before requestGrant", () => {
+await check("SEND-0 [A-1260 named re-pin] sendPiggyOnce adds bounded deposit retry and proved-never-sent cleanup without changing the auth/lock shape", () => {
   const once = fnBody("sendPiggyOnce");
-  assert.equal(sha(once), PRE.sendPiggyOnceA896, "sendPiggyOnce == A-896 pin (A-768 + 99e M-L-2 60 s signer-margin entry check only; any further edit must re-pin with a named reason)");
+  assert.equal(sha(once), PRE.sendPiggyOnceA1260, "sendPiggyOnce == A-1260 pin (bounded deposit retry + proved-never-sent cleanup)");
+  assert.notEqual(PRE.sendPiggyOnceA1260, PRE.sendPiggyOnceA896, "the A-896 pin was superseded, not silently reused");
   assert.notEqual(PRE.sendPiggyOnceA896, PRE.sendPiggyOnceA768, "the A-768 pin was superseded, not silently reused");
   assert.notEqual(PRE.sendPiggyOnceA768, PRE.sendPiggyOnceA756, "the A-756 pin was superseded, not silently reused");
   assert.notEqual(PRE.sendPiggyOnceA756, PRE.sendPiggyOnceA707r2, "the A-707 r2 pin was superseded, not silently reused");
@@ -629,7 +631,7 @@ await check("SEND-0 [re-pinned by A-707 M2-beta: reservation + confirm + sign-be
   assert.ok(once.includes("recoverPiggy({ isCurrent: () => attempt.live })"), "recovery carries the attempt token");
   assert.ok(once.indexOf("if (state.appLock)") > 0 && once.indexOf("if (state.appLock)") < once.indexOf("requestGrant("), "lock guard precedes requestGrant");
   assert.ok(once.indexOf("reserveSend()") > 0 && once.indexOf("reserveSend()") < once.indexOf('beginAuthAttempt("send")'), "reservation is written before the attempt slot is taken");
-  assert.ok(once.indexOf("writeOwnedSendPending(reservation, { stage: \"deposit-broadcast\", phase: \"signed\"") < once.indexOf("publicClient.sendRawTransaction("), "the signed hash is persisted before the first broadcast");
+  assert.ok(once.indexOf("writeOwnedSendPending(reservation, { stage: \"deposit-broadcast\", phase: \"signed\"") < once.indexOf("broadcastDepositRaw(depositSigned.raw)"), "the signed hash is persisted before the bounded deposit broadcast");
 });
 
 finished = true;

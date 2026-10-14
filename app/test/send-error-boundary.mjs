@@ -116,15 +116,28 @@ for (const [label, opts] of [["simulate", { simThrows: true }], ["send/deposit",
   check(`${label} failure: card detail empty (no raw error)`, scene[2], "");
   check(`  ${label}: card title/detail contain no URL/raw tx/address/args/data`, noLeak(scene.join(" ")), true);
   const rec = JSON.parse(t.storage.getItem("araso.lastSendError"));
-  check(`  ${label}: safe record keys = at,phase,category,code only`, Object.keys(rec).sort().join(","), "at,category,code,phase");
+  check(`  ${label}: safe record keys include fixed messagePrefix only`, Object.keys(rec).sort().join(","), "at,category,code,messagePrefix,phase");
   check(`  ${label}: safe record has no leak strings`, noLeak(JSON.stringify(rec)), true);
   check(`  ${label}: category/code kept`, `${rec.category}/${rec.code}`, "InvalidParamsRpcError/-32602");
+  check(`  ${label}: raw RPC message reduced to fixed class`, rec.messagePrefix, "other");
 }
 {
   const t = makeSend({});
   const rec = t.recordSafeError("x", { name: "bad name with spaces http://x", code: "0xdeadbeef raw" });
   check("unsafe name/code are dropped from the record", `${rec.category}/${rec.code}`, "Error/");
+  check("unsafe message is reduced to fixed class", rec.messagePrefix, "other");
   check("unknown non-Send error is flow_error other", JSON.stringify(t.calls.events), JSON.stringify([["flow_error", "other"]]));
+}
+for (const [message, want] of [
+  ["insufficient funds for gas * price + value", "insufficient"],
+  ["nonce too low", "nonce"],
+  ["max fee per gas less than block base fee", "fee"],
+  ["opaque provider rejection", "other"],
+]) {
+  const t = makeSend({});
+  const rec = t.recordSafeError("send", new Error(message));
+  check(`fixed RPC prefix class: ${want}`, rec.messagePrefix, want);
+  check(`  ${want}: original message not stored`, JSON.stringify(rec).includes(message), false);
 }
 for (const [phase, code] of [["open", "open"], ["unlock", "unlock"], ["home-money", "home_money"], ["prf_unavailable", "prf_unavailable"]]) {
   const t = makeSend({});

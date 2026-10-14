@@ -982,17 +982,18 @@ if (FORK) {
 }
 
 // ═══ H. source invariants ════════════════════════════════════════════════════════════════════════
-await check("H1 broadcast sites: main.js has exactly two broadcast calls (First deposit + redeem), both `publicClient.sendRawTransaction`, no sendTransaction call left (money-executor.mjs H1 stays green)", async () => {
+await check("H1 broadcast sites: deposit uses the A-1260 bounded same-raw helper; redeem remains direct", async () => {
   const code = strip(MAIN);
   assert.equal((code.match(/\.sendRawTransaction\s*\(/g) || []).length, 2);
   assert.equal((code.match(/\.sendTransaction\s*\(/g) || []).length, 0);
-  assert.equal((strip(fnBody("sendPiggyOnce")).match(/publicClient\.sendRawTransaction\(/g) || []).length, 2);
+  assert.equal((strip(fnBody("sendPiggyOnce")).match(/publicClient\.sendRawTransaction\(/g) || []).length, 1);
+  assert.equal((strip(fnBody("broadcastDepositRaw")).match(/publicClient\.sendRawTransaction\(/g) || []).length, 1);
 });
-await check("H2 source order inside sendPiggyOnce: reserve < confirm < appLock guard < grant; per leg: signSendStep < writeOwnedSendPending(signed) < sendRawTransaction; unsent-hash window closes only after the persist", async () => {
+await check("H2 source order inside sendPiggyOnce: persist signed identity before bounded deposit broadcast; redeem order unchanged", async () => {
   const s = fnBody("sendPiggyOnce");
   const at = (x) => s.indexOf(x);
   assert.ok(at("reserveSend()") < at("confirmSendReservation(") && at("confirmSendReservation(") < at("if (state.appLock)") && at("if (state.appLock)") < at("requestGrant("));
-  const dep = [at("signSendStep(walletClient, account, plan.depositTx)"), at('writeOwnedSendPending(reservation, { stage: "deposit-broadcast", phase: "signed"'), at("unsentDepositHash = null; //"), at("publicClient.sendRawTransaction({ serializedTransaction: depositSigned.raw })")];
+  const dep = [at("signSendStep(walletClient, account, plan.depositTx)"), at('writeOwnedSendPending(reservation, { stage: "deposit-broadcast", phase: "signed"'), at("unsentDepositHash = null; //"), at("broadcastDepositRaw(depositSigned.raw)")];
   assert.ok(dep.every((x) => x > 0) && dep[0] < dep[1] && dep[1] < dep[2] && dep[2] < dep[3], `deposit order ${dep}`);
   // [A-768 M-L-1 re-pin, named reason] the redeem signature moved into prepareRedeemAfterDeposit (deposit-block-pinned reads + bounded
   // retry); its call site in sendPiggyOnce keeps the same order: sign (inside the helper) < persist(signed) < broadcast.
@@ -1002,21 +1003,24 @@ await check("H2 source order inside sendPiggyOnce: reserve < confirm < appLock g
   assert.ok(at("clearOwnSendPending(reservation, { unsentHash: unsentDepositHash })") > at("catch (error)"));
   assert.equal(/deposit-sending|redeem-sending/.test(strip(s)), false, "no hash-less stage is written any more");
 });
-await check("H3 no new user-visible words and no retry semantics: setScene strings added by this card are existing ones; sendPiggyOnce/helpers contain no setTimeout/loop re-send", async () => {
+await check("H3 no new user-visible words; A-1260 retry is bounded to four same-raw attempts at 1500 ms", async () => {
   const added = [...fnBody("sendPiggyOnce").matchAll(/setScene\(([^)]*)\)/g)].map((m) => m[1]);
   for (const a of added) assert.ok(/^"(sendstay|birth|away)", "(Piggy is home\.|Piggy can't go out yet\.|Chog could not wake Piggy\.|Piggy is waking up\.|Piggy is asking to go out\.|Piggy went out\.|relayer unreachable|Piggy could not get ready\.|Not from here\.)"/.test(a) || /Piggy can only go out/.test(a), `setScene ${a}`);
-  const helpers = strip(PENDING_SRC);
-  assert.equal(/setTimeout|setInterval|while \(|for \(;;\)/.test(strip(fnBody("sendPiggyOnce")) + strip(fnBody("signSendStep")) + strip(fnBody("clearOwnSendPending"))), false);
+  assert.equal(/setInterval|while \(|for \(;;\)/.test(strip(fnBody("sendPiggyOnce")) + strip(fnBody("signSendStep")) + strip(fnBody("clearOwnSendPending"))), false);
+  assert.equal(/attempt < DEPOSIT_BROADCAST_ATTEMPTS/.test(fnBody("broadcastDepositRaw")), true);
+  assert.equal(/setTimeout\(resolve, DEPOSIT_BROADCAST_RETRY_MS\)/.test(fnBody("broadcastDepositRaw")), true);
+  assert.ok(MAIN.includes("const DEPOSIT_BROADCAST_ATTEMPTS = 4;") && MAIN.includes("const DEPOSIT_BROADCAST_RETRY_MS = 1500;"));
 });
 await check("H4 the raw signed transaction is never persisted or logged: no storage write contains `raw`, serializedTransaction only flows to sendRawTransaction", async () => {
   const s = strip(fnBody("sendPiggyOnce"));
   assert.equal(/writeOwnedSendPending\([^)]*raw/.test(s), false);
-  assert.equal((s.match(/serializedTransaction/g) || []).length, 2);
+  assert.equal((s.match(/serializedTransaction/g) || []).length, 1);
+  assert.equal((strip(fnBody("broadcastDepositRaw")).match(/serializedTransaction/g) || []).length, 1);
   assert.equal(/recordSafeError\([^)]*raw/.test(s), false);
 });
-await check("H5 pinned functions untouched by this card: classifySendPending / reconcileSendPending / reconciledSendReceipt / readSendPending / writeSendPending / commitSendSuccess / finishTrip / render keep their A-699 hashes", async () => {
+await check("H5 protected functions keep their pins except A-1260 named reconcile repin", async () => {
   const sha16 = (x) => createHash("sha256").update(x).digest("hex").slice(0, 16);
-  const want = { classifySendPending: "2389cf76d2658fd6", reconcileSendPending: "1caf49b6a16b09df", readSendPending: "065bbae2d4bb516e", commitSendSuccess: "9d3ac854b6df8ff3", finishTrip: "60edd8708e77d531", reconciledSendReceipt: "1de55c29816852f7", render: "521db6368b3a331d" };
+  const want = { classifySendPending: "2389cf76d2658fd6", reconcileSendPending: "8616d47f00b8bba9", readSendPending: "065bbae2d4bb516e", commitSendSuccess: "9d3ac854b6df8ff3", finishTrip: "60edd8708e77d531", reconciledSendReceipt: "1de55c29816852f7", render: "521db6368b3a331d" };
   for (const [name, h] of Object.entries(want)) {
     // A1153 explicitly adds account-scoped completion. Its outcome behavior is exercised in
     // a1153-first-state; keep the entire prior finishTrip body pinned apart from that one addition.

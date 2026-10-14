@@ -51,16 +51,17 @@ function mockStorage(init = {}) {
 }
 
 // 전체 sendPiggy + sendPiggyOnce 를 스텁 위에서 만든다. settleOutcome 으로 결말을 고른다.
-function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows = false, simThrows = false, allowed = true }) {
+function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows = false, depositRpcFailures = 0, proofNonce = null, simThrows = false, allowed = true }) {
   const calls = { grant: 0, sign: 0, sendTx: 0, prepared: 0, scenes: [], finished: [], endSession: 0 };
+  const testAddress = "0x1111111111111111111111111111111111111111";
   const btn = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   const env = {
     localStorage: storage,
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
-    state: { address: "0xabc", txHash: "", mark: "", grantTxHash: "" },
+    state: { address: testAddress, txHash: "", mark: "", grantTxHash: "" },
     isAllowedPiggyRpId: () => allowed,
     signerSince: Date.now(), // [A-896 harness wiring] live signer stamped now (wall clock) so sendPiggyOnce's 60 s margin check sees a fresh signer
-    activeAccount: { address: "0xabc", signTransaction: async (prepared) => `0xa${prepared.nonce}` },
+    activeAccount: { address: testAddress, signTransaction: async (prepared) => `0xa${prepared.nonce}` },
     navigator: { locks: fakeLocks() },
     keccak256,
     activeSession: { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } },
@@ -81,13 +82,24 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
     waitForSuccess: async () => ({ status: "success", gasUsed: 1n, effectiveGasPrice: 1n, blockNumber: 1n }),
     readShmonBalance: async () => 5n,
     makeRedeemTx: () => ({}),
-    publicClient: { estimateGas: async () => 1n, getTransactionCount: async () => calls.prepared, sendRawTransaction: async ({ serializedTransaction }) => { calls.sendTx += 1; if (depositThrows && calls.sendTx === 1) throw new Error("rpc"); return keccak256(serializedTransaction); } },
+    publicClient: {
+      estimateGas: async () => 1n,
+      getTransactionCount: async (opts = {}) => opts.blockTag === "pending" && proofNonce !== null ? proofNonce : calls.prepared,
+      getTransactionReceipt: async () => { const error = new Error("not found"); error.name = "TransactionReceiptNotFoundError"; throw error; },
+      sendRawTransaction: async ({ serializedTransaction }) => {
+        calls.sendTx += 1;
+        if (depositThrows && calls.sendTx === 1) throw new Error("rpc");
+        if (calls.sendTx <= depositRpcFailures) { const error = new Error("insufficient funds"); error.name = "InvalidInputRpcError"; error.code = -32000; throw error; }
+        return keccak256(serializedTransaction);
+      },
+    },
     settleSend: async () => ({ outcome: settleOutcome, reason: settleOutcome === "done" ? "ok" : "redeem-unconfirmed-or-reverted", receipt: null }),
     finishTrip: (t) => calls.finished.push(t.outcome),
     formatError: (e) => String(e),
     // [A-451] 새 helper 스텁 — 기록만(원문 0), 새 grant 없음 경로라 대기 0.
     recordSafeError: () => {},
     waitForGrantBalance: async () => true,
+    setTimeout: (fn) => { fn(); return 0; },
     // [A-555 S4] 하네스 배선만 — sendPiggy wrapper finally 가 부르는 실제 세션 종료 함수의 스파이.
     // 이 파일은 session/activeAccount 전역을 흉내내지 않는다(그건 s4-send-session-end.mjs 몫).
     endActiveSession: () => { calls.endSession += 1; },
@@ -155,6 +167,31 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
   check("deposit send threw: pending kept (signed deposit record with the hash, phase signed)", `${JSON.parse(storage.getItem("araso.sendPending") || "{}").stage}/${JSON.parse(storage.getItem("araso.sendPending") || "{}").phase}/${JSON.parse(storage.getItem("araso.sendPending") || "{}").depositTxHash === HASH_DEPOSIT}`, "deposit-broadcast/signed/true");
   check("  lock released (no settle)", t.isInFlight(), false);
   check("  txHash not written", storage.getItem("araso.txHash"), null);
+}
+
+// ── 4a. [A-1260] 같은 signed raw bounded retry · 증명된 never-sent만 해제 ─────────
+{
+  const storage = mockStorage();
+  const t = makeSend({ storage, depositRpcFailures: 1 });
+  await t.sendPiggy(); await tick(); await tick();
+  check("A-1260 first -32000 then same signed deposit succeeds", t.calls.sendTx, 3);
+  check("  flow reaches redeem pending after retry", JSON.parse(storage.getItem("araso.sendPending")).stage, "redeem-broadcast");
+}
+{
+  const storage = mockStorage();
+  const t = makeSend({ storage, depositRpcFailures: 4, proofNonce: 0 });
+  await t.sendPiggy(); await tick();
+  check("A-1260 four rejected broadcasts are bounded", t.calls.sendTx, 4);
+  check("  receipt absent + pending nonce unchanged clears", storage.getItem("araso.sendPending"), null);
+  check("  cleared failure returns through existing sendstay failure path", t.calls.scenes.at(-1)[1], "Piggy could not get ready.");
+  check("  Send is enabled again", t.btn.disabled, false);
+}
+{
+  const storage = mockStorage();
+  const t = makeSend({ storage, depositRpcFailures: 4, proofNonce: 1 });
+  await t.sendPiggy(); await tick();
+  check("A-1260 advanced pending nonce keeps signed record", JSON.parse(storage.getItem("araso.sendPending")).phase, "signed");
+  check("  uncertain failure keeps Send locked", t.btn.disabled, true);
 }
 
 // ── 5. broadcast 전 실패(simulate 거절) → 기록 없음 · 잠금 해제 · 재시도 가능 ─────────────
