@@ -1739,6 +1739,7 @@ async function openPiggy() {
     finishAuthAttempt(attempt);
     indexControlledPiggy({ address, credentialId: result.credentialId, transports: result.transports, prfSaltHex: toHex(result.prfSalt) });
     noteRecoverSuccess();
+    if (typeof a1255MaybeClearKnownForeignInvite === "function") a1255MaybeClearKnownForeignInvite();
     // [A-559 PHASE S1 → A-579 Lane G] 방금 **새로 만든** Piggy 가 받는 사람의 Gift Piggy 다 — 시작 때 잡아 둔
     // intent 가 있을 때만 그 새 주소에 묶고(bindGiftToNewPiggy) 그 묶음으로만 claim 을 시도한다. 실패해도
     // 위의 First 흐름(탄생)을 되돌리지 않는다. scene 은 아래 분기가 그대로 정한다.
@@ -2060,7 +2061,7 @@ async function startPiggyOpen() {
   if (readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential) || (typeof a1214ReadPendingBirth === "function" && a1214ReadPendingBirth())) {
     return checkPiggy();
   }
-  if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && (!readForkInvite(safeLocalStorage()) || (typeof a1223IgnoreUsedInvite === "function" && a1223IgnoreUsedInvite()))) {
+  if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && (!readForkInvite(safeLocalStorage()) || (typeof a1223UsedInvite === "function" && a1223UsedInvite()))) {
     if (a1160TakePublicCreate()) return openPiggy();
     const result = await checkPiggy();
     // Same explicit retry contract as invite recovery; blocked/late attempts cannot authorize create.
@@ -2144,6 +2145,7 @@ async function checkPiggy() {
       onCredential: () => { credentialFound = true; },
     })));
     recovered = true;
+    if (!pin?.pendingBirth && typeof a1255ReconcileRecoveredInvite === "function") await a1255ReconcileRecoveredInvite(state.address);
     clearTimeout(attempt.timer);
     if (pin?.pendingBirth) {
       if (typeof a1214ClearPendingBirth === "function") a1214ClearPendingBirth();
@@ -14546,7 +14548,7 @@ async function a1160RefreshPublicEntry() {
 // Grant: requestGrant() first binds the invite to the live Piggy (server challenge → live signer signature, no new passkey prompt → bind),
 // once per Piggy on this device, then asks for the grant exactly as before. Binding failure is silent; the server decides the grant.
 // No screen, no copy, no new scene. The local harness (__HARNESS_NO_GRANT__) is untouched.
-import { bindInviteBeforeGrant as a960BindInviteBeforeGrant, inviteBoundFor as a960InviteBoundFor, markInviteBound as a960MarkInviteBound, readForkInvite as a960ReadInvite, storeInvite as a960StoreInvite, takeInviteFromHash as a960TakeInviteFromHash } from "./fork-entry-client.js";
+import { bindInviteBeforeGrant as a960BindInviteBeforeGrant, clearForkInvite as a960ClearInvite, inviteBoundFor as a960InviteBoundFor, markInviteBound as a960MarkInviteBound, readForkInvite as a960ReadInvite, storeInvite as a960StoreInvite, takeInviteFromHash as a960TakeInviteFromHash } from "./fork-entry-client.js";
 // [A-1209] Entry fallback is UI-only; server invite validation/binding is unchanged.
 let a1209Invite = null;
 function a1209EntryInvite() {
@@ -14581,9 +14583,10 @@ try {
 } catch {} // failed persistence keeps the link and the in-memory entry fallback
 // [A-1158] Read before the tap; never await the server in the WebAuthn gesture.
 // The one-use hint is bound to this token and this tab, not an authorization to bind/fund.
-// A1223: verdicts are tab-local fingerprints only. Existing invite storage is unchanged.
+// A1223/A1255: server metadata is a short-lived fingerprint. A used invite bound to another Piggy is removed from the device only while
+// public entry is open; the whole app then follows its ordinary public path. This device's own binding is retained. A fresh device defers
+// the decision until recovery proves a Piggy, then uses the existing signed bind check to distinguish this Piggy from another one.
 let a1223BoundInvite = null;
-let a1223PublicIgnoredInvite = null;
 function a1223HasPiggy() {
   return !!(readCredential() || hasReceivedPiggy() || state.address
     || (typeof readPiggyName === "function" && readPiggyName())
@@ -14604,13 +14607,8 @@ function a1223EntryWaiting() {
 function a1223UsedInviteBlocked() {
   return !a1223HasPiggy() && a1223UsedInvite() && !(typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen());
 }
-function a1223IgnoreUsedInvite() {
-  return !!a1223PublicIgnoredInvite && a1223PublicIgnoredInvite === a1223InviteFingerprint();
-}
 function a1223FinishEntry() {
-  if (!a1223HasPiggy() && a1223UsedInvite() && typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen()) {
-    a1223PublicIgnoredInvite = a1223BoundInvite;
-  }
+  if (typeof a1255MaybeClearKnownForeignInvite === "function") a1255MaybeClearKnownForeignInvite();
   if (!a1223HasPiggy() && typeof render === "function") Promise.resolve().then(() => {
     render();
     if (typeof startTesterIntro === "function") startTesterIntro();
@@ -14624,32 +14622,72 @@ let a1158UnboundInvite = null;
 function a1158AttemptKey(invite) {
   return "araso.inviteCreateAttempt.v1." + keccak256(new TextEncoder().encode(invite));
 }
+function a1255ClearForeignUsedInvite() {
+  const storage = safeLocalStorage();
+  if (!a960ClearInvite(storage)) return false;
+  a1209Invite = null;
+  a1223BoundInvite = null;
+  a1158UnboundInvite = null;
+  return a960ReadInvite(storage) === null;
+}
+function a1255MaybeClearKnownForeignInvite() {
+  if (!(typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen()) || !a1223UsedInvite()) return false;
+  const piggy = String(state.address || "").toLowerCase();
+  if (!piggy || a960InviteBoundFor(safeLocalStorage(), piggy)) return false;
+  return a1255ClearForeignUsedInvite();
+}
+async function a1255ReconcileRecoveredInvite(address) {
+  if (!(typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen()) || !a1223UsedInvite()) return "unchanged";
+  const storage = safeLocalStorage();
+  const piggy = String(address || "").toLowerCase();
+  if (!piggy) return "deferred";
+  if (a960InviteBoundFor(storage, piggy)) return "kept";
+  const invite = a960ReadInvite(storage);
+  const account = activeAccount;
+  if (!invite || !account || String(account.address || "").toLowerCase() !== piggy) return "deferred";
+  try {
+    const result = await a960BindInviteBeforeGrant({ url: `${RELAYER_URL}/grant`, invite, piggyAddress: piggy, signMessage: (message) => account.signMessage({ message }) });
+    if (result.bound === true) {
+      a960MarkInviteBound(storage, piggy);
+      return "kept";
+    }
+    if (result.reason === "invite_bound_to_other_piggy" || result.reason === "piggy_bound_to_other_tester") {
+      return a1255ClearForeignUsedInvite() ? "cleared" : "deferred";
+    }
+  } catch { /* unknown keeps the invite so recovery can be retried safely */ }
+  return "deferred";
+}
 async function a1158PrefetchInvite() {
   a1158UnboundInvite = null;
   let controller, timer;
   let expired = false;
+  let hadPiggy = false;
   try {
     const invite = typeof a1209EntryInvite === "function" ? a1209EntryInvite() : a960ReadInvite(safeLocalStorage());
-    if (!invite || a1223HasPiggy()) return;
-    state.a1223InvitePending = true;
+    if (!invite) return;
+    hadPiggy = a1223HasPiggy();
+    if (!hadPiggy) state.a1223InvitePending = true;
     controller = new AbortController();
     timer = setTimeout(() => {
       expired = true;
       controller.abort();
-      state.a1223InvitePending = false;
+      if (!hadPiggy) state.a1223InvitePending = false;
       a1223FinishEntry();
     }, 5000);
     const response = await fetch("/api/fork-entry", { method: "POST", headers: { "content-type": "application/json", "x-araso-invite": invite }, body: JSON.stringify({ action: "invite_state" }), cache: "no-store", signal: controller.signal });
     const out = response.ok ? await response.json() : null;
-    if (expired || a1223HasPiggy() || a1223InviteFingerprint() !== a1158AttemptKey(invite)) return;
-    if (out?.ok === true && out.bound === true) a1223BoundInvite = a1158AttemptKey(invite);
-    if (out?.ok === true && out.bound === false && !sessionStorage.getItem(a1158AttemptKey(invite)) && !state.freshRecoveryTried && !authAttempt && !platformAuthInflight) {
+    if (expired || a1223InviteFingerprint() !== a1158AttemptKey(invite)) return;
+    if (out?.ok === true && out.bound === true) {
+      a1223BoundInvite = a1158AttemptKey(invite);
+      if (hadPiggy) a1255MaybeClearKnownForeignInvite();
+    }
+    if (!hadPiggy && out?.ok === true && out.bound === false && !sessionStorage.getItem(a1158AttemptKey(invite)) && !state.freshRecoveryTried && !authAttempt && !platformAuthInflight) {
       a1158UnboundInvite = { invite };
     }
   } catch { /* unknown/offline keeps the existing envelope/find-first */ }
   finally {
     clearTimeout(timer);
-    state.a1223InvitePending = false;
+    if (!hadPiggy) state.a1223InvitePending = false;
     a1223FinishEntry();
   }
 }
@@ -14668,7 +14706,6 @@ function a1158TakeUnboundInvite() {
 }
 void a1158PrefetchInvite();
 async function a960BindInvite(address) {
-  if (typeof a1223IgnoreUsedInvite === "function" && a1223IgnoreUsedInvite()) return;
   try {
     const storage = safeLocalStorage();
     const invite = a960ReadInvite(storage);

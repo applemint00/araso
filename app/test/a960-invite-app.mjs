@@ -106,13 +106,16 @@ await check("5 #invite= leaves the fragment; #g=…&t=…&v=… stays byte-for-b
   assert.deepEqual(parseClaimUrl(base + C.takeInviteFromHash(`#invite=${TOKEN}&${gift}`).hash), parseClaimUrl(`${base}#${gift}`));
   assert.equal(parseClaimUrl(`${base}#${gift}`).ok, true);
 });
-await check("5 device slot: storeInvite → FORK_INVITE_KEY (the Journey 2 slot) · newest link wins and clears the bound mark · same link keeps it", () => {
+await check("5 device slot: storeInvite → FORK_INVITE_KEY (the Journey 2 slot) · newest link wins and clears the bound mark · same link keeps it · clear removes only the pair", () => {
   const s = memStorage();
   assert.equal(C.storeInvite(TOKEN, s), true); assert.equal(C.readForkInvite(s), TOKEN);
   C.markInviteBound(s, "0x" + "ab".repeat(20)); assert.equal(C.inviteBoundFor(s, "0x" + "AB".repeat(20)), true);
   C.storeInvite(TOKEN, s); assert.equal(C.inviteBoundFor(s, "0x" + "ab".repeat(20)), true, "same link: mark kept");
   C.storeInvite(TOKEN.replace("A", "B"), s); assert.equal(C.inviteBoundFor(s, "0x" + "ab".repeat(20)), false, "new link: mark cleared");
   assert.equal(C.storeInvite("bad", s), false);
+  s.setItem("araso.passkey", "keep"); s.setItem("araso.receipts", "keep");
+  assert.equal(C.clearForkInvite(s), true); assert.equal(C.readForkInvite(s), null);
+  assert.equal(s.getItem(C.INVITE_BOUND_KEY), null); assert.equal(s.getItem("araso.passkey"), "keep"); assert.equal(s.getItem("araso.receipts"), "keep");
 });
 await check("5 invite-bind text: only this origin · chain 10143 · this Piggy + nonce · ≤ 2 min; a fork-entry text never passes", () => {
   const acct = privateKeyToAccount(generatePrivateKey()); const piggy = acct.address.toLowerCase();
@@ -153,6 +156,8 @@ await check("5 bindInviteBeforeGrant → server bind → grant 200; token only i
 // ==== main.js [A-960] block ====
 const BLOCK_RE = /^\/\/ ── \[A-960\] invite link → first grant\.[\s\S]*?^\/\/ ── \[A-960\] end invite link → first grant ──\n/m;
 const block = (MAIN.match(BLOCK_RE) || [""])[0];
+// A1158/A1223/A1255 extend the entry metadata between invite boot and grant binding. The A960 invariant below covers its original boot+grant seam.
+const a960Core = block.replace(/^\/\/ \[A-1158\][\s\S]*?^void a1158PrefetchInvite\(\);\n/m, "");
 await check("main.js: exactly one contiguous [A-960] block, after the [A-956] block and before the Gift fragment boot read; every [A-960] mark inside", () => {
   assert.ok(block.length > 0);
   assert.equal([...MAIN.matchAll(/\[A-960\]/g)].length, [...block.matchAll(/\[A-960\]/g)].length);
@@ -166,7 +171,7 @@ await check("main.js outside the [A-960] block is byte-equal to the pre-card cop
   assert.equal(A1023_CUT(A977_CUT(MAIN)) /* [A-1023 RE-PIN] pre-A-1023: A977_CUT(MAIN) */.replace(BLOCK_RE, "").replace(/^\/\/ ── \[A-966\] Gift on the shared fork[\s\S]*?^\/\/ ── \[A-966\] end Gift on the shared fork ──\n/m, "") /* [A-966 re-pin] the later [A-966] fork Gift block is cut too; pre-A-966: MAIN.replace(BLOCK_RE, "") */.replace(/^\/\/ ── \[A-974\] Fork app entry[\s\S]*?^\/\/ ── \[A-974\] end fork app entry ──\n/m, "") /* [A-974 re-pin] the later [A-974] fork entry block too; pre-A-974: no third cut */, readFileSync(pre, "utf8"));
 });
 await check("block content: no screen / copy / scene / render / DOM; no [A-956] marks; grant path still the existing requestGrant", () => {
-  const code = block.replace(/^\s*\/\/.*$/gm, "");
+  const code = a960Core.replace(/^\s*\/\/.*$/gm, "");
   for (const bad of [/textContent|innerHTML|setScene\(|render\(|createElement|a891ChogSay|querySelector/, /\[A-956\]/, /console\./]) assert.doesNotMatch(code, bad);
   assert.match(code, /return a960BaseRequestGrant\(address\);/);
 });
@@ -174,10 +179,10 @@ function runBlock({ hash = "", storage = memStorage(), account = null, relayer =
   const calls = { replace: [], base: [] };
   const loc = { pathname: "/", search: "?i=abc", hash };
   const hist = { replaceState: (_s, _t, url) => { calls.replace.push(url); const i = url.indexOf("#"); loc.hash = i >= 0 ? url.slice(i) : ""; } };
-  const code = block.replace(/^import [^\n]*\n/m, "");
-  const names = ["a960BindInviteBeforeGrant", "a960InviteBoundFor", "a960MarkInviteBound", "a960ReadInvite", "a960StoreInvite", "a960TakeInviteFromHash", "location", "history", "safeLocalStorage", "RELAYER_URL", "isLocalDevRpId", "__base", "__acct"];
+  const code = a960Core.replace(/^import [^\n]*\n/m, "");
+  const names = ["a960BindInviteBeforeGrant", "a960InviteBoundFor", "a960MarkInviteBound", "a960ReadInvite", "a960StoreInvite", "a960TakeInviteFromHash", "location", "history", "safeLocalStorage", "RELAYER_URL", "isLocalDevRpId", "requestAnimationFrame", "__base", "__acct"];
   const fn = new Function(...names, `let requestGrant = __base; let activeAccount = __acct(); ${code}\nreturn { requestGrant: (a) => requestGrant(a) };`);
-  const api = fn(C.bindInviteBeforeGrant, C.inviteBoundFor, C.markInviteBound, C.readForkInvite, C.storeInvite, C.takeInviteFromHash, loc, hist, () => storage, harness ? "__HARNESS_NO_GRANT__" : relayer, () => harness,
+  const api = fn(C.bindInviteBeforeGrant, C.inviteBoundFor, C.markInviteBound, C.readForkInvite, C.storeInvite, C.takeInviteFromHash, loc, hist, () => storage, harness ? "__HARNESS_NO_GRANT__" : relayer, () => harness, (cb) => cb(),
     async (a) => { calls.base.push(a); return { granted: true, txHash: "0x1" }; }, () => account);
   return { api, calls, loc, storage };
 }

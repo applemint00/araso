@@ -51,6 +51,15 @@ export function readForkInvite(storage = typeof localStorage !== "undefined" ? l
   try { const v = storage?.getItem(FORK_INVITE_KEY); return typeof v === "string" && /^[A-Za-z0-9._~-]{16,200}$/.test(v) ? v : null; } catch { return null; }
 }
 
+/** Remove the one stored invite and its same-device Piggy binding together. No Piggy identity, passkey, name or receipt key is touched. */
+export function clearForkInvite(storage = typeof localStorage !== "undefined" ? localStorage : null) {
+  try {
+    storage?.removeItem(FORK_INVITE_KEY);
+    storage?.removeItem(INVITE_BOUND_KEY);
+    return storage?.getItem(FORK_INVITE_KEY) == null && storage?.getItem(INVITE_BOUND_KEY) == null;
+  } catch { return false; }
+}
+
 /** Pointers to this Piggy's Journey 1 txs (the newest legacy receipt with both hashes). The server re-reads them; nothing here is trusted. */
 export function journey1Pointers(receipts) {
   for (const r of Array.isArray(receipts) ? receipts : []) {
