@@ -28,7 +28,40 @@ await check('enabled without output -> no auto get/no identity -> explicit pinne
 await check('unsupported PRF -> failure reason, pinned metadata and no extra creation',async()=>{const h=rig('unsupported');await h.c.openPiggy();assert.equal(h.counts.phase,'prf_unavailable');assert.equal(h.counts.scene,'birth');assert.equal(h.counts.get,0);assert.equal(h.counts.create,1);assert.equal(h.counts.commit,0);assert.equal(h.c.lateCreatedCredential.prfUnavailable,true)});
 await check('pinned failure cannot fall back to another credential',async()=>{const h=rig('deferred');await h.c.openPiggy();h.c.requestPrf=()=>{h.counts.get++;return Promise.reject(new MeraError('PASSKEY_OPERATION_FAILED','failure'))};await h.c.checkPiggy();assert.equal(h.counts.get,1);assert.equal(h.counts.commit,0);assert.ok(h.c.lateCreatedCredential)});
 await check('browser request: normal eval present, adaptive enable-only prf empty; no provider override',async()=>{for(const adaptive of [false,true]){let request;const c={createPasskeyWithPrfOutput,btoa,Uint8Array,Error,navigator:{credentials:{create:async r=>{request=r;return {type:'public-key',rawId:new Uint8Array([1]).buffer,response:{getTransports:()=>['internal']},getClientExtensionResults:()=>({prf:{enabled:true}})}}}}};vm.createContext(c);vm.runInContext(fn('a1202CreatePasskey'),c);const stage={};await c.a1202CreatePasskey({rp:{id:'localhost',name:'Araso'},user:{name:'owner',displayName:'owner'}},stage,adaptive).catch(()=>{});assert.equal('eval' in request.publicKey.extensions.prf,!adaptive);assert.equal(request.publicKey.authenticatorSelection.userVerification,'required');assert.equal(request.publicKey.authenticatorSelection.authenticatorAttachment,undefined);assert.equal(stage.value,'created');assert.ok(stage.pin)}});
-await check('boot snapshot ignores newly written marker, accepts prior marker for same invite only',()=>{const m=new Map(),sessionStorage={get length(){return m.size},key:i=>[...m.keys()][i],getItem:k=>m.get(k)};const boot=src.slice(src.indexOf('const a1212PriorCreateAttempts ='),src.indexOf('// A1202/A1212:'));for(const prior of [false,true]){m.clear();if(prior)m.set('araso.publicCreateAttempt.v1','attempted');const c={Set,sessionStorage,readForkInvite:()=>null,safeLocalStorage:()=>null};vm.createContext(c);vm.runInContext(boot,c);m.set('araso.publicCreateAttempt.v1','attempted');assert.equal(c.a1212CreateEnableOnly(),prior)}});
+await check('fresh boot accepts only a live 30-minute cross-tab marker for public and invite entry',()=>{
+ const now=Date.parse('2026-10-14T11:00:00Z');
+ const boot=src.slice(src.indexOf('const A1212_CREATE_ATTEMPT_TTL_MS ='),src.indexOf('// A1214:'));
+ for(const invite of [null,'invite-a1254'])for(const [age,expected] of [[0,true],[30*60*1000,true],[30*60*1000+1,false]]){
+  const key=invite?'araso.inviteCreateAttempt.v1.'+invite:'araso.publicCreateAttempt.v1',m=new Map([[key,String(now-age)]]),events=[];
+  const localStorage={get length(){return m.size},key:i=>[...m.keys()][i],getItem:k=>m.get(k),setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};
+  const c={Set,Number,Date:class extends Date{static now(){return now}},localStorage,readForkInvite:()=>invite,safeLocalStorage:()=>localStorage,a1158AttemptKey:v=>'araso.inviteCreateAttempt.v1.'+v,track:(...x)=>events.push(x)};
+  vm.createContext(c);vm.runInContext(boot,c);
+  assert.equal(c.a1212CreateEnableOnly(),expected,`${invite||'public'} age ${age}`);
+  assert.deepEqual(events,expected?[['flow_error','create_lost']]:[]);
+ }
+ const m=new Map(),localStorage={get length(){return m.size},key:i=>[...m.keys()][i],getItem:k=>m.get(k),setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};
+ const c={Set,Number,Date,localStorage,readForkInvite:()=>null,safeLocalStorage:()=>localStorage,a1158AttemptKey:v=>'araso.inviteCreateAttempt.v1.'+v,track(){}};
+ vm.createContext(c);vm.runInContext(boot,c);m.set('araso.publicCreateAttempt.v1',String(Date.now()));
+ assert.equal(c.a1212CreateEnableOnly(),false,'this boot cannot consume its own new marker');
+});
+await check('create writes a timestamp immediately and clears it on success, cancel, or failure for public and invite entry',async()=>{
+ for(const invite of [null,'invite-a1254'])for(const outcome of ['success','cancel','failure']){
+  const key=invite?'araso.inviteCreateAttempt.v1.'+invite:'araso.publicCreateAttempt.v1',m=new Map();let creates=0;
+  const localStorage={get length(){return m.size},key:i=>[...m.keys()][i],getItem:k=>m.get(k),setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};
+  const client={createCredential:async()=>{creates++;assert.ok(Number(m.get(key))>0,'timestamp exists before create');if(outcome==='cancel'){const e=Error('cancel');e.name='NotAllowedError';throw e}if(outcome==='failure')throw Error('failure');return {credentialId:new Uint8Array([1]),prfEnabled:true,prfOutput:new Uint8Array(32)}}};
+  const c={createPasskeyWithPrfOutput,btoa,Uint8Array,Error,Number,Date,localStorage,readForkInvite:()=>invite,safeLocalStorage:()=>localStorage,a1158AttemptKey:v=>'araso.inviteCreateAttempt.v1.'+v,track(){}};
+  vm.createContext(c);vm.runInContext(['a1212CreateAttemptKey','a1212MarkCreateAttempt','a1212ClearCreateAttempt','a1202CreatePasskey'].map(fn).join('\n'),c);
+  await c.a1202CreatePasskey({rp:{id:'localhost',name:'Araso'},user:{name:'owner',displayName:'owner'},webAuthnClient:client},{value:'unknown'}).catch(()=>{});
+  assert.equal(creates,1);assert.equal(m.has(key),false,`${invite||'public'} ${outcome}`);
+ }
+});
+await check('mutation: removing result cleanup leaves the marker and is detected',async()=>{
+ const key='araso.publicCreateAttempt.v1',m=new Map(),localStorage={getItem:k=>m.get(k),setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)};
+ const c={createPasskeyWithPrfOutput,btoa,Uint8Array,Error,Number,Date,localStorage,readForkInvite:()=>null,safeLocalStorage:()=>localStorage,a1158AttemptKey:v=>'araso.inviteCreateAttempt.v1.'+v};
+ vm.createContext(c);vm.runInContext(['a1212CreateAttemptKey','a1212MarkCreateAttempt','a1212ClearCreateAttempt'].map(fn).join('\n')+fn('a1202CreatePasskey').replace('if (typeof a1212ClearCreateAttempt === "function") a1212ClearCreateAttempt(createAttemptKey);','if (false) a1212ClearCreateAttempt(createAttemptKey);'),c);
+ await c.a1202CreatePasskey({rp:{id:'localhost',name:'Araso'},user:{name:'owner',displayName:'owner'},webAuthnClient:{createCredential:async()=>({credentialId:new Uint8Array([1]),prfEnabled:true,prfOutput:new Uint8Array(32)})}},{value:'unknown'});
+ assert.throws(()=>assert.equal(m.has(key),false),assert.AssertionError);
+});
 await check('mutation: removing deferred pin is detected',async()=>{
  const c={createPasskeyWithPrfOutput,btoa,Uint8Array,Error};vm.createContext(c);
  vm.runInContext(fn('a1202CreatePasskey').replace('if (created.prfOutput === undefined) {','if (false) {'),c);

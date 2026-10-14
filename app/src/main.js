@@ -1517,15 +1517,40 @@ function piggyFindAfterGetCode(error) {
   return "after_get_other";
 }
 
-// A1212: snapshot before any tap writes an attempt marker. An unresolved earlier boot
-// may retry enable-only; this boot's first create retains the normal create-time eval.
+// A1212/A1254: a create that never returned leaves a short-lived cross-tab marker.
+// Only that earlier unresolved create may retry enable-only; ordinary creation still
+// asks for create-time PRF output and clears the marker as soon as any result returns.
+const A1212_CREATE_ATTEMPT_TTL_MS = 30 * 60 * 1000;
+function a1212CreateAttemptKey() {
+  try {
+    const invite = readForkInvite(safeLocalStorage());
+    return invite ? a1158AttemptKey(invite) : "araso.publicCreateAttempt.v1";
+  } catch { return "araso.publicCreateAttempt.v1"; }
+}
+function a1212MarkCreateAttempt() {
+  try {
+    const key = a1212CreateAttemptKey();
+    localStorage.setItem(key, String(Date.now()));
+    return key;
+  } catch { return null; }
+}
+function a1212ClearCreateAttempt(key) {
+  try { if (key) localStorage.removeItem(key); } catch { /* a stale marker expires at boot */ }
+}
 const a1212PriorCreateAttempts = new Set();
 try {
-  for (let i = 0; i < sessionStorage.length; i += 1) {
-    const key = sessionStorage.key(i);
-    if ((key === "araso.publicCreateAttempt.v1" || key?.startsWith("araso.inviteCreateAttempt.v1.")) && sessionStorage.getItem(key) === "attempted") a1212PriorCreateAttempts.add(key);
+  const now = Date.now();
+  for (let i = 0; i < localStorage.length; i += 1) {
+    const key = localStorage.key(i);
+    if (key === "araso.publicCreateAttempt.v1" || key?.startsWith("araso.inviteCreateAttempt.v1.")) {
+      const attemptedAt = Number(localStorage.getItem(key));
+      if (Number.isFinite(attemptedAt) && attemptedAt > 0 && attemptedAt <= now && now - attemptedAt <= A1212_CREATE_ATTEMPT_TTL_MS) {
+        a1212PriorCreateAttempts.add(key);
+      }
+    }
   }
 } catch { /* no prior evidence: preserve normal options */ }
+if (a1212PriorCreateAttempts.size && typeof track === "function") track("flow_error", "create_lost");
 function a1212CreateEnableOnly() {
   try {
     const invite = readForkInvite(safeLocalStorage());
@@ -1584,10 +1609,14 @@ function a1202CreatePasskey(options, stage, enableOnly = false) {
     createCredential: async request => {
       stage.value = "pending";
       let created;
+      // Synchronous local metadata only: no await or network may precede WebAuthn.
+      const createAttemptKey = typeof a1212MarkCreateAttempt === "function" ? a1212MarkCreateAttempt() : null;
       try { created = await (client ? client.createCredential(request) : browserCreate(request)); }
       catch (error) {
         if (typeof track === "function") track("passkey_create", error?.name === "NotAllowedError" ? "cancel" : "fail");
         stage.value = error?.name === "NotAllowedError" ? "cancelled" : "unknown"; throw error;
+      } finally {
+        if (typeof a1212ClearCreateAttempt === "function") a1212ClearCreateAttempt(createAttemptKey);
       }
       stage.value = "created";
       if (typeof track === "function") track("passkey_create", "ok");

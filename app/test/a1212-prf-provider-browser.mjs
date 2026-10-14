@@ -33,7 +33,7 @@ try{
   await d.p.evaluate(()=>{localStorage.clear();sessionStorage.clear()});
   await d.p.goto('about:blank');await d.p.goto(d.BASE+'#invite='+token,{waitUntil:'networkidle'});
   if(mode==='adaptive'){
-   await d.p.evaluate(k=>sessionStorage.setItem(k,'attempted'),marker);
+   await d.p.evaluate(k=>localStorage.setItem(k,String(Date.now())),marker);
    await d.p.reload({waitUntil:'networkidle'});
    await d.p.evaluate(()=>window.rejectGet=true);
    await d.p.locator('#inviteFaceButton').click();await d.p.waitForSelector('#authTryAgainButton');
@@ -59,6 +59,7 @@ try{
    }
   }
   assert.equal(await d.p.evaluate(()=>window.createEval),mode!=='adaptive');
+  assert.equal(await d.p.evaluate(k=>localStorage.getItem(k),marker),null);
   pass++;console.log('PASS '+mode);
  assert.deepEqual(d.errors,[]);
 

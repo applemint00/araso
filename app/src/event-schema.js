@@ -4,7 +4,7 @@ export const EVENT_CODES = Object.freeze(Object.fromEntries(Object.entries({
   entry_blocked: ['invite_only', 'used', 'unsupported_origin'],
   inapp: ['kakao', 'line', 'instagram', 'facebook', 'other'],
   auth_tap: ['create', 'find'],
-  flow_error: ['open', 'unlock', 'home_money', 'prf_unavailable', 'other'],
+  flow_error: ['open', 'unlock', 'home_money', 'prf_unavailable', 'create_lost', 'other'],
   piggy_find: ['ok', 'after_get', 'after_get_mismatch', 'after_get_timeout', 'after_get_save', 'after_get_other', 'platform_pending'],
   passkey_create: ['ok', 'cancel', 'fail'],
   passkey_get: ['ok', 'cancel', 'fail'],
