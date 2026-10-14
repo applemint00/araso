@@ -42,7 +42,7 @@ await check('schema accepts create/find and rejects any other auth_tap code', ()
   assert.equal(validEvent({ step: 'auth_tap', code: 'other' }), false);
 });
 
-await check('find beacon queues synchronously before the WebAuthn get', async () => {
+await check('find starts WebAuthn without queuing an auth tap beacon', async () => {
   const events = [];
   const context = {
     Uint8Array,
@@ -58,7 +58,7 @@ await check('find beacon queues synchronously before the WebAuthn get', async ()
   vm.createContext(context);
   vm.runInContext(fn('requestPrf'), context);
   const result = context.requestPrf();
-  assert.deepEqual(events, ['sendBeacon', 'webauthn:get']);
+  assert.deepEqual(events, ['webauthn:get']);
   await result;
 });
 
@@ -84,19 +84,19 @@ function createHarness(client) {
   return { context, events, request, client };
 }
 
-await check('create beacon queues before browser navigator.credentials.create', async () => {
+await check('browser create starts WebAuthn without queuing an auth tap beacon', async () => {
   const harness = createHarness(null);
   await harness.context.a1202CreatePasskey({}, { value: 'idle' });
-  assert.deepEqual(harness.events.slice(0, 2), ['sendBeacon', 'webauthn:create']);
+  assert.equal(harness.events[0], 'webauthn:create');
 });
 
-await check('create beacon also precedes the injected local WebAuthn client', async () => {
+await check('injected client create starts WebAuthn without queuing an auth tap beacon', async () => {
   const harness = createHarness(true);
   const client = { createCredential: async () => { harness.events.push('local-client:create'); return {
     credentialId: new Uint8Array([1]), transports: [], prfOutput: new Uint8Array(32),
   }; } };
   await harness.context.a1202CreatePasskey({ webAuthnClient: client }, { value: 'idle' });
-  assert.deepEqual(harness.events.slice(0, 2), ['sendBeacon', 'local-client:create']);
+  assert.equal(harness.events[0], 'local-client:create');
 });
 
 console.log(`A-1242: ${pass} PASS / 0 FAIL (node spies, no real WebAuthn)`);
