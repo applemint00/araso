@@ -6782,3 +6782,28 @@ html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-wid
 .inviteOnly img { display: block; width: 100%; height: auto; }
 .inviteOnly__copy { margin-top: 24px; font: 18px/1.6 Georgia, serif; }
 .inviteOnly p { margin: 0; }
+
+/* A-1224: copy-only slots; existing artwork and controls keep their geometry. */
+.invite__explain {
+  position: absolute;
+  width: max-content;
+  margin: 0;
+  color: var(--gold);
+  font: italic 400 calc(15px / var(--invS, 1)) / 1.4 "Playfair Display", Georgia, serif;
+  transform: translateY(-50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.invite--wide .invite__explain {
+  font-size: calc(20px / var(--invS, 1));
+  text-align: right;
+  transform: translate(-100%, -50%);
+}
+.sendCard__explain {
+  position: absolute;
+  left: 46px;
+  right: 36px;
+  top: 410px;
+  color: #b88f00;
+  white-space: nowrap;
+}

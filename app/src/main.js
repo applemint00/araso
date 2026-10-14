@@ -1614,7 +1614,7 @@ async function openPiggy() {
   const attempt = beginAuthAttempt("open");
   state.authPhase = "checking";
   state.authCancelled = false;
-  setScene("birth", "The egg is checking this device.", "Face ID is your Piggy's key. No password.");
+  setScene("birth", "The egg is checking this device.", "Face ID may appear once.");
 
   // [A-579 Lane G] Gift 은 **시작 시점에** 이 생성 흐름에 묶인다 — 흐름이 도는 동안 다른 경로(checkPiggy 등)가
   // 같은 pending 을 가져가지 못한다. 묶일 수 있는 것은 **이 흐름이 방금 만든** Piggy 뿐이다(시작 전 주소 목록에
@@ -5700,6 +5700,7 @@ function fitInvite() {
   board.style.setProperty("--invVw", `${window.innerWidth}px`);
   board.style.setProperty("--invVh", `${window.innerHeight}px`);
   board.style.setProperty("--invHoleOff", `${f ? inviteHolePhase(board.dataset.kind, f.L, scale) : 0}px`);
+  if (typeof fitInviteExplanation === "function") fitInviteExplanation(board, scale);
 }
 // [A-839 · Cowork U-I1: no shrink] Invite content-group scale, pure. Landscape (wide 1280x800 arrangement) = today's board scale at 1440x900 (1.125) x HomeCard / 377 (1440x900 ~ today's
 // size); portrait (phone 420x840 arrangement) = today's rendered 390x844 phone scale (390/420) x min(HomeCard / 283, fit height (vh / 780 = the board fits the viewport height)).
@@ -5972,6 +5973,22 @@ function inviteHoles(count) {
   return `<div class="invite__holes" aria-hidden="true">${Array.from({ length: count }, () => `<i class="invite__hole"></i>`).join("")}</div>`;
 }
 
+// A-1224: position only the readable copy beside the existing actor. The actor,
+// envelope and button retain their original transforms and animation clocks.
+function inviteExplanation(gift) {
+  return gift ? "" : '<p class="invite__explain">Your Piggy keeps your money.<br>Tap Face ID. It hatches!</p>';
+}
+function fitInviteExplanation(board, scale) {
+  const copy = board.querySelector(".invite__explain");
+  const chog = board.querySelector("[data-chog-invite]");
+  if (!copy || !chog || !(scale > 0)) return;
+  const actor = chog.getBoundingClientRect();
+  const paper = board.querySelector(".invite__paper").getBoundingClientRect();
+  const wide = board.dataset.kind === "wide";
+  copy.style.left = `${((wide ? actor.left - 14 : actor.right + 10) - paper.left) / scale}px`;
+  copy.style.top = `${(actor.top + actor.height / 2 - paper.top) / scale}px`;
+}
+
 // 모바일 아트보드 — Main.dc.html 420×840
 function inviteMobile(gift = null) {
   return `
@@ -5982,6 +5999,7 @@ function inviteMobile(gift = null) {
         <div class="invite__hero" aria-hidden="true">${inviteHero("/invite", gift && GIFT_PAPER_LINES[gift])}</div>
         <img class="invite__burst" src="/invite/burst@2x.png" alt="" aria-hidden="true" />
         ${inviteFace(!!gift)}
+        ${inviteExplanation(gift)}
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/trail@2x.png" alt="" />
           ${chogInviteMarkup()}
@@ -6002,6 +6020,7 @@ function inviteWide(gift = null) {
         <div class="invite__hero" aria-hidden="true">${inviteHero("/invite/wide", gift && GIFT_PAPER_LINES[gift])}</div>
         <img class="invite__burst" src="/invite/wide/burst@2x.png" alt="" aria-hidden="true" />
         ${inviteFace(!!gift)}
+        ${inviteExplanation(gift)}
         <div class="invite__chog" aria-hidden="true">
           <img class="invite__trail" src="/invite/wide/trail@2x.png" alt="" />
         </div>
@@ -13835,6 +13854,8 @@ function startHomeDrowsyTimer() {
 function renderSendStay() {
   const blocked = !isAllowedPiggyRpId();
   const piggyName = displayPiggyName();
+  const explain = !blocked && !sendBusy() && !state.detail
+    && (!state.message || state.message === "Piggy is home.");
   // [A-354-b] Home 대기(초그 + HomeNotepad, 클릭 가능)와 Send 카드 표시를 분리한다.
   // state.sendCardVisible 이 설 때만 카드를 낀다 — 도착·stay 직후에는 항상 꺼져 있다.
   // [A-356 §1/§7 → A-359 §1] 공통 카드 자리(.cardAnchor, style.css) 안에 얹는다 — 이
@@ -13865,7 +13886,7 @@ function renderSendStay() {
             terms: [FIRST_SEND_USD_LABEL],
             blocked,
             busy: sendBusy(),
-          })}
+          }).replace('<div class="sendCard__footer">', `${explain ? '<p class="sendCard__detail sendCard__explain">You sign. Piggy takes your money to work.</p>' : ""}<div class="sendCard__footer">`)}
         </div>
       </div>`
     : "";
