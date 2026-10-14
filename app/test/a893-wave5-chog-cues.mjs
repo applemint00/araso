@@ -146,7 +146,7 @@ await check("N3 CG-05 wiring: chogHomeMarkupForExplore reads the derivation at r
 
 await check("N4 CG-01: said before the first card, restored after its render, and cleared by the first Send tap", () => {
   const home = fnBody("mountHome");
-  assert.match(home, /if \(!sayFirstSendCue\(\)\) return;\s*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/);
+  assert.match(home, /sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*\s*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/);
   assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);/);
   assert.match(fnBody("sayFirstSendCue"), /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*document\.querySelector\("#firstSendChogCue"\)\?\.remove\(\);[\s\S]*\{ once: true \}/);
   const ok = sandbox({ scene: "sendstay", sendCardVisible: true });

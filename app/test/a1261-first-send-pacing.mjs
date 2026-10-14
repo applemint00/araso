@@ -19,7 +19,7 @@ assert.match(MAIN, /const HOME_FIRST_JOURNEY_CARD_MS = 1200;/);
 assert.match(MAIN, /const POST_FILE_QUIET_HOME_MS = 8000;/);
 assert.match(cue, /const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job\.";/);
 assert.doesNotMatch(cue, /!state\.sendCardVisible/);
-assert.match(settle, /const announceFirstSend = \(\) => \{[\s\S]*if \(!sayFirstSendCue\(\)\) return;[\s\S]*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);[\s\S]*sceneTimeout\(announceFirstSend, FIRST_SEND_QUIET_MS\);/);
+assert.match(settle, /const announceFirstSend = \(\) => \{[\s\S]*sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*[\s\S]*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);[\s\S]*sceneTimeout\(announceFirstSend, FIRST_SEND_QUIET_MS\);/);
 assert.match(settle, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);/);
 assert.match(cue, /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*document\.querySelector\("#firstSendChogCue"\)\?\.remove\(\);[\s\S]*\{ once: true \}/);
 
@@ -41,8 +41,10 @@ assert.equal(say(), true);
 assert.equal(typeof click, "function");
 click();
 assert.equal(removed, true, "first Send tap removes CG-01");
-const sequenceContract = /if \(!sayFirstSendCue\(\)\) return;[\s\S]*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/;
-assert.equal(sequenceContract.test(settle.replace("if (!sayFirstSendCue()) return;", "")), false, "dropping the cue fails the sequence pin");
+// [A-1265] the Send card is never gated on the cue line being inserted
+assert.doesNotMatch(settle, /if \(!sayFirstSendCue\(\)\) return;/);
+const sequenceContract = /sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*[\s\S]*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/;
+assert.equal(sequenceContract.test(settle.replace(/sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*/, "")), false, "dropping the cue fails the sequence pin");
 assert.equal(/const FIRST_SEND_QUIET_MS = 4500;/.test(MAIN.replace("const FIRST_SEND_QUIET_MS = 4500;", "const FIRST_SEND_QUIET_MS = 1200;")), false, "reverting the quiet beat fails its pin");
 
-console.log("A1261 16/16 PASS");
+console.log("A1261 17/17 PASS");

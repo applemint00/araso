@@ -5350,6 +5350,9 @@ function goHomeFromFilebox() {
   // 의 실제 진입점이다. Second 를 이 세션에서 이미 끝냈다면 세우지 않는다(Owner "Second
   // 완료: 조용한 Home만, Explore 자동재실행 0").
   state.homeQuietForExplore = !state.secondJourneyCompletedOnce;
+  // [A-1265 F1] The First Send card has done its job once the Receipt is filed; left up, it re-renders on Home and
+  // blocks the post-file "tap me!" (a891ArmPostFileQuietHome's arm() returns while sendCardVisible).
+  state.sendCardVisible = false;
   setScene("sendstay", "Piggy is home.", "");
 }
 
@@ -13638,7 +13641,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
           sceneTimeout(announceFirstSend, HOME_FIRST_JOURNEY_CARD_MS);
           return;
         }
-        if (!sayFirstSendCue()) return;
+        sayFirstSendCue(); // [A-1265] a missing cue line only drops the line — the Send card still follows
         sceneTimeout(revealSendCard, FIRST_SEND_CUE_LEAD_MS);
       };
       sceneTimeout(announceFirstSend, FIRST_SEND_QUIET_MS);
@@ -14508,6 +14511,7 @@ let a956EntryBusy = false;
 async function a956ForkMoneyAllowed() {
   if (!onForkProfile(CHAIN_PROFILE)) return false;
   try {
+    if (!a1160PublicEntryOpen() && typeof a1265AwaitPublicState === "function") await a1265AwaitPublicState(); // [A-1265] switch boot asked before public_state answered
     const r = await checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: state.address, forkInstanceId: CHAIN_PROFILE.forkInstanceId });
     if (r.allowed === true) return true;
     if (r.reenter === true) return (await a956Enter({ reenter: true })) === true;
@@ -14594,6 +14598,10 @@ async function a956Enter({ reenter = false } = {}) {
   a891ArmPostFileQuietHome = (...args) => {
     if (!entryOpen()) return a956BaseArm(...args);
     a891CueChog = null;
+    if (!readForkInvite() && !a1160PublicEntryOpen() && typeof a1265PublicPending === "function" && a1265PublicPending()) { // [A-1265] public_state still in flight: arm once it lands
+      a1265AwaitPublicState().then(() => { if (a1160PublicEntryOpen() && state.scene === "sendstay") a891ArmPostFileQuietHome(...args); });
+      return undefined;
+    }
     if (state.secondJourneyCompletedOnce || (!readForkInvite() && !a1160PublicEntryOpen()) || !journey1Pointers(readReceipts())) return undefined;
     const arm = () => {
       if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || !homeChog) return;
@@ -14644,6 +14652,15 @@ function a1160TakePublicCreate() {
     return sessionStorage.getItem(key) === "attempted";
   } catch { return false; }
 }
+// [A-1265] Settles once the boot public_state read has finished (either answer). Callers that would otherwise read the
+// public flag before the server answered (the post-file / switch-boot Journey 2 checks) wait on this instead of failing closed.
+let a1265PublicDone = null;
+const a1265PublicSettled = new Promise((resolve) => { a1265PublicDone = resolve; });
+function a1265PublicPending() { return a1265PublicDone !== null; }
+function a1265AwaitPublicState() {
+  return state.a1223PublicPending === false && a1265PublicDone === null ? Promise.resolve()
+    : Promise.race([a1265PublicSettled, new Promise((resolve) => setTimeout(resolve, 6000))]);
+}
 async function a1160RefreshPublicEntry() {
   state.publicEntryOpen = false;
   state.a1223PublicPending = true;
@@ -14661,6 +14678,7 @@ async function a1160RefreshPublicEntry() {
     clearTimeout(timer);
     state.a1223PublicPending = false;
     if (typeof a1223FinishEntry === "function") a1223FinishEntry();
+    if (a1265PublicDone) { a1265PublicDone(); a1265PublicDone = null; }
   }
 }
 

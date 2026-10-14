@@ -67,7 +67,7 @@ await check("N3 First Home: no tap cue/silent hold; 4500 ms quiet, CG-01, 2500 m
   const home = topFn(MAIN, "mountHome");
   assert.equal(/startTapCue/.test(strip(home)), false, "mountHome never starts the cue");
   assert.doesNotMatch(home, /a891StartFirstArrivalHold\(\)/);
-  assert.match(home, /if \(!sayFirstSendCue\(\)\) return;\s*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/);
+  assert.match(home, /sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*\s*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/);
   assert.match(home, /sceneTimeout\(announceFirstSend, FIRST_SEND_QUIET_MS\);/);
   assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);/);
 });
@@ -78,7 +78,7 @@ await check("N4 post-file path: revealExplorePaper (1.2 s auto-Explore) is gone;
   assert.match(home, /if \(state\.scene === "sendstay" && state\.homeQuietForExplore\) \{\s*state\.homeQuietForExplore = false;\s*a891ArmPostFileQuietHome\(\);\s*\}/);
   assert.equal(/openSecondJourneyExplore\(\)/.test(strip(home)), false, "mountHome never opens Explore by itself");
   assert.match(MAIN, /state\.homeQuietForExplore = state\.scene === "sendstay" && state\.tripClosed && !state\.secondJourneyCompletedOnce;/);
-  assert.match(cutFn(MAIN, "goHomeFromFilebox"), /markResultMotionSeen\(\);[\s\S]*state\.homeQuietForExplore = !state\.secondJourneyCompletedOnce;\s*setScene\("sendstay", "Piggy is home\.", ""\);/);
+  assert.match(cutFn(MAIN, "goHomeFromFilebox"), /markResultMotionSeen\(\);[\s\S]*state\.homeQuietForExplore = !state\.secondJourneyCompletedOnce;[\s\S]*?state\.sendCardVisible = false;\s*setScene\("sendstay", "Piggy is home\.", ""\);/);
   assert.match(home, /onTap: \(\) => a891HomeChogTap\(\),/);
 });
 
