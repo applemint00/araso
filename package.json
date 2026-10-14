@@ -5,6 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
+    "rehearse": "node app/e2e/a1264-rehearsal.mjs",
     "dev": "vite app --host 0.0.0.0",
     "build": "vite build app --outDir ../dist --emptyOutDir",
     "preview": "vite preview --host 0.0.0.0",
