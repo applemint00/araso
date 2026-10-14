@@ -4,7 +4,7 @@ import {readFileSync} from 'node:fs';
 import {keccak256} from 'viem';
 const src=readFileSync(process.env.A1158_MAIN_PATH || new URL('../src/main.js',import.meta.url),'utf8');
 const i=src.indexOf('async function startPiggyOpen()'),fn=src.slice(i,src.indexOf('\n}\n',i)+2);
-const helpers=src.slice(src.indexOf('let a1158UnboundInvite'),src.indexOf('void a1158PrefetchInvite();'));
+const helpers=src.slice(src.indexOf('let a1223BoundInvite'),src.indexOf('void a1158PrefetchInvite();'));
 const storage=()=>{const m=new Map();return {getItem:k=>m.get(k)??null,setItem:(k,v)=>m.set(k,v),removeItem:k=>m.delete(k)}};
 function tab({reply={ok:true,bound:false},existing=false,invite='synthetic-invite-1158',shared=storage(),pending=false}={}){
  const state={address:existing?'existing':'',freshRecoveryTried:false},calls={get:0,create:0,fetch:0};let resolve;
@@ -16,10 +16,10 @@ function tab({reply={ok:true,bound:false},existing=false,invite='synthetic-invit
 }
 let pass=0;async function check(n,f){await f();pass++;console.log('PASS '+n)}
 await check('unbound first tap calls create synchronously with no tap-time fetch',async()=>{const d=tab();await d.prefetch();const result=d.open();assert.deepEqual(d.calls,{get:0,create:1,fetch:1});await result});
-await check('bound/offline/malformed replies keep get-first',async()=>{for(const reply of [{ok:true,bound:true},null,{ok:true,bound:'false'},{ok:false,bound:false}]){const d=tab({reply});await d.prefetch();await d.open();assert.equal(d.calls.get,1);assert.equal(d.calls.create,0)}});
+await check('used invite blocks auth; offline/malformed keep get-first',async()=>{for(const reply of [{ok:true,bound:true},null,{ok:true,bound:'false'},{ok:false,bound:false}]){const d=tab({reply});await d.prefetch();await d.open();assert.equal(d.calls.get,reply?.bound===true?0:1);assert.equal(d.calls.create,0)}});
 await check('existing identity and no invite never prefetch',async()=>{for(const opts of [{existing:true},{invite:null}]){const d=tab(opts);await d.prefetch();await d.open();assert.deepEqual(d.calls,{get:1,create:0,fetch:0})}});
-await check('late prefetch cannot override find-first after early tap',async()=>{const d=tab({pending:true});const p=d.prefetch();await d.open();d.resolve();await p;assert.equal(vm.runInContext('a1158UnboundInvite',d.ctx),null);assert.equal(d.calls.get,1)});
-await check('uncertain creation reload preserves recovery before another create',async()=>{const a=tab();await a.prefetch();await a.open();const b=tab({shared:a.shared});await b.prefetch();await b.open();assert.deepEqual(b.calls,{get:1,create:0,fetch:0});await b.open();assert.equal(b.calls.create,1)});
+await check('A1223 pending metadata blocks early tap, then unbound permits create',async()=>{const d=tab({pending:true});const p=d.prefetch();await d.open();assert.equal(d.calls.get+d.calls.create,0);d.resolve();await p;await d.open();assert.equal(d.calls.create,1)});
+await check('uncertain creation reload preserves recovery before another create',async()=>{const a=tab();await a.prefetch();await a.open();const b=tab({shared:a.shared});await b.prefetch();await b.open();assert.deepEqual(b.calls,{get:1,create:0,fetch:1});await b.open();assert.equal(b.calls.create,1)});
 await check('late-created or platform-active protection wins over metadata',async()=>{for(const field of ['lateCreatedCredential','platformAuthInflight']){const d=tab();await d.prefetch();d.ctx[field]={};await d.open();assert.equal(d.calls.create,0);assert.equal(d.calls.get,1)}});
 await check('invite hint remains valid ten minutes later, still one use',async()=>{const d=tab();await d.prefetch();d.ctx.Date={now:()=>Date.now()+10*60*1000};await d.open();assert.equal(d.calls.create,1);await d.open();assert.equal(d.calls.create,1);assert.equal(d.calls.get,1)});
 console.log(`${pass} PASS / 0 FAIL / 0 SKIP`);

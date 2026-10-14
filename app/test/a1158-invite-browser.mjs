@@ -20,9 +20,10 @@ try{
   reply=result;await d.p.evaluate(existing=>{localStorage.clear();sessionStorage.clear();if(existing)localStorage.setItem('araso.piggyReceived','1')},existing);
   await d.p.goto('about:blank');
   await d.p.goto(d.BASE+'#invite=synthetic-invite-1158',{waitUntil:'networkidle'});
+  if(name==='bound'){await d.p.getByText('This invite was already used.',{exact:true}).waitFor();assert.equal(await d.p.locator('#inviteFaceButton').count(),0);assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{get:0,create:0,gesture:false});pass++;continue}
   await d.p.locator('#inviteFaceButton').click();await d.p.waitForSelector(existing ? '#checkButton' : '#authTryAgainButton');
   assert.deepEqual(await d.p.evaluate(()=>window.authCounts),{get:1,create:0,gesture:false},name);pass++;
  }
  assert.deepEqual(d.errors,[]);pass++;
- console.log(`${pass} PASS / 0 FAIL / 0 SKIP: unbound create+gesture+duplicate0, bound get, offline get, existing get, pageerror0`);
+ console.log(`${pass} PASS / 0 FAIL / 0 SKIP: unbound create+gesture+duplicate0, bound blocked, offline get, existing get, pageerror0`);
 }finally{await d.close()}

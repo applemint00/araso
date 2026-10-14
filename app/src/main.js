@@ -1614,7 +1614,7 @@ async function openPiggy() {
   const attempt = beginAuthAttempt("open");
   state.authPhase = "checking";
   state.authCancelled = false;
-  setScene("birth", "The egg is checking this device.", "Face ID may appear once.");
+  setScene("birth", "The egg is checking this device.", "Face ID is your Piggy's key. No password.");
 
   // [A-579 Lane G] Gift 은 **시작 시점에** 이 생성 흐름에 묶인다 — 흐름이 도는 동안 다른 경로(checkPiggy 등)가
   // 같은 pending 을 가져가지 못한다. 묶일 수 있는 것은 **이 흐름이 방금 만든** Piggy 뿐이다(시작 전 주소 목록에
@@ -1995,11 +1995,12 @@ async function settleBoundGiftClaim(binding, claim) {
 }
 
 async function startPiggyOpen() {
+  if (typeof a1223EntryWaiting === "function" && (a1223EntryWaiting() || a1223UsedInviteBlocked())) return { ok: false, reason: "invite_unavailable" };
   if (typeof inviteOnlyEntry === "function" && inviteOnlyEntry()) return { ok: false, reason: "invite_only" };
   if (readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential) || (typeof a1214ReadPendingBirth === "function" && a1214ReadPendingBirth())) {
     return checkPiggy();
   }
-  if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && !readForkInvite(safeLocalStorage())) {
+  if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && (!readForkInvite(safeLocalStorage()) || (typeof a1223IgnoreUsedInvite === "function" && a1223IgnoreUsedInvite()))) {
     if (a1160TakePublicCreate()) return openPiggy();
     const result = await checkPiggy();
     // Same explicit retry contract as invite recovery; blocked/late attempts cannot authorize create.
@@ -5943,8 +5944,8 @@ function inviteHero(dir, lines = null) {
         <img class="invite__stamp" src="${dir}/stamp@2x.png" alt="" />
         <img class="invite__underline" src="${dir}/underline@2x.png" alt="" />
         <div class="invite__hand">
-          <span class="invite__line1">${lines ? lines[0] : "something small"}</span>
-          <span class="invite__line2">${lines ? lines[1] : "just for you"}</span>
+          <span class="invite__line1">${lines ? lines[0] : "your money,"}</span>
+          <span class="invite__line2">${lines ? lines[1] : "as a little Piggy"}</span>
         </div>
       </div>
     </div>
@@ -6016,11 +6017,11 @@ function inviteOnlyEntry() {
   return !a1160PublicEntryOpen() && !a1209EntryInvite() && !readCredential() && !hasReceivedPiggy() && !state.address;
 }
 
-function renderInviteOnly() {
+function renderInviteOnly(used = false) {
   return `<section class="inviteOnly" data-scene="invite-only">
     <div class="inviteOnly__content">
       <img src="/og-invite.png" width="1200" height="630" alt="" />
-      <div class="inviteOnly__copy"><p>Araso is invite-only for now.</p><p>Opens to everyone at 12:00 KST.</p></div>
+      <div class="inviteOnly__copy"><p>${used ? "This invite was already used." : "Araso is invite-only for now."}</p><p>${used ? "If it was you, open Araso where you made your Piggy." : "Opens to everyone at 12:00 KST."}</p></div>
     </div>
   </section>`;
 }
@@ -14395,6 +14396,7 @@ function a1160TakePublicCreate() {
 }
 async function a1160RefreshPublicEntry() {
   state.publicEntryOpen = false;
+  state.a1223PublicPending = true;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
@@ -14405,7 +14407,11 @@ async function a1160RefreshPublicEntry() {
       state.publicEntryOpen = true;
       render(); // metadata only; no authentication, selection or payment
     }
-  } catch { /* fail closed */ } finally { clearTimeout(timer); }
+  } catch { /* fail closed */ } finally {
+    clearTimeout(timer);
+    state.a1223PublicPending = false;
+    if (typeof a1223FinishEntry === "function") a1223FinishEntry();
+  }
 }
 
 // ── [A-960] invite link → first grant. One block; the code above and below is unchanged. ──────────────────────────────────────────────
@@ -14449,26 +14455,79 @@ try {
 } catch {} // failed persistence keeps the link and the in-memory entry fallback
 // [A-1158] Read before the tap; never await the server in the WebAuthn gesture.
 // The one-use hint is bound to this token and this tab, not an authorization to bind/fund.
+// A1223: verdicts are tab-local fingerprints only. Existing invite storage is unchanged.
+let a1223BoundInvite = null;
+let a1223PublicIgnoredInvite = null;
+function a1223HasPiggy() {
+  return !!(readCredential() || hasReceivedPiggy() || state.address
+    || (typeof readPiggyName === "function" && readPiggyName())
+    || (typeof hasPlayedBirth === "function" && hasPlayedBirth()));
+}
+function a1223InviteFingerprint() {
+  try {
+    const invite = typeof a1209EntryInvite === "function" ? a1209EntryInvite() : a960ReadInvite(safeLocalStorage());
+    return invite ? a1158AttemptKey(invite) : null;
+  } catch { return null; }
+}
+function a1223UsedInvite() {
+  return !!a1223BoundInvite && a1223BoundInvite === a1223InviteFingerprint();
+}
+function a1223EntryWaiting() {
+  return !a1223HasPiggy() && (state.a1223InvitePending === true || (a1223UsedInvite() && state.a1223PublicPending === true));
+}
+function a1223UsedInviteBlocked() {
+  return !a1223HasPiggy() && a1223UsedInvite() && !(typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen());
+}
+function a1223IgnoreUsedInvite() {
+  return !!a1223PublicIgnoredInvite && a1223PublicIgnoredInvite === a1223InviteFingerprint();
+}
+function a1223FinishEntry() {
+  if (!a1223HasPiggy() && a1223UsedInvite() && typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen()) {
+    a1223PublicIgnoredInvite = a1223BoundInvite;
+  }
+  if (!a1223HasPiggy() && typeof render === "function") Promise.resolve().then(() => {
+    render();
+    if (typeof startTesterIntro === "function") startTesterIntro();
+  });
+}
+function a1223LoadingMarkup() {
+  // Same approved loading art/classes. Static hold; existing motion/timing rules stay unchanged.
+  return `<div class="a995bLoading" data-a1223-loading="1" aria-busy="true" style="--a995b-loading-splash:url('/splash/splash-1170x2532.png')"><div class="a995bLoading__face"><object type="image/svg+xml" data="/motion/a995b-loading-piggy.svg" tabindex="-1"></object></div></div>`;
+}
 let a1158UnboundInvite = null;
 function a1158AttemptKey(invite) {
   return "araso.inviteCreateAttempt.v1." + keccak256(new TextEncoder().encode(invite));
 }
 async function a1158PrefetchInvite() {
   a1158UnboundInvite = null;
+  let controller, timer;
+  let expired = false;
   try {
-    const invite = a960ReadInvite(safeLocalStorage());
-    if (!invite || readCredential() || hasReceivedPiggy() || state.address || sessionStorage.getItem(a1158AttemptKey(invite))) return;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
-    try {
-      const response = await fetch("/api/fork-entry", { method: "POST", headers: { "content-type": "application/json", "x-araso-invite": invite }, body: JSON.stringify({ action: "invite_state" }), cache: "no-store", signal: controller.signal });
-      const out = response.ok ? await response.json() : null;
-      if (out?.ok === true && out.bound === false && a960ReadInvite(safeLocalStorage()) === invite && !state.freshRecoveryTried && !authAttempt && !platformAuthInflight) {
-        a1158UnboundInvite = { invite };
-      }
-    } finally { clearTimeout(timer); }
-  } catch { /* unknown/offline keeps find-first */ }
+    const invite = typeof a1209EntryInvite === "function" ? a1209EntryInvite() : a960ReadInvite(safeLocalStorage());
+    if (!invite || a1223HasPiggy()) return;
+    state.a1223InvitePending = true;
+    controller = new AbortController();
+    timer = setTimeout(() => {
+      expired = true;
+      controller.abort();
+      state.a1223InvitePending = false;
+      a1223FinishEntry();
+    }, 5000);
+    const response = await fetch("/api/fork-entry", { method: "POST", headers: { "content-type": "application/json", "x-araso-invite": invite }, body: JSON.stringify({ action: "invite_state" }), cache: "no-store", signal: controller.signal });
+    const out = response.ok ? await response.json() : null;
+    if (expired || a1223HasPiggy() || a1223InviteFingerprint() !== a1158AttemptKey(invite)) return;
+    if (out?.ok === true && out.bound === true) a1223BoundInvite = a1158AttemptKey(invite);
+    if (out?.ok === true && out.bound === false && !sessionStorage.getItem(a1158AttemptKey(invite)) && !state.freshRecoveryTried && !authAttempt && !platformAuthInflight) {
+      a1158UnboundInvite = { invite };
+    }
+  } catch { /* unknown/offline keeps the existing envelope/find-first */ }
+  finally {
+    clearTimeout(timer);
+    state.a1223InvitePending = false;
+    a1223FinishEntry();
+  }
 }
+
 function a1158TakeUnboundInvite() {
   const hint = a1158UnboundInvite;
   a1158UnboundInvite = null;
@@ -14483,6 +14542,7 @@ function a1158TakeUnboundInvite() {
 }
 void a1158PrefetchInvite();
 async function a960BindInvite(address) {
+  if (typeof a1223IgnoreUsedInvite === "function" && a1223IgnoreUsedInvite()) return;
   try {
     const storage = safeLocalStorage();
     const invite = a960ReadInvite(storage);
@@ -15650,9 +15710,14 @@ function render() {
   if (holdInviteAuthPresentation()) return;
   resetRecordsForFullRender();
   teardownScene();
-  if (inviteOnlyEntry()) {
+  if (a1223EntryWaiting()) {
     clearInviteTimers();
-    app.innerHTML = renderInviteOnly();
+    app.innerHTML = a1223LoadingMarkup();
+    return;
+  }
+  if (inviteOnlyEntry() || a1223UsedInviteBlocked()) {
+    clearInviteTimers();
+    app.innerHTML = renderInviteOnly(a1223UsedInviteBlocked());
     return;
   }
   // [A-633 A] 잠긴 동안은 목적지 대신 LOGIN_CHECKING(또는 해제 실패 카드)만 — 목적지 mount·1회용 표 소비 0.
@@ -16231,7 +16296,7 @@ function removeTesterIntro() {
 }
 
 function startTesterIntro() {
-  if (inviteOnlyEntry()) return;
+  if (inviteOnlyEntry() || a1223EntryWaiting() || a1223UsedInviteBlocked()) return;
   if (!testerIntroPending) return;
   testerIntroPending = false;
   if (state.scene !== "received" || state.appLock) return;
@@ -16276,7 +16341,7 @@ render();
 startTesterIntro();
 // [A-995-b] Same-turn PWA splash -> loading bridge. The browser cannot paint the first render
 // before this module task ends, so the approved 3.6 s overlay remains the first visible surface.
-if (!inviteOnlyEntry()) mountA995bLoadingPiggy();
+if (!inviteOnlyEntry() && !a1223EntryWaiting() && !a1223UsedInviteBlocked()) mountA995bLoadingPiggy();
 
 // [A-697] Invite fit rides the same debounce as Home (A-666 §2): a real width/orientation change
 // recomputes synchronously (so the wide<->mobile `render()` switch in fitInvite is immediate), an
