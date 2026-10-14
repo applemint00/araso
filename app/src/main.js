@@ -1,3 +1,4 @@
+import { track } from "./track.js";
 import { waitForPasskey } from "./passkey-wait.js";
 import { createResponsiveLayout, responsiveFrame } from "./responsive-layout.js";
 import {
@@ -1222,6 +1223,7 @@ function safeErrorCode(error) {
   return /^-?\d{1,6}$/.test(code) || /^[A-Z][A-Z0-9_]{0,39}$/.test(code) ? code : "";
 }
 function recordSafeError(phase, error) {
+  if (typeof track === "function") track("send", ({ recover: "auth", grant: "grant", "grant-visibility": "grant", simulate: "simulate", send: "fail" })[phase] || "fail");
   const entry = { at: Date.now(), phase, category: safeErrorCategory(error), code: safeErrorCode(error) };
   try {
     localStorage.setItem(LAST_SEND_ERROR_KEY, JSON.stringify(entry));
@@ -1250,7 +1252,11 @@ function requestPrf(credential, { prfSalt = null } = {}) {
     timeout: 120_000,
     // LOCAL_ONLY. 잠금이 하나라도 걸리면 빈 객체다(위 localTestWebAuthnOption 주석).
     ...localTestWebAuthnOption(),
-  }), { timeoutMs: UNLOCK_UI_WAIT_MS }).catch((error) => {
+  }), { timeoutMs: UNLOCK_UI_WAIT_MS }).then((result) => {
+    if (typeof track === "function") track("passkey_get", "ok");
+    return result;
+  }).catch((error) => {
+    if (typeof track === "function") track("passkey_get", isCancelledAuthError(error) ? "cancel" : "fail");
     console.debug("passkey", error?.name === "AuthWaitTimeout" ? "timeout" : isCancelledAuthError(error) ? "cancelled" : "failed");
     throw error;
   });
@@ -1560,8 +1566,12 @@ function a1202CreatePasskey(options, stage, enableOnly = false) {
       stage.value = "pending";
       let created;
       try { created = await (client ? client.createCredential(request) : browserCreate(request)); }
-      catch (error) { stage.value = error?.name === "NotAllowedError" ? "cancelled" : "unknown"; throw error; }
+      catch (error) {
+        if (typeof track === "function") track("passkey_create", error?.name === "NotAllowedError" ? "cancel" : "fail");
+        stage.value = error?.name === "NotAllowedError" ? "cancelled" : "unknown"; throw error;
+      }
       stage.value = "created";
+      if (typeof track === "function") track("passkey_create", "ok");
       if (created.prfOutput === undefined) {
         stage.pin = {
           credentialId: btoa(String.fromCharCode(...created.credentialId)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""),
@@ -2404,6 +2414,7 @@ async function requestGrant(address) {
       body: JSON.stringify({ address }),
     });
   } catch {
+    if (typeof track === "function") track("grant", "unavailable");
     throw new Error("relayer unreachable");
   }
   let body = null;
@@ -2416,11 +2427,14 @@ async function requestGrant(address) {
   // 수취 주소 잔고로 판정하므로(api/grant.js), 한 번 받은 Piggy 는 그 뒤 매번 403 을 받는다.
   // 이걸 에러로 처리하면 두 번째 Send 부터 영원히 막힌다(2026-09-03 A-004 실측).
   if (res.status === 403 && body?.error === "already funded") {
+    if (typeof track === "function") track("grant", "already_funded");
     return { granted: false, txHash: "" };
   }
   if (!res.ok || !body?.ok) {
+    if (typeof track === "function") track("grant", ({ "not allowlisted": "not_allowlisted", "grant cap reached": "cap_reached", "grant store unavailable": "unavailable", "grant unconfirmed": "unconfirmed", "grant reverted": "reverted" })[body?.error] || "fail");
     throw new Error(body?.error || "relayer unreachable");
   }
+  if (typeof track === "function") track("grant", "ok");
   return { granted: true, txHash: body.txHash };
 }
 
@@ -2693,6 +2707,7 @@ async function settleSend({ before, address, piggyId = "", grantTxHash = "", dep
 
 // 결말 하나가 화면과 저장을 같이 정한다. 성공했을 때만 바퀴가 닫힌다.
 function finishTrip(trip) {
+  if (typeof track === "function") track("send", trip.outcome === "done" ? "ok" : "unconfirmed");
   state.tripOutcome = trip.outcome;
   state.tripReason = trip.reason;
   // [A-699 M2-alpha] The receipt save is verified (rememberReceipt re-reads storage) and can no longer throw out of
@@ -3184,6 +3199,7 @@ function syncSendButton() {
 }
 
 async function sendPiggy() {
+  if (typeof track === "function") track("send_tap", "ok");
   // [A-441] 두 번째 호출·미확정 기록이 있으면 아무것도 시작하지 않는다.
   if (sendInFlight) return;
   // Testnet-only path: off the testnet profile nothing starts — no grant, no auth prompt, no
@@ -10720,7 +10736,7 @@ async function a898FaceId() {
   // [A-915] a turned-on Gift create config that cannot work (escrow/sponsor unset or malformed, deadline passed, ...) is refused BEFORE Face ID: existing "Not ready yet" screen, no signer.
   if (typeof a915PreFaceIdRefusal === "function") {
     const a915Why = a915PreFaceIdRefusal();
-    if (a915Why) { state.giftSend = { ...d0, stage: "unavailable", refusal: a915Why, lock: null }; refreshHomePaperMount(); return; }
+    if (a915Why) { if (typeof track === "function") track("gift", "unavailable"); state.giftSend = { ...d0, stage: "unavailable", refusal: a915Why, lock: null }; refreshHomePaperMount(); return; }
   }
   state.giftSend = giftSendReduce(d0, { type: "faceid_start", lock });
   // From here a payer signer may be live: it ALWAYS ends (finally), even if the draft is closed or anything throws.
@@ -10736,7 +10752,10 @@ async function a898FaceId() {
     if (!sel || sel.id !== cur.payer.id) { state.giftSend = giftSendReduce(cur, { type: "payer_changed" }); return; }
     const after = giftSendReduce(cur, { type: "faceid_result", ok: proved.ok === true, signerAddress: proved.signerAddress });
     state.giftSend = after;
-    if (!after || after.stage !== "executing") return;
+    if (!after || after.stage !== "executing") {
+      if (typeof track === "function") track("gift", "auth");
+      return;
+    }
     // [A-915] GIFT_SEND_CONFIG.executor stays null (OFF); the Gift create executor below exists only while A915_GIFT_CREATE_CONFIG is turned on.
     const executor = GIFT_SEND_CONFIG.executor || (typeof a915GiftCreateExecutor === "function" ? a915GiftCreateExecutor() : null);
     if (typeof executor === "function") {
@@ -10761,6 +10780,7 @@ async function a898FaceId() {
   }
   const last = state.giftSend;
   if (last && last.draftId === d0.draftId && last.stage === "executing") {
+    if (typeof track === "function") track("gift", result.ok ? "ok" : ({ requote_needed: "requote", executor_unavailable: "unavailable" })[result.reason] || "fail");
     state.giftSend = giftSendReduce(last, { type: "executed", result });
     if (state.giftSend.stage === "done") a898ForgetDraft();
   }
@@ -15763,6 +15783,10 @@ function render() {
   if (inviteOnlyEntry() || a1223UsedInviteBlocked()) {
     clearInviteTimers();
     app.innerHTML = renderInviteOnly(a1223UsedInviteBlocked());
+    if (typeof track === "function") {
+      if (a1223UsedInviteBlocked()) track("entry_shown", "used");
+      track("entry_blocked", a1223UsedInviteBlocked() ? "used" : "invite_only");
+    }
     return;
   }
   // [A-633 A] 잠긴 동안은 목적지 대신 LOGIN_CHECKING(또는 해제 실패 카드)만 — 목적지 mount·1회용 표 소비 0.
@@ -15796,6 +15820,10 @@ function render() {
   // 엉뚱한 시점에 Birth 로 넘어간다.
   if (state.scene !== "received") clearInviteTimers();
   app.innerHTML = markup;
+  if (typeof track === "function") {
+    if (state.scene === "received") track("entry_shown", a1160PublicEntryOpen() && (!a1209EntryInvite() || a1223UsedInvite()) ? "public" : "invite");
+    if (state.scene === "sendstay") track("home_reached", "ok");
+  }
 
   document.querySelector("#inviteFaceButton")?.addEventListener("click", openInvite);
   if (state.scene === "received") {
