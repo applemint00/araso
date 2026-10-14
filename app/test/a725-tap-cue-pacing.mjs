@@ -61,7 +61,8 @@ function check(label, got, want) {
 
 // ═══ Part 1 — node ══════════════════════════════════════════════════════════════════════════
 const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
-const MAIN = stripComments(readFileSync(path.join(APP_DIR, "src/main.js"), "utf8"));
+const RAW_MAIN = readFileSync(path.join(APP_DIR, "src/main.js"), "utf8");
+const MAIN = stripComments(RAW_MAIN);
 const CHOG = stripComments(readFileSync(path.join(APP_DIR, "src/chog-home.js"), "utf8"));
 
 check("TAP_CUE_TIMING.holdMs = 1500 (upper edge of the recorded 1.0–1.5s Owner envelope)", TAP_CUE_TIMING.holdMs, HOLD_TARGET_MS);
@@ -79,7 +80,7 @@ check("copy unchanged: label text 'tap me!'", /label\.textContent = "tap me!";/.
 check("hold getter still = readyMs − cue clock (0 for reduced/hidden/none)",
   /get tapCueHoldRemainingMs\(\) \{\s*if \(!tapCue \|\| tapCue\.hidden \|\| reduced\) return 0;\s*return Math\.max\(0, TAP_CUE_TIMING\.readyMs - tapCue\.t\);/.test(CHOG), true);
 check("main.js revealSendCard waits on tapCueHoldRemainingMs, then closeCard() BEFORE the card renders",
-  /const cueWait = homeChog\?\.tapCueHoldRemainingMs \|\| 0;\s*if \(cueWait > 0\) \{\s*sceneTimeout\(revealSendCard, Math\.max\(50, cueWait\)\);\s*return;\s*\}\s*homeChog\?\.closeCard\?\.\(\);\s*state\.sendCardVisible = true;\s*render\(\);/.test(MAIN), true);
+  /const cueWait = homeChog\?\.tapCueHoldRemainingMs \|\| 0;[\s\S]*?if \(cueWait > 0\) \{\s*sceneTimeout\(revealSendCard, Math\.max\(50, cueWait\)\);\s*return;\s*\}[\s\S]*?homeChog\?\.closeCard\?\.\(\);\s*state\.sendCardVisible = true;\s*render\(\);/.test(RAW_MAIN), true);
 check("main.js has no hard-coded cue total (3070 / 3370 / 1870) — handoff follows TAP_CUE_TIMING", /\b(3070|3370|1870)\b/.test(MAIN), false);
 check("closeCard() hides (removes) the cue first", /const closeCard = \(\) => \{\s*hideTapCue\(\);/.test(CHOG), true);
 check("hideTapCue() removes the label node (no opacity-0 ghost left in the DOM)", /tapCue\.hidden = true;\s*waveDeg = 0;\s*tapCue\.label\.remove\(\);/.test(CHOG), true);

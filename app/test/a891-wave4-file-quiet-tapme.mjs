@@ -52,39 +52,24 @@ await check("N1 copy: the locked lines appear verbatim, exactly once each, only 
   assert.equal(/tap me!/.test(BLOCK.replace(/\/\/.*$/gm, "")), false, "the cue wording stays in chog-home.js (existing startTapCue)");
 });
 
-await check("N2 ~8 s is one named constant with the Owner comment; First Send timing constant untouched", () => {
+await check("N2 named timing constants keep the post-file 8000 ms separate from First Send pacing", () => {
   assert.match(MAIN, /const POST_FILE_QUIET_HOME_MS = 8000; \/\/ Owner 2026-10-08 ~8 s, tune on device/);
   // pre-A-904 baseline: counted the whole file (2). The [A-904] jar guide reuses the same beat, so its block is cut out first; the A-891 count itself is unchanged.
   const MAIN_NO_A904 = MAIN.replace(/\/\/ ── \[A-904\] One-time guide[\s\S]*?\/\/ ── \[\/A-904\][^\n]*\n/, "").replace(/^\/\/ ── \[A-956\] Journey 2 entry[\s\S]*?^\/\/ ── \[A-956\] end Journey 2 entry ──\n/m, ""); // [A-956 RE-PIN] the entry block re-arms the same cue (pre-A-956: A-904 strip only)
   assert.equal((MAIN_NO_A904.match(/POST_FILE_QUIET_HOME_MS/g) || []).length, 2, "declared + used once (the post-file arm)");
   assert.match(MAIN, /const HOME_FIRST_JOURNEY_CARD_MS = 1200;/);
+  assert.match(MAIN, /const FIRST_SEND_QUIET_MS = 4500;/);
+  assert.match(MAIN, /const FIRST_SEND_CUE_LEAD_MS = 2500;/);
   assert.match(cutFn(MAIN, "a891ArmPostFileQuietHome"), /sceneTimeout\(arm, POST_FILE_QUIET_HOME_MS\);/);
 });
 
-await check("N3 First Home stays quiet: no startTapCue on first arrival; the silent hold keeps the First Send reveal = max(1200, readyMs) normal / 1200 reduced", () => {
+await check("N3 First Home: no tap cue/silent hold; 4500 ms quiet, CG-01, 2500 ms, Send card", () => {
   const home = topFn(MAIN, "mountHome");
   assert.equal(/startTapCue/.test(strip(home)), false, "mountHome never starts the cue");
-  assert.match(home, /if \(isFirstArrival && !state\.sendCardVisible\) a891StartFirstArrivalHold\(\);/);
-  assert.match(home, /const quietWait = a891FirstArrivalHoldRemainingMs\(\);[^\n]*\n\s*if \(quietWait > 0\) \{ sceneTimeout\(revealSendCard, Math\.max\(50, quietWait\)\); return; \}\s*const cueWait = homeChog\?\.tapCueHoldRemainingMs \|\| 0;/);
-  assert.match(home, /sceneTimeout\(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS\);\s*\}/, "first reveal still at HOME_FIRST_JOURNEY_CARD_MS");
-  const holdFn = cutFn(MAIN, "a891StartFirstArrivalHold");
-  assert.match(holdFn, /if \(prefersReducedMotion\(\)\) return;/, "reduced = 0 (as the reduced cue)");
-  assert.match(holdFn, /const dt = last && !document\.hidden \? Math\.min\(now - last, 50\) : 0;/, "same dt rule as chog-home tapCue.t");
-  assert.match(rd("app/src/chog-home.js"), /const dt = last && !document\.hidden \? Math\.min\(now - last, 50\) : 0;/);
-  assert.equal(TAP_CUE_TIMING.readyMs, 3370);
-  // pure replay of the hold clock: 60 fps frames → remaining time hits 0 at readyMs
-  const ctx = vm.createContext({ Math, document: { hidden: false }, A891_TAP_CUE_TIMING: TAP_CUE_TIMING, frames: [], teardown: [] });
-  vm.runInContext(`let a891FirstArrivalHold = null; const prefersReducedMotion = () => false;
-    const runSceneFrames = (f) => frames.push(f); const onSceneTeardown = (f) => teardown.push(f);
-    ${holdFn}\n${cutFn(MAIN, "a891FirstArrivalHoldRemainingMs")}
-    globalThis.start = a891StartFirstArrivalHold; globalThis.rem = a891FirstArrivalHoldRemainingMs;`, ctx);
-  ctx.start();
-  const step = ctx.frames[0];
-  let now = 1000; step(now);
-  const seen = [];
-  for (let k = 0; k < 400; k += 1) { now += 1000 / 60; if (step(now) === false) break; if (k === 71) seen.push(Math.round(ctx.rem())); }
-  assert.equal(Math.round(ctx.rem()), 0);
-  assert.ok(Math.abs(seen[0] - (3370 - 1200)) <= 17, `remaining at 1.2 s ≈ 2170 (got ${seen[0]})`);
+  assert.doesNotMatch(home, /a891StartFirstArrivalHold\(\)/);
+  assert.match(home, /if \(!sayFirstSendCue\(\)\) return;\s*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/);
+  assert.match(home, /sceneTimeout\(announceFirstSend, FIRST_SEND_QUIET_MS\);/);
+  assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);/);
 });
 
 await check("N4 post-file path: revealExplorePaper (1.2 s auto-Explore) is gone; settle() arms the quiet Home; homeQuietForExplore setters unchanged", () => {
@@ -401,7 +386,7 @@ for (const reduced of [false, true]) {
       assert.ok(Math.abs(c.cx - c.vw / 2) <= 2 && Math.abs(c.cy - c.vh / 2) <= 2, `${tag}: Receipt centred ${JSON.stringify(c)}`);
       await B.mustTap("#fileboxPaper", "open Receipt");
       assert.equal(await B.waitScene(["sendstay"], 3000), "sendstay", `${tag}: second tap closes`);
-      // First arrival: no cue, First Send reveal ≈ settle + readyMs (normal) / 1200 (reduced)
+      // First arrival: 4500 ms quiet, then CG-01, then the Send card 2500 ms later.
       const fa = await p.evaluate(async (red) => {
         localStorage.removeItem("araso.tripClosed");
         let tSettle = null, tCard = null, cue = 0; const t0 = performance.now();
@@ -424,7 +409,7 @@ for (const reduced of [false, true]) {
       assert.equal(fa.date?.cardClip, false, `${tag}: date texts not clipped`);
       assert.deepEqual([fa.date?.domHitsTitle, fa.date?.domHitsDay], [false, false], `${tag}: .sendCard__dom clear of title/day`);
       if (fa.tSettle != null && fa.tCard != null) {
-        const want = reduced ? 1200 : TAP_CUE_TIMING.readyMs;
+        const want = 7000;
         assert.ok(Math.abs(fa.tCard - fa.tSettle - want) <= 200, `${tag}: First Send reveal ${Math.round(fa.tCard - fa.tSettle)} ms after settle vs ${want}`);
       }
       assert.deepEqual(B.errors, [], `${tag}: page errors`);

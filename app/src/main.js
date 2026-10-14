@@ -7032,6 +7032,10 @@ const HOME_FPS = 0.03;
 // [A-356 §2] Save → 정착 완료 뒤 첫 Journey 카드까지의 대기. 정본 대기값이 없어 구현
 // 초안으로 쓴다 — Owner 확정 초수 아님. mountHome() 의 settle() 이 이 표를 쓴다.
 const HOME_FIRST_JOURNEY_CARD_MS = 1200;
+// [A-1261] First arrival only: quiet Home, then Chog's job cue, then the existing Send card.
+// HOME_FIRST_JOURNEY_CARD_MS stays unchanged for its retry/shared-beat callers.
+const FIRST_SEND_QUIET_MS = 4500;
+const FIRST_SEND_CUE_LEAD_MS = 2500;
 
 // [A-603] 캐릭터 스케일 바닥 — A-602 Owner 프리뷰(Candidate C, c_floor.js)가 측정·검증한 그 메커니즘을 값·
 // 넛지까지 그대로 들여온다(재발명 0, "port the A-602 C mechanism into app properly").
@@ -12392,13 +12396,18 @@ function insertChogCueLine(id, text) {
   return true;
 }
 
-// CG-01: once, when the First Send card first appears — called only from mountHome()'s revealSendCard, which runs only on
-// the first arrival after Name save (isFirstArrival; Send revisits, reloads and added Piggies never reach it). The card's
-// own copy ("Piggy's first job?", A-779) is untouched; the next render (Send tap, Home, reload) clears the line.
-const FIRST_SEND_CUE_LINE = "wanna let Piggy try one?";
+// CG-01: once on the first arrival after Name save (isFirstArrival; revisits, reloads and added Piggies never reach it).
+// It starts before the card, is restored after the card render, and the first Send tap clears it.
+const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job.";
 function sayFirstSendCue() {
-  if (state.appLock || state.scene !== "sendstay" || !state.sendCardVisible || sendBusy()) return false;
-  return insertChogCueLine("firstSendChogCue", FIRST_SEND_CUE_LINE);
+  if (state.appLock || state.scene !== "sendstay" || sendBusy()) return false;
+  const inserted = insertChogCueLine("firstSendChogCue", FIRST_SEND_CUE_LINE);
+  if (inserted && state.sendCardVisible) {
+    document.querySelector("#sendButton")?.addEventListener("click", () => {
+      document.querySelector("#firstSendChogCue")?.remove();
+    }, { once: true });
+  }
+  return inserted;
 }
 
 // CG-02 [A-893b · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로 · ㅇㅇ굿", supersedes the separate-speech / sequenced versions]:
@@ -13589,10 +13598,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     // 과 같은 조건(아직 Send 카드가 자리를 쥐지 않음)으로만 부른다. 추가 Piggy 의 Name → Home
     // (saveName() 의 pendingNamePiggyId 분기)은 homeArrival 을 세우지 않으므로 반복하지 않는다.
     // Home 종이를 스스로 열지 않는다 — 여는 것은 사용자의 실제 Chog 탭뿐이다.
-    // [A-891 CG-04] First Home stays quiet (Owner 2026-10-08): no "tap me!" on the first arrival. pre-A-891 baseline:
-    // `if (isFirstArrival && !state.sendCardVisible) homeChog?.startTapCue?.();`. The cue's frame clock is kept (silent)
-    // so the First Send reveal timing below is unchanged.
-    if (isFirstArrival && !state.sendCardVisible) a891StartFirstArrivalHold();
+    // [A-891 CG-04 / A-1261] First Home has no "tap me!" cue. The explicit first-job sequence below now owns its pacing.
     // [A-356 §2] A354 회귀 교정 — state.sendCardVisible 이 설 자리가 없어 첫 Journey 카드가
     // 영영 안 열리던 것. 이 정착이 Save 직후 첫 도착일 때만, 잠깐(위 상수) 뒤 카드를 연다.
     // 재방문·Stay 재진입은 isFirstArrival 이 false 라 여기 오지 않는다. 씬을 떠나면(다음
@@ -13611,12 +13617,9 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
           sceneTimeout(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS);
           return;
         }
-        // [A-624 → A-626 A] 첫 도착 신호가 아직 등장 중이거나 완전 가시 유지(1.2s) 중이면 그 남은
-        // 신호 시간만큼 정확히 미룬다(1200ms 배수 재시도는 유지가 0.57s 또는 1.73s 로 떨어졌다).
+        // [A-1261] Preserve the existing tap-cue overlap guard; First arrival itself starts no tap cue.
         // 신호 시계는 그려진 프레임으로만 흐르므로 숨은 탭에서는 다시 미뤄질 뿐이다. 두 번째 카드
         // 자리·새 저장 키 0. 최소 50ms — 0ms 재귀 방지.
-        const quietWait = a891FirstArrivalHoldRemainingMs(); // [A-891] same remaining time the removed first-arrival cue gave
-        if (quietWait > 0) { sceneTimeout(revealSendCard, Math.max(50, quietWait)); return; }
         const cueWait = homeChog?.tapCueHoldRemainingMs || 0;
         if (cueWait > 0) {
           sceneTimeout(revealSendCard, Math.max(50, cueWait));
@@ -13628,9 +13631,17 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         homeChog?.closeCard?.();
         state.sendCardVisible = true;
         render();
-        sayFirstSendCue(); // [A-893 CG-01]
+        sayFirstSendCue(); // [A-1261] render replaces Home DOM; restore CG-01 beside the visible card.
       };
-      sceneTimeout(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS);
+      const announceFirstSend = () => {
+        if (state.recordsCardVisible) {
+          sceneTimeout(announceFirstSend, HOME_FIRST_JOURNEY_CARD_MS);
+          return;
+        }
+        if (!sayFirstSendCue()) return;
+        sceneTimeout(revealSendCard, FIRST_SEND_CUE_LEAD_MS);
+      };
+      sceneTimeout(announceFirstSend, FIRST_SEND_QUIET_MS);
     }
     // [A-411-p] "First Receipt filed → 정착 → 잠깐 조용 → Paper" — Home next errand 버튼을
     // 없앤 대신, 이 정착 신호(=settle 호출 그 자체, First 도착 걷기연출의 revealSendCard 와

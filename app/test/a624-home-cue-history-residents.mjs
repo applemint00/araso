@@ -81,17 +81,16 @@ const mountHome = code.slice(code.indexOf("function mountHome("), code.indexOf("
 // (firstArrival), post-file / revisit cue entrance = a779-small-text-unify.mjs B5 and a891 Part B. A regression that restores the cue fails here; one that
 // shifts the Send timing is caught by a891 B, not by this file.
 // pre-A-891 baseline: /if \(isFirstArrival && !state\.sendCardVisible\) homeChog\?\.startTapCue\?\.\(\);/ → true.
-// [A-891 CG-04, Owner 2026-10-08 "First Home stays quiet"] the first-arrival cue is removed; the same gate now starts only the silent hold
-// that keeps the First Send reveal timing. Measured: [old call present, new gate present] = [false, true].
-check("settle(): cue started only on isFirstArrival && !sendCardVisible (no new persistence key)",
+// [A-891 CG-04 / A-1261] the first-arrival tap cue and silent hold are absent; named timers own the new pacing.
+check("settle(): first arrival has no tap cue or silent hold (no new persistence key)",
   [/if \(isFirstArrival && !state\.sendCardVisible\) homeChog\?\.startTapCue\?\.\(\);/.test(mountHome),
-    /if \(isFirstArrival && !state\.sendCardVisible\) a891StartFirstArrivalHold\(\);/.test(mountHome)], [false, true]);
+    /if \(isFirstArrival && !state\.sendCardVisible\) a891StartFirstArrivalHold\(\);/.test(mountHome)], [false, false]);
 check("no new localStorage key for the cue", /localStorage\.setItem\([^)]*[Cc]ue/.test(MAIN) || /localStorage/.test(chog), false);
-// [A-626 A] superseded: records keep the 1200ms retry; the cue now defers by its exact remaining
-// entrance + 1.2s hold (tapCueHoldRemainingMs) instead of a 1200ms-multiple retry.
-check("revealSendCard(): records retry 1200ms; cue defers by its remaining entrance+hold",
+// Records keep the existing 1200ms retry; A-1261 adds only the named quiet and cue-lead beats.
+check("first Send: records retry uses 1200ms; cue leads the card by the named 2500ms beat",
   /if \(state\.recordsCardVisible\) \{\s*sceneTimeout\(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS\);\s*return;\s*\}/.test(mountHome) &&
-  /const cueWait = homeChog\?\.tapCueHoldRemainingMs \|\| 0;\s*if \(cueWait > 0\) \{\s*sceneTimeout\(revealSendCard, Math\.max\(50, cueWait\)\);\s*return;/.test(mountHome), true);
+  /sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/.test(mountHome) &&
+  /sceneTimeout\(announceFirstSend, FIRST_SEND_QUIET_MS\);/.test(mountHome), true);
 check("chog-home toggle(): real tap hides the cue before the pin flips", /const toggle = \(e\) => \{\s*e\.preventDefault\(\);\s*hideTapCue\(\);\s*pinned = !pinned;/.test(chog), true);
 check("cue never calls hover()/requestHover (no auto-open, no reduced snap)", /requestHover|hover\(/.test(fnBody(chog, "startTapCue")), false);
 check("closeCard() hides the cue (no overlap frame with the Send card)", /const closeCard = \(\) => \{\s*hideTapCue\(\);/.test(chog), true);

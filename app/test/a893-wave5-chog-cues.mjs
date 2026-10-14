@@ -100,15 +100,16 @@ await check("N0 the A-893 block exists, outside every protected body; no timer, 
 });
 
 await check("N1 copy: only the Owner-locked lines, each defined once in code", () => {
+  assert.equal(MAIN.split(`const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job.";`).length - 1, 1, "CG-01 copy defined once");
   const code = stripComments(MAIN);
-  for (const line of ["wanna let Piggy try one?", "still out working.", "not back yet."]) {
+  for (const line of ["still out working.", "not back yet."]) {
     assert.equal(code.split(line).length - 1, 1, `${line} appears once`);
   }
-  assert.equal(code.split('"all of them?"').length - 1, 1, "all of them? once (CG-05 derivation)");
-  assert.equal(code.split('"these two?"').length - 1, 1, "these two? once (CG-05 derivation)");
+  assert.equal(MAIN.split('"all of them?"').length - 1, 1, "all of them? once (CG-05 derivation)");
+  assert.equal(MAIN.split('"these two?"').length - 1, 1, "these two? once (CG-05 derivation)");
   const strings = [...stripComments(BLOCK).matchAll(/"([^"\\]*[a-z][^"\\]*)"/g)].map((m) => m[1]);
-  const allowed = new Set(["wanna let Piggy try one?", "still out working.", "not back yet.", "all of them?", "these two?",
-    "#chogHome", ".chogHome__hit", "span", "chogCheckLine", "translateX(-50%)", "firstSendChogCue", "awayOpenCue", "sendstay", "away",
+  const allowed = new Set(["work's coming! let's send Piggy to work — your money does the job.", "still out working.", "not back yet.", "all of them?", "these two?",
+    "#chogHome", ".chogHome__hit", "#sendButton", "click", ".chogHome__hit", "span", "chogCheckLine", "translateX(-50%)", "firstSendChogCue", "awayOpenCue", "sendstay", "away",
     "visibilitychange", "visible", "pending"]);
   for (const s of strings) assert.ok(allowed.has(s), `unexpected string in the A-893 block: ${JSON.stringify(s)}`);
 });
@@ -143,17 +144,18 @@ await check("N3 CG-05 wiring: chogHomeMarkupForExplore reads the derivation at r
   assert.match(fnBody("openSecondJourneyExplore"), /sj\.exploreOfferedIds = null;/);
 });
 
-await check("N4 CG-01: said once, right after the first-arrival revealSendCard render; gated on the card actually showing; DOM-only (next render clears it)", () => {
+await check("N4 CG-01: said before the first card, restored after its render, and cleared by the first Send tap", () => {
   const home = fnBody("mountHome");
-  assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\); \/\/ \[A-893 CG-01\]/);
-  assert.equal((stripComments(MAIN).match(/(?<!function )sayFirstSendCue\(\)/g) || []).length, 1, "one call site only (first arrival)");
-  assert.match(home, /if \(isFirstArrival && !state\.sendCardVisible\) \{\s*const revealSendCard/);
+  assert.match(home, /if \(!sayFirstSendCue\(\)\) return;\s*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/);
+  assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);/);
+  assert.match(fnBody("sayFirstSendCue"), /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*document\.querySelector\("#firstSendChogCue"\)\?\.remove\(\);[\s\S]*\{ once: true \}/);
   const ok = sandbox({ scene: "sendstay", sendCardVisible: true });
   assert.equal(ok.api.sayFirstSendCue(), true);
-  assert.equal(ok.text("firstSendChogCue"), "wanna let Piggy try one?");
+  assert.equal(ok.text("firstSendChogCue"), "work's coming! let's send Piggy to work — your money does the job.");
   assert.equal(ok.lines.length, 1);
   assert.equal(ok.lines[0].className, "chogCheckLine", "reuses the existing Chog line style");
-  for (const [why, opts] of [["card not shown", { scene: "sendstay", sendCardVisible: false }], ["busy", { scene: "sendstay", sendCardVisible: true, busy: true }], ["locked", { scene: "sendstay", sendCardVisible: true, appLock: { phase: "waiting" } }], ["other scene", { scene: "explore", sendCardVisible: true }]]) {
+  assert.equal(sandbox({ scene: "sendstay", sendCardVisible: false }).api.sayFirstSendCue(), true, "cue may precede the card");
+  for (const [why, opts] of [["busy", { scene: "sendstay", sendCardVisible: true, busy: true }], ["locked", { scene: "sendstay", sendCardVisible: true, appLock: { phase: "waiting" } }], ["other scene", { scene: "explore", sendCardVisible: true }]]) {
     const s = sandbox(opts);
     assert.equal(s.api.sayFirstSendCue(), false, why);
     assert.equal(s.lines.length, 0, why);
@@ -428,11 +430,11 @@ async function browserRun(browser, BASE, shots, W, H, reduced, fork) {
     }
     await sleep(400);
     if (!fork) { // [A-950] First-journey checks: forkMode off only
-    await check(`B1 [${tag}] CG-01 "wanna let Piggy try one?" appears with the first First Send card; card copy unchanged; legible`, async () => {
-      assert.equal(cueSeenBeforeCard, false, "never before the card");
+    await check(`B1 [${tag}] CG-01 leads the first Send card; card copy unchanged; legible`, async () => {
+      assert.equal(cueSeenBeforeCard, true, "cue appears before the card");
       assert.ok(await p.locator("#sendCard").count(), "First Send card shown");
       const b = await lineBox("#firstSendChogCue");
-      assert.equal(b?.text, "wanna let Piggy try one?");
+      assert.equal(b?.text, "work's coming! let's send Piggy to work — your money does the job.");
       legible(b, "CG-01 line");
       const msg = await p.evaluate(() => document.querySelector("#sendCard .sendCard__message")?.textContent?.trim());
       assert.equal(msg, "Piggy's first job?", "A-779 card line kept");
