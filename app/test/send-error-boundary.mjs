@@ -62,11 +62,12 @@ function leakyError() {
 
 function makeSend({ grantGranted = false, balances = [], simThrows = false, sendThrows = false }) {
   const storage = mockStorage();
-  const calls = { scenes: [], sign: 0, sendTx: 0, prepared: 0, sim: 0, balanceReads: 0 };
+  const calls = { scenes: [], sign: 0, sendTx: 0, prepared: 0, sim: 0, balanceReads: 0, events: [] };
   const btn = { disabled: false, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   let bi = 0;
   const env = {
     localStorage: storage,
+    track: (...event) => { calls.events.push(event); },
     document: { querySelector: (sel) => (sel === "#sendButton" ? btn : null) },
     state: { address: LEAK.addr, txHash: "", mark: "", grantTxHash: "" },
     isAllowedPiggyRpId: () => true,
@@ -123,6 +124,12 @@ for (const [label, opts] of [["simulate", { simThrows: true }], ["send/deposit",
   const t = makeSend({});
   const rec = t.recordSafeError("x", { name: "bad name with spaces http://x", code: "0xdeadbeef raw" });
   check("unsafe name/code are dropped from the record", `${rec.category}/${rec.code}`, "Error/");
+  check("unknown non-Send error is flow_error other", JSON.stringify(t.calls.events), JSON.stringify([["flow_error", "other"]]));
+}
+for (const [phase, code] of [["open", "open"], ["unlock", "unlock"], ["home-money", "home_money"], ["prf_unavailable", "prf_unavailable"]]) {
+  const t = makeSend({});
+  t.recordSafeError(phase, new Error("private"));
+  check(`${phase} is labeled as flow_error ${code}`, JSON.stringify(t.calls.events), JSON.stringify([["flow_error", code]]));
 }
 
 // ── 2. 새 grant 뒤 잔고 가시성 대기 ──────────────────────────────────────────────

@@ -92,7 +92,7 @@ function device({ stored = true, credentialOnly = false, throwOn = null, indexTh
     store.set(KEYS.salt, "aa".repeat(32));
     store.set(KEYS.recv, "1");
   }
-  const calls = { get: [], create: [], scenes: [], index: [], ended: 0, sessions: 0, errors: [] };
+  const calls = { get: [], create: [], scenes: [], index: [], ended: 0, sessions: 0, errors: [], events: [] };
   const pending = { get: [], create: [] };
   const injected = { throwOn };
   const ctx = {
@@ -134,6 +134,7 @@ function device({ stored = true, credentialOnly = false, throwOn = null, indexTh
     knownPiggyAddresses: () => [],
     restorePendingGiftClaim: () => {},
     recordSafeError: (phase, e) => { calls.errors.push([phase, e?.name]); },
+    track: (step, code) => { calls.events.push([step, code]); },
     readCredential: () => { try { return JSON.parse(store.get(KEYS.cred) || "null"); } catch { return null; } },
     hasReceivedPiggy: () => store.get(KEYS.recv) === "1",
     lockAppAfterIdle: () => false,
@@ -208,6 +209,7 @@ await check("R1d pinned success but derived address ≠ stored address (salt/ide
   const run = d.api.checkPiggy();
   resolveGet(d, 0, "OLD", key(33));
   assert.equal((await run).ok, false);
+  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "after_get"]]);
   deq(d.snap(), before);
   assert.equal(d.peek().signer, false);
 });
@@ -217,6 +219,7 @@ await check("R1e same Piggy (pinned, matching address) recovers normally; marker
   const run = d.api.checkPiggy();
   resolveGet(d, 0, "OLD", key(11));
   deq(await run, { ok: true });
+  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "ok"]]);
   deq([d.state.scene, d.state.message], ["sendstay", "Piggy is home."]);
   deq(d.peek(), { signer: true, account: true, signerTimer: true, idleTimer: true, attempt: false }, "live signer only WITH expiry + idle");
   const f = device({ stored: false });
@@ -386,6 +389,7 @@ await check("R5d retry after timeout = a NEW attempt; the old late result neithe
   d.clock.advance(WAIT_MS);
   await first;
   deq(await d.api.checkPiggy(), { ok: false, cancelled: false, reason: "platform_pending" });
+  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "platform_pending"]]);
   assert.equal(d.calls.get.length, 1, "no overlapping get while the first is pending");
   deq([d.state.scene, d.state.message, d.state.authPhase], ["birth", "Chog could not find Piggy here.", "idle"]);
   resolveGet(d, 0, "OLD", key(11)); // stale success

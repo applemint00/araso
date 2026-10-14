@@ -3,6 +3,8 @@ export const EVENT_CODES = Object.freeze(Object.fromEntries(Object.entries({
   entry_shown: ['invite', 'public', 'used'],
   entry_blocked: ['invite_only', 'used', 'unsupported_origin'],
   auth_tap: ['create', 'find'],
+  flow_error: ['open', 'unlock', 'home_money', 'prf_unavailable', 'other'],
+  piggy_find: ['ok', 'after_get', 'platform_pending'],
   passkey_create: ['ok', 'cancel', 'fail'],
   passkey_get: ['ok', 'cancel', 'fail'],
   grant: ['ok', 'already_funded', 'not_allowlisted', 'cap_reached', 'unavailable', 'unconfirmed', 'reverted', 'fail'],

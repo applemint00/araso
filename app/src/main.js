@@ -1223,7 +1223,11 @@ function safeErrorCode(error) {
   return /^-?\d{1,6}$/.test(code) || /^[A-Z][A-Z0-9_]{0,39}$/.test(code) ? code : "";
 }
 function recordSafeError(phase, error) {
-  if (typeof track === "function") track("send", ({ recover: "auth", grant: "grant", "grant-visibility": "grant", simulate: "simulate", send: "fail" })[phase] || "fail");
+  if (typeof track === "function") {
+    const sendCode = ({ recover: "auth", grant: "grant", "grant-visibility": "grant", simulate: "simulate", send: "fail" })[phase];
+    if (sendCode) track("send", sendCode);
+    else track("flow_error", ({ open: "open", unlock: "unlock", "home-money": "home_money", prf_unavailable: "prf_unavailable" })[phase] || "other");
+  }
   const entry = { at: Date.now(), phase, category: safeErrorCategory(error), code: safeErrorCode(error) };
   try {
     localStorage.setItem(LAST_SEND_ERROR_KEY, JSON.stringify(entry));
@@ -1454,6 +1458,7 @@ async function recoverPiggy(options = {}) {
     if (options.pin?.pendingBirth || !pinned || !mayBeGone || !isCurrent()) throw error;
     result = await requestPrf(null, { prfSalt });
   }
+  if (typeof options.onCredential === "function") options.onCredential();
   const prfOutput = result.prfOutput;
   try {
     if (!isCurrent()) throw namedAuthError("StaleAuthAttempt", "auth attempt no longer current");
@@ -2064,6 +2069,7 @@ async function checkPiggy() {
   if (platformAuthInflight) {
     state.authPhase = "idle";
     state.authCancelled = false;
+    if (typeof track === "function") track("piggy_find", "platform_pending");
     setScene("birth", "Chog could not find Piggy here.", "Couldn't find your Piggy.");
     return { ok: false, cancelled: false, reason: "platform_pending" };
   }
@@ -2083,6 +2089,7 @@ async function checkPiggy() {
   let giftAttempted = false;
   let recovered = false;
   let released = false;
+  let credentialFound = false;
   // 생성 폴백 없음 — 이 버튼은 절대 새 패스키를 만들지 않는다.
   state.authPhase = "checking";
   state.authCancelled = false;
@@ -2090,7 +2097,11 @@ async function checkPiggy() {
 
   try {
     // [A-667 R5] 대기 상한 + 시도 토큰: 시간이 다 된 뒤의 늦은 결과는 recoverPiggy 안에서 서명자·저장 전에 버려진다.
-    await boundAuthAttempt(attempt, trackPlatformAuth(recoverPiggy({ isCurrent: () => attempt.live, pin })));
+    await boundAuthAttempt(attempt, trackPlatformAuth(recoverPiggy({
+      isCurrent: () => attempt.live,
+      pin,
+      onCredential: () => { credentialFound = true; },
+    })));
     recovered = true;
     clearTimeout(attempt.timer);
     if (pin?.pendingBirth) {
@@ -2150,12 +2161,14 @@ async function checkPiggy() {
     if (pin?.pendingBirth) {
       if (hasPlayedBirth()) setScene(readPiggyName() ? "sendstay" : "name", "Piggy is home.", "");
       else setScene("hatch");
+      if (typeof track === "function") track("piggy_find", "ok");
       return { ok: true };
     }
     // 복구는 신규 탄생이 아니다 — 해치·hello·Name it 을 다시 재생하지 않는다.
     // [Owner + gift_card_20261004 README:48, 2026-10-12] 이름 데이터 없음은 새 Piggy가
     // 아니다. 같은 Piggy로 Home에 먼저 복귀하고, 이름은 색인 복구/사용자 수정에 맡긴다.
     setScene("sendstay", "Piggy is home.", "Same place, same Piggy.");
+    if (typeof track === "function") track("piggy_find", "ok");
     return { ok: true };
   } catch (error) {
     if (giftIntent && !giftAttempted) restorePendingGiftClaim(giftIntent);
@@ -2166,6 +2179,7 @@ async function checkPiggy() {
     noteRecoverFailure();
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
+    if (credentialFound && typeof track === "function") track("piggy_find", "after_get");
     // [A-389-a] 복구 실패는 짧고 구분되는 원인만 보여준다 — cancelled 는 renderAuthCard 가
     // "Face ID was cancelled."로 따로 가로챈다(authCancelled). 그 외(NotFound 등)는 원본
     // 기술 에러 문자열(formatError) 대신 이 짧은 문구를 쓴다. 두 버튼 다시 보이는 것은
