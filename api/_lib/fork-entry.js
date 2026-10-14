@@ -246,7 +246,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
       try {
         if (config?.completionOpen !== true || typeof config?.rewardCampaignVersion !== "string") return { ok: false, status: 404, reason: "completion_not_open" };
         if (!ready() || typeof forkRpc !== "function") return { ok: false, status: 503, reason: "entry_unavailable" };
-        const testerId = await tester(inviteToken); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
+        const testerId = await tester(inviteToken, piggyAddress); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
         const piggy = low(piggyAddress); if (!ADDR_RE.test(piggy)) return refuse("bad_piggy");
         const jid = low(journeyId);
         const reg = ID_RE.test(jid) && config.journeys && Object.prototype.hasOwnProperty.call(config.journeys, jid) ? config.journeys[jid] : null;

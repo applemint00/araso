@@ -323,6 +323,15 @@ await check("7 completion slot closed by default (404), even with a valid entry"
   const r = await S.svc.complete({ inviteToken: TOKEN, piggyAddress: PIGGY.address, journeyId: "j.aave", txHashes: [h(1)] });
   assert.equal(r.ok, false); assert.equal(r.status, 404); assert.equal(r.reason, "completion_not_open");
 });
+await check("A-1263 completion accepts a public no-token Piggy when the slot is explicitly open", async () => {
+  const F = forkChain();
+  const S = setup({ config: { completionOpen: true, rewardCampaignVersion: "camp-1", journeys: REGISTRY, publicEntry: { enabled: true }, publicBudget: { reserve: async () => ({ ok: true }) } }, forkRpc: F.rpc });
+  assert.equal((await signedEnter(S, { token: null, journey1: journey1For(S.t, P, 8050) })).allowed, true);
+  F.add(h(0x91), { from: P, input: `${SEL_A}${"00".repeat(32)}` });
+  F.add(h(0x92), { from: P, input: `${SEL_B}${"00".repeat(32)}` });
+  const done = await S.svc.complete({ inviteToken: null, piggyAddress: PIGGY.address, journeyId: "j.aave", txHashes: [h(0x91), h(0x92)] });
+  assert.equal(done.verdict, "COMPLETE"); assert.equal(done.rewarded, true);
+});
 await check("7 E MUST: steps from the server registry · evidence read from the fork RPC · verdict → stamp → reward (rewardLedgerApply record) in one request · once per tester", async () => {
   const F = forkChain();
   const S = setup({ config: { completionOpen: true, rewardCampaignVersion: "camp-1", journeys: REGISTRY }, forkRpc: F.rpc });

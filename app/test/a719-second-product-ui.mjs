@@ -339,7 +339,7 @@ await check("N8 static: lane UI paths never reach permission / executor / lane i
   // completion still persists only from the Return "Home" with a confirmed outcome, and lands on quiet Home
   const ret = fnBody("mountSecondReturn");
   assert.match(ret, /const persistNow = persist && confirmed;/);
-  assert.match(ret, /setScene\("sendstay", "Piggy is home\.", "Second errand filed\. \(preview\)"\);/);
+  assert.match(ret, /setScene\("sendstay", "Piggy is home\.", ""\);/);
   assert.match(fnBody("goHomeFromFilebox"), /state\.homeQuietForExplore = !state\.secondJourneyCompletedOnce;/);
   // no user-visible rule step: the candidates card only has pick rows + Home + ok
   assert.equal(/rule|agreed/i.test(secondJourneyCardMarkup({ step: "candidates", destinations: exploreCandidateDestinations(exploreCandidateRows({ families: listVisibleJobFamilies() }).rows, { selectedErrandIds: ["grow"] }) })), false);

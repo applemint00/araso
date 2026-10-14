@@ -227,9 +227,11 @@ await check("4/8 block content: no new screen/copy/scene · no Explore · no Jou
 // Run the block itself with stubs (imports → the real client; switchJourney + the server = in-process). import.meta.env → FORK_ENV.
 function loadBlock(over = {}) {
   const body = block.replace(/^import [^\n]*\n/gm, "").replace(/import\.meta\.env/g, "__env");
+  const decisionStart = MAIN.indexOf("function a1263ServerInvite(");
+  const decision = MAIN.slice(decisionStart, MAIN.indexOf("\n}\n", decisionStart) + 2);
   const names = ["a1160PublicEntryOpen", "CHAIN_PROFILE", "state", "readReceipts", "activeAccount", "RELEASE_LEVEL", "sendInFlight", "readSendPending", "requestMoneyPermission", "proveFundingTargetControl", "settleBoundGiftClaim", "a891ArmPostFileQuietHome", "a891HomeChogTap", "a891CueChog", "a891FirstArrivalHold", "homeChog", "sceneTimeout", "HOME_FIRST_JOURNEY_CARD_MS", "POST_FILE_QUIET_HOME_MS", "isAllowedPiggyRpId", "webAuthnUnsupported", "requestPrf", "storedPrfSalt", "activateSigningSession", "endSignerSession", "isCancelledAuthError"];
   const env = { ...over };
-  const src = `${names.map((n) => `let ${n} = E.${n};`).join("\n")}\nconst { checkForkPermission, forkEntryOpen, forkEntryUrl, journey1Pointers, onForkProfile, readForkInvite, requestForkEntry, registerJourneySwitchBusyProbe, a956SwitchJourney, __env } = E;\n${body}\nreturn { get: (n) => eval(n), set: (n, v) => { switch (n) { ${names.map((n) => `case "${n}": ${n} = v; break;`).join(" ")} } }, enter: () => a956Enter(), allowed: () => a956ForkMoneyAllowed() };`;
+  const src = `${names.map((n) => `let ${n} = E.${n};`).join("\n")}\nconst { checkForkPermission, forkEntryOpen, forkEntryUrl, journey1Pointers, onForkProfile, readForkInvite, requestForkEntry, registerJourneySwitchBusyProbe, a956SwitchJourney, __env } = E;\n${decision}\n${body}\nreturn { get: (n) => eval(n), set: (n, v) => { switch (n) { ${names.map((n) => `case "${n}": ${n} = v; break;`).join(" ")} } }, enter: (options) => a956Enter(options), allowed: () => a956ForkMoneyAllowed() };`;
   return new Function("E", src)(env);
 }
 const timers = [];
@@ -313,6 +315,7 @@ await check("A-1165 cancellation and duplicate tap: quiet Home, no request on ca
   const cancelled = new Error("cancelled"); cancelled.name = "NotAllowedError"; rejectGet(cancelled);
   await settle();
   assert.equal(T.calls.switched, 0); assert.equal(T.state.scene, "sendstay"); assert.equal(S.seen.length, 0);
+  assert.equal(T.calls.cue, 2, "failed tap re-arms the existing cue once");
 });
 await check("A-1165 wrong stored identity and app lock: no server request or switch", async () => {
   const S = server(); const j1 = S.addJ1(P, 620);
@@ -350,12 +353,12 @@ await check("A-1171 fork profile: envelope remains after fresh server OK (Face I
   const T0 = harness({ profile: FORK, fetchImpl: S.fetchImpl });
   await T0.B.get("requestMoneyPermission")(); assert.equal(T0.calls.money, 0, "no entry yet");
   assert.equal((await C.requestForkEntry({ fetchImpl: S.fetchImpl, invite: TOKEN, piggyAddress: P, signMessage: (m) => PIGGY.signMessage({ message: m }), journey1: j1 })).allowed, true);
-  const T = harness({ profile: FORK, fetchImpl: S.fetchImpl });
+  const T = harness({ profile: FORK, receipts: [j1], fetchImpl: S.fetchImpl });
   const n0 = S.st.statusCalls;
   await T.B.get("requestMoneyPermission")(); await T.B.get("requestMoneyPermission")();
   assert.equal(T.calls.money, 2); assert.equal(S.st.statusCalls - n0, 2, "asked the server each time");
   S.st.instance = "fork-143-110874000-20261012t000000z-22222222";
-  await T.B.get("requestMoneyPermission")(); assert.equal(T.calls.money, 2, "fork instance changed → refused until re-entry");
+  await T.B.get("requestMoneyPermission")(); assert.equal(T.calls.money, 3, "fork instance changed → existing challenge/enter re-enters, then money continues");
   const T2 = harness({ profile: FORK, fetchImpl: async () => { throw new Error("offline"); } });
   await T2.B.get("requestMoneyPermission")(); assert.equal(T2.calls.money, 0);
   const T3 = harness({ profile: FORK, invite: null, fetchImpl: S.fetchImpl });

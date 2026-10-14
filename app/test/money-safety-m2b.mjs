@@ -640,7 +640,7 @@ await check("S4 the sweep never touches a signed/broadcast record, whatever the 
 await check("S5 boot wiring: the sweep + lifetime-lock step is behind LEGACY_TESTNET_PATH, runs outside the pinned A-633 reconcile/boot blocks, and the post-clear card is an existing string", async () => {
   const boot = cut("if (LEGACY_TESTNET_PATH) {\n  holdSendTabLock();", "// [A-666] Owner-identified top-left HISTORY dot");
   assert.ok(boot.includes("sweepStaleSendReservation()"));
-  assert.ok(/setScene\("sendstay", "Piggy can't go out yet\.", ""\)/.test(boot));
+  assert.ok(/setScene\("sendstay", "Piggy is home\.", ""\)/.test(boot));
   assert.ok(MAIN.indexOf("holdSendTabLock();\n  sweepStaleSendReservation()") > MAIN.indexOf("\n\nrender();"), "after the first render(), outside every boot cut other suites pin");
 });
 
@@ -1018,9 +1018,10 @@ await check("H4 the raw signed transaction is never persisted or logged: no stor
   assert.equal((strip(fnBody("broadcastDepositRaw")).match(/serializedTransaction/g) || []).length, 1);
   assert.equal(/recordSafeError\([^)]*raw/.test(s), false);
 });
-await check("H5 protected functions keep their pins except A-1260 named reconcile repin", async () => {
+await check("H5 protected functions keep their pins except named A-1260/A-1263 reconcile repins", async () => {
   const sha16 = (x) => createHash("sha256").update(x).digest("hex").slice(0, 16);
-  const want = { classifySendPending: "2389cf76d2658fd6", reconcileSendPending: "8616d47f00b8bba9", readSendPending: "065bbae2d4bb516e", commitSendSuccess: "9d3ac854b6df8ff3", finishTrip: "60edd8708e77d531", reconciledSendReceipt: "1de55c29816852f7", render: "521db6368b3a331d" };
+  // A-1263 changes only the proved-never-sent reopen copy inside reconcileSendPending to the existing resting line.
+  const want = { classifySendPending: "2389cf76d2658fd6", reconcileSendPending: "76d46bd45493847d", readSendPending: "065bbae2d4bb516e", commitSendSuccess: "9d3ac854b6df8ff3", finishTrip: "60edd8708e77d531", reconciledSendReceipt: "1de55c29816852f7", render: "521db6368b3a331d" };
   for (const [name, h] of Object.entries(want)) {
     // A1153 explicitly adds account-scoped completion. Its outcome behavior is exercised in
     // a1153-first-state; keep the entire prior finishTrip body pinned apart from that one addition.

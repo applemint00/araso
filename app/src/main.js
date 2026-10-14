@@ -2074,7 +2074,7 @@ async function startPiggyOpen() {
   if (readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential) || (typeof a1214ReadPendingBirth === "function" && a1214ReadPendingBirth())) {
     return checkPiggy();
   }
-  if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && (!readForkInvite(safeLocalStorage()) || (typeof a1223UsedInvite === "function" && a1223UsedInvite()))) {
+  if (typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen() && (!a1263ServerInvite(() => readForkInvite(safeLocalStorage())) || (typeof a1223UsedInvite === "function" && a1223UsedInvite()))) {
     if (a1160TakePublicCreate()) return openPiggy();
     const result = await checkPiggy();
     // Same explicit retry contract as invite recovery; blocked/late attempts cannot authorize create.
@@ -2445,7 +2445,7 @@ async function reconcileSendPending(pending, { watch = true } = {}) {
     const cleared = await clearProvenNeverSentDeposit(pending);
     if (cleared) {
       state.awayRestore = null;
-      setScene("sendstay", "Piggy can't go out yet.", "");
+      setScene("sendstay", "Piggy is home.", "");
       syncSendButton();
       return { kind: "never-sent" };
     }
@@ -5283,7 +5283,7 @@ function mountSecondReturn() {
     // [A-447] Second 완료 = quiet Home. First Send 카드 표가 남아 있으면 sendstay 가 그 카드를 다시
     // 그린다(A-446 a446-22) — 진입 전에 내린다. 정상·onError·onIdleEnter 가 모두 이 함수를 지난다.
     state.sendCardVisible = false;
-    setScene("sendstay", "Piggy is home.", "Second errand filed. (preview)");
+    setScene("sendstay", "Piggy is home.", "");
   };
   // [A-421] First(mountReturn)와 같은 알람 생명주기 — 씬 이탈 정리 + 벨 뒤 한 박자
   // 발화 공개. 구현은 공용 beginReturnArrivalAlarm() 하나뿐이다(두 번째 구현 0).
@@ -14497,15 +14497,18 @@ let a956EntryBusy = false;
 async function a956ForkMoneyAllowed() {
   if (!onForkProfile(CHAIN_PROFILE)) return false;
   try {
-    const r = await checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), publicEntry: a1160PublicEntryOpen(), piggyAddress: state.address, forkInstanceId: CHAIN_PROFILE.forkInstanceId });
-    return r.allowed === true;
+    const r = await checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: state.address, forkInstanceId: CHAIN_PROFILE.forkInstanceId });
+    if (r.allowed === true) return true;
+    if (r.reenter === true) return (await a956Enter({ reenter: true })) === true;
+    return false;
   } catch { return false; }
 }
-async function a956Enter() {
+async function a956Enter({ reenter = false } = {}) {
   const piggy = String(state.address || "").toLowerCase();
-  if (a956EntryBusy) return;
-  if (state.appLock) { console.debug("fork_entry", "locked"); return; }
-  if (!piggy || state.scene !== "sendstay") { console.debug("fork_entry", "unavailable"); return; }
+  const reentering = reenter === true && onForkProfile(CHAIN_PROFILE);
+  if (a956EntryBusy) return false;
+  if (state.appLock) { console.debug("fork_entry", "locked"); return false; }
+  if (!piggy || (!reentering && state.scene !== "sendstay")) { console.debug("fork_entry", "unavailable"); return false; }
   a956EntryBusy = true;
   try {
     let account = activeAccount;
@@ -14513,7 +14516,7 @@ async function a956Enter() {
       const pinned = state.credential;
       if (!pinned?.credentialId || !isAllowedPiggyRpId() || webAuthnUnsupported("get")) {
         console.debug("fork_entry", "credential_unavailable");
-        return;
+        return false;
       }
       // No await, render, or server call precedes this get: iOS keeps the tap gesture.
       a956Signing += 1;
@@ -14523,13 +14526,13 @@ async function a956Enter() {
       try {
         if (result.credentialId !== pinned.credentialId || state.credential?.credentialId !== pinned.credentialId || String(state.address || "").toLowerCase() !== piggy || state.appLock || state.scene !== "sendstay") {
           console.debug("fork_entry", "identity_changed");
-          return;
+          return false;
         }
         const restored = activateSigningSession(result.prfOutput, { persistAddress: false });
         if (String(restored.address).toLowerCase() !== piggy) {
           endSignerSession();
           console.debug("fork_entry", "identity_mismatch");
-          return;
+          return false;
         }
         account = restored.account;
       } finally {
@@ -14538,7 +14541,7 @@ async function a956Enter() {
     }
     if (String(account.address || "").toLowerCase() !== piggy || String(state.address || "").toLowerCase() !== piggy || state.appLock) {
       console.debug("fork_entry", "signer_mismatch");
-      return;
+      return false;
     }
     const signMessage = async (message) => {
       a956Signing += 1;
@@ -14547,11 +14550,16 @@ async function a956Enter() {
         return await account.signMessage({ message });
       } finally { a956Signing -= 1; }
     };
-    const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: readForkInvite(), publicEntry: a1160PublicEntryOpen(), piggyAddress: piggy, journey1: journey1Pointers(readReceipts()), signMessage });
-    if (r.allowed === true && state.scene === "sendstay" && !state.appLock && activeAccount === account) a956SwitchJourney(2);
-    else console.debug("fork_entry", typeof r.reason === "string" && /^[a-z_]+$/.test(r.reason) ? r.reason : "refused");
+    const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: piggy, journey1: journey1Pointers(readReceipts()), signMessage });
+    if (r.allowed === true && !state.appLock && activeAccount === account && (reentering || state.scene === "sendstay")) {
+      if (!reentering) a956SwitchJourney(2);
+      return true;
+    }
+    console.debug("fork_entry", typeof r.reason === "string" && /^[a-z_]+$/.test(r.reason) ? r.reason : "refused");
+    return false;
   } catch (error) {
     console.debug("fork_entry", isCancelledAuthError(error) ? "cancelled" : "failed");
+    return false;
   } finally { a956EntryBusy = false; } // a failure = the quiet Home stays
 }
 {
@@ -14598,7 +14606,10 @@ async function a956Enter() {
     if (!chog || chog !== homeChog || state.scene !== "sendstay") return undefined;
     a891CueChog = null;
     chog.closeCard?.();
-    a956Enter();
+    void a956Enter().then((entered) => {
+      if (entered === true || state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || state.appLock || chog !== homeChog) return;
+      if (chog.startTapCue?.()) a891CueChog = chog;
+    });
     return undefined;
   };
 }
@@ -14606,6 +14617,12 @@ async function a956Enter() {
 // A1160: one server switch, read before any tap. Unknown/closed remains invite-only.
 function a1160PublicEntryOpen() {
   return RELEASE_LEVEL >= 2 && state.publicEntryOpen === true;
+}
+// A-1263: every server-bound invite passes this one decision. Public ON never reads or sends a stored/hash invite;
+// public OFF/UNKNOWN evaluates the existing reader unchanged.
+function a1263ServerInvite(readInvite) {
+  if (a1160PublicEntryOpen()) return null;
+  try { return typeof readInvite === "function" ? readInvite() : readInvite; } catch { return null; }
 }
 function a1160TakePublicCreate() {
   try {
@@ -14699,7 +14716,8 @@ function a1223EntryWaiting() {
   return !a1223HasPiggy() && (state.a1223InvitePending === true || (a1223UsedInvite() && state.a1223PublicPending === true));
 }
 function a1223UsedInviteBlocked() {
-  return !a1223HasPiggy() && a1223UsedInvite() && !(typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen());
+  return !a1223HasPiggy() && a1223UsedInvite()
+    && a1263ServerInvite(() => (typeof a1209EntryInvite === "function" ? a1209EntryInvite() : a960ReadInvite(safeLocalStorage()))) !== null;
 }
 function a1223FinishEntry() {
   if (typeof a1255MaybeClearKnownForeignInvite === "function") a1255MaybeClearKnownForeignInvite();
@@ -14725,12 +14743,14 @@ function a1255ClearForeignUsedInvite() {
   return a960ReadInvite(storage) === null;
 }
 function a1255MaybeClearKnownForeignInvite() {
+  if (a1263ServerInvite(() => a960ReadInvite(safeLocalStorage())) === null) return false;
   if (!(typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen()) || !a1223UsedInvite()) return false;
   const piggy = String(state.address || "").toLowerCase();
   if (!piggy || a960InviteBoundFor(safeLocalStorage(), piggy)) return false;
   return a1255ClearForeignUsedInvite();
 }
 async function a1255ReconcileRecoveredInvite(address) {
+  if (a1263ServerInvite(() => a960ReadInvite(safeLocalStorage())) === null) return "unchanged";
   if (!(typeof a1160PublicEntryOpen === "function" && a1160PublicEntryOpen()) || !a1223UsedInvite()) return "unchanged";
   const storage = safeLocalStorage();
   const piggy = String(address || "").toLowerCase();
@@ -14757,7 +14777,7 @@ async function a1158PrefetchInvite() {
   let expired = false;
   let hadPiggy = false;
   try {
-    const invite = typeof a1209EntryInvite === "function" ? a1209EntryInvite() : a960ReadInvite(safeLocalStorage());
+    const invite = a1263ServerInvite(() => (typeof a1209EntryInvite === "function" ? a1209EntryInvite() : a960ReadInvite(safeLocalStorage())));
     if (!invite) return;
     hadPiggy = a1223HasPiggy();
     if (!hadPiggy) state.a1223InvitePending = true;
@@ -14798,11 +14818,14 @@ function a1158TakeUnboundInvite() {
     return sessionStorage.getItem(key) === "attempted";
   } catch { return false; }
 }
-void a1158PrefetchInvite();
+async function a1263StartEntryChecks() {
+  await a1160RefreshPublicEntry();
+  if (a1263ServerInvite(true) !== null) await a1158PrefetchInvite();
+}
 async function a960BindInvite(address) {
   try {
     const storage = safeLocalStorage();
-    const invite = a960ReadInvite(storage);
+    const invite = a1263ServerInvite(() => a960ReadInvite(storage));
     const account = activeAccount;
     const piggy = String(address || "").toLowerCase();
     if (!invite || !account || String(account.address || "").toLowerCase() !== piggy || a960InviteBoundFor(storage, piggy)) return;
@@ -14818,7 +14841,7 @@ async function a960BindInvite(address) {
   };
 }
 // ── [A-960] end invite link → first grant ──
-void a1160RefreshPublicEntry();
+void a1263StartEntryChecks();
 // ── [A-966] Gift on the shared fork (record source · sponsored claim · create step). One block; the code above and below is unchanged. ────────────
 // Off the fork nothing here runs (A966_FORK_GIFT = null): the testnet / mainnet Gift paths stay exactly as they are (mainnet Gift stays OFF, the
 // GIFT_RECORD_CONFIG / GIFT_CLAIM_SUBMIT_CONFIG / A915_GIFT_CREATE_CONFIG literals stay null). On the fork profile (release level ≥ 2, journeyFeatureOpen
@@ -16707,7 +16730,7 @@ if (LEGACY_TESTNET_PATH) {
       if (swept !== "cleared") return;
       if (state.scene === "away" && state.awayRestore) {
         state.awayRestore = null;
-        setScene("sendstay", "Piggy can't go out yet.", "");
+        setScene("sendstay", "Piggy is home.", "");
       }
       syncSendButton();
     })
