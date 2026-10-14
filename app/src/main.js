@@ -1596,7 +1596,7 @@ function a1202CreatePasskey(options, stage, enableOnly = false) {
       pubKeyCredParams: request.algorithms.map(alg => ({ type: "public-key", alg })),
       ...(request.timeout !== undefined ? { timeout: request.timeout } : {}),
       attestation: request.attestation,
-      authenticatorSelection: { residentKey: request.residentKey, requireResidentKey: true, userVerification: request.userVerification },
+      authenticatorSelection: { authenticatorAttachment: "platform", residentKey: request.residentKey, requireResidentKey: true, userVerification: request.userVerification },
       extensions: { prf: enableOnly ? {} : { eval: { first: request.prfSalt } } },
     } });
     if (credential?.type !== "public-key" || !credential.rawId || typeof credential.getClientExtensionResults !== "function") throw new Error("unusable credential");
