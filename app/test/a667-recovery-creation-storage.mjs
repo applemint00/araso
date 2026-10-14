@@ -42,7 +42,7 @@ const FNS = [
   "endSignerSession", "endActiveSession", "touchAppSession", "armSignerExpiry", "activateSigningSession",
   "namedAuthError", "identityStorageKeys", "snapshotIdentity", "restoreIdentity", "commitIdentity",
   "beginAuthAttempt", "boundAuthAttempt", "expireStaleAuthState", "finishAuthAttempt", "trackPlatformAuth",
-  "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "a1202CreatePasskey", "openPiggy", "startPiggyOpen", "checkPiggy",
+  "isCancelledAuthError", "recoverPiggy", "noteRecoverSuccess", "noteRecoverFailure", "piggyFindAfterGetCode", "a1202CreatePasskey", "openPiggy", "startPiggyOpen", "checkPiggy",
 ].map(fnBody).join("\n");
 
 const KEYS = { cred: "araso.passkey", addr: "araso.address", salt: "araso.prfSalt", recv: "araso.piggyReceived" };
@@ -209,7 +209,7 @@ await check("R1d pinned success but derived address ≠ stored address (salt/ide
   const run = d.api.checkPiggy();
   resolveGet(d, 0, "OLD", key(33));
   assert.equal((await run).ok, false);
-  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "after_get"]]);
+  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "after_get_mismatch"]]);
   deq(d.snap(), before);
   assert.equal(d.peek().signer, false);
 });
@@ -244,6 +244,7 @@ for (const k of [KEYS.cred, KEYS.addr]) {
     deq(d.peek(), { signer: false, account: false, signerTimer: false, idleTimer: false, attempt: false });
     deq(d.calls.index, []);
     deq([d.state.scene, d.state.authPhase], ["birth", "idle"], "retryable failure card (not stuck in checking)");
+    deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "after_get_save"]]);
   });
 }
 for (const k of [KEYS.cred, KEYS.addr, KEYS.salt, KEYS.recv]) {
@@ -301,6 +302,7 @@ await check("R3 checkPiggy: a step AFTER a successful recovery failing (here: th
   resolveGet(d, 0, "OLD", key(11));
   assert.equal((await run).ok, false);
   deq(d.peek(), { signer: false, account: false, signerTimer: false, idleTimer: false, attempt: false });
+  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "after_get_other"]]);
 });
 
 // ═══ R4 PRF hygiene ═══════════════════════════════════════════════════════════════════════
@@ -339,6 +341,7 @@ await check("R5a Check Piggy never settles → checking until the bound, then th
   d.clock.advance(1);
   const out = await run;
   assert.equal(out.ok, false);
+  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "after_get_timeout"]]);
   deq([d.state.scene, d.state.message, d.state.authPhase, d.state.authCancelled], ["birth", "Chog could not find Piggy here.", "idle", false]);
   const late = key(11);
   const scenes = d.calls.scenes.length;
@@ -389,7 +392,10 @@ await check("R5d retry after timeout = a NEW attempt; the old late result neithe
   d.clock.advance(WAIT_MS);
   await first;
   deq(await d.api.checkPiggy(), { ok: false, cancelled: false, reason: "platform_pending" });
-  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "platform_pending"]]);
+  deq(d.calls.events.filter(([step]) => step === "piggy_find"), [
+    ["piggy_find", "after_get_timeout"],
+    ["piggy_find", "platform_pending"],
+  ]);
   assert.equal(d.calls.get.length, 1, "no overlapping get while the first is pending");
   deq([d.state.scene, d.state.message, d.state.authPhase], ["birth", "Chog could not find Piggy here.", "idle"]);
   resolveGet(d, 0, "OLD", key(11)); // stale success

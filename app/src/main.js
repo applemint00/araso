@@ -1,4 +1,5 @@
 import { track } from "./track.js";
+import { handleInAppBrowser } from "./inapp.js";
 import { waitForPasskey } from "./passkey-wait.js";
 import { createResponsiveLayout, responsiveFrame } from "./responsive-layout.js";
 import {
@@ -195,6 +196,10 @@ import "./style.css";
 import "./home-peek.css";
 import "./home-paper-multi.css";
 import { mountResidentPaper } from "./home-paper-multi.js";
+
+// [A-1247] Entry observation/escape happens before the first app render and before any WebAuthn call.
+// The event vocabulary stores only the fixed browser class; the UA and URL are never included.
+handleInAppBrowser({ target: globalThis, emit: track });
 
 const PASSKEY_STORAGE_KEY = "araso.passkey";
 // rpId 이력: arasoapp.vercel.app (9/2 낮, 폐기) → arasoo.vercel.app (9/2 밤 재생성, 현재).
@@ -1506,6 +1511,13 @@ function noteRecoverFailure() {
   if (state.recoverFailures >= 2) state.noPiggy = true;
 }
 
+function piggyFindAfterGetCode(error) {
+  if (error?.name === "PiggyIdentityMismatch") return "after_get_mismatch";
+  if (error?.name === "AuthWaitTimeout") return "after_get_timeout";
+  if (error?.name === "PiggyIdentityWriteFailed") return "after_get_save";
+  return "after_get_other";
+}
+
 // A1212: snapshot before any tap writes an attempt marker. An unresolved earlier boot
 // may retry enable-only; this boot's first create retains the normal create-time eval.
 const a1212PriorCreateAttempts = new Set();
@@ -2179,7 +2191,9 @@ async function checkPiggy() {
     noteRecoverFailure();
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
-    if (credentialFound && typeof track === "function") track("piggy_find", "after_get");
+    if ((credentialFound || error?.name === "AuthWaitTimeout") && typeof track === "function") {
+      track("piggy_find", piggyFindAfterGetCode(error));
+    }
     // [A-389-a] 복구 실패는 짧고 구분되는 원인만 보여준다 — cancelled 는 renderAuthCard 가
     // "Face ID was cancelled."로 따로 가로챈다(authCancelled). 그 외(NotFound 등)는 원본
     // 기술 에러 문자열(formatError) 대신 이 짧은 문구를 쓴다. 두 버튼 다시 보이는 것은
