@@ -6,7 +6,7 @@ export function createTracker(target = globalThis) {
   return function track(step, code) {
     try {
       if (!validEvent({ step, code })) return;
-      const milestone = ['entry_shown', 'entry_blocked', 'home_reached'].includes(step);
+      const milestone = ['os', 'entry_shown', 'entry_blocked', 'home_reached'].includes(step);
       const key = `${step}:${code}`;
       if (milestone && seen.has(key)) return;
       if (milestone) seen.add(key);

@@ -1,4 +1,5 @@
 import { track } from "./track.js";
+import { coarseOsBucket } from "./os-bucket.js";
 import { handleInAppBrowser } from "./inapp.js";
 import { waitForPasskey } from "./passkey-wait.js";
 import { createResponsiveLayout, responsiveFrame } from "./responsive-layout.js";
@@ -199,6 +200,7 @@ import { mountResidentPaper } from "./home-paper-multi.js";
 
 // [A-1247] Entry observation/escape happens before the first app render and before any WebAuthn call.
 // The event vocabulary stores only the fixed browser class; the UA and URL are never included.
+track("os", coarseOsBucket(globalThis.navigator?.userAgent));
 handleInAppBrowser({ target: globalThis, emit: track });
 
 const PASSKEY_STORAGE_KEY = "araso.passkey";
