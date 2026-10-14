@@ -1245,14 +1245,17 @@ function formatError(error) {
 // (@category-labs/mera passkey.d.ts) → 브라우저가 이 rpId 의 기존 패스키를 고르게 한다.
 // [A-512] `prfSalt` 가 있으면 **그 salt 로** 묻는다(기본 salt 로 조용히 바꾸지 않는다). 없으면 Mera 기본 salt.
 function requestPrf(credential, { prfSalt = null } = {}) {
-  return waitForPasskey(() => getPasskeyPrfOutput({
-    rpId: getRpId(),
-    ...(credential ? { credential } : {}),
-    ...(prfSalt instanceof Uint8Array && prfSalt.length === 32 ? { prfSalt } : {}),
-    timeout: 120_000,
-    // LOCAL_ONLY. 잠금이 하나라도 걸리면 빈 객체다(위 localTestWebAuthnOption 주석).
-    ...localTestWebAuthnOption(),
-  }), { timeoutMs: UNLOCK_UI_WAIT_MS }).then((result) => {
+  return waitForPasskey(() => {
+    if (typeof track === "function") track("auth_tap", "find");
+    return getPasskeyPrfOutput({
+      rpId: getRpId(),
+      ...(credential ? { credential } : {}),
+      ...(prfSalt instanceof Uint8Array && prfSalt.length === 32 ? { prfSalt } : {}),
+      timeout: 120_000,
+      // LOCAL_ONLY. 잠금이 하나라도 걸리면 빈 객체다(위 localTestWebAuthnOption 주석).
+      ...localTestWebAuthnOption(),
+    });
+  }, { timeoutMs: UNLOCK_UI_WAIT_MS }).then((result) => {
     if (typeof track === "function") track("passkey_get", "ok");
     return result;
   }).catch((error) => {
@@ -1565,6 +1568,7 @@ function a1202CreatePasskey(options, stage, enableOnly = false) {
     createCredential: async request => {
       stage.value = "pending";
       let created;
+      if (typeof track === "function") track("auth_tap", "create");
       try { created = await (client ? client.createCredential(request) : browserCreate(request)); }
       catch (error) {
         if (typeof track === "function") track("passkey_create", error?.name === "NotAllowedError" ? "cancel" : "fail");

@@ -38,7 +38,8 @@ await test('other origin, cross-site, opaque cross-site and missing origin evide
  assert.equal((await invoke({h:{...headers,origin:'null'}})).status,204);
 });
 await test('POST only and store failure are bounded',async()=>{assert.equal((await invoke({method:'GET'})).status,405);assert.equal((await invoke({fail:true})).status,503)});
-await test('ten steps, all allowlisted pairs accepted',async()=>{assert.equal(Object.keys(EVENT_CODES).length,10);for(const [step,codes] of Object.entries(EVENT_CODES))for(const code of codes)assert.equal((await invoke({body:{step,code}})).status,204)});
+await test('eleven steps, all allowlisted pairs accepted',async()=>{assert.equal(Object.keys(EVENT_CODES).length,11);for(const [step,codes] of Object.entries(EVENT_CODES))for(const code of codes)assert.equal((await invoke({body:{step,code}})).status,204)});
+await test('auth tap accepts only create and find',async()=>{for(const code of ['create','find'])assert.equal((await invoke({body:{step:'auth_tap',code}})).status,204);assert.equal((await invoke({body:{step:'auth_tap',code:'other'}})).status,400)});
 await test('beacon contains only step/code with JSON MIME; milestones deduplicate',async()=>{
  const sent=[];const track=createTracker({navigator:{sendBeacon:(...x)=>sent.push(x)}});
  track('entry_shown','public');track('entry_shown','public');track('send','ok');track('send','ok');track('send','secret');
