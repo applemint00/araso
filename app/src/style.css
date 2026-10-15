@@ -6083,6 +6083,8 @@ html .a905-jar[data-a904="twinkle"]::after {
     60%, 100% { opacity: 0; transform: scale(0.85); }
   }
 }
+/* the first Home after Second: the jar waits one quiet breath before it drops (no tap box while unseen) */
+html .a905-jar[data-a904="wait"] { visibility: hidden; }
 /* ── [A-904] end ── */
 
 /* Money tab (inside the Home paper, local 400x568 -> --tsK 0.640845 like .a898-paper). Title 26 = MONEY, total = Title, real-assets line = Detail,

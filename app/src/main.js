@@ -4381,6 +4381,7 @@ async function recheckSecondCandidatesOnHome() {
 function mountSecondHomeBell() {
   const sj = state.secondJourney;
   if (!a1182HomeVisible() || a1182ConsumedOpen === a1182OpenId || !a1172BellVisit) return;
+  if (state.a904Guide) return; // Chog's jar guide speaks before the first bell; it re-arms the bell when it ends
   if (!sj.bellCandidateId && !(import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEligible())) return;
   const stage = document.querySelector('.stage[data-scene="sendstay"]');
   if (!stage || stage.querySelector("#secondHomeBell")) return;
@@ -11833,7 +11834,7 @@ a905ObserveHome();
 // Persisted in one localStorage key ("done" after the first jar tap, else the entry count). Storage unreadable = no guide (nothing is faked).
 // Away / secondAway / Return scenes never count. Reduced motion: style.css shows a still glow only. Seam: a MutationObserver sees the jar being mounted
 // and a delegated click sees the tap, so the A-905 jar code stays as it is. Functions only (render() can run before this block is reached).
-let a904Entry = { token: -1, active: false, drop: false, lit: false, timer: null };
+let a904Entry = { token: -1, active: false, drop: false, lit: false, wait: false, timer: null };
 function a904Key() { return "araso.a904JarGuide"; }
 function a904Read() {
   try {
@@ -11848,7 +11849,8 @@ function a904Apply() {
   const btn = document.querySelector("#a905Jar");
   if (!btn) return;
   if (!a904Entry.active || state.scene !== "sendstay") { btn.removeAttribute("data-a904"); return; }
-  if (a904Entry.lit) btn.setAttribute("data-a904", "twinkle");
+  if (a904Entry.wait) btn.setAttribute("data-a904", "wait");
+  else if (a904Entry.lit) btn.setAttribute("data-a904", "twinkle");
   else if (a904Entry.drop) btn.setAttribute("data-a904", "drop");
   else btn.removeAttribute("data-a904");
 }
@@ -11863,6 +11865,7 @@ function a904Arm() {
     a904Entry.active = true;
     a904Entry.drop = g.entries === 0;
     const token = sceneToken;
+    if (a904Entry.drop && state.secondCompletedThisSession === true) { a904GuideStart(token); return; }
     a904Entry.timer = setTimeout(() => {
       if (a904Entry.token !== token || state.scene !== "sendstay") return;
       a904Entry.drop = false;
@@ -11874,6 +11877,7 @@ function a904Arm() {
 }
 function a904Done(event) {
   if (!event.target?.closest?.("#a905Jar")) return;
+  if (state.a904Guide && !state.a904Guide.tapped) a904GuideTapped(state.a904Guide);
   a904Write("done");
   clearTimeout(a904Entry.timer);
   a904Entry = { token: sceneToken, active: false, drop: false, lit: false, timer: null };
@@ -11886,6 +11890,53 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" &
   document.addEventListener("click", a904Done, true);
 }
 // ── [/A-904] ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// Jar + bell Chog guide (Owner copy and timing): the Home right after the first Second finishes, once: a breath, the jar drops and sparkles, then Chog points at it and tells about the bell; the first bell waits for the guide.
+function a904GuideLines() { return { jar: "the jar's sparkling. wanna tap it?", bell: "when there's a new job for piggy, the bell will ring." }; }
+function a904GuideStart(token) {
+  const g = { token, tapped: false, said: false };
+  state.a904Guide = g;
+  const L = a904GuideLines();
+  const live = () => state.a904Guide === g && sceneToken === token && state.scene === "sendstay";
+  g.live = live;
+  a904Entry.wait = true;
+  a904Apply();
+  setTimeout(() => {
+    a904Entry.wait = false;
+    if (!live()) { a904GuideEnd(g); return; }
+    a904Apply(); // drop
+    setTimeout(() => {
+      if (!live()) { a904GuideEnd(g); return; }
+      if (a904Entry.active && a904Entry.token === token) { a904Entry.drop = false; a904Entry.lit = true; a904Apply(); }
+      setTimeout(() => {
+        if (g.tapped) return; // the tap path finishes the guide
+        if (!live()) { a904GuideEnd(g); return; }
+        insertChogCueLine("a904GuideLine", [L.jar]);
+        g.said = true;
+        setTimeout(() => { if (g.tapped) return; if (live()) a904GuideBell(g); else a904GuideEnd(g); }, chogSpeakMs(L.jar) + 5000);
+      }, 1500);
+    }, 500);
+  }, PACE_BREATH_MS);
+}
+function a904GuideTapped(g) {
+  g.tapped = true;
+  const waitHome = () => {
+    if (state.a904Guide !== g || sceneToken !== g.token || state.scene !== "sendstay") { a904GuideEnd(g); return; }
+    if (state.a905Money || document.querySelector(".a911-screen")) { setTimeout(waitHome, 200); return; }
+    setTimeout(() => { if (g.live()) a904GuideBell(g); else a904GuideEnd(g); }, PACE_BREATH_MS);
+  };
+  setTimeout(waitHome, 200);
+}
+function a904GuideBell(g) {
+  const L = a904GuideLines();
+  insertChogCueLine("a904GuideLine", g.said ? [L.jar, L.bell] : [L.bell]);
+  setTimeout(() => a904GuideEnd(g), chogSpeakMs(L.bell));
+}
+function a904GuideEnd(g) {
+  if (state.a904Guide !== g) return;
+  state.a904Guide = null;
+  if (a1172BellVisit) a1172ArmBell(); // the bell held back by the guide may ring now
+}
 
 // ── [A-911] Own screens: Money tab · Gift a Piggy · Move money (wiring only; markup = a911-screens.js, logic = the A-898 / A-905 / A-646 code above) ─
 // Owner 2026-10-08 (INBOX A-911, frames approved "ㅇㅇ 고"). The Money tab, Gift a Piggy and Move money are one full-screen host (.a911-screen) on document.body,

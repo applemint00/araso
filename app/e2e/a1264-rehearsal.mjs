@@ -46,7 +46,7 @@ const COPY_ALLOW = new Set([
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
   "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -721,15 +721,68 @@ async function laneNames() {
 async function jarShown(person) {
   return person.page.evaluate(() => { const el = document.querySelector("#a905Jar"); if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden"; });
 }
+const JAR_LINE = "the jar's sparkling. wanna tap it?";
+const BELL_LINE = "when there's a new job for piggy, the bell will ring.";
+const speakMs = (t) => t.length * 60 + 1200; // same read time as the app's Chog lines
+async function watchJarGuide(person) {
+  const t0 = Date.now();
+  await until(person, "jar", () => jarShown(person), 20_000);
+  const jarAt = Date.now();
+  await until(person, "Chog: the jar's sparkling", (s) => s.text.includes(JAR_LINE), 15_000);
+  return { homeToJar: jarAt - t0, jarToLine: Date.now() - jarAt, lineAt: Date.now() };
+}
+async function laneJarTap() {
+  const w = createWorld("jartap");
+  const q = await openPerson(browser, w, "jt"); people.push(q);
+  await check("guide · tap path: first Journey → Journey 2 round 1 → Home", async () => {
+    await walkFirstJourney(q); await walkReturnAndFile(q); await enterSecond(q); await walkSecondJob(q, 1);
+  });
+  await check("guide · tap the sparkling jar → Money → back → 1 s → Chog adds the bell line under the jar line", async () => {
+    await watchJarGuide(q);
+    await checkpoint(q, "guide-jar-line");
+    await q.page.locator("#a905Jar").click();
+    await until(q, "Money screen", async () => q.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000);
+    await sleep(1500);
+    assert.ok(!(await look(q)).text.includes(BELL_LINE), "bell line came while Money was open");
+    await q.page.locator('.a911-back[data-a905-act="back"]').click();
+    const back = Date.now();
+    const s = await until(q, "Chog: bell line", (x) => x.text.includes(BELL_LINE), 10_000);
+    const ms = Date.now() - back;
+    assert.ok(ms >= 900 && ms <= 3000, `back → bell line ${ms} ms`);
+    assert.ok(s.text.includes(JAR_LINE), "jar line kept above the bell line");
+    await checkpoint(q, "guide-bell-line");
+  });
+  await q.context.close();
+}
 async function laneJarPiggy() {
   const w = createWorld("jarpiggy");
   const p = await openPerson(browser, w, "jp"); people.push(p);
   await check("jar · first Journey → filed → Journey 2 round 1 → Receipt filed → Home with no tap", async () => {
     await walkFirstJourney(p); await walkReturnAndFile(p); await enterSecond(p); await walkSecondJob(p, 1, { tapHome: false });
   });
+  let guide = null;
   await check("jar · round 1 done: jar shows on Home within 20 s with no tap", async () => {
+    guide = watchJarGuide(p).catch((e) => ({ error: e }));
     await until(p, "jar after round 1", () => jarShown(p), 20_000);
     await checkpoint(p, "jar-r1");
+  });
+  await check("guide · first Home after Journey 2: the jar drops, sparkles, settles 1.5 s → Chog: the jar's sparkling. wanna tap it?", async () => {
+    const g = await guide;
+    if (g?.error) throw g.error;
+    assert.ok(g.jarToLine >= 1500, `jar → line ${g.jarToLine} ms`);
+    assert.equal(await p.page.evaluate(() => document.querySelector("#a905Jar")?.getAttribute("data-a904")), "twinkle", "jar sparkles while Chog says it");
+    await checkpoint(p, "guide-jar-line");
+  });
+  await check("guide · no tap: after the jar line's read time + 5 s, Chog adds the bell line (jar line kept) and no bell rang before it", async () => {
+    const g = await guide;
+    if (g?.error) throw g.error;
+    let bellEarly = false;
+    const s = await until(p, "Chog: bell line", async (x) => { if (!x.text.includes(BELL_LINE) && (await p.page.evaluate(() => !!document.querySelector("#secondHomeBell")))) bellEarly = true; return x.text.includes(BELL_LINE); }, 20_000);
+    const ms = Date.now() - g.lineAt;
+    assert.ok(ms >= speakMs(JAR_LINE) + 5000 - 400, `jar line → bell line ${ms} ms (want ≥ ${speakMs(JAR_LINE) + 5000})`);
+    assert.ok(s.text.includes(JAR_LINE), "jar line kept");
+    assert.ok(!bellEarly, "bell rang before the guide ended");
+    await checkpoint(p, "guide-bell-line");
   });
   await check("jar · reopen → unlock → bell → Journey 2 round 2 → Receipt filed → Home with no tap", async () => {
     await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
@@ -737,9 +790,11 @@ async function laneJarPiggy() {
     await until(p, "bell", async () => p.page.evaluate(() => !!document.querySelector("#secondHomeBell")), 60_000);
     await walkSecondJob(p, 2, { tapHome: false });
   });
-  await check("jar · round 2 done: jar shows on Home within 20 s with no tap", async () => {
+  await check("jar · round 2 done: jar shows on Home within 20 s with no tap, and the guide does not come again", async () => {
     await until(p, "jar after round 2", () => jarShown(p), 20_000);
-    await checkpoint(p, "jar-r2");
+    await sleep(6000);
+    const t = (await checkpoint(p, "jar-r2")).text;
+    assert.ok(!t.includes(JAR_LINE) && !t.includes(BELL_LINE), `guide again: ${JSON.stringify(t.slice(-6))}`);
   });
   // KNOWN until the fork-scope origin index is decided: after the Journey 2 switch the app runs in the fork scope, whose Piggy index is empty
   // (the first Piggy and its birth mark live in the testnet scope), so + Piggy stops before Face ID (origin_index_missing) and nothing shows.
@@ -960,7 +1015,7 @@ function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy()].filter(Boolean));
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });
