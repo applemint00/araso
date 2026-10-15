@@ -301,7 +301,7 @@ async function enterSecond(person) {
   await until(person, "Explore", (s) => s.scene === "explore", 30_000);
   await checkpoint(person, "explore");
 }
-async function walkSecondJob(person, round) {
+async function walkSecondJob(person, round, { tapHome = true } = {}) {
   await until(person, "Explore", (s) => s.scene === "explore", 20_000);
   if (await person.page.locator('input[data-errand-id="clean"]').count()) {
     await person.page.locator('input[data-errand-id="clean"]').check();
@@ -318,8 +318,10 @@ async function walkSecondJob(person, round) {
   await until(person, "Job Receipt", () => live(person, "#returnTap"), 90_000);
   await checkpoint(person, `j${round}-return`);
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `job receipt tap ${i + 1}`); await sleep(400); }
-  await click(person, "#returnOpen", "Second Receipt Home");
-  await until(person, "filed → Home", (s) => s.scene === "sendstay", 30_000);
+  // A person may tap the folder's Home, or just wait: Home must come either way.
+  if (tapHome) await until(person, "Second Receipt Home or settled Home", async (s) => s.scene === "sendstay" || (await live(person, "#returnOpen")), 20_000);
+  if (tapHome && (await live(person, "#returnOpen"))) await person.page.locator("#returnOpen").click().catch(() => {});
+  await until(person, tapHome ? "filed → Home" : "filed → Home with no tap", (s) => s.scene === "sendstay", tapHome ? 30_000 : 20_000);
   await checkpoint(person, `j${round}-home`);
 }
 function publicInviteZero(world, who) {
@@ -715,6 +717,47 @@ async function laneNames() {
   await r.context.close();
 }
 
+// Jar + Piggy: after each Journey 2 round, the jar must show on Home with no tap; then + Piggy must make a new Piggy.
+async function jarShown(person) {
+  return person.page.evaluate(() => { const el = document.querySelector("#a905Jar"); if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden"; });
+}
+async function laneJarPiggy() {
+  const w = createWorld("jarpiggy");
+  const p = await openPerson(browser, w, "jp"); people.push(p);
+  await check("jar · first Journey → filed → Journey 2 round 1 → Receipt filed → Home with no tap", async () => {
+    await walkFirstJourney(p); await walkReturnAndFile(p); await enterSecond(p); await walkSecondJob(p, 1, { tapHome: false });
+  });
+  await check("jar · round 1 done: jar shows on Home within 20 s with no tap", async () => {
+    await until(p, "jar after round 1", () => jarShown(p), 20_000);
+    await checkpoint(p, "jar-r1");
+  });
+  await check("jar · reopen → unlock → bell → Journey 2 round 2 → Receipt filed → Home with no tap", async () => {
+    await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
+    await unlockIfLocked(p);
+    await until(p, "bell", async () => p.page.evaluate(() => !!document.querySelector("#secondHomeBell")), 60_000);
+    await walkSecondJob(p, 2, { tapHome: false });
+  });
+  await check("jar · round 2 done: jar shows on Home within 20 s with no tap", async () => {
+    await until(p, "jar after round 2", () => jarShown(p), 20_000);
+    await checkpoint(p, "jar-r2");
+  });
+  // KNOWN until the fork-scope origin index is decided: after the Journey 2 switch the app runs in the fork scope, whose Piggy index is empty
+  // (the first Piggy and its birth mark live in the testnet scope), so + Piggy stops before Face ID (origin_index_missing) and nothing shows.
+  await knownCheck("piggy · Chog opens the Home paper → + Piggy → a new Piggy is made (Name it)", async () => {
+    await click(p, "#chogHomeHit", "Chog");
+    await sleep(2500); // the paper has finished opening (a person reads it before tapping)
+    await click(p, ".homePlusPiggyTab", "+ Piggy");
+    await checkpoint(p, "plus-piggy");
+    try { await until(p, "Name it for the new Piggy", (s) => s.scene === "name", 20_000); }
+    catch (e) {
+      const idx = await p.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("araso.myPiggiesIndex.v1.")).join(","));
+      throw new Error(`${e.message} · Piggy index keys: ${idx || "none"}`);
+    }
+    await checkpoint(p, "plus-piggy-name");
+  });
+  await p.context.close();
+}
+
 async function laneFaults() {
   const f = await openPerson(browser, fault1, "f1"); people.push(f);
   await check("fault · first deposit -32000 once → retried → Return", async () => {
@@ -916,8 +959,8 @@ async function laneAtlas() {
 function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id); if (e.length) return e; } return []; }
 
 try {
-  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy()].filter(Boolean));
+  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy").split(",");
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });

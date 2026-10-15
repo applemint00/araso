@@ -74,7 +74,9 @@ check("credential 없이 이름만 있어도 birth 우선", scene(false, false, 
   checkTrue("정상 완료 경로(파일 열기)만 저장한다", /onOpenFilebox: \(\) => finishSecondJourney\(\{ persist: true \}\)/.test(SRC));
   checkTrue("DEV 씬점프(onIdleEnter)는 저장하지 않는다", /finishSecondJourney\(\{ persist: false \}\), 0\)/.test(SRC));
   checkTrue("기본값이 persist:false — 새 호출부가 실수로 저장하지 않는다", /finishSecondJourney = \(\{ persist = false \} = \{\}\) =>/.test(SRC));
-  check("  persist:true 를 넘기는 자리는 정확히 1곳", (SRC.match(/finishSecondJourney\(\{ persist: true \}\)/g) || []).length, 1);
+  // 2자리: Home(폴더) 탭 + filed 뒤 저절로 Home — 1차와 같은 정착("Later Returns … settle Home the same way").
+  check("  persist:true 를 넘기는 자리는 정확히 2곳", (SRC.match(/finishSecondJourney\(\{ persist: true \}\)/g) || []).length, 2);
+  checkTrue("  두 번째 자리 = filed 뒤 secondReturn 에서만, 1차 hold 뒤", /if \(!returnView\?\.filed\) return true;\s*sceneTimeout\(\(\) => \{ if \(valid\(\) && state\.scene === "secondReturn"\) finishSecondJourney\(\{ persist: true \}\); \}, A891_FILED_LINE_HOLD_MS\);/.test(SRC));
 
   // 지우는 곳은 reset 하나뿐 — 일반 Home 이동/기록 열기/새로고침에서는 0.
   const removes = (SRC.match(/localStorage\.removeItem\(SECOND_JOURNEY_CLOSED_KEY\)/g) || []).length;

@@ -5419,6 +5419,13 @@ function mountSecondReturn() {
   // [A-421] 파일링 완료 시 알람 제거 — First 와 같은 공용 구현.
   a902WatchReturn(returnView, valid); // [A-902] bell + toss sounds
   endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid);
+  // Filed already looks like Home: settle by itself after the First's hold (no repeated teaching line), so the jar and + Piggy come without a tap.
+  runSceneFrames(() => {
+    if (!valid()) return false;
+    if (!returnView?.filed) return true;
+    sceneTimeout(() => { if (valid() && state.scene === "secondReturn") finishSecondJourney({ persist: true }); }, A891_FILED_LINE_HOLD_MS);
+    return false;
+  });
 }
 
 // [A-466] 첫 결과를 **끝까지** 정리한 뒤에만 선다. 실패·중단·새로고침으로는 서지 않는다.
