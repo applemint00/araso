@@ -752,6 +752,10 @@ async function laneJarTap() {
     const ms = Date.now() - back;
     assert.ok(ms >= 900 && ms <= 3000, `back → bell line ${ms} ms`);
     assert.ok(s.text.includes(JAR_LINE), "jar line kept above the bell line");
+    // [A-1287] the bell line stays long enough to read (the guide does not end under it)
+    const seenFrom = Date.now(); let seenUntil = seenFrom;
+    while (Date.now() - seenFrom < speakMs(BELL_LINE) + 1500) { if ((await look(q)).text.includes(BELL_LINE)) seenUntil = Date.now(); else break; await sleep(150); }
+    assert.ok(seenUntil - seenFrom >= speakMs(BELL_LINE) - 300, `bell line seen ${seenUntil - seenFrom} ms (read time ${speakMs(BELL_LINE)} ms)`);
     await checkpoint(q, "guide-bell-line");
   });
   await q.context.close();

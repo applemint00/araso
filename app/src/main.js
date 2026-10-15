@@ -11947,8 +11947,10 @@ function a904GuideTapped(g) {
 }
 function a904GuideBell(g) {
   const L = a904GuideLines();
-  insertChogCueLine("a904GuideLine", g.said ? [L.jar, L.bell] : [L.bell]);
-  setTimeout(() => a904GuideEnd(g), chogSpeakMs(L.bell));
+  const lines = g.said ? [L.jar, L.bell] : [L.bell];
+  insertChogCueLine("a904GuideLine", lines);
+  // the guide ends once the bell line has shown (it may still wait for the jar line's read time) and been read
+  setTimeout(() => a904GuideEnd(g), chogLineWaits("a904GuideLine", lines).at(-1) + chogSpeakMs(L.bell));
 }
 function a904GuideEnd(g) {
   if (state.a904Guide !== g) return;
@@ -12748,7 +12750,10 @@ function insertChogCueLine(id, text) {
   line.classList.toggle("chogCheckLine--two", Array.isArray(text) && text.length > 1);
   if (Array.isArray(text) && text.length > 1) {
     line.replaceChildren(...chogLineNodes(id, text));
-  } else line.textContent = Array.isArray(text) ? text.join(" ") : text;
+  } else {
+    line.textContent = Array.isArray(text) ? text.join(" ") : text;
+    if (Array.isArray(text)) chogLineWaits(id, text); // a single line starts this key's clock, so a line added under it later keeps it
+  }
   return true;
 }
 
