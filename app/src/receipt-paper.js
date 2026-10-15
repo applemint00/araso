@@ -67,7 +67,7 @@ export function receiptPaperMarkup({
 // "—" 로 둔다(§4). 실제 금융 판단/저장 로직 변경 0 — 이 함수는 읽기만 한다.
 //
 //   date      receipt.at(완료 시각) 가 있으면 그 날짜. 없으면 "—"(오늘로 채우지 않는다).
-//   wentOut   출발 시각을 담는 필드가 현재 receipt 에 없다 — "—"(Unknown), 항상.
+//   wentOut   receipt.wentOutAt(deposit 이 나간 시각)을 시:분으로. 없으면(옛 영수증) "—".
 //   cameBack  receipt.at 을 시:분으로. 없으면 "—".
 //   kept      "kept" 의 금융 의미(잔액이냐 이익이냐)가 현재 데이터로 확인되지 않는다 —
 //             sent/after/gas 같은 다른 필드를 임의로 끌어다 채우지 않는다(A-346 §2). "—" 고정.
@@ -81,9 +81,8 @@ export function receiptPaperFields({ receipt = null, name = "Piggy" } = {}) {
   return {
     name,
     date: hasAt ? at.toLocaleDateString("en-US", { month: "short", day: "numeric" }) : "—",
-    // [A-684] wentOut = 출발 시각(A-346). 저장된 출발 시각 필드가 없다 — receipt.at 은 귀환 시각, sent 는 금액이라
-    // 쓰지 않는다. "—" 고정(새 필드 0).
-    wentOut: "—",
+    // wentOut = the stored departure moment (deposit sent); receipts from before it was stored keep "—".
+    wentOut: Number.isSafeInteger(receipt?.wentOutAt) && receipt.wentOutAt > 0 ? new Date(receipt.wentOutAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "—",
     cameBack: hasAt ? at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "—",
     // [A-684] kept = 그 Piggy 의 실현 Job 이익(검증된 이익 원천이 생길 때까지 "—"). receipt.after/sent/gas/
     // balance/principal 에서 끌어오지 않는다 — 원금 귀환과 이익은 별도 줄이다.

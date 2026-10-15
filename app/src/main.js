@@ -2784,7 +2784,7 @@ async function waitForSuccess(hash) {
   return receipt.status === "success" ? receipt : null;
 }
 
-async function settleSend({ before, address, piggyId = "", grantTxHash = "", depositTxHash, depositReceipt, redeemTxHash, shmonReceived }) {
+async function settleSend({ before, address, piggyId = "", grantTxHash = "", depositTxHash, depositReceipt, redeemTxHash, shmonReceived, wentOutAt }) {
   const redeemReceipt = await waitForSuccess(redeemTxHash);
   if (!redeemReceipt) {
     return { outcome: "failed", reason: "redeem-unconfirmed-or-reverted", receipt: null };
@@ -2821,6 +2821,7 @@ async function settleSend({ before, address, piggyId = "", grantTxHash = "", dep
       shmonAfterRedeem,
       status: redeemReceipt.status,
       at: Date.now(),
+      ...(Number.isSafeInteger(wentOutAt) && wentOutAt > 0 ? { wentOutAt } : {}),
       // [A-544] settle 안에서 UI 상태를 다시 읽지 않는다 — 호출자가 이미 넘긴 값만, 그리고
       // 그 값이 빈칸 아닌 문자열일 때만 receipt 에 적는다.
       ...(typeof piggyId === "string" && piggyId.trim() !== "" ? { piggyId: piggyId.trim() } : {}),
@@ -3619,6 +3620,7 @@ async function sendPiggyOnce(markSettling) {
     if (String(depositSentHash).toLowerCase() !== depositSigned.hash.toLowerCase()) throw new Error("send_hash_mismatch");
     const depositTxHash = depositSigned.hash;
     markSendPhaseSent(reservation, { stage: "deposit-broadcast", address: account.address, depositTxHash, nonce: depositSigned.nonce });
+    const wentOutAt = Date.now(); // the moment Piggy actually left — the Receipt's "went out"
     const depositReceipt = await waitForSuccess(depositTxHash);
     if (!depositReceipt) throw new Error("deposit unconfirmed or reverted");
     // [A-768 M-L-1] redeem 을 정하는 읽기는 deposit receipt 블록에 고정 + 상한 재시도(prepareRedeemAfterDeposit).
@@ -3654,6 +3656,7 @@ async function sendPiggyOnce(markSettling) {
       depositReceipt,
       redeemTxHash,
       shmonReceived,
+      wentOutAt,
     })
       .then((trip) => {
         // 성공(redeem receipt status success)일 때만 확정값 저장·미확정 기록 제거. 실패·미확정은 기록 유지.

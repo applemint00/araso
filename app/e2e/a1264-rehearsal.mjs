@@ -255,7 +255,7 @@ async function walkFirstJourney(person, { send = true } = {}) {
 }
 async function walkReturnAndFile(person) {
   await until(person, "Return receipt", () => live(person, "#returnTap"), 60_000);
-  await checkpoint(person, "return");
+  person.receiptText = (await checkpoint(person, "return")).text;
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `receipt tap ${i + 1}`); await sleep(400); }
   await until(person, "filed → quiet Home", (s) => s.scene === "sendstay", 30_000);
   await checkpoint(person, "home-filed");
@@ -354,6 +354,12 @@ async function laneMain() {
     a.firstTimeline = await readTimeline(a);
     await trace(a, "after-file", 20_000);
     assert.match(a.world.chain.log.join(";"), /deposit nonce=0;sendRaw redeem nonce=1/);
+  });
+  await check("a · first Receipt: went out shows the departure time (h:mm), kept stays —", () => {
+    const t = a.receiptText || [];
+    const i = t.indexOf("went out"), k = t.indexOf("kept");
+    assert.ok(i >= 0 && /^\d{1,2}:\d{2} (AM|PM)$/.test(t[i + 1] || ""), `receipt rows: ${JSON.stringify(t)}`);
+    assert.equal(t[k + 1], "—", `kept: ${t[k + 1]}`);
   });
   await check("a · events: os · entry_shown/public · passkey_create/ok · home_reached/ok · send_tap/ok · grant/ok · send/ok", () => {
     const ev = eventsOf(main, "a");

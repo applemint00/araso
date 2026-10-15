@@ -67,6 +67,7 @@ function decodeLegacyRow(row) {
     // 옛 영수증에는 status 가 없다. 없으면 빈 값으로 두고 성공이라 넘겨짚지 않는다.
     status: row.status || "",
     at: row.at || 0,
+    ...(Number.isSafeInteger(row.wentOutAt) && row.wentOutAt > 0 ? { wentOutAt: row.wentOutAt } : {}),
     // 저장된 값이 비어 있지 않은 문자열일 때만 읽는다 — 없거나 빈칸/문자열이 아니면 owner
     // 필드 자체를 만들지 않는다(참고: history-filter.js receiptOwnerId()).
     ...(typeof row.piggyId === "string" && row.piggyId.trim() !== ""
@@ -96,6 +97,7 @@ function encodeLegacyRow(row) {
     shmonAfterRedeem: String(optionalUint(row.shmonAfterRedeem, "shmonAfterRedeem")),
     status: row.status || "",
     at: row.at,
+    ...(Number.isSafeInteger(row.wentOutAt) && row.wentOutAt > 0 ? { wentOutAt: row.wentOutAt } : {}),
     ...(typeof row.piggyId === "string" && row.piggyId.trim() !== ""
       ? { piggyId: row.piggyId.trim() }
       : {}),
