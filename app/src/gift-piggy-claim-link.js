@@ -208,11 +208,13 @@ export function isStorableLinkRecord(record) {
 /**
  * 링크 URL. 토큰은 **fragment 에** 둔다 — query 였다면 서버 로그·Referer 로 새어 나간다.
  */
-export function buildClaimUrl(origin, { giftId, token } = {}) {
+export function buildClaimUrl(origin, { giftId, token, note = "", amountUsd = null } = {}) {
   const base = typeof origin === "string" ? origin.replace(/\/+$/, "") : "";
   if (!base || typeof giftId !== "string" || !giftId) return null;
   if (typeof token !== "string" || !TOKEN.test(token)) return null;
-  return `${base}/claim#g=${encodeURIComponent(giftId)}&t=${token}&v=${GIFT_LINK_VERSION}`;
+  const display = typeof note === "string" && note ? `&n=${encodeURIComponent(note.slice(0, 140))}` : "";
+  const amount = [20, 50, 100].includes(Number(amountUsd)) ? `&a=${Number(amountUsd)}` : "";
+  return `${base}/claim#g=${encodeURIComponent(giftId)}&t=${token}&v=${GIFT_LINK_VERSION}${display}${amount}`;
 }
 
 /** 받는 쪽이 연 URL 을 읽는다. 잘못된 링크를 **조용히 고치지 않는다**. */
@@ -227,7 +229,9 @@ export function parseClaimUrl(url) {
   if (!giftId) return { ok: false, reason: "no_gift_id" };
   if (!TOKEN.test(token)) return { ok: false, reason: "bad_token" };
   if (version !== GIFT_LINK_VERSION) return { ok: false, reason: "version_mismatch" };
-  return { ok: true, giftId, token };
+  const note = params.get("n") || "";
+  const amountUsd = Number(params.get("a"));
+  return { ok: true, giftId, token, note: note.slice(0, 140), amountUsd: [20, 50, 100].includes(amountUsd) ? amountUsd : null };
 }
 
 /**

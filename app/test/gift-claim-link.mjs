@@ -100,7 +100,14 @@ test("the token rides in the fragment, never the query", async () => {
 test("a round trip through the URL recovers exactly what was put in", async () => {
   const { token } = await freshLink();
   const parsed = parseClaimUrl(buildClaimUrl("https://araso.app", { giftId: "g-001", token }));
-  assert.deepEqual(parsed, { ok: true, giftId: "g-001", token });
+  assert.deepEqual(parsed, { ok: true, giftId: "g-001", token, note: "", amountUsd: null });
+});
+
+test("display-only Gift card metadata round-trips in the fragment", async () => {
+  const { token } = await freshLink();
+  const note = "02\nDana\nfor you\nSam";
+  const parsed = parseClaimUrl(buildClaimUrl("https://araso.app", { giftId: "g-001", token, note, amountUsd: 20 }));
+  assert.deepEqual(parsed, { ok: true, giftId: "g-001", token, note, amountUsd: 20 });
 });
 
 test("a link with no fragment or a wrong version is not guessed at", () => {

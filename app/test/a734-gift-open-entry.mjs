@@ -106,15 +106,15 @@ await check("S3 vercel.json: /api/grant function config, build/output/install un
       "api/gift-sponsor.js": { maxDuration: 60, includeFiles: "relayer/src/**" }, "api/gift-sponsor-reconcile.js": { maxDuration: 60, includeFiles: "relayer/src/**" } } }); // pre-A-913 baseline: only "api/grant.js"
   deq(Object.keys(VERCEL).sort(), ["buildCommand", "crons", "functions", "headers", "installCommand", "outputDirectory", "rewrites"]); // pre-A-913 baseline: no "crons"
 });
-await check("S4 claim URL contract unchanged: buildClaimUrl → <origin>/claim#g=<id>&t=<token>&v=1, token fragment-only; parse round-trips; query never carries it", () => {
+await check("S4 claim URL contract: buildClaimUrl → fragment-only identity plus optional display metadata; query never carries it", () => {
   const { token, url } = mintLink("https://arasoo.vercel.app", "gift s4/é");
   assert.match(url, /^https:\/\/arasoo\.vercel\.app\/claim#g=gift%20s4%2F%C3%A9&t=[^&]+&v=1$/);
   const u = new URL(url);
   assert.equal(u.pathname, "/claim");
   assert.equal(u.search, "");
   assert.equal(u.hash.includes(token), true);
-  deq(parseClaimUrl(url), { ok: true, giftId: "gift s4/é", token });
-  deq(readClaimFragment(`https://x.test/claim?i=tester01${url.slice(url.indexOf("#"))}`), { status: GIFT_ENTRY_STATUS.READY, giftId: "gift s4/é", token }, "?i= + #g coexist");
+  deq(parseClaimUrl(url), { ok: true, giftId: "gift s4/é", token, note: "", amountUsd: null });
+  deq(readClaimFragment(`https://x.test/claim?i=tester01${url.slice(url.indexOf("#"))}`), { status: GIFT_ENTRY_STATUS.READY, giftId: "gift s4/é", token, note: "", amountUsd: null }, "?i= + #g coexist");
 });
 await check("S5 live Gift stays fail-closed: GIFT_RECORD_CONFIG / GIFT_CLAIM_SUBMIT_CONFIG / ISSUANCE_AUTHORITY are null literals; source/submitter derive only from them", () => {
   assert.match(CODE, /^const GIFT_RECORD_CONFIG = null;/m);

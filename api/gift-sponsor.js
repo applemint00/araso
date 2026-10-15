@@ -18,6 +18,7 @@ const AUTH_KEYS = ["chainId", "address", "nonce", "r", "s", "yParity"];
 const DELEG_KEYS = ["delegate", "delegator", "authority", "caveats", "salt", "signature"];
 const CAVEAT_KEYS = ["enforcer", "terms", "args"];
 const CLAIM_KEYS = ["recipient", "preimage", "salt", "deadline"];
+const FORK_KEYS = ["forkInstanceId", "escrowAddress"];
 
 const isObj = (o) => o !== null && typeof o === "object" && !Array.isArray(o);
 const exact = (o, keys) => isObj(o) && Object.keys(o).length === keys.length && keys.every((k) => Object.hasOwn(o, k));
@@ -30,10 +31,12 @@ function authOk(a) {
 }
 
 /** Shape allowlist only (keys + primitive types). Value semantics are the service's job. */
-export function isRegisterBody(b) { return exact(b, REGISTER_KEYS) && b.action === "register_gas_tx" && isStr(b.giftId) && isStr(b.gasTx); }
+const exactTransport = (b, keys) => exact(b, keys) || exact(b, [...keys, ...FORK_KEYS]);
+const forkBindingOk = (b) => !Object.hasOwn(b, "forkInstanceId") || (isStr(b.forkInstanceId) && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(b.forkInstanceId) && isStr(b.escrowAddress));
+export function isRegisterBody(b) { return exactTransport(b, REGISTER_KEYS) && forkBindingOk(b) && b.action === "register_gas_tx" && isStr(b.giftId) && isStr(b.gasTx); }
 
 export function isAllowedSponsorBody(b) {
-  if (!(exact(b, TOP_KEYS) || exact(b, [...TOP_KEYS, "gasTx"])) || !isStr(b.giftId) || (Object.hasOwn(b, "gasTx") && !isStr(b.gasTx))) return false;
+  if (!(exactTransport(b, TOP_KEYS) || exactTransport(b, [...TOP_KEYS, "gasTx"])) || !forkBindingOk(b) || !isStr(b.giftId) || (Object.hasOwn(b, "gasTx") && !isStr(b.gasTx))) return false;
   if (!authOk(b.authorization) || !authOk(b.revokeAuthorization)) return false;
   if (!exact(b.delegation, DELEG_KEYS)) return false;
   const d = b.delegation;
@@ -107,12 +110,14 @@ export function createGiftSponsorHandler({ getRuntime = () => getGiftSponsorRunt
       let rt;
       try { rt = getRuntime(); } catch { rt = null; }                                          // misconfigured env == OFF (never half-running)
       if (!rt || !rt.service || rt.service.ready !== true) return respond(res, 503, { ok: false, error: "unavailable_not_sent" });
+      if (Object.hasOwn(parsed, "forkInstanceId") && String(parsed.escrowAddress).toLowerCase() !== String(rt.policy?.escrow || "").toLowerCase()) return respond(res, 400, { ok: false, error: "bad_request" });
+      const serviceBody = Object.hasOwn(parsed, "forkInstanceId") ? Object.fromEntries(Object.entries(parsed).filter(([k]) => !FORK_KEYS.includes(k))) : parsed;
       if (typeof rt.rateLimit === "function") {                                                // [F-6] per-IP / per-gift limit (injected numbers; absent => no limiter)
         let allowed = false;
         try { allowed = (await rt.rateLimit({ ip: clientIp(req), giftId: parsed.giftId })) === true; } catch { return respond(res, 503, { ok: false, error: "unavailable_not_sent" }); }
         if (!allowed) return respond(res, 429, { ok: false, error: "rate_limited" });
       }
-      const r = registering ? await rt.service.register(parsed) : await rt.service.handle(parsed);                                              // validated object only (JSON.parse keeps the last duplicate key)
+      const r = registering ? await rt.service.register(serviceBody) : await rt.service.handle(serviceBody);                                  // validated object only (JSON.parse keeps the last duplicate key)
       if (!r || ![200, 400, 409, 503].includes(r.status) || !isObj(r.body)) return respond(res, 503, { ok: false, error: "unavailable" });
       return respond(res, r.status, r.body);
     } catch {

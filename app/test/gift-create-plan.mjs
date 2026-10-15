@@ -14,6 +14,7 @@ import {
   CLAIM_STATUS,
   GIFT_LINK_VERSION,
   hashClaimToken,
+  parseClaimUrl,
 } from "../src/gift-piggy-claim-link.js";
 import { createGiftRecordSource } from "../src/gift-record-source.js";
 import { FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "../src/funding-context.js";
@@ -84,6 +85,14 @@ await atest("claimUrl is built only when origin is given, via the real buildClai
   assert.ok(typeof withOrigin.claimUrl === "string" && withOrigin.claimUrl.includes("#g="));
   const withoutOrigin = await validPlan({ origin: null });
   assert.equal(withoutOrigin.claimUrl, null);
+});
+
+await atest("claimUrl carries the selected card letter and amount for the recipient screen", async () => {
+  const note = "02\nDana\nfor you\nSam";
+  const plan = await validPlan({ note, presetLabel: 20 });
+  const parsed = parseClaimUrl(plan.claimUrl);
+  assert.equal(parsed.note, note);
+  assert.equal(parsed.amountUsd, 20);
 });
 
 // ── claimTokenHash: same commitment record <-> escrow args, and matches the real getter shape ──

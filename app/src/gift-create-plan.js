@@ -164,7 +164,7 @@ export async function planGiftCreate({
     : sealed0;
 
   const claimUrl0 = typeof origin === "string" && origin
-    ? buildClaimUrl(origin, { giftId, token: created.token })
+    ? buildClaimUrl(origin, { giftId, token: created.token, note, amountUsd: Number(presetLabel) })
     : null;
   // [gift-fork] a Gift made on the shared fork opens on the fork's boot path ("/j2" = boot-profile.js FORK_BOOT_PATH), so the link boots the
   // chain profile it was made on; "/claim" boots the build profile (testnet / 143), exactly as before for every other scope.

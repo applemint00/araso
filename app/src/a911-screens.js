@@ -95,6 +95,17 @@ function giftCards(view) {
   return `<div class="a911-cards" data-a898-picked="${esc(picked || "")}" data-a911-cards="${stage}">${cards}</div>`;
 }
 
+export function a911GiftReceiveMarkup({ front, fields = {}, amountUsd = null, flipped = false } = {}) {
+  if (!FRONT_ART[front]) return "";
+  const view = { amountUsd, fields };
+  const card = `<div class="a911-card is-picked${flipped ? " is-flipped" : ""}" data-gift-receive-card="${esc(front)}">
+    <button class="a911-cardTap" id="giftOpenButton" type="button" data-gift-receive="flip" aria-label="${flipped ? "letter" : "gift card"}"></button>
+    <span class="a911-card__inner">${frontFace(front, view)}${letterFace(view, false)}</span></div>`;
+  const body = `<div class="a911-giftGroup"><div class="a911-cards" data-a911-cards="pick">${card}</div>${flipped ? `<div class="a911-hint">${A911_COPY.turn}</div>` : ""}</div>`;
+  return shell({ kind: "gift-receive", title: A911_COPY.gift, stage: flipped ? "letter" : "front", back: { attr: "data-gift-receive", act: "back" }, body,
+    act: flipped ? actButton({ label: "Face ID", attrs: 'id="giftOpenButton" data-gift-receive="open"' }) : "" });
+}
+
 const money$ = (v) => (v == null || v === "" ? "" : String(v).startsWith("$") ? esc(v) : `$${esc(v)}`);
 
 function giftCtrl(view) {
