@@ -6857,6 +6857,7 @@ html .nameScene__say.chogCheckLine { left: 0; top: auto; bottom: 104%; transform
 
 /* [A-1288] Money's "Gift a Piggy" until the first Gift tap = design D: the words keep their black; a gold light sweeps over them (2.4 s) and
    three stars blink, our gold #E0B100 (main.js giftSparkleApply). Reduced motion: no sweep, one still star. */
+html .a911-row#a905GiftPiggy[data-gift-sparkle="1"] { position: relative; }
 html .a911-row#a905GiftPiggy .a1288Txt { position: relative; display: inline-block; }
 html .a911-row#a905GiftPiggy .a1288Txt::after {
   content: attr(data-text); position: absolute; inset: 0; white-space: nowrap; pointer-events: none;

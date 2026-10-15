@@ -11939,9 +11939,10 @@ function giftSparkleApply() {
     txt.dataset.text = words.textContent;
     words.replaceWith(txt);
     txt.append(words);
-    for (const k of [1, 2, 3]) { const st = document.createElement("i"); st.className = `a1288Star a1288Star--${k}`; st.setAttribute("aria-hidden", "true"); txt.append(st); }
+    // the stars sit beside the words (not inside them), so the words stay one plain text the page and its checks can read
+    for (const k of [1, 2, 3]) { const st = document.createElement("i"); st.className = `a1288Star a1288Star--${k}`; st.setAttribute("aria-hidden", "true"); txt.after(st); }
   } else if (!on && txt) {
-    txt.querySelectorAll(".a1288Star").forEach((st) => st.remove());
+    row.querySelectorAll(".a1288Star").forEach((st) => st.remove());
     txt.replaceWith(...txt.childNodes);
   }
   if (on) row.setAttribute("data-gift-sparkle", "1"); else row.removeAttribute("data-gift-sparkle");
