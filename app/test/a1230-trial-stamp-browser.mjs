@@ -43,7 +43,7 @@ try{
    const overlaps=s=>{const b=document.querySelector(s).getBoundingClientRect();return r.left<b.right&&r.right>b.left&&r.top<b.bottom&&r.bottom>b.top};
    return {text:e.textContent,color:getComputedStyle(e).color,sameDetailSize:getComputedStyle(e).fontSize===getComputedStyle(document.querySelector('.sendCard__meta .sendCard__detail')).fontSize,lines:range.getClientRects().length,inside:ink.left>=card.left&&ink.right<=card.right&&ink.bottom<=card.bottom,overlap:['#sendButton','.sendCard__message','.sendCard__meta','.sendCard__rule'].some(overlaps),rect:r.toJSON()};
   });
-  assert.equal(metrics.text,'You sign. Piggy takes your money to work.');assert.equal(metrics.color,'rgb(184, 143, 0)');assert.equal(metrics.lines,1);assert.ok(metrics.sameDetailSize&&metrics.inside&&!metrics.overlap);
+  assert.equal(metrics.text,'You sign. Piggy takes your money to work.');assert.equal(metrics.color,'rgb(224, 177, 0)');assert.equal(metrics.lines,1);assert.ok(metrics.sameDetailSize&&metrics.inside&&!metrics.overlap);
   await stampCheck('send',width);rows.push({scene:'send',width,...metrics});if(shots)await d.p.screenshot({path:`${shots}/send-${width}.png`});check(`send ${width}: one line/detail size/containment/overlap`);
  }
  await d.p.evaluate(()=>{localStorage.clear();sessionStorage.clear()});await d.p.goto('about:blank');await d.p.goto(d.BASE,{waitUntil:'networkidle'});

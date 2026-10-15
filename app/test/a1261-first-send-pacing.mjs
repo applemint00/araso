@@ -1,4 +1,5 @@
-// [A-1261] First Home pacing: 4500 ms quiet → CG-01 → 2500 ms → existing Send card.
+// First Home pacing (canon FIRST_JOURNEY_PACING_20261015): sit → 2 s → "work's coming!" → card at max(arrival + 20 s, grant + 25 s)
+// → 1 s → the two job lines → +1 s → Send can be pressed.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
@@ -13,14 +14,18 @@ const cut = (start, end) => {
 const settle = cut("  const settle = ({ keepPose = false } = {}) => {", "\n  const startRect = state.homeStartRect;");
 const cue = cut("const FIRST_SEND_CUE_LINE", "\n// CG-02");
 
-assert.match(MAIN, /const FIRST_SEND_QUIET_MS = 4500;/);
-assert.match(MAIN, /const FIRST_SEND_CUE_LEAD_MS = 2500;/);
+assert.match(MAIN, /const PACE_SEAT_BREATH_MS = 2000;/);
+assert.match(MAIN, /const PACE_HOME_TO_CARD_MIN_MS = 20000;/);
+assert.match(MAIN, /const PACE_GRANT_SETTLE_MS = 25000;/);
+assert.match(MAIN, /const PACE_SEND_ARM_MS = 1000;/);
+assert.match(MAIN, /const PACE_BREATH_MS = 1000;/);
 assert.match(MAIN, /const HOME_FIRST_JOURNEY_CARD_MS = 1200;/);
 assert.match(MAIN, /const POST_FILE_QUIET_HOME_MS = 8000;/);
 assert.match(cue, /const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job\.";/);
 assert.doesNotMatch(cue, /!state\.sendCardVisible/);
-assert.match(settle, /const announceFirstSend = \(\) => \{[\s\S]*sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*[\s\S]*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);[\s\S]*sceneTimeout\(announceFirstSend, FIRST_SEND_QUIET_MS\);/);
-assert.match(settle, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);/);
+assert.match(settle, /const announceFirstSend = \(\) => \{[\s\S]*sayFirstSendCue\("coming"\);\s*sceneTimeout\(revealSendCard, chogSpeakMs\(FIRST_SEND_CUE_PARTS\[0\]\) \+ PACE_BREATH_MS\);[\s\S]*sceneTimeout\(announceFirstSend, PACE_SEAT_BREATH_MS\);/);
+assert.match(settle, /const readyAt = firstGrantReadyAt === null \? Infinity : Math\.max\(arrivedAt \+ PACE_HOME_TO_CARD_MIN_MS, firstGrantReadyAt\);/);
+assert.match(settle, /state\.sendCardVisible = true;\s*render\(\);\s*sceneTimeout\(\(\) => \{\s*sayFirstSendCue\("job"\);\s*sceneTimeout\(armSend, [^;]*PACE_SEND_ARM_MS\);\s*\}, PACE_BREATH_MS\);/);
 assert.match(cue, /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*document\.querySelector\("#firstSendChogCue"\)\?\.remove\(\);[\s\S]*\{ once: true \}/);
 
 let click = null;
@@ -43,8 +48,8 @@ click();
 assert.equal(removed, true, "first Send tap removes CG-01");
 // [A-1265] the Send card is never gated on the cue line being inserted
 assert.doesNotMatch(settle, /if \(!sayFirstSendCue\(\)\) return;/);
-const sequenceContract = /sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*[\s\S]*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/;
-assert.equal(sequenceContract.test(settle.replace(/sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*/, "")), false, "dropping the cue fails the sequence pin");
-assert.equal(/const FIRST_SEND_QUIET_MS = 4500;/.test(MAIN.replace("const FIRST_SEND_QUIET_MS = 4500;", "const FIRST_SEND_QUIET_MS = 1200;")), false, "reverting the quiet beat fails its pin");
+const sequenceContract = /sayFirstSendCue\("coming"\);\s*sceneTimeout\(revealSendCard, chogSpeakMs\(FIRST_SEND_CUE_PARTS\[0\]\) \+ PACE_BREATH_MS\);/;
+assert.equal(sequenceContract.test(settle.replace('sayFirstSendCue("coming");', "")), false, "dropping the cue fails the sequence pin");
+assert.equal(/const PACE_HOME_TO_CARD_MIN_MS = 20000;/.test(MAIN.replace("const PACE_HOME_TO_CARD_MIN_MS = 20000;", "const PACE_HOME_TO_CARD_MIN_MS = 7000;")), false, "reverting the Home → card time fails its pin");
 
-console.log("A1261 17/17 PASS");
+console.log("A1261 PASS");

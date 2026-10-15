@@ -44,7 +44,7 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "virtual money · fork",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "try again", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
 ]);
 function normaliseLine(line, name) {
@@ -151,12 +151,35 @@ async function addPasskey(page, credential = null) {
 
 async function openPerson(browser, world, id, { storageState, invite, credential, viewport, initScript, base, userVerified, clock } = {}) {
   const phone = Number(process.env.ARASO_REHEARSAL_WIDTH) > 0 ? { width: Number(process.env.ARASO_REHEARSAL_WIDTH), height: 932 } : { width: 390, height: 844 };
-  const context = await browser.newContext({ viewport: viewport || phone, ...(storageState ? { storageState } : {}) });
+  const video = process.env.ARASO_REHEARSAL_VIDEO && id === "a" ? { recordVideo: { dir: process.env.ARASO_REHEARSAL_VIDEO, size: viewport || phone } } : {};
+  const context = await browser.newContext({ ...video, viewport: viewport || phone, ...(storageState ? { storageState } : {}) });
   const tag = { id };
   await context.route("**/*", (route) => world.route(route, tag.id));
   if (invite) await context.addInitScript((token) => { try { if (!localStorage.getItem("araso.forkInvite.v1")) localStorage.setItem("araso.forkInvite.v1", token); } catch {} }, invite);
   if (initScript) await context.addInitScript(initScript);
   if (clock) await context.clock.install();
+  await context.addInitScript(() => {
+    // Pacing timeline: every 100 ms, record when a watched thing first appears/changes (scene, Send live, Chog lines, receipt).
+    let tl = []; try { tl = JSON.parse(sessionStorage.getItem("__arasoTimeline") || "[]"); } catch {}
+    let last = {};
+    const live = (sel) => { const el = document.querySelector(sel); if (!el || el.disabled || el.hidden) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+    setInterval(() => {
+      try {
+        const now = {
+          scene: document.querySelector("[data-scene]")?.dataset.scene || "",
+          card: !!document.querySelector("#sendButton") && document.querySelector("#sendButton").getBoundingClientRect().width > 0,
+          send: live("#sendButton"),
+          receipt: live("#returnTap"),
+          chog: [...document.querySelectorAll(".chogCheckLine")].filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.textContent.trim()).join(" | "),
+        };
+        let changed = false;
+        for (const k of Object.keys(now)) if (now[k] !== last[k]) { tl.push({ t: Date.now(), k, v: now[k] }); changed = true; }
+        last = now;
+        window.__arasoTimeline = tl;
+        if (changed) try { sessionStorage.setItem("__arasoTimeline", JSON.stringify(tl.slice(-400))); } catch {}
+      } catch (e) { window.__arasoTimelineError = String(e); }
+    }, 100);
+  });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error.message).slice(0, 160)));
@@ -212,13 +235,18 @@ async function walkFirstJourney(person, { send = true } = {}) {
   const born = await until(person, "hatch or name", (s) => ["hatch", "name"].includes(s.scene), 25_000);
   if (born.scene === "hatch") { await checkpoint(person, "hatch"); await click(person, "#skipHatchButton", "hatch skip"); }
   await until(person, "name", (s) => s.scene === "name");
+  await until(person, "Chog's arrival lines", (s) => s.text.includes("my first piggy"), 15_000).catch(() => {}); // read like a person; the line check below judges it
   await click(person, ".nameCard__okBtn", "arrival ok");
   await click(person, "#piggyNameInput", "name input");
   await person.page.locator("#piggyNameInput").fill(person.name);
   await checkpoint(person, "name");
   await click(person, ".nameScene__save", "name save");
-  await until(person, "Home Send card", () => live(person, "#sendButton"), 30_000);
+  await until(person, "Home Send card", () => live(person, "#sendButton"), 70_000);
   await checkpoint(person, "home-send");
+  person.cardStyle = await person.page.evaluate(() => {
+    const pick = (sel) => { const el = document.querySelector(sel); if (!el) return null; const c = getComputedStyle(el); return { color: c.color, stroke: c.webkitTextStrokeWidth || c.getPropertyValue("-webkit-text-stroke-width") }; };
+    return { explain: pick(".sendCard__explain"), stamp: pick(".trialStamp--send"), chog: pick(".chogCheckLine") };
+  });
   if (!send) return;
   await person.page.locator("#sendButton").click();
   person.sentAt = Date.now();
@@ -229,6 +257,17 @@ async function walkReturnAndFile(person) {
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `receipt tap ${i + 1}`); await sleep(400); }
   await until(person, "filed → quiet Home", (s) => s.scene === "sendstay", 30_000);
   await checkpoint(person, "home-filed");
+}
+async function readTimeline(person) {
+  for (let i = 0; i < 10; i += 1) {
+    try {
+      await person.page.waitForLoadState("domcontentloaded");
+      const tl = await person.page.evaluate(() => { try { return JSON.parse(sessionStorage.getItem("__arasoTimeline") || "[]"); } catch { return []; } });
+      if (tl.length) return tl;
+    } catch {}
+    await sleep(300);
+  }
+  return [];
 }
 async function trace(person, label, ms) {
   if (process.env.ARASO_REHEARSAL_DEBUG !== "1") return;
@@ -310,6 +349,7 @@ async function laneMain() {
   await check("a · public ON, no invite: envelope → Face ID → hatch → name → Home → Send pressed", () => walkFirstJourney(a));
   await check("a · Away → Return → Receipt → File it → quiet Home (real deposit + redeem on the stand-in chain)", async () => {
     await walkReturnAndFile(a);
+    a.firstTimeline = await readTimeline(a);
     await trace(a, "after-file", 20_000);
     assert.match(a.world.chain.log.join(";"), /deposit nonce=0;sendRaw redeem nonce=1/);
   });
@@ -320,14 +360,58 @@ async function laneMain() {
   await knownCheck("a · public ON boot never reports entry_blocked/invite_only (A-1245 flicker)", () => {
     assert.ok(!eventsOf(main, "a").includes("entry_blocked/invite_only"), `events: ${eventsOf(main, "a").join(",")}`);
   });
+  // First-journey pacing (canon FIRST_JOURNEY_PACING_20261015): time to read before each next thing.
+  const tl = a.firstTimeline || [];
+  const at = (pred, from = 0) => (tl.find((e) => e.t >= from && pred(e)) || {}).t;
+  const homeAt = at((e) => e.k === "scene" && e.v === "sendstay");
+  const cardAt = at((e) => e.k === "card" && e.v === true, homeAt);
+  const sendAt = at((e) => e.k === "send" && e.v === true, homeAt);
+  const awayAt = at((e) => e.k === "scene" && e.v === "away", sendAt);
+  const returnAt = at((e) => e.k === "scene" && e.v === "return", awayAt);
+  const receiptAt = at((e) => e.k === "receipt" && e.v === true, returnAt);
+  const chogLines = tl.filter((e) => e.k === "chog" && e.v).map((e) => e.v);
+  await check("pace · name card: Chog says wallet? → Piggy!!!!!! → my first piggy, one at a time", () => {
+    const i = ["wallet?", "Piggy!!!!!!", "my first piggy"].map((w) => chogLines.findIndex((v) => v === w));
+    assert.ok(i.every((x) => x >= 0) && i[0] < i[1] && i[1] < i[2], `chog lines: ${JSON.stringify(chogLines.slice(0, 8))}`);
+  });
+  await check("pace · Home arrival → Send card ≥ 20 s (time to understand)", () => { assert.ok(cardAt - homeAt >= 20_000, `${((cardAt - homeAt) / 1000).toFixed(1)} s`); });
+  await check("pace · first Chog line on Home = work's coming! before the card; the two job lines come after the card", () => {
+    const first = tl.find((e) => e.k === "chog" && e.v && e.t >= homeAt);
+    assert.equal(first?.v, "work's coming!", `first Home line: ${first?.v}`);
+    const jobLine = tl.find((e) => e.k === "chog" && /let's send Piggy to work/.test(e.v || ""));
+    assert.ok(jobLine && jobLine.t >= cardAt + 1000, `job lines at ${jobLine?.t} · card at ${cardAt}`);
+  });
+  await check("pace · Send can be pressed only after the job lines end (+1 s), not as the card appears", () => { assert.ok(sendAt - cardAt >= 4_000, `${((sendAt - cardAt) / 1000).toFixed(1)} s`); });
+  await check("pace · Away → Return ≥ 8 s outside", () => { assert.ok(returnAt - awayAt >= 7_900, `${((returnAt - awayAt) / 1000).toFixed(1)} s`); });
+  await check("pace · Return → Receipt has a breath (≥ base + 1.5 s)", () => { assert.ok(receiptAt - returnAt >= Number(process.env.ARASO_PACE_RECEIPT_MS || 8500), `${((receiptAt - returnAt) / 1000).toFixed(1)} s`); });
+  await check("pace · yellow text = our gold #E0B100, drawn bold (card lines + Chog speech)", async () => {
+    const st = await a.page.evaluate(() => {
+      const pick = (sel) => { const el = document.querySelector(sel); if (!el) return null; const c = getComputedStyle(el); return { color: c.color, stroke: c.webkitTextStrokeWidth || c.getPropertyValue("-webkit-text-stroke-width") }; };
+      return { explain: pick(".sendCard__explain"), stamp: pick(".trialStamp--send"), chog: pick(".chogCheckLine") };
+    });
+    for (const [k, v] of Object.entries(a.cardStyle || st)) {
+      if (!v) continue;
+      assert.equal(v.color, "rgb(224, 177, 0)", `${k} color ${v.color}`);
+      assert.ok(parseFloat(v.stroke) > 0, `${k} not bold (stroke ${v.stroke})`);
+    }
+  });
+  if (process.env.ARASO_REHEARSAL_DEBUG === "1") console.log(`TL ${tl.length} ${JSON.stringify(tl.slice(0, 40))}`);
+  console.log(`PACE home→card ${((cardAt - homeAt) / 1000).toFixed(1)} s · card→send ${((sendAt - cardAt) / 1000).toFixed(1)} s · away→return ${((returnAt - awayAt) / 1000).toFixed(1)} s · return→receipt ${((receiptAt - returnAt) / 1000).toFixed(1)} s`);
   await check("a · 1st done → Journey 2 entry (live signer enters directly; otherwise \"tap me!\") → switch → intro → Explore", async () => {
     await until(a, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
+    if ((await look(a)).scene === "explore") {
+      const t2 = await readTimeline(a);
+      const intro = t2.find((e) => e.k === "chog" && /I found a few things/.test(e.v || ""));
+      const exp = t2.find((e) => e.k === "scene" && e.v === "explore" && (!intro || e.t >= intro.t));
+      a.introToExplore = intro && exp ? exp.t - intro.t : null;
+    }
     if ((await look(a)).text.includes("tap me!")) { await checkpoint(a, "tapme"); await click(a, "#chogHomeHit", "tap me"); }
     await until(a, "Explore", (s) => s.scene === "explore", 30_000);
     await sleep(1500);
     await checkpoint(a, "explore");
     assert.ok(main.requests.some((r) => r.person === "a" && r.action === "enter"), "fork entry recorded");
   });
+  await check("pace · second intro line → Explore paper ≥ 2.7 s (1.2 s beat + 1.5 s breath)", () => { assert.ok(a.introToExplore >= 2_700, `${a.introToExplore} ms`); });
   await check("a · Journey 2 round 1: places → Job (tidy the wallet) → Send → Away → back → Receipt → File it → Home", () => walkSecondJob(a, 1));
   await check("a · reopen the app → lock → Chog → Face ID → Home → bell → Explore opens again", async () => {
     await a.page.goto("about:blank"); await a.page.goto(BASE, { waitUntil: "networkidle" });
@@ -430,11 +514,20 @@ async function laneFaults() {
   fault4.chain.faults.sendErrors.push(1, 1, 1, 1);
   await check("fault · four refusals + nonce unchanged → never-sent deposit released: \"nothing moved.\", Send pressable again", async () => {
     await until(g, "nothing moved.", (s) => s.text.some((t) => t.startsWith("nothing moved.")), 40_000);
+    await until(g, "try again", (s) => s.text.includes("try again"), 5_000);
+    const face = await g.page.evaluate(() => [...document.querySelectorAll(".homeChar__seat--sulky")].map((e) => e.className).join("|"));
+    assert.match(face, /is-sulky/, `sulky face: ${face}`);
+    assert.equal(await live(g, "#sendButton"), false, "Send waits while Piggy is sulky");
+    await checkpoint(g, "send-failed-sulky");
     assert.equal(await g.page.evaluate(() => Object.keys(localStorage).filter((k) => /sendPending/i.test(k) && localStorage.getItem(k)).length), 0, "send pending record cleared");
     await until(g, "Send pressable", () => live(g, "#sendButton"), 20_000);
     await checkpoint(g, "home-after-refusals");
     assert.doesNotMatch(fault4.chain.log.join(";"), /sendRaw deposit/, "no deposit landed; nonce stays 0");
     assert.ok(eventsOf(fault4, "f4").includes("send_why/broadcast"), `events: ${eventsOf(fault4, "f4").join(",")}`);
+  });
+  await check("fault · after the sulky beat: Piggy's face comes back and Send can be pressed again", async () => {
+    await until(g, "Send back", () => live(g, "#sendButton"), 10_000);
+    assert.equal(await g.page.evaluate(() => document.querySelectorAll(".homeChar__seat--sulky.is-in:not(.is-leaving)").length), 0);
   });
   await g.context.close();
 
@@ -453,14 +546,10 @@ async function laneFaults() {
   // The live failure of 2026-10-15: the grant lands, but the node refuses the deposit as "insufficient balance" for ~20 s.
   const k = await openPerson(browser, lag, "f6"); people.push(k);
   await check("fault · grant lag: walk to Send", () => walkFirstJourney(k));
-  await check("fault · grant lag reproduces live: \"Piggy could not get ready. · nothing moved.\" · send_why/insufficient · nothing sent", async () => {
-    await until(k, "nothing moved.", (s) => s.text.some((t) => t.startsWith("nothing moved.")), 40_000);
-    assert.match(lag.chain.log.join(";"), /refused insufficient nonce=0/);
-    assert.doesNotMatch(lag.chain.log.join(";"), /sendRaw deposit/);
-    assert.ok(eventsOf(lag, "f6").includes("send_why/insufficient"), `events: ${eventsOf(lag, "f6").join(",")}`);
-  });
-  await knownCheck("fault · grant lag: the first send still completes (needs the open fix decision)", async () => {
-    assert.match(lag.chain.log.join(";"), /sendRaw deposit nonce=0/, `chain: ${lag.chain.log.join(";")}`);
+  await check("fault · grant lag (node refuses for 20 s after the grant): the app waits — no refused broadcast, the first trip finishes", async () => {
+    await walkReturnAndFile(k);
+    assert.doesNotMatch(lag.chain.log.join(";"), /refused insufficient/, `chain: ${lag.chain.log.join(";")}`);
+    assert.match(lag.chain.log.join(";"), /sendRaw deposit nonce=0;sendRaw redeem nonce=1/);
   });
   await k.context.close();
 }

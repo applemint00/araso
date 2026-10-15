@@ -58,18 +58,18 @@ await check("N2 named timing constants keep the post-file 8000 ms separate from 
   const MAIN_NO_A904 = MAIN.replace(/\/\/ ── \[A-904\] One-time guide[\s\S]*?\/\/ ── \[\/A-904\][^\n]*\n/, "").replace(/^\/\/ ── \[A-956\] Journey 2 entry[\s\S]*?^\/\/ ── \[A-956\] end Journey 2 entry ──\n/m, ""); // [A-956 RE-PIN] the entry block re-arms the same cue (pre-A-956: A-904 strip only)
   assert.equal((MAIN_NO_A904.match(/POST_FILE_QUIET_HOME_MS/g) || []).length, 2, "declared + used once (the post-file arm)");
   assert.match(MAIN, /const HOME_FIRST_JOURNEY_CARD_MS = 1200;/);
-  assert.match(MAIN, /const FIRST_SEND_QUIET_MS = 4500;/);
-  assert.match(MAIN, /const FIRST_SEND_CUE_LEAD_MS = 2500;/);
+  assert.match(MAIN, /const PACE_SEAT_BREATH_MS = 2000;/);
+  assert.match(MAIN, /const PACE_HOME_TO_CARD_MIN_MS = 20000;/);
   assert.match(cutFn(MAIN, "a891ArmPostFileQuietHome"), /sceneTimeout\(arm, POST_FILE_QUIET_HOME_MS\);/);
 });
 
-await check("N3 First Home: no tap cue/silent hold; 4500 ms quiet, CG-01, 2500 ms, Send card", () => {
+await check("N3 First Home: no tap cue/silent hold; 2 s breath, \"work's coming!\", card at ≥ 20 s, job lines after the card", () => {
   const home = topFn(MAIN, "mountHome");
   assert.equal(/startTapCue/.test(strip(home)), false, "mountHome never starts the cue");
   assert.doesNotMatch(home, /a891StartFirstArrivalHold\(\)/);
-  assert.match(home, /sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*\s*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/);
-  assert.match(home, /sceneTimeout\(announceFirstSend, FIRST_SEND_QUIET_MS\);/);
-  assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);/);
+  assert.match(home, /sayFirstSendCue\("coming"\);\s*sceneTimeout\(revealSendCard, chogSpeakMs\(FIRST_SEND_CUE_PARTS\[0\]\) \+ PACE_BREATH_MS\);/);
+  assert.match(home, /sceneTimeout\(announceFirstSend, PACE_SEAT_BREATH_MS\);/);
+  assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sceneTimeout\(\(\) => \{\s*sayFirstSendCue\("job"\);/);
 });
 
 await check("N4 post-file path: revealExplorePaper (1.2 s auto-Explore) is gone; settle() arms the quiet Home; homeQuietForExplore setters unchanged", () => {

@@ -38,7 +38,7 @@ import {
 } from "./piggy-motion-state.js";
 import { nameCardMarkup, mountNameCard } from "./name-card.js";
 import { returnSceneMarkup, mountReturnView, RETURN_VIEW_GEOMETRY } from "./return-view.js";
-import { setReceiptLegacySizeProvider } from "./piggy-return.js";
+import { createReturnPlayback, setReceiptLegacySizeProvider } from "./piggy-return.js";
 import {
   homePaperMarkup,
   homePaperRecordsEntryMarkup,
@@ -1053,6 +1053,10 @@ function prefersReducedMotion() {
 
 // [A-684] 실패 문구의 증거 등급 매핑 — 고정(pin)된 송금/인증 함수를 건드리지 않으려고 문구를 그리는 자리(setScene)에서
 // 붙인다. 기존 등급만: nothing moved / still out. / can't tell yet. 사용자 화면에 "relayer" 낱말 0. 새 재시도 0.
+// Messages that mean a First Send attempt stopped (the sulky beat answers these on Home).
+const SEND_FAILURE_MESSAGES = new Set(["Piggy could not get ready.", "Piggy can't go out yet.", "couldn't finish this one."]);
+// send_why word → the reason line Chog says before "try again". Words are confirmed by the Owner; until then only "try again".
+const SEND_FAILURE_REASON_LINES = Object.freeze({});
 function sendFailureCopy(scene, message, detail) {
   if (scene !== "sendstay" || detail) return { message, detail };
   if (message === "relayer unreachable") return { message: "Piggy can't go out yet.", detail: "nothing moved." };
@@ -1071,8 +1075,18 @@ function sendFailureCopy(scene, message, detail) {
   return { message, detail };
 }
 
+let awayShownAt = 0;
 function setScene(scene, message = "", detail = "") {
   ({ message, detail } = sendFailureCopy(scene, message, detail));
+  // Away is the only proof Piggy left: keep it on screen long enough to be seen before Return replaces it.
+  if (scene === "return" && state.scene === "away" && Date.now() - awayShownAt < PACE_OUTSIDE_MIN_MS) {
+    const token = awayShownAt;
+    setTimeout(() => { if (state.scene === "away" && awayShownAt === token) setScene(scene, message, detail); }, PACE_OUTSIDE_MIN_MS - (Date.now() - awayShownAt));
+    return;
+  }
+  if (scene === "away" && state.scene !== "away") awayShownAt = Date.now();
+  state.sendHold = false; // every new scene starts free; a pacing beat re-holds Send after its own render
+  state.sendFailedBeat = scene === "sendstay" && SEND_FAILURE_MESSAGES.has(message);
   // [A-383 §4] "닫으면 원래 Home 그대로" — 기록 카드는 render() 를 부르지 않는 직접 DOM
   // 토글로만 열린다(openRecordsCard, §5 주석). 그래서 어떤 이유로든 씬을 다시 그리면
   // (Send/Stay 결과, 재방문 등) 기록 카드는 항상 닫힌 채로 새로 시작한다 — 다른 씬 전환에
@@ -3365,7 +3379,8 @@ function syncSendButton() {
   // The first send is a testnet-only path (see LEGACY_TESTNET_PATH). `typeof`: existing tests run
   // this function cut out on stubs where the module const does not exist; in the app it always does.
   const sealed = typeof LEGACY_TESTNET_PATH === "boolean" && LEGACY_TESTNET_PATH !== true;
-  const locked = sealed || !isAllowedPiggyRpId() || sendBusy();
+  const held = typeof state === "object" && state?.sendHold === true; // a pacing beat (job lines · sulky face) still owns the button
+  const locked = sealed || !isAllowedPiggyRpId() || sendBusy() || held;
   btn.disabled = locked;
   if (locked) btn.setAttribute("aria-disabled", "true");
   else btn.removeAttribute("aria-disabled");
@@ -7018,10 +7033,31 @@ function mountName() {
     });
   // 첫 해치 뒤에는 도착 카드(ok)부터, 이름 미완 복귀는 도착 없이 바로 Name it(A-324 §6).
   // submit 은 render() 가 savePiggyName 에 이미 묶는다 — 여기서 두 번 묶지 않는다.
-  mountNameCard(document.querySelector("#nameScene"), {
+  const nameCard = mountNameCard(document.querySelector("#nameScene"), {
     listen: sceneListener,
     focus: !state.nameResumed,
   });
+  if (nameCard?.card?.dataset.phase === "arrival") sayArrivalLines(token);
+}
+
+// On "you've got the one piggy!" Chog reacts one line at a time, slowly enough to read each.
+const ARRIVAL_CHOG_LINES = ["wallet?", "Piggy!!!!!!", "my first piggy"];
+function sayArrivalLines(token) {
+  const host = document.querySelector(".nameScene__chog");
+  if (!host) return;
+  const say = document.createElement("span");
+  say.className = "chogCheckLine nameScene__say";
+  host.append(say);
+  let i = 0;
+  const next = () => {
+    if (token !== sceneToken || !say.isConnected) return;
+    if (i >= ARRIVAL_CHOG_LINES.length) { say.remove(); return; }
+    say.textContent = ARRIVAL_CHOG_LINES[i];
+    const hold = chogSpeakMs(ARRIVAL_CHOG_LINES[i]);
+    i += 1;
+    sceneTimeout(() => { say.textContent = ""; sceneTimeout(next, PACE_BREATH_MS); }, hold);
+  };
+  sceneTimeout(next, PACE_BREATH_MS);
 }
 
 // --- 첫 Home 도착 (A-304) ----------------------------------------------
@@ -7055,8 +7091,57 @@ const HOME_FPS = 0.03;
 const HOME_FIRST_JOURNEY_CARD_MS = 1200;
 // [A-1261] First arrival only: quiet Home, then Chog's job cue, then the existing Send card.
 // HOME_FIRST_JOURNEY_CARD_MS stays unchanged for its retry/shared-beat callers.
-const FIRST_SEND_QUIET_MS = 4500;
-const FIRST_SEND_CUE_LEAD_MS = 2500;
+// First-journey pacing: a first-time person needs time to read each beat before the next one appears.
+const PACE_BREATH_MS = 1000;            // between two beats
+const PACE_SEAT_BREATH_MS = 2000;       // Piggy sits on Home → Chog's first line
+const PACE_HOME_TO_CARD_MIN_MS = 20000; // Home arrival → First Send card, at least
+const PACE_GRANT_SETTLE_MS = 25000;     // grant confirmed → the node accepts the first deposit (live: refused 16–22 s after the grant)
+const PACE_SEND_ARM_MS = 1000;          // last job line → Send can be pressed
+const PACE_OUTSIDE_MIN_MS = 8000;       // Away stays on screen at least this long
+const PACE_RECEIPT_BREATH_MS = 1500;    // First Return → Receipt
+const PACE_SULKY_MS = 3000;             // failed Send: sulky face, then Send comes back
+// How long Chog needs to say a line (read time grows with its length).
+function chogSpeakMs(text) { return Math.round(String(text).length * 60 + 1200); }
+
+// Grant asked as soon as Piggy is Home (testnet First only), so the card can wait until the node can spend it.
+let firstGrantReadyAt = null;
+function prefetchFirstGrant() {
+  firstGrantReadyAt = null;
+  if (!LEGACY_TESTNET_PATH || !state.address || state.tripClosed) { firstGrantReadyAt = 0; return; }
+  requestGrant(state.address).then(
+    (grant) => { firstGrantReadyAt = grant?.granted ? Date.now() + PACE_GRANT_SETTLE_MS : 0; },
+    () => { firstGrantReadyAt = 0; }, // the Send tap asks again and shows its own failure
+  );
+}
+
+// A failed First Send: Chog says why (when a reason line is confirmed) and "try again"; Piggy's face drops to sulky,
+// then the face comes back and Send can be pressed again.
+function sendFailedBeat() {
+  state.sendFailedBeat = false;
+  const why = (() => { try { return sendFailureWhy(JSON.parse(localStorage.getItem(LAST_SEND_ERROR_KEY) || "null")); } catch { return "other"; } })();
+  const reason = SEND_FAILURE_REASON_LINES[why];
+  insertChogCueLine("sendFailedChogCue", reason ? [reason, "try again"] : ["try again"]);
+  const seat = document.querySelector("#homeSeat");
+  let sulky = null;
+  if (seat?.parentElement) {
+    sulky = document.createElement("img");
+    sulky.className = "homeChar__seat homeChar__seat--sulky is-sulky";
+    sulky.alt = "";
+    sulky.src = `${MOTION_DIR}/seat_sulky.svg`;
+    sulky.style.cssText = seat.style.cssText; // same box as the seated Piggy, so only the face reads as changed
+    seat.after(sulky);
+    requestAnimationFrame(() => sulky.classList.add("is-in"));
+  }
+  state.sendHold = true;
+  syncSendButton();
+  sceneTimeout(() => {
+    sulky?.classList.add("is-leaving");
+    sulky?.classList.remove("is-sulky");
+    sceneTimeout(() => sulky?.remove(), 400);
+    state.sendHold = false;
+    syncSendButton();
+  }, PACE_SULKY_MS);
+}
 
 // [A-603] 캐릭터 스케일 바닥 — A-602 Owner 프리뷰(Candidate C, c_floor.js)가 측정·검증한 그 메커니즘을 값·
 // 넛지까지 그대로 들여온다(재발명 0, "port the A-602 C mechanism into app properly").
@@ -12414,8 +12499,8 @@ function insertChogCueLine(id, text) {
     root.insertBefore(line, hit);
   }
   // Two given lines use the existing two-line speech layout, so a long line is never cut on a narrow phone.
+  line.classList.toggle("chogCheckLine--two", Array.isArray(text) && text.length > 1);
   if (Array.isArray(text) && text.length > 1) {
-    line.classList.add("chogCheckLine--two");
     line.replaceChildren(...text.map((t) => { const l = document.createElement("span"); l.className = "chogCheckLine__line"; l.textContent = t; return l; }));
   } else line.textContent = Array.isArray(text) ? text.join(" ") : text;
   return true;
@@ -12424,9 +12509,11 @@ function insertChogCueLine(id, text) {
 // CG-01: once on the first arrival after Name save (isFirstArrival; revisits, reloads and added Piggies never reach it).
 // It starts before the card, is restored after the card render, and the first Send tap clears it.
 const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job.";
-function sayFirstSendCue() {
+// The first job line is said in two beats: "work's coming!" when Piggy sits, the job itself once the card is up.
+const FIRST_SEND_CUE_PARTS = FIRST_SEND_CUE_LINE.split(/(?<=!) (?=let's)|(?<=—) /);
+function sayFirstSendCue(stage = "job") {
   if (state.appLock || state.scene !== "sendstay" || sendBusy()) return false;
-  const inserted = insertChogCueLine("firstSendChogCue", FIRST_SEND_CUE_LINE.split(/(?<=—) /));
+  const inserted = insertChogCueLine("firstSendChogCue", stage === "coming" ? FIRST_SEND_CUE_PARTS.slice(0, 1) : FIRST_SEND_CUE_PARTS.slice(1));
   if (inserted && state.sendCardVisible) {
     document.querySelector("#sendButton")?.addEventListener("click", () => {
       document.querySelector("#firstSendChogCue")?.remove();
@@ -12434,6 +12521,7 @@ function sayFirstSendCue() {
   }
   return inserted;
 }
+
 
 // CG-02 [A-893b · Owner via Cowork 2026-10-08 "체킹 다음에 나오는걸로 · ㅇㅇ굿", supersedes the separate-speech / sequenced versions]:
 // no second line anywhere. The existing Away restore slot (#awayRestoreLine) says "checking…" and, when the read settles to the
@@ -13637,37 +13725,50 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
     // 타이머만 기록이 열려 있는 동안 미룬다 — 기록을 닫으면 바로 이어서 연다(반복 강제 표시
     // 없이, 다음 render() 의 teardownScene() 이 여전히 예약을 지운다).
     if (isFirstArrival && !state.sendCardVisible) {
+      const arrivedAt = Date.now();
+      prefetchFirstGrant();
+      const armSend = () => {
+        state.sendHold = false;
+        syncSendButton();
+        const btn = document.querySelector("#sendButton");
+        if (btn) { btn.classList.add("is-armed"); btn.addEventListener("animationend", () => btn.classList.remove("is-armed"), { once: true }); }
+      };
       const revealSendCard = () => {
         if (state.recordsCardVisible) {
           sceneTimeout(revealSendCard, HOME_FIRST_JOURNEY_CARD_MS);
           return;
         }
-        // [A-1261] Preserve the existing tap-cue overlap guard; First arrival itself starts no tap cue.
-        // 신호 시계는 그려진 프레임으로만 흐르므로 숨은 탭에서는 다시 미뤄질 뿐이다. 두 번째 카드
-        // 자리·새 저장 키 0. 최소 50ms — 0ms 재귀 방지.
         const cueWait = homeChog?.tapCueHoldRemainingMs || 0;
         if (cueWait > 0) {
           sceneTimeout(revealSendCard, Math.max(50, cueWait));
           return;
         }
-        // [A-359 §3] Send 카드가 공통 자리를 넘겨받기 직전, 아직 pinned 로 열려 있을 수
-        // 있는 Home 노트패드를 먼저 닫는다 — render() 의 전체 다시그리기가 곧 이 인스턴스를
-        // 치우지만, 그 사이 한 프레임이라도 두 카드가 같은 자리에서 겹치지 않게 한다.
+        // The card waits for both: time to understand Home, and the grant to be spendable on the node.
+        const readyAt = firstGrantReadyAt === null ? Infinity : Math.max(arrivedAt + PACE_HOME_TO_CARD_MIN_MS, firstGrantReadyAt);
+        if (Date.now() < readyAt) {
+          sceneTimeout(revealSendCard, readyAt === Infinity ? 500 : Math.max(50, readyAt - Date.now()));
+          return;
+        }
+        state.sendHold = true;
         homeChog?.closeCard?.();
         state.sendCardVisible = true;
         render();
-        sayFirstSendCue(); // [A-1261] render replaces Home DOM; restore CG-01 beside the visible card.
+        sceneTimeout(() => {
+          sayFirstSendCue("job");
+          sceneTimeout(armSend, FIRST_SEND_CUE_PARTS.slice(1).reduce((ms, line) => ms + chogSpeakMs(line), 0) + PACE_SEND_ARM_MS);
+        }, PACE_BREATH_MS);
       };
       const announceFirstSend = () => {
         if (state.recordsCardVisible) {
           sceneTimeout(announceFirstSend, HOME_FIRST_JOURNEY_CARD_MS);
           return;
         }
-        sayFirstSendCue(); // [A-1265] a missing cue line only drops the line — the Send card still follows
-        sceneTimeout(revealSendCard, FIRST_SEND_CUE_LEAD_MS);
+        sayFirstSendCue("coming");
+        sceneTimeout(revealSendCard, chogSpeakMs(FIRST_SEND_CUE_PARTS[0]) + PACE_BREATH_MS);
       };
-      sceneTimeout(announceFirstSend, FIRST_SEND_QUIET_MS);
+      sceneTimeout(announceFirstSend, PACE_SEAT_BREATH_MS);
     }
+    if (state.sendFailedBeat) sendFailedBeat();
     // [A-411-p] "First Receipt filed → 정착 → 잠깐 조용 → Paper" — Home next errand 버튼을
     // 없앤 대신, 이 정착 신호(=settle 호출 그 자체, First 도착 걷기연출의 revealSendCard 와
     // 같은 자리) 뒤에 기존 Second Journey 진입 함수(openSecondJourneyExplore)를 그대로
@@ -14374,7 +14475,7 @@ const A891_SECOND_INTRO_LINES = ["I found a few things.", "wanna see a few more?
 // Reading hold for the filed line before Home settles = the existing A-725 Chog-line hold (1.5 s); not an Owner number, tune on device.
 const A891_FILED_LINE_HOLD_MS = A891_TAP_CUE_TIMING.holdMs;
 // Intro line → Explore Paper = the existing short beat before a card (HOME_FIRST_JOURNEY_CARD_MS, 1.2 s); not an Owner number, tune on device.
-const A891_SECOND_INTRO_TO_PAPER_MS = HOME_FIRST_JOURNEY_CARD_MS;
+const A891_SECOND_INTRO_TO_PAPER_MS = HOME_FIRST_JOURNEY_CARD_MS + 1500; // + a 1.5 s breath to read the intro lines before the Explore paper
 const SECOND_INTRO_SEEN_KEY = scopedSecondKey("araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
 let a891FirstArrivalHold = null; // { t } silent frame clock of the removed first-arrival cue (keeps the First Send reveal timing)
 let a1206SwitchIntroPending = false; // UI-only boot handoff; consumed once by the existing CG-05 intro
@@ -15393,6 +15494,7 @@ function mountReturn() {
     schedule: (step) => runSceneFrames(step),
     listen: (target, type, handler, options) => sceneListener(target, type, handler, options),
     onCleanup: (fn) => onSceneTeardown(fn),
+    createPlayback: (o) => createReturnPlayback({ ...o, receiptBreathMs: PACE_RECEIPT_BREATH_MS }),
     // [A-656 decision 4] Same Home anchor math (mobile floor / mid-band) as Home settled —
     // wraps #returnChogHop + #returnName, and hands the canvas consumer (return-view.js fit())
     // the viewport-space k/nudge it needs to resize/reposition itself the same way.

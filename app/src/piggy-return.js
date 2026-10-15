@@ -751,6 +751,7 @@ export const RETURN_GEOMETRY = {
 // 여기서 rememberReceipt / settleSend / finishTrip / tx 를 부르지 않는다.
 export function createReturnPlayback(opts) {
   const {
+    receiptBreathMs = 0,
     canvas,
     loadAssets = loadReturnAssets,
     makeRenderer = createReturnRenderer,
@@ -819,6 +820,7 @@ export function createReturnPlayback(opts) {
   }
 
   // 지금 시점에서 더 진행할 수 있는 한계.
+  let receiptHeldMs = 0;
   const gateFor = () => (taps === 0 ? RECEIPT_GATE_S : taps === 1 ? ZOOM_DONE_S : RETURN_TOTAL_S);
 
   function step(now) {
@@ -832,6 +834,8 @@ export function createReturnPlayback(opts) {
     // 한 번 더 hidePaper:true 로 다시 그린다(위 settle 참조).
     onFrame(renderer.drawAt(t, drawOpts()));
     drawCount += 1;
+    // A held breath at the receipt point: the frame stays, the tap opens after receiptBreathMs.
+    if (t >= gate && gate === RECEIPT_GATE_S && taps === 0 && receiptHeldMs < receiptBreathMs) { receiptHeldMs += dt; return true; }
     if (t >= gate) {
       running = false;
       if (gate === RETURN_TOTAL_S) {

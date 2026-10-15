@@ -62,7 +62,7 @@ function sandbox({ scene = "away", awayRestore = null, sendCardVisible = false, 
     restoreLine: null,
     querySelector: (sel) => (sel === "#chogHome" ? root : sel === "#awayRestoreLine" ? doc.restoreLine : lines.find((l) => `#${l.id}` === sel) || null),
     createElement: () => { const el = { className: "", id: "", style: {}, textContent: "", children: [], getBoundingClientRect: () => cueRect, remove: () => { const i = lines.indexOf(el); if (i >= 0) lines.splice(i, 1); },
-      classList: { add: (c) => { el.className = `${el.className} ${c}`.trim(); } }, replaceChildren: (...kids) => { el.children = kids; el.textContent = kids.map((k) => k.textContent).join(" "); } }; return el; },
+      classList: { add: (c) => { el.className = `${el.className} ${c}`.trim(); }, toggle: (c, on) => { const has = el.className.split(" ").includes(c); if (on === undefined ? !has : on) { if (!has) el.className = `${el.className} ${c}`.trim(); } else el.className = el.className.split(" ").filter((x) => x !== c).join(" "); } }, replaceChildren: (...kids) => { el.children = kids; el.textContent = kids.map((k) => k.textContent).join(" "); } }; return el; },
   };
   const state = { scene, awayRestore, sendCardVisible, appLock, departureArrival };
   const timers = [];
@@ -147,15 +147,18 @@ await check("N3 CG-05 wiring: chogHomeMarkupForExplore reads the derivation at r
 
 await check("N4 CG-01: said before the first card, restored after its render, and cleared by the first Send tap", () => {
   const home = fnBody("mountHome");
-  assert.match(home, /sayFirstSendCue\(\); \/\/ \[A-1265\][^\n]*\s*sceneTimeout\(revealSendCard, FIRST_SEND_CUE_LEAD_MS\);/);
-  assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);/);
+  assert.match(home, /sayFirstSendCue\("coming"\);\s*sceneTimeout\(revealSendCard, chogSpeakMs\(FIRST_SEND_CUE_PARTS\[0\]\) \+ PACE_BREATH_MS\);/);
+  assert.match(home, /state\.sendCardVisible = true;\s*render\(\);\s*sceneTimeout\(\(\) => \{\s*sayFirstSendCue\("job"\);/);
   assert.match(fnBody("sayFirstSendCue"), /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*document\.querySelector\("#firstSendChogCue"\)\?\.remove\(\);[\s\S]*\{ once: true \}/);
   const ok = sandbox({ scene: "sendstay", sendCardVisible: true });
   assert.equal(ok.api.sayFirstSendCue(), true);
-  assert.equal(ok.text("firstSendChogCue"), "work's coming! let's send Piggy to work — your money does the job.");
+  assert.equal(ok.text("firstSendChogCue"), "let's send Piggy to work — your money does the job.", "after the card: the two job lines (\"work's coming!\" was said when Piggy sat)");
   assert.equal(ok.lines.length, 1);
   assert.equal(ok.lines[0].className, "chogCheckLine chogCheckLine--two", "reuses the existing two-line Chog speech style");
-  assert.deepEqual(ok.lines[0].children.map((l) => [l.className, l.textContent]), [["chogCheckLine__line", "work's coming! let's send Piggy to work —"], ["chogCheckLine__line", "your money does the job."]], "same words, two lines (Owner: two rows, never cut)");
+  assert.deepEqual(ok.lines[0].children.map((l) => [l.className, l.textContent]), [["chogCheckLine__line", "let's send Piggy to work —"], ["chogCheckLine__line", "your money does the job."]], "same words, two lines (Owner: two rows, never cut)");
+  const early = sandbox({ scene: "sendstay", sendCardVisible: false });
+  assert.equal(early.api.sayFirstSendCue("coming"), true);
+  assert.equal(early.text("firstSendChogCue"), "work's coming!", "first beat when Piggy sits");
   assert.equal(sandbox({ scene: "sendstay", sendCardVisible: false }).api.sayFirstSendCue(), true, "cue may precede the card");
   for (const [why, opts] of [["busy", { scene: "sendstay", sendCardVisible: true, busy: true }], ["locked", { scene: "sendstay", sendCardVisible: true, appLock: { phase: "waiting" } }], ["other scene", { scene: "explore", sendCardVisible: true }]]) {
     const s = sandbox(opts);

@@ -2366,6 +2366,7 @@ h1 {
 .chogCheckLine.chogCheckLine--two { margin-top: -1.2em; } /* [A-849] two stacked lines grow upward so the first line keeps the head-top anchor */
 .chogCheckLine--two .chogCheckLine__line { display: block; }
 .chogCheckLine {
+  -webkit-text-stroke: 0.6px currentColor; /* bold: one-weight hand font, thickened by a stroke of its own colour */
   position: absolute;
   /* [A-429 Owner "Chog 발화는 전부 머리 위"] 560/320(Chog 옆) → Explore 발화와 같은 머리 위
      기준(.chogHome 좌표 left450/top236, 가운데 정렬). 값 = INFERRED(Owner 원본 수치 아님). */
@@ -6804,7 +6805,8 @@ html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-wid
   left: 46px;
   right: 36px;
   top: 410px;
-  color: #b88f00;
+  color: var(--gold);
+  -webkit-text-stroke: 0.5px currentColor; /* bold: the hand-drawn font has one weight, so the stroke thickens it */
   white-space: nowrap;
 }
 
@@ -6829,8 +6831,18 @@ html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-wid
   --trialScale: calc(0.65 * var(--cardShrink, 1) * var(--fmtS, 1));
   left: 130px;
   top: 198px;
-  color: #b88f00;
+  color: var(--gold);
+  -webkit-text-stroke: 0.5px currentColor; /* bold: the hand-drawn font has one weight, so the stroke thickens it */
 }
 @media (min-width: 700px) {
   .trialStamp--send { --trialFont: 22px; }
 }
+
+/* First-journey pacing beats */
+html .nameScene__say.chogCheckLine { left: 50%; top: auto; bottom: 104%; transform: translateX(-50%); white-space: nowrap; }
+#sendButton.is-armed { animation: sendArmed 0.55s ease-in-out 3; }
+@keyframes sendArmed { 0%, 100% { filter: none; transform: none; } 50% { filter: drop-shadow(0 0 6px var(--gold)) brightness(1.15); transform: scale(1.06); } }
+.homeChar__seat--sulky { pointer-events: none; visibility: visible; opacity: 0; translate: 0 -5%; transition: opacity 0.35s ease, translate 0.35s ease; }
+.homeChar__seat--sulky.is-in { opacity: 1; translate: 0 0; }
+.homeChar__seat--sulky.is-leaving { opacity: 0; translate: 0 3%; }
+@media (prefers-reduced-motion: reduce) { #sendButton.is-armed { animation: none; } .homeChar__seat--sulky { transition: none; } }
