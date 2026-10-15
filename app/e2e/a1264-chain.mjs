@@ -18,13 +18,21 @@ const ERC20 = parseAbi([
   "function approve(address spender, uint256 amount) returns (bool)",
 ]);
 const APPROVAL = keccak256(new TextEncoder().encode("Approval(address,address,uint256)"));
-const GAS_PRICE = 50_000_000_000n;
-const GAS_USED = 120_000n;
+const GWEI = 1_000_000_000n;
+const PRIORITY = 2n * GWEI;
+// Measured on testnet 2026-10-15: shMON deposit estimate 97,736 · redeem is the same class of call.
+const GAS_USED = 97_736n;
 const hex = (n) => toHex(BigInt(n));
 const word = (n) => `0x${BigInt(n).toString(16).padStart(64, "0")}`;
 
 // erc20: { defaultAllowance, defaultBalance } — a token's allowance/balance reads start from these until a tx changes them
-export function createChain({ chainId = 10143, guard = null, erc20 = null } = {}) {
+// gasPriceWei: what eth_gasPrice answers (base fee = gas price − 2 gwei priority, like testnet today).
+// fundLagMs: right after funding, the node still judges the sender's balance as it was before (seen live: +16–22 s after a grant).
+export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPriceWei = 102n * GWEI, fundLagMs = 0 } = {}) {
+  const GAS_PRICE = BigInt(gasPriceWei);
+  const BASE_FEE = GAS_PRICE > PRIORITY ? GAS_PRICE - PRIORITY : GAS_PRICE;
+  const fundedAt = new Map();
+  const preFund = new Map();
   const allowance = new Map();
   const balance = new Map();
   const shares = new Map();
@@ -38,9 +46,9 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null } = {}
   const key = (a) => String(a || "").toLowerCase();
   const get = (m, a) => m.get(key(a)) || 0n;
 
-  function fund(address, wei) { balance.set(key(address), get(balance, address) + BigInt(wei)); }
+  function fund(address, wei) { preFund.set(key(address), get(balance, address)); fundedAt.set(key(address), Date.now()); balance.set(key(address), get(balance, address) + BigInt(wei)); }
   function blockObj(n = block) {
-    return { number: hex(n), hash: word(n), parentHash: word(n - 1n), timestamp: hex(1760000000n + n), baseFeePerGas: hex(GAS_PRICE / 2n), gasLimit: hex(30_000_000n), gasUsed: "0x0", transactions: [], miner: `0x${"0".repeat(40)}`, difficulty: "0x0", totalDifficulty: "0x0", extraData: "0x", size: "0x0", nonce: "0x0000000000000000", sha3Uncles: word(0), logsBloom: `0x${"0".repeat(512)}`, transactionsRoot: word(0), stateRoot: word(0), receiptsRoot: word(0), uncles: [], mixHash: word(0) };
+    return { number: hex(n), hash: word(n), parentHash: word(n - 1n), timestamp: hex(1760000000n + n), baseFeePerGas: hex(BASE_FEE), gasLimit: hex(30_000_000n), gasUsed: "0x0", transactions: [], miner: `0x${"0".repeat(40)}`, difficulty: "0x0", totalDifficulty: "0x0", extraData: "0x", size: "0x0", nonce: "0x0000000000000000", sha3Uncles: word(0), logsBloom: `0x${"0".repeat(512)}`, transactionsRoot: word(0), stateRoot: word(0), receiptsRoot: word(0), uncles: [], mixHash: word(0) };
   }
   function call({ to, data }) {
     if (key(to) !== SHMON && erc20 && data) {
@@ -63,9 +71,15 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null } = {}
     const hash = keccak256(raw);
     if (receipts.has(hash)) return { result: hash };
     if (Number(tx.nonce) !== Number(get(nonce, from))) return { error: { code: -32000, message: "nonce too low" } };
-    nonce.set(from, get(nonce, from) + 1n);
     const value = tx.value || 0n;
-    balance.set(from, get(balance, from) - value - GAS_USED * GAS_PRICE);
+    const gasLimit = tx.gas || GAS_USED;
+    const maxFee = tx.maxFeePerGas ?? tx.gasPrice ?? GAS_PRICE;
+    // The node's balance rule: the signed values must fit the balance it sees (Monad charges the gas limit, not gas used).
+    const seen = fundLagMs > 0 && fundedAt.has(from) && Date.now() - fundedAt.get(from) < fundLagMs ? get(preFund, from) : get(balance, from);
+    if (value + gasLimit * maxFee > seen) { log.push(`sendRaw refused insufficient nonce=${tx.nonce}`); return { error: { code: -32000, message: "insufficient balance" } }; }
+    const price = maxFee < BASE_FEE + PRIORITY ? maxFee : BASE_FEE + PRIORITY;
+    nonce.set(from, get(nonce, from) + 1n);
+    balance.set(from, get(balance, from) - value - gasLimit * price);
     const logs = [];
     let approved = null;
     if (erc20 && key(tx.to) !== SHMON && tx.data) { try { approved = decodeFunctionData({ abi: ERC20, data: tx.data }); } catch {} }
@@ -80,8 +94,8 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null } = {}
       log.push(`sendRaw ${functionName} nonce=${tx.nonce}`);
     } else log.push(`sendRaw other nonce=${tx.nonce}`);
     block += 1n;
-    txs.set(hash, { hash, from, to: tx.to, input: tx.data || "0x", value: hex(value), nonce: hex(tx.nonce), blockNumber: hex(block), blockHash: word(block), transactionIndex: "0x0", gas: hex(tx.gas || GAS_USED), gasPrice: hex(GAS_PRICE), chainId: hex(chainId), type: "0x0", v: "0x0", r: word(1), s: word(1) });
-    receipts.set(hash, { transactionHash: hash, from, to: tx.to, status: "0x1", blockNumber: hex(block), blockHash: word(block), transactionIndex: "0x0", gasUsed: hex(GAS_USED), cumulativeGasUsed: hex(GAS_USED), effectiveGasPrice: hex(GAS_PRICE),
+    txs.set(hash, { hash, from, to: tx.to, input: tx.data || "0x", value: hex(value), nonce: hex(tx.nonce), blockNumber: hex(block), blockHash: word(block), transactionIndex: "0x0", gas: hex(gasLimit), gasPrice: hex(price), chainId: hex(chainId), type: "0x0", v: "0x0", r: word(1), s: word(1) });
+    receipts.set(hash, { transactionHash: hash, from, to: tx.to, status: "0x1", blockNumber: hex(block), blockHash: word(block), transactionIndex: "0x0", gasUsed: hex(gasLimit), cumulativeGasUsed: hex(gasLimit), effectiveGasPrice: hex(price),
       logs: logs.map((l, i) => ({ ...l, blockNumber: hex(block), blockHash: word(block), transactionHash: hash, transactionIndex: "0x0", logIndex: hex(i), removed: false })), logsBloom: `0x${"0".repeat(512)}`, contractAddress: null, type: "0x0" });
     return { result: hash };
   }
@@ -96,12 +110,12 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null } = {}
       case "eth_getBalance": return { result: hex(get(balance, p[0])) };
       case "eth_getTransactionCount": return { result: hex(get(nonce, p[0])) };
       case "eth_gasPrice": return { result: hex(GAS_PRICE) };
-      case "eth_maxPriorityFeePerGas": return { result: hex(1_000_000_000n) };
+      case "eth_maxPriorityFeePerGas": return { result: hex(PRIORITY) };
       case "eth_estimateGas":
         if (faults.estimateOkLeft <= 0) return { error: { code: -32000, message: "insufficient funds for gas * price + value" } };
         faults.estimateOkLeft -= 1; return { result: hex(GAS_USED) };
       case "eth_getBlockByNumber": return { result: blockObj() };
-      case "eth_feeHistory": return { result: { oldestBlock: hex(block), baseFeePerGas: [hex(GAS_PRICE / 2n), hex(GAS_PRICE / 2n)], gasUsedRatio: [0.5], reward: [[hex(1_000_000_000n)]] } };
+      case "eth_feeHistory": return { result: { oldestBlock: hex(block), baseFeePerGas: [hex(BASE_FEE), hex(BASE_FEE)], gasUsedRatio: [0.5], reward: [[hex(PRIORITY)]] } };
       case "eth_call": return { result: call(p[0] || {}) };
       case "eth_sendRawTransaction": return sendRaw(p[0]);
       case "eth_getTransactionReceipt": return { result: receipts.get(key(p[0])) || null };

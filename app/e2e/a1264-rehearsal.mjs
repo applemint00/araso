@@ -59,9 +59,22 @@ const repoHarness = path.join(REPO, `_${"private"}`, "ops/harness/package.json")
 const { chromium } = createRequire(existsSync(configuredHarness) ? configuredHarness : repoHarness)("playwright");
 
 // ── one local world per chain: grant memory · fork-entry memory · event log · request log ────────────────
-function createWorld(label) {
-  const chain = createChain();
-  const forkChain = createChain({ chainId: 31337143, erc20: { defaultAllowance: 5_000_000n, defaultBalance: 0n }, guard: { guard: "araso-a949-public-guard", chainId: 31337143, forkInstanceId: FORK_INSTANCE, forkStartBlock: 110874000 } });
+// Gas scenario (ARASO_REHEARSAL_GAS = low | now | high): 10 gwei · testnet eth_gasPrice read once at start (102 gwei if unreadable) · 1000 gwei.
+const GAS = process.env.ARASO_REHEARSAL_GAS || "now";
+async function scenarioGasPrice() {
+  if (GAS === "low") return 10n * 10n ** 9n;
+  if (GAS === "high") return 1000n * 10n ** 9n;
+  try {
+    const r = await fetch("https://testnet-rpc.monad.xyz", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_gasPrice", params: [] }), signal: AbortSignal.timeout(3000) });
+    return BigInt((await r.json()).result);
+  } catch { return 102n * 10n ** 9n; }
+}
+const GAS_PRICE_WEI = await scenarioGasPrice();
+console.log(`A1264_GAS ${GAS} ${Number(GAS_PRICE_WEI / 10n ** 6n) / 1000} gwei`);
+
+function createWorld(label, { fundLagMs = 0 } = {}) {
+  const chain = createChain({ gasPriceWei: GAS_PRICE_WEI, fundLagMs });
+  const forkChain = createChain({ chainId: 31337143, gasPriceWei: GAS_PRICE_WEI, erc20: { defaultAllowance: 5_000_000n, defaultBalance: 0n }, guard: { guard: "araso-a949-public-guard", chainId: 31337143, forkInstanceId: FORK_INSTANCE, forkStartBlock: 110874000 } });
   const granted = new Set();
   const requests = [];
   const events = [];
@@ -103,6 +116,7 @@ function createWorld(label) {
           const message = ["Araso Journey 2 entry", `uri: ${BASE}`, "chainId: 31337143", `piggy: ${piggy}`, `tester: public:${piggy.slice(2, 10)}`, `fork: ${FORK_INSTANCE}`, `nonce: ${nonce}`, `expires: ${new Date(expiresAt).toISOString()}`].join("\n");
           return json(200, { ok: true, nonce, message, expiresAt });
         }
+        if (action === "enter") forkChain.fund(String(body?.piggyAddress || ""), 10n ** 19n); // the server tops up fork MON on entry
         if (action === "enter") return json(200, { ok: true, allowed: true, forkScope: "monad-fork", forkInstanceId: FORK_INSTANCE, grants: [] });
         return json(400, { ok: false, reason: "a1264_unexpected_action" });
       }
@@ -278,6 +292,7 @@ const side = createWorld("side");     // b (stored used invite)
 const fault1 = createWorld("fault1"); // first deposit refused once
 const fault4 = createWorld("fault4"); // deposit refused four times, nonce unchanged
 const faultEst = createWorld("faultEst"); // second gas estimate refused (grant seen by one node, not the next)
+const lag = createWorld("lag", { fundLagMs: 20_000 }); // the node still sees the pre-grant balance for 20 s (live 10-15: refused +16–22 s)
 const desk = createWorld("desk");     // e (desktop width, public, no invite)
 const people = [];
 
@@ -425,19 +440,33 @@ async function laneFaults() {
     assert.ok(ev.includes("send/fail") && ev.includes("send_why/insufficient"), `events: ${ev.join(",")}`);
   });
   await h.context.close();
+
+  // The live failure of 2026-10-15: the grant lands, but the node refuses the deposit as "insufficient balance" for ~20 s.
+  const k = await openPerson(browser, lag, "f6"); people.push(k);
+  await check("fault · grant lag: walk to Send", () => walkFirstJourney(k));
+  await check("fault · grant lag reproduces live: \"Piggy could not get ready. · nothing moved.\" · send_why/insufficient · nothing sent", async () => {
+    await until(k, "nothing moved.", (s) => s.text.some((t) => t.startsWith("nothing moved.")), 40_000);
+    assert.match(lag.chain.log.join(";"), /refused insufficient nonce=0/);
+    assert.doesNotMatch(lag.chain.log.join(";"), /sendRaw deposit/);
+    assert.ok(eventsOf(lag, "f6").includes("send_why/insufficient"), `events: ${eventsOf(lag, "f6").join(",")}`);
+  });
+  await knownCheck("fault · grant lag: the first send still completes (needs the open fix decision)", async () => {
+    assert.match(lag.chain.log.join(";"), /sendRaw deposit nonce=0/, `chain: ${lag.chain.log.join(";")}`);
+  });
+  await k.context.close();
 }
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk").split(",");
   await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop()].filter(Boolean));
-  await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, desk]) publicInviteZero(w, people.map((p) => p.id)); });
+  await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });
   await check("fault · fork status reenter:true is wired back through entry (source pin, main.js)", () => {
     assert.match(MAIN, /if \(r\.reenter === true\) return \(await a956Enter\(\{ reenter: true \}\)\) === true;/);
   });
   await check("stand-in chain saw no unhandled RPC method", () => {
-    const u = [...new Set([main, side, fault1, fault4, faultEst, desk].flatMap((w) => w.chain.unknown))].filter((m) => m !== "eth_fillTransaction");
+    const u = [...new Set([main, side, fault1, fault4, faultEst, lag, desk].flatMap((w) => w.chain.unknown))].filter((m) => m !== "eth_fillTransaction");
     assert.deepEqual(u, []);
   });
 } finally {
@@ -446,7 +475,7 @@ try {
 
 const failed = results.filter((r) => !r.ok);
 console.log(`A1264 ${results.length - failed.length} PASS / ${failed.length} FAIL / ${known.length} KNOWN · ${Math.round((Date.now() - T0) / 1000)} s`);
-console.log(`A1264_EVENTS ${JSON.stringify(Object.fromEntries([main, side, fault1, fault4, faultEst, desk].flatMap((w) => [...new Set(w.events.map((e) => e.person))].map((id) => [id, eventsOf(w, id)]))))}`);
+console.log(`A1264_EVENTS ${JSON.stringify(Object.fromEntries([main, side, fault1, fault4, faultEst, lag, desk].flatMap((w) => [...new Set(w.events.map((e) => e.person))].map((id) => [id, eventsOf(w, id)]))))}`);
 console.log(`A1264_SCREENSHOTS=${screenshots.length}`);
 console.log(`A1264_SCREENSHOT_DIR=${OUT}`);
 process.exit(failed.length ? 1 : 0);
