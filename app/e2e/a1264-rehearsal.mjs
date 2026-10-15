@@ -45,7 +45,7 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "get your piggy", "make passkey to hatch the piggy", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
 ]);
 function normaliseLine(line, name) {
@@ -228,7 +228,16 @@ async function until(person, label, predicate, timeout = 20_000) {
   while (Date.now() - start < timeout) { last = await look(person).catch(() => null); if (last && (await predicate(last))) return last; await sleep(250); }
   throw new Error(`${label}: timeout — scene=${last?.scene} text=${JSON.stringify((last?.text || []).slice(-6))}`);
 }
+// [A-1289] the first-visit entry shows Face ID after two taps (logo → "get your piggy" → "make passkey to hatch the piggy"); a person taps there first
+async function entryToFace(person) {
+  for (let i = 0; i < 4; i += 1) {
+    const step = await person.page.evaluate(() => { const b = document.querySelector(".entryChog"); return b ? Number(b.dataset.step || 0) : null; }).catch(() => null);
+    if (step === null || step >= 2) break;
+    await person.page.mouse.click(195, 420); await sleep(900);
+  }
+}
 async function click(person, selector, label) {
+  if (selector === "#inviteFaceButton") await entryToFace(person);
   await until(person, `${label} clickable`, () => live(person, selector), 20_000);
   await person.page.locator(selector).click();
 }
@@ -237,6 +246,17 @@ async function click(person, selector, label) {
 async function walkFirstJourney(person, { send = true } = {}) {
   await until(person, "envelope", (s) => s.scene === "received");
   await checkpoint(person, "envelope");
+  // [A-1289] first visit: Piggy logo → tap → Chog "get your piggy" → tap → "make passkey to hatch the piggy" + Face ID
+  const entryLook = () => person.page.evaluate(() => { const b = document.querySelector(".entryChog"); const vis = (sel) => { const e = document.querySelector(sel); if (!e) return false; const r = e.getBoundingClientRect(); const c = getComputedStyle(e); return r.width > 0 && r.height > 0 && c.visibility !== "hidden" && Number(c.opacity) > 0.5; };
+    return { entry: !!b, step: b?.dataset.step ?? null, logo: vis(".entryChog__logo svg"), envelope: vis(".invite__env"), say: [...document.querySelectorAll(".entryChog__say span")].filter((e) => getComputedStyle(e).visibility !== "hidden" && Number(getComputedStyle(e).opacity) > 0.5).map((e) => e.textContent), face: vis("#inviteFaceButton") }; });
+  person.entrySteps = [await entryLook()];
+  if (person.entrySteps[0].entry) {
+    for (let i = 0; i < 2; i += 1) {
+      await person.page.mouse.click(195, 420); await sleep(900);
+      person.entrySteps.push(await entryLook());
+      await checkpoint(person, `entry-tap${i + 1}`);
+    }
+  }
   await click(person, "#inviteFaceButton", "envelope Face ID");
   const born = await until(person, "hatch or name", (s) => ["hatch", "name"].includes(s.scene), 25_000);
   if (born.scene === "hatch") await checkpoint(person, "hatch"); // watch the hatch to its end like a person (no skip): pacing is measured on real time
@@ -387,13 +407,21 @@ async function laneMain() {
     assert.ok(i.every((x) => x >= 0) && i[0] < i[1] && i[1] < i[2], `chog lines: ${JSON.stringify(chogLines.slice(0, 8))}`);
   });
   const sitAt = at((e) => e.k === "phase" && e.v && e.v !== "walk", homeAt + 500) || homeAt;
+  await check("entry · first screen = Piggy logo (no envelope) → tap: \"get your piggy\" → tap: + \"make passkey to hatch the piggy\" and Face ID", () => {
+    const st = a.entrySteps || [];
+    assert.ok(st[0]?.entry && st[0].logo && !st[0].envelope && st[0].say.length === 0 && !st[0].face, `first screen ${JSON.stringify(st[0])}`);
+    assert.deepEqual(st[1]?.say, ["get your piggy"], `after tap 1 ${JSON.stringify(st[1])}`);
+    assert.equal(st[1]?.face, false, "Face ID waits for the second line");
+    assert.deepEqual(st[2]?.say, ["get your piggy", "make passkey to hatch the piggy"], `after tap 2 ${JSON.stringify(st[2])}`);
+    assert.equal(st[2]?.face, true, "Face ID with the second line");
+  });
   await check("pace · Piggy sits → Send card ≈ 10 s (grant asked early enough that the node is ready)", () => { const d = cardAt - sitAt; assert.ok(d >= 9_500 && d <= 12_500, `${(d / 1000).toFixed(1)} s after sitting`); });
   await check("pace · Chog's lines on the name card stay inside the screen (no cut words)", () => { const out = tl.filter((e) => e.k === "sayOut" && e.v).map((e) => e.v); assert.deepEqual(out, []); });
   await check("pace · first Chog line on Home = work's coming! before the card; the two job lines come after the card", () => {
     const first = tl.find((e) => e.k === "chog" && e.v && e.t >= homeAt);
     assert.equal(first?.v, "work's coming!", `first Home line: ${first?.v}`);
     const jobLine = tl.find((e) => e.k === "chog" && /let's send Piggy to work/.test(e.v || ""));
-    assert.ok(jobLine && jobLine.t >= cardAt + 1000, `job lines at ${jobLine?.t} · card at ${cardAt}`);
+    assert.ok(jobLine && jobLine.t >= cardAt + 1000 - 50, `job lines at ${jobLine?.t} · card at ${cardAt}`); // 50 ms = the timeline's sampling step (seen 996–999 ms on a 1000 ms breath)
   });
   await check("pace · two job lines come one at a time: the first stays, the second joins after it is read (+1 s)", () => {
     const one = tl.find((e) => e.k === "chog" && e.v === "let's send Piggy to work");
@@ -650,6 +678,19 @@ async function laneExploreWhy() {
     });
   }));
 }
+// [A-1289] entry captures at 390 · 810 · 1440 (logo → "get your piggy" → "make passkey to hatch the piggy" + Face ID)
+async function laneEntryShots() {
+  await Promise.all([[390, 844], [810, 1080], [1440, 900]].map(async ([width, height]) => {
+    const w = createWorld(`entry-${width}`);
+    const p = await openPerson(browser, w, `entry${width}`, { viewport: { width, height } }); people.push(p);
+    await check(`entry shots · ${width}: logo → two lines one tap at a time → Face ID`, async () => {
+      await until(p, "entry", (s) => s.scene === "received");
+      await sleep(800); await checkpoint(p, "entry-0");
+      for (let i = 1; i <= 2; i += 1) { await p.page.mouse.click(Math.round(width / 2), Math.round(height / 2)); await sleep(1100); await checkpoint(p, `entry-${i}`); }
+      assert.equal(await live(p, "#inviteFaceButton"), true, "Face ID visible after two taps");
+    });
+  }));
+}
 async function laneJobFail() {
   const cases = [
     ["jf-reverted", "after Away · the Job tx reverts", (w) => w.forkChain.faults.revert.add("approve"), "failed"],
@@ -827,6 +868,7 @@ async function retryOpen(p) {
   if (!btn) return `안 됨 (누를 버튼 없음: ${ids.join("/") || "—"})`;
   await p.page.locator(`#${btn}`).click();
   await sleep(2500);
+  if ((await look(p)).scene === "received") await entryToFace(p);
   if ((await look(p)).scene === "received" && (await live(p, "#inviteFaceButton"))) { await p.page.locator("#inviteFaceButton").click(); }
   try { await until(p, "after retry", (s) => ["hatch", "name", "sendstay"].includes(s.scene), 12_000); return `바로 풀림 (#${btn})`; } catch { return `안 됨 (#${btn} 뒤 같은 실패 · 원인 지속)`; }
 }
@@ -836,19 +878,19 @@ async function laneAtlas() {
   const toSend = (p) => walkFirstJourney(p);
   const lanes = [
     ["open-unsupported", { world: W("at1"), setup: { initScript: () => { try { delete window.PublicKeyCredential; Object.defineProperty(navigator, "credentials", { value: undefined, configurable: true }); } catch {} } },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "This device can't use Face ID or a passkey here."], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "This device can't use Face ID or a passkey here."], retry: retryOpen }],
     ["open-not-this-site", { world: W("at2"), setup: { base: "http://127.0.0.1:5944" },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Piggy opens in the real app."], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Piggy opens in the real app."], retry: retryOpen }],
     ["find-not-this-site", { world: W("at2b"), setup: { base: "http://127.0.0.1:5944", initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); } catch {} } },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["find-unsupported", { world: W("at1b"), setup: { initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); delete window.PublicKeyCredential; Object.defineProperty(navigator, "credentials", { value: undefined, configurable: true }); } catch {} } },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["open-cancelled", { world: W("at3"), setup: { userVerified: false },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Face ID was cancelled."],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Face ID was cancelled."],
       // A virtual authenticator keeps refusing after setUserVerified(true); a fresh one stands for "approve this time".
       retry: async (p) => { await p.passkey.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: p.passkey.authenticatorId }); p.passkey = await addPasskey(p.page); return `${await retryOpen(p)} — 이번엔 Face ID 승인(새 인증기)`; } }],
     ["find-failed", { world: W("at4"), setup: { initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); } catch {} }, userVerified: false },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["unlock-failed", { world: W("at5"),
       trigger: async (p) => { await toSend(p); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); await until(p, "lock", (s) => s.scene === "birth", 20_000); await p.passkey.cdp.send("WebAuthn.clearCredentials", { authenticatorId: p.passkey.authenticatorId }); await click(p, "#loginChogButton", "lock Chog"); },
       expect: ["Couldn't open Piggy"], retry: retryOpen }],
@@ -917,7 +959,7 @@ function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy()].filter(Boolean));
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("entryshots") && laneEntryShots()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });

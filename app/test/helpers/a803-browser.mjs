@@ -34,6 +34,8 @@ export async function launch({ forkMode = false, recordVideo } = {}) {
   }
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, ...(recordVideo ? { recordVideo } : {}) });
+  // [A-1289] these browser tests were written for the envelope entry; keep it unless a test asks for the Chog entry (the rehearsal covers that)
+  if (process.env.ARASO_TEST_ENTRY_CHOG !== "1") await context.addInitScript(() => { try { localStorage.setItem("araso.entryEnvelope.v1", "1"); } catch {} });
   if (forkMode) await context.addInitScript(FORK_MODE_INIT);
   await context.route("**/*", (route) => { const u = new URL(route.request().url()); if (u.hostname !== "127.0.0.1" && u.hostname !== "localhost") return route.abort(); return route.continue(); });
   if (forkMode) await forkRpcStub(context); // [A-974] fork RPC reads + the fork entry status answered locally (registered after the catch-all: the later route wins). pre-A-974: none
