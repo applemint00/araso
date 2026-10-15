@@ -59,7 +59,7 @@ await check("N2 named timing constants keep the post-file 8000 ms separate from 
   assert.equal((MAIN_NO_A904.match(/POST_FILE_QUIET_HOME_MS/g) || []).length, 2, "declared + used once (the post-file arm)");
   assert.match(MAIN, /const HOME_FIRST_JOURNEY_CARD_MS = 1200;/);
   assert.match(MAIN, /const PACE_SEAT_BREATH_MS = 2000;/);
-  assert.match(MAIN, /const PACE_HOME_TO_CARD_MIN_MS = 20000;/);
+  assert.match(MAIN, /const PACE_HOME_TO_CARD_MIN_MS = 10000;/);
   assert.match(cutFn(MAIN, "a891ArmPostFileQuietHome"), /sceneTimeout\(arm, POST_FILE_QUIET_HOME_MS\);/);
 });
 
@@ -90,11 +90,11 @@ function makeWorld({ seen = false, secondDone = false, records = false, pinned =
   const said = [];
   const mkRoot = (tag) => ({ tag, kids: [], querySelector(sel) { if (sel === ".chogHome__hit") return { hit: true }; if (sel.startsWith("#")) return this.kids.find((k) => `#${k.id}` === sel) || null; return null; }, insertBefore(el) { this.kids.push(el); said.push({ where: tag, id: el.id, text: el.lines.length ? el.lines : [el.textContent] }); } });
   const roots = { sendstay: mkRoot("home"), explore: mkRoot("explore"), ret: mkRoot("return") };
-  const mkEl = () => ({ id: "", className: "", textContent: "", style: {}, lines: [], attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, append(c) { this.lines.push(c.textContent); }, remove() { this.removed = true; } });
+  const mkEl = () => ({ id: "", className: "", textContent: "", style: {}, lines: [], attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, append(...cs) { for (const c of cs) this.lines.push(c.textContent); }, remove() { this.removed = true; } });
   const homeChog = { state: { pinned }, startTapCue() { calls.startTapCue += 1; return true; }, closeCard() { calls.closeCard += 1; } };
   const state = { scene, secondJourneyCompletedOnce: secondDone, recordsCardVisible: records, sendCardVisible: false, resultMotionSeen: false };
   const ctx = vm.createContext({
-    Math, String, JSON, state, homeChog, timers, calls,
+    Math, String, JSON, Date, Map, state, homeChog, timers, calls, PACE_BREATH_MS: 1000,
     localStorage: { getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => store.set(k, String(v)) },
     document: {
       createElement: () => mkEl(),
@@ -108,7 +108,9 @@ function makeWorld({ seen = false, secondDone = false, records = false, pinned =
     scopedSecondKey, RUNTIME_CHAIN_SCOPE: "monad-testnet", // [A-946 RE-PIN] pre-A-946: not needed (the key line was a plain literal)
   });
   const decl = BLOCK.split("\n").filter((l) => /^const (POST_FILE_QUIET_HOME_MS|A891_FILED_LINE|A891_SECOND_INTRO_LINES|A891_FILED_LINE_HOLD_MS|A891_SECOND_INTRO_TO_PAPER_MS|SECOND_INTRO_SEEN_KEY)\b/.test(l)).join("\n");
-  vm.runInContext(`${decl}\nlet a891FirstArrivalHold = null; let a891CueChog = null;\n${["a891SecondIntroSeen", "a891ChogSay", "a891AfterFiling", "a891ArmPostFileQuietHome", "a891HomeChogTap"].map((n) => cutFn(MAIN, n)).join("\n")}
+  // [A-1281] two-line Chog speech helpers (one line at a time) that the block's lines and intro timer now use
+  const chogHelpers = `const chogLinesStartedAt = new Map();\n${["chogSpeakMs", "chogLinesMs", "chogLineWaits", "chogLineNodes"].map((n) => cutFn(MAIN, n)).join("\n")}`;
+  vm.runInContext(`${chogHelpers}\n${decl}\nlet a891FirstArrivalHold = null; let a891CueChog = null;\n${["a891SecondIntroSeen", "a891ChogSay", "a891AfterFiling", "a891ArmPostFileQuietHome", "a891HomeChogTap"].map((n) => cutFn(MAIN, n)).join("\n")}
     globalThis.arm = a891ArmPostFileQuietHome; globalThis.tap = a891HomeChogTap; globalThis.afterFiling = a891AfterFiling; globalThis.seenFn = a891SecondIntroSeen;`, ctx);
   const runTimer = (i = 0) => { const t = timers.splice(i, 1)[0]; t.fn(); return t; };
   return { ctx, timers, calls, said, state, store, homeChog, runTimer };
@@ -140,7 +142,7 @@ await check("N7 CG-05 intro: the tap on the cue → seen stored, Home pad closed
   assert.equal(w.store.get("araso.secondIntroSeen"), "1");
   assert.equal(w.calls.closeCard, 1);
   assert.deepEqual(w.said, [{ where: "home", id: "secondIntroLine", text: ["I found a few things.", "wanna see a few more?"] }]);
-  assert.deepEqual(w.timers.map((t) => t.ms), [1200]);
+  assert.deepEqual(w.timers.map((t) => t.ms), [6920], "[A-1281] both lines read one at a time (+ a breath after each) before the Paper; pre-A-1281: 1200");
   assert.equal(w.calls.explore, 0, "Paper only after the line");
   w.ctx.tap(); assert.equal(w.timers.length, 1, "a second tap does nothing");
   w.runTimer();

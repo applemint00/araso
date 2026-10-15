@@ -68,7 +68,7 @@ function sandbox({ scene = "away", awayRestore = null, sendCardVisible = false, 
   const timers = [];
   const api = new Function(
     "document", "state", "sendBusy", "sceneListener", "secondPickedErrandIds", "computeExploreDisplayErrands", "setTimeout", "setInterval", "MutationObserver", "onSceneTeardown", "showAwayRestore",
-    `${fnBody("awayRestoreLineMarkup")}\n${BLOCK}\nreturn { exploreChogConfirmLine, insertChogCueLine, sayFirstSendCue, armAwayOpenLine, awayRestoreLineMarkup, noteAwayLocked,
+    `const PACE_BREATH_MS = 1000; const chogLinesStartedAt = new Map(); ${["chogSpeakMs", "chogLineWaits", "chogLineNodes"].map((n) => fnBody(n)).join("\n")}\n${fnBody("awayRestoreLineMarkup")}\n${BLOCK}\nreturn { exploreChogConfirmLine, insertChogCueLine, sayFirstSendCue, armAwayOpenLine, awayRestoreLineMarkup, noteAwayLocked,
       count: () => awayOpenCount };`,
   )(
     doc, state, () => busy,
@@ -101,7 +101,7 @@ await check("N0 the A-893 block exists, outside every protected body; no timer, 
 });
 
 await check("N1 copy: only the Owner-locked lines, each defined once in code", () => {
-  assert.equal(MAIN.split(`const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job.";`).length - 1, 1, "CG-01 copy defined once");
+  assert.equal(MAIN.split(`const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work\\nyour money does the job.";`).length - 1, 1, "CG-01 copy defined once");
   const code = stripComments(MAIN);
   for (const line of ["still out working.", "not back yet."]) {
     assert.equal(code.split(line).length - 1, 1, `${line} appears once`);
@@ -109,7 +109,7 @@ await check("N1 copy: only the Owner-locked lines, each defined once in code", (
   assert.equal(MAIN.split('"all of them?"').length - 1, 1, "all of them? once (CG-05 derivation)");
   assert.equal(MAIN.split('"these two?"').length - 1, 1, "these two? once (CG-05 derivation)");
   const strings = [...stripComments(BLOCK).matchAll(/"([^"\\]*[a-z][^"\\]*)"/g)].map((m) => m[1]);
-  const allowed = new Set(["work's coming! let's send Piggy to work — your money does the job.", "still out working.", "not back yet.", "all of them?", "these two?",
+  const allowed = new Set(["work's coming! let's send Piggy to work\\nyour money does the job.", "still out working.", "not back yet.", "all of them?", "these two?",
     "#chogHome", ".chogHome__hit", "#sendButton", "click", ".chogHome__hit", "span", "chogCheckLine", "translateX(-50%)", "firstSendChogCue", "awayOpenCue", "sendstay", "away",
     "visibilitychange", "visible", "pending"]);
   for (const s of strings) assert.ok(allowed.has(s), `unexpected string in the A-893 block: ${JSON.stringify(s)}`);
@@ -152,10 +152,12 @@ await check("N4 CG-01: said before the first card, restored after its render, an
   assert.match(fnBody("sayFirstSendCue"), /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*document\.querySelector\("#firstSendChogCue"\)\?\.remove\(\);[\s\S]*\{ once: true \}/);
   const ok = sandbox({ scene: "sendstay", sendCardVisible: true });
   assert.equal(ok.api.sayFirstSendCue(), true);
-  assert.equal(ok.text("firstSendChogCue"), "let's send Piggy to work — your money does the job.", "after the card: the two job lines (\"work's coming!\" was said when Piggy sat)");
+  assert.equal(ok.text("firstSendChogCue"), "let's send Piggy to work your money does the job.", "after the card: the two job lines (\"work's coming!\" was said when Piggy sat)");
   assert.equal(ok.lines.length, 1);
   assert.equal(ok.lines[0].className, "chogCheckLine chogCheckLine--two", "reuses the existing two-line Chog speech style");
-  assert.deepEqual(ok.lines[0].children.map((l) => [l.className, l.textContent]), [["chogCheckLine__line", "let's send Piggy to work —"], ["chogCheckLine__line", "your money does the job."]], "same words, two lines (Owner: two rows, never cut)");
+  assert.deepEqual(ok.lines[0].children.map((l) => [l.className, l.textContent]), [["chogCheckLine__line", "let's send Piggy to work"], ["chogCheckLine__line chogCheckLine__line--later", "your money does the job."]], "[A-1281] two lines, no dash; the second joins after the first is read (Owner: one at a time, the first stays)");
+  const wait = parseInt(ok.lines[0].children[1].style.animationDelay, 10);
+  assert.ok(wait > 3600 && wait <= 3640, `second line waits chogSpeakMs(first) + 1 s breath (${wait} ms)`);
   const early = sandbox({ scene: "sendstay", sendCardVisible: false });
   assert.equal(early.api.sayFirstSendCue("coming"), true);
   assert.equal(early.text("firstSendChogCue"), "work's coming!", "first beat when Piggy sits");

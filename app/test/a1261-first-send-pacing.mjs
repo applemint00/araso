@@ -15,13 +15,14 @@ const settle = cut("  const settle = ({ keepPose = false } = {}) => {", "\n  con
 const cue = cut("const FIRST_SEND_CUE_LINE", "\n// CG-02");
 
 assert.match(MAIN, /const PACE_SEAT_BREATH_MS = 2000;/);
-assert.match(MAIN, /const PACE_HOME_TO_CARD_MIN_MS = 20000;/);
+assert.match(MAIN, /const PACE_HOME_TO_CARD_MIN_MS = 10000;/);
 assert.match(MAIN, /const PACE_GRANT_SETTLE_MS = 25000;/);
 assert.match(MAIN, /const PACE_SEND_ARM_MS = 1000;/);
 assert.match(MAIN, /const PACE_BREATH_MS = 1000;/);
 assert.match(MAIN, /const HOME_FIRST_JOURNEY_CARD_MS = 1200;/);
 assert.match(MAIN, /const POST_FILE_QUIET_HOME_MS = 8000;/);
-assert.match(cue, /const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job\.";/);
+// [A-1281] no dash in Chog speech: the job is two lines said one at a time; pre-A-1281: "… to work — your money does the job."
+assert.match(cue, /const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work\\nyour money does the job\.";/);
 assert.doesNotMatch(cue, /!state\.sendCardVisible/);
 assert.match(settle, /const announceFirstSend = \(\) => \{[\s\S]*sayFirstSendCue\("coming"\);\s*sceneTimeout\(revealSendCard, chogSpeakMs\(FIRST_SEND_CUE_PARTS\[0\]\) \+ PACE_BREATH_MS\);[\s\S]*sceneTimeout\(announceFirstSend, PACE_SEAT_BREATH_MS\);/);
 assert.match(settle, /const minAt = arrivedAt \+ PACE_HOME_TO_CARD_MIN_MS;\s*const readyAt = firstGrantReadyAt === null \? \(Date\.now\(\) >= minAt \? minAt : Infinity\) : Math\.max\(minAt, firstGrantReadyAt\);/);
@@ -50,6 +51,6 @@ assert.equal(removed, true, "first Send tap removes CG-01");
 assert.doesNotMatch(settle, /if \(!sayFirstSendCue\(\)\) return;/);
 const sequenceContract = /sayFirstSendCue\("coming"\);\s*sceneTimeout\(revealSendCard, chogSpeakMs\(FIRST_SEND_CUE_PARTS\[0\]\) \+ PACE_BREATH_MS\);/;
 assert.equal(sequenceContract.test(settle.replace('sayFirstSendCue("coming");', "")), false, "dropping the cue fails the sequence pin");
-assert.equal(/const PACE_HOME_TO_CARD_MIN_MS = 20000;/.test(MAIN.replace("const PACE_HOME_TO_CARD_MIN_MS = 20000;", "const PACE_HOME_TO_CARD_MIN_MS = 7000;")), false, "reverting the Home → card time fails its pin");
+assert.equal(/const PACE_HOME_TO_CARD_MIN_MS = 10000;/.test(MAIN.replace("const PACE_HOME_TO_CARD_MIN_MS = 10000;", "const PACE_HOME_TO_CARD_MIN_MS = 7000;")), false, "reverting the Home → card time fails its pin");
 
 console.log("A1261 PASS");

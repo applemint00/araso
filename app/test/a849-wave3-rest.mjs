@@ -75,7 +75,9 @@ await check("N2b heading and Chog wait lines share one picks helper; nothing ass
 });
 await check("N3 two Chog lines exactly, stacked spans, in the existing exploreChogSay mechanism", () => {
   const f = fnBody("chogHomeMarkupForExplore");
-  assert.ok(f.includes('<span class="chogCheckLine__line">oh… no jobs to go.</span><span class="chogCheckLine__line">wait for the next bell?</span>'));
+  // [A-1281] the same two lines, stacked, said one at a time (the second joins after the first is read); pre-A-1281: both literal spans at once
+  assert.ok(f.includes('${chogLinesMarkup("exploreWait", ["oh… no jobs to go.", "wait for the next bell?"])}'));
+  assert.match(MAIN, /function chogLinesMarkup\(key, lines\) \{[\s\S]*?class="chogCheckLine__line\$\{/);
   assert.ok(f.includes('id="exploreChogSay"'));
 });
 await check("N4 shared centred-card helper: measured only (visualViewport), 16px gap, outside the hash-pinned functions, CSS ~0.2s + reduced motion", () => {

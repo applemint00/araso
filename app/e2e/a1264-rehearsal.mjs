@@ -29,6 +29,7 @@ const screenshots = [];
 const allWorlds = [];
 
 function record(label, ok, why = "") { results.push({ label, ok }); console.log(`${ok ? "PASS" : "FAIL"} ${label}${ok ? "" : ` — ${why}`}`); }
+const chogMs = (text) => Math.round(String(text).length * 60 + 1200); // main.js chogSpeakMs
 async function check(label, fn) { try { await fn(); record(label, true); } catch (error) { record(label, false, String(error?.message || error).split("\n")[0]); } }
 // Known app findings that have their own card: reported every run as KNOWN, counted as failures only with ARASO_REHEARSAL_STRICT=1.
 const known = [];
@@ -44,7 +45,7 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
 ]);
 function normaliseLine(line, name) {
@@ -172,7 +173,10 @@ async function openPerson(browser, world, id, { storageState, invite, credential
           card: !!document.querySelector("#sendButton") && document.querySelector("#sendButton").getBoundingClientRect().width > 0,
           send: live("#sendButton"),
           receipt: live("#returnTap"),
-          chog: [...document.querySelectorAll(".chogCheckLine")].filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.textContent.trim()).join(" | "),
+          phase: document.querySelector("#homeChar")?.dataset.phase || "",
+          sayOut: (() => { const e = document.querySelector(".nameScene__say"); if (!e || !e.textContent) return ""; const r = e.getBoundingClientRect(); return r.left < 0 || r.right > innerWidth ? `${e.textContent}@${Math.round(r.left)}..${Math.round(r.right)}/${innerWidth}` : ""; })(),
+          // only the lines a person can see now (a later line of two-line speech waits hidden until the first is read)
+          chog: [...document.querySelectorAll(".chogCheckLine")].filter((e) => e.getBoundingClientRect().width > 0).map((e) => { const ls = [...e.querySelectorAll(".chogCheckLine__line")]; return (ls.length ? ls.filter((l) => getComputedStyle(l).visibility !== "hidden").map((l) => l.textContent.trim()).join(" ") : e.textContent).trim(); }).join(" | "),
         };
         let changed = false;
         for (const k of Object.keys(now)) if (now[k] !== last[k]) { tl.push({ t: Date.now(), k, v: now[k] }); changed = true; }
@@ -235,9 +239,9 @@ async function walkFirstJourney(person, { send = true } = {}) {
   await checkpoint(person, "envelope");
   await click(person, "#inviteFaceButton", "envelope Face ID");
   const born = await until(person, "hatch or name", (s) => ["hatch", "name"].includes(s.scene), 25_000);
-  if (born.scene === "hatch") { await checkpoint(person, "hatch"); await click(person, "#skipHatchButton", "hatch skip"); }
-  await until(person, "name", (s) => s.scene === "name");
-  await until(person, "Chog's arrival lines", (s) => s.text.includes("my first piggy"), 15_000).catch(() => {}); // read like a person; the line check below judges it
+  if (born.scene === "hatch") await checkpoint(person, "hatch"); // watch the hatch to its end like a person (no skip): pacing is measured on real time
+  await until(person, "name", (s) => s.scene === "name", 30_000);
+  if (await until(person, "Chog's arrival lines", (s) => s.text.includes("my first piggy"), 15_000).then(() => true, () => false)) await checkpoint(person, "name-say"); // read like a person; the line check below judges it
   await click(person, ".nameCard__okBtn", "arrival ok");
   await click(person, "#piggyNameInput", "name input");
   await person.page.locator("#piggyNameInput").fill(person.name);
@@ -382,13 +386,21 @@ async function laneMain() {
     const i = ["wallet?", "Piggy!!!!!!", "my first piggy"].map((w) => chogLines.findIndex((v) => v === w));
     assert.ok(i.every((x) => x >= 0) && i[0] < i[1] && i[1] < i[2], `chog lines: ${JSON.stringify(chogLines.slice(0, 8))}`);
   });
-  await check("pace · Home arrival → Send card ≥ 20 s (time to understand)", () => { assert.ok(cardAt - homeAt >= 20_000, `${((cardAt - homeAt) / 1000).toFixed(1)} s`); });
+  const sitAt = at((e) => e.k === "phase" && e.v && e.v !== "walk", homeAt + 500) || homeAt;
+  await check("pace · Piggy sits → Send card ≈ 10 s (grant asked early enough that the node is ready)", () => { const d = cardAt - sitAt; assert.ok(d >= 9_500 && d <= 12_500, `${(d / 1000).toFixed(1)} s after sitting`); });
+  await check("pace · Chog's lines on the name card stay inside the screen (no cut words)", () => { const out = tl.filter((e) => e.k === "sayOut" && e.v).map((e) => e.v); assert.deepEqual(out, []); });
   await check("pace · first Chog line on Home = work's coming! before the card; the two job lines come after the card", () => {
     const first = tl.find((e) => e.k === "chog" && e.v && e.t >= homeAt);
     assert.equal(first?.v, "work's coming!", `first Home line: ${first?.v}`);
     const jobLine = tl.find((e) => e.k === "chog" && /let's send Piggy to work/.test(e.v || ""));
     assert.ok(jobLine && jobLine.t >= cardAt + 1000, `job lines at ${jobLine?.t} · card at ${cardAt}`);
   });
+  await check("pace · two job lines come one at a time: the first stays, the second joins after it is read (+1 s)", () => {
+    const one = tl.find((e) => e.k === "chog" && e.v === "let's send Piggy to work");
+    const both = tl.find((e) => e.k === "chog" && e.v === "let's send Piggy to work your money does the job.");
+    assert.ok(one && both && both.t - one.t >= chogMs("let's send Piggy to work") + 1000 - 300, `first ${one?.t} · both ${both?.t} · seen ${JSON.stringify(tl.filter((e) => e.k === "chog" && /Piggy to work/.test(e.v || "")).map((e) => e.v).slice(0, 4))}`);
+  });
+  await check("pace · no dash in anything Chog says", () => { const d = tl.filter((e) => e.k === "chog" && /—/.test(e.v || "")).map((e) => e.v); assert.deepEqual([...new Set(d)], []); });
   await check("pace · Send can be pressed only after the job lines end (+1 s), not as the card appears", () => { assert.ok(sendAt - cardAt >= 4_000, `${((sendAt - cardAt) / 1000).toFixed(1)} s`); });
   await check("pace · Away → Return ≥ 8 s outside", () => { assert.ok(returnAt - awayAt >= 7_900, `${((returnAt - awayAt) / 1000).toFixed(1)} s`); });
   await check("pace · Return → Receipt has a breath (≥ base + 1.5 s)", () => { assert.ok(receiptAt - returnAt >= Number(process.env.ARASO_PACE_RECEIPT_MS || 8500), `${((receiptAt - returnAt) / 1000).toFixed(1)} s`); });
@@ -404,6 +416,7 @@ async function laneMain() {
     }
   });
   if (process.env.ARASO_REHEARSAL_DEBUG === "1") console.log(`TL ${tl.length} ${JSON.stringify(tl.slice(0, 40))}`);
+  if (process.env.ARASO_REHEARSAL_DEBUG === "1") console.log(`TLCHOG ${JSON.stringify(tl.filter((e) => e.k === "chog" || e.k === "send"))}`);
   console.log(`PACE home→card ${((cardAt - homeAt) / 1000).toFixed(1)} s · card→send ${((sendAt - cardAt) / 1000).toFixed(1)} s · away→return ${((returnAt - awayAt) / 1000).toFixed(1)} s · return→receipt ${((receiptAt - returnAt) / 1000).toFixed(1)} s`);
   await check("a · 1st done → Journey 2 entry (live signer enters directly; otherwise \"tap me!\") → switch → intro → Explore", async () => {
     await until(a, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
@@ -604,8 +617,12 @@ async function laneJobFail() {
       inject(w);
       await p.page.locator("#secondSendButton").click();
       await until(p, "try again", (s) => s.text.includes("try again"), 60_000);
-      const face = await p.page.evaluate(() => document.querySelectorAll(".homeChar__seat--sulky").length);
-      assert.ok(face > 0, "sulky face missing");
+      // only the face changes (and a small dip): no second whole-body picture laid over Piggy
+      const face = await p.page.evaluate(() => ({ overlay: document.querySelectorAll(".homeChar__seat--sulky").length, sulkyFace: document.querySelectorAll(".sulkyFace").length, seatSulky: /seat_sulky/.test(document.querySelector("#homeSeat")?.getAttribute("src") || "") && getComputedStyle(document.querySelector("#homeSeat")).visibility !== "hidden", canvasSulky: !!document.querySelector('.departStage[data-face="sulky"]'), dip: !!document.querySelector(".is-sulky-dip"),
+        scene: document.querySelector(".stage")?.dataset.scene, idle: !!document.querySelector(".homeAmbient__idle #face"), seat: (() => { const e = document.querySelector("#homeSeat"); if (!e) return null; const r = e.getBoundingClientRect(); return `${e.getAttribute("src")}@${Math.round(r.width)}x${Math.round(r.height)} ${getComputedStyle(e).visibility}/${getComputedStyle(e).opacity}`; })(),
+        ambientSeat: document.querySelector("#homeChar")?.hasAttribute("data-ambient-seat"), imgs: [...document.querySelectorAll("#homeChar img, #homeChar svg")].filter((e) => e.getBoundingClientRect().width > 0).map((e) => `${e.tagName}.${e.getAttribute("class") || ""}#${e.id}`).slice(0, 6) }));
+      assert.equal(face.overlay, 0, `whole-body overlay present ${JSON.stringify(face)}`);
+      assert.ok((face.sulkyFace > 0 || face.seatSulky || face.canvasSulky) && face.dip, `face-only sulky missing ${JSON.stringify(face)}`);
       await checkpoint(p, `job-failed-${word}`);
       const ok = word === "failed" ? eventsOf(w, id).some((e) => e === "job_why/failed" || e === "job_why/refused") : eventsOf(w, id).includes(`job_why/${word}`);
       assert.ok(ok, `events: ${eventsOf(w, id).join(",")}`);
@@ -669,8 +686,12 @@ async function laneFaults() {
   await check("fault · four refusals + nonce unchanged → never-sent deposit released: \"nothing moved.\", Send pressable again", async () => {
     await until(g, "nothing moved.", (s) => s.text.some((t) => t.startsWith("nothing moved.")), 40_000);
     await until(g, "try again", (s) => s.text.includes("try again"), 5_000);
-    const face = await g.page.evaluate(() => [...document.querySelectorAll(".homeChar__seat--sulky")].map((e) => e.className).join("|"));
-    assert.match(face, /is-sulky/, `sulky face: ${face}`);
+    await checkpoint(g, "send-failed-sulky-now");
+    if (process.env.ARASO_REHEARSAL_OUT) await g.page.screenshot({ path: path.join(OUT, `${g.id}-sulky-closeup.png`), clip: { x: 230, y: 640, width: 160, height: 170 } }).catch(() => {});
+    // only the face changes (and a small dip): no second whole-body picture laid over the seated Piggy
+    const face = await g.page.evaluate(() => ({ overlay: document.querySelectorAll(".homeChar__seat--sulky").length, sulkyFace: document.querySelectorAll(".sulkyFace").length, seatSulky: /seat_sulky/.test(document.querySelector("#homeSeat")?.getAttribute("src") || "") && getComputedStyle(document.querySelector("#homeSeat")).visibility !== "hidden", canvasSulky: !!document.querySelector('.departStage[data-face="sulky"]'), dip: !!document.querySelector(".is-sulky-dip") }));
+    assert.equal(face.overlay, 0, `whole-body overlay present ${JSON.stringify(face)}`);
+    assert.ok((face.sulkyFace > 0 || face.seatSulky || face.canvasSulky) && face.dip, `face-only sulky missing ${JSON.stringify(face)}`);
     assert.equal(await live(g, "#sendButton"), false, "Send waits while Piggy is sulky");
     await checkpoint(g, "send-failed-sulky");
     assert.equal(await g.page.evaluate(() => Object.keys(localStorage).filter((k) => /sendPending/i.test(k) && localStorage.getItem(k)).length), 0, "send pending record cleared");

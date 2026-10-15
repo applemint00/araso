@@ -6838,6 +6838,7 @@ function renderHatch() {
 async function mountHatch() {
   const host = document.querySelector("#hatchStage");
   if (!host) return;
+  prefetchFirstGrant();
   const token = sceneToken;
   // [A-662 OWNER DECISION — NAME/HATCH → HOME ENDPOINT CONTINUITY] see applyOnboardingPhoneFoot().
   applyOnboardingPhoneFoot();
@@ -7147,7 +7148,7 @@ const HOME_FIRST_JOURNEY_CARD_MS = 1200;
 // First-journey pacing: a first-time person needs time to read each beat before the next one appears.
 const PACE_BREATH_MS = 1000;            // between two beats
 const PACE_SEAT_BREATH_MS = 2000;       // Piggy sits on Home → Chog's first line
-const PACE_HOME_TO_CARD_MIN_MS = 20000; // Home arrival → First Send card, at least
+const PACE_HOME_TO_CARD_MIN_MS = 10000; // Piggy sits on Home → First Send card, at least
 const PACE_GRANT_SETTLE_MS = 25000;     // grant confirmed → the node accepts the first deposit (live: refused 16–22 s after the grant)
 const PACE_SEND_ARM_MS = 1000;          // last job line → Send can be pressed
 const PACE_OUTSIDE_MIN_MS = 8000;       // Away stays on screen at least this long
@@ -7155,16 +7156,87 @@ const PACE_RECEIPT_BREATH_MS = 1500;    // First Return → Receipt
 const PACE_SULKY_MS = 3000;             // failed Send: sulky face, then Send comes back
 // How long Chog needs to say a line (read time grows with its length).
 function chogSpeakMs(text) { return Math.round(String(text).length * 60 + 1200); }
+// Two-line Chog speech is said one line at a time: the first line shows, and the next joins once the first is read (+ a breath).
+// Earlier lines stay. A redraw of the same lines keeps the clock it started with, so nothing is said twice.
+const chogLinesStartedAt = new Map();
+function chogLinesMs(lines) { return lines.reduce((ms, t) => ms + chogSpeakMs(t) + PACE_BREATH_MS, 0); } // all read, a breath after each
+function chogLinesRestart(key) { chogLinesStartedAt.delete(key); }
+function chogLineWaits(key, lines) { // ms each line still waits before it shows (0 = showing)
+  const sig = lines.join("\n");
+  const was = chogLinesStartedAt.get(key);
+  if (!was || was.sig !== sig) chogLinesStartedAt.set(key, { sig, at: Date.now() });
+  const elapsed = Date.now() - chogLinesStartedAt.get(key).at;
+  let at = 0;
+  return lines.map((t) => { const wait = Math.max(0, at - elapsed); at += chogSpeakMs(t) + PACE_BREATH_MS; return wait; });
+}
+function chogLinesMarkup(key, lines) {
+  const waits = chogLineWaits(key, lines);
+  return lines.map((t, i) => `<span class="chogCheckLine__line${waits[i] ? ` chogCheckLine__line--later" style="animation-delay:${waits[i]}ms` : ""}">${escapeHtml(t)}</span>`).join("");
+}
+function chogLineNodes(key, lines) {
+  const waits = chogLineWaits(key, lines);
+  return lines.map((t, i) => {
+    const l = document.createElement("span");
+    l.className = waits[i] ? "chogCheckLine__line chogCheckLine__line--later" : "chogCheckLine__line";
+    if (waits[i]) l.style.animationDelay = `${waits[i]}ms`;
+    l.textContent = t;
+    return l;
+  });
+}
 
-// Grant asked as soon as Piggy is Home (testnet First only), so the card can wait until the node can spend it.
+// Grant asked once, as early as the Piggy exists (hatch start; Home arrival if not yet), so the node can spend it by the card.
 let firstGrantReadyAt = null;
+let firstGrantAskedFor = "";
 function prefetchFirstGrant() {
+  if (state.address && firstGrantAskedFor === state.address) return;
+  firstGrantAskedFor = state.address || "";
   firstGrantReadyAt = null;
   if (!LEGACY_TESTNET_PATH || !state.address || state.tripClosed) { firstGrantReadyAt = 0; return; }
   requestGrant(state.address).then(
     (grant) => { firstGrantReadyAt = grant?.granted ? Date.now() + PACE_GRANT_SETTLE_MS : 0; },
     () => { firstGrantReadyAt = 0; }, // the Send tap asks again and shows its own failure
   );
+}
+
+// The #2 sulky face (lookdownR-2 eyes + mouth, aligned on the seated Piggy's eyes): only the face changes, the body dips a little.
+const SULKY_FACE_MARKUP = `<g class="sulkyFace" transform="translate(152 -94)"><path d="M222.153 623.234L210.5 628.581L203.119 635.854L199.006 647.565L198.382 659.448L201.471 667.271L208.921 675.332L219.951 681.869L229.558 682.373L234.882 680.95L242.084 677.072L246.713 672.208L252.527 661.438L253.24 647.857L247.846 633.945L241.223 626.788L236.122 623.967L222.153 623.234Z" fill="white"/><path d="M369.717 628.568L359.026 632.263L348.984 640.247L343.17 651.018L342.591 662.052L345.546 672.421L354.652 682.272L363.981 687.869L374.461 688.418L386.942 683.966L391.482 680.8L397.084 674.274L399.051 670.122L399.942 653.145L399.293 648.845L393.666 639.187L381.025 630.012L369.717 628.568Z" fill="white"/><path d="M234.586 733.014C232.61 732.593 230.548 732.973 228.853 734.071C227.158 735.169 225.969 736.896 225.547 738.872C225.125 740.847 225.505 742.909 226.603 744.604C227.702 746.299 229.429 747.489 231.404 747.91C231.404 747.91 231.404 747.91 231.404 747.91C232.313 748.101 232.97 748.109 233.351 748.115C233.566 748.116 233.771 748.111 233.959 748.103C234.117 748.096 234.268 748.086 234.416 748.075C235.048 748.023 235.451 747.962 235.888 747.892C236.734 747.752 237.434 747.595 238.11 747.43C239.466 747.096 240.688 746.726 241.891 746.332C253.736 742.28 264.066 736.319 273.675 728.982C274.03 728.708 274.375 728.433 274.718 728.15C281.124 723.05 286.299 715.208 288.944 709.446C288.946 709.443 288.947 709.441 288.949 709.439C288.966 709.417 288.966 709.43 288.936 709.488C288.914 709.532 288.834 709.677 288.642 709.93C288.476 710.127 288.118 710.673 286.996 711.428C286.598 711.709 285.201 712.475 283.647 712.624C282.106 712.841 280.063 712.382 278.835 711.628C277.464 710.792 277.142 710.32 276.696 709.815C276.501 709.574 276.351 709.36 276.23 709.172C276.104 708.975 276.057 708.891 275.989 708.771C275.747 708.328 275.661 708.079 275.622 707.985C275.536 707.759 275.558 707.829 275.572 707.949C275.657 708.507 275.783 709.738 275.875 710.902C276.067 713.299 276.236 715.932 276.496 718.621C277.306 724.166 276.851 729.327 281.796 737.538C281.853 737.619 281.909 737.7 281.966 737.78C289.636 748.81 302.725 751.588 310.587 753.831L309.43 753.525C309.431 753.525 309.432 753.526 309.433 753.527C310.033 753.846 311.304 755.634 314.092 756.921C314.099 756.924 314.105 756.927 314.112 756.93C314.748 757.215 315.341 757.459 315.877 757.674C318.312 758.631 319.716 759.16 321.417 759.97C324.34 761.342 327.665 761.479 330.677 760.315C333.688 759.154 336.139 756.786 337.475 753.769C338.811 750.753 338.917 747.346 337.754 744.335C336.592 741.323 334.255 738.953 331.275 737.711C331.275 737.711 331.275 737.711 331.275 737.711C328.892 736.691 326.086 735.704 324.325 735.123C323.95 734.997 323.637 734.89 323.375 734.799C323.373 734.798 323.37 734.797 323.367 734.796C322.159 734.415 319.639 734.05 316.115 733.017C316.109 733.015 316.103 733.014 316.098 733.012C315.864 732.954 315.179 732.738 314.94 732.706C305.779 731.609 299.765 730.555 296.631 726.777C296.605 726.747 296.579 726.717 296.553 726.686C296.385 726.739 295.483 724.921 294.988 723.031C294.44 721.085 294.011 718.834 293.645 716.491C293.275 714.139 292.979 711.702 292.613 709.034C292.415 707.664 292.256 706.366 291.822 704.441C291.692 703.9 291.569 703.39 291.273 702.549C291.147 702.201 290.913 701.582 290.533 700.891C290.361 700.581 290.057 700.053 289.563 699.443C289.01 698.809 288.61 698.253 287.08 697.321C284.133 695.3 279.152 696.536 278.032 697.594C276.679 698.493 276.044 699.34 275.718 699.743C274.915 700.813 274.721 701.261 274.396 701.878C274.384 701.903 274.372 701.927 274.36 701.952C271.608 708.725 269.282 712.794 265.032 716.395C264.814 716.574 264.595 716.748 264.37 716.922C256.108 723.275 246.627 728.64 237.136 731.861C236.215 732.164 235.302 732.435 234.481 732.637C234.079 732.735 233.691 732.817 233.425 732.861C233.297 732.882 233.196 732.892 233.225 732.889C233.244 732.888 233.292 732.883 233.454 732.883C233.591 732.888 233.903 732.875 234.586 733.014Z" fill="white"/></g>`;
+let workPoseFace = null; // the live work-pose canvas (mountSendCardWorkPose), when Piggy is drawn there
+let workFace = null; // the face the work pose should wear; a picture mounted during the beat picks it up
+let workFaceUntil = 0; // when that face ends, even if the beat's own timer was cleared by a scene change
+function sulkyFace() {
+  const canvas = [...document.querySelectorAll(".departStage")].find((c) => c.getBoundingClientRect().width > 0 && getComputedStyle(c).visibility !== "hidden");
+  const live = () => (workPoseFace?.alive() && workPoseFace.canvas.isConnected ? workPoseFace : null);
+  const art = document.querySelector(".homeAmbient__idle");
+  const face = art?.querySelector("#face");
+  const seat = document.querySelector("#homeSeat");
+  const ambientSeat = document.querySelector("#homeChar")?.hasAttribute("data-ambient-seat");
+  let target = null;
+  let undo = () => {};
+  if (canvas) { // Piggy is the drawn work pose: the #2 face is painted on that picture, the body stays
+    workFace = "sulky";
+    workFaceUntil = Date.now() + PACE_SULKY_MS;
+    const work = live();
+    if (work) { work.setFace(workFace); work.canvas.dataset.face = workFace; work.redraw(); }
+    target = canvas;
+    undo = () => {
+      workFace = null;
+      const now = live();
+      if (now) { now.setFace(null); delete now.canvas.dataset.face; now.canvas.classList.remove("is-sulky-dip"); now.redraw(); }
+    };
+  } else if (face) {
+    const kids = [...face.children];
+    kids.forEach((k) => k.setAttribute("visibility", "hidden"));
+    face.insertAdjacentHTML("beforeend", SULKY_FACE_MARKUP);
+    target = art;
+    undo = () => { face.querySelector(".sulkyFace")?.remove(); kids.forEach((k) => k.removeAttribute("visibility")); };
+  } else if (seat && !ambientSeat) {
+    const was = seat.getAttribute("src");
+    seat.setAttribute("src", `${MOTION_DIR}/seat_sulky.svg`); // same body bytes as seat.svg; only the face differs
+    target = seat;
+    undo = () => seat.setAttribute("src", was);
+  } // another pose on screen: keep its body as is (no face swap)
+  target?.classList.add("is-sulky-dip");
+  return () => { undo(); target?.classList.remove("is-sulky-dip"); };
 }
 
 // A failed First Send: Chog says why (when a reason line is confirmed) and "try again"; Piggy's face drops to sulky,
@@ -7175,27 +7247,17 @@ function sendFailedBeat() {
   state.jobFailedWhy = null;
   const why = jobWhy || (() => { try { return sendFailureWhy(JSON.parse(localStorage.getItem(LAST_SEND_ERROR_KEY) || "null")); } catch { return "other"; } })();
   const reason = SEND_FAILURE_REASON_LINES[why];
-  insertChogCueLine("sendFailedChogCue", reason ? [reason, "try again"] : ["try again"]);
-  const seat = document.querySelector("#homeSeat");
-  let sulky = null;
-  if (seat?.parentElement) {
-    sulky = document.createElement("img");
-    sulky.className = "homeChar__seat homeChar__seat--sulky is-sulky";
-    sulky.alt = "";
-    sulky.src = `${MOTION_DIR}/seat_sulky.svg`;
-    sulky.style.cssText = seat.style.cssText; // same box as the seated Piggy, so only the face reads as changed
-    seat.after(sulky);
-    requestAnimationFrame(() => sulky.classList.add("is-in"));
-  }
+  const lines = reason ? [reason, "try again"] : ["try again"];
+  chogLinesRestart("sendFailedChogCue");
+  insertChogCueLine("sendFailedChogCue", lines);
+  const back = sulkyFace();
   state.sendHold = true;
   syncSendButton();
-  sceneTimeout(() => {
-    sulky?.classList.add("is-leaving");
-    sulky?.classList.remove("is-sulky");
-    sceneTimeout(() => sulky?.remove(), 400);
+  sceneTimeout(back, PACE_SULKY_MS);
+  sceneTimeout(() => { // Send waits until both lines are read
     state.sendHold = false;
     syncSendButton();
-  }, PACE_SULKY_MS);
+  }, Math.max(PACE_SULKY_MS, chogLinesMs(lines)));
 }
 
 // [A-603] 캐릭터 스케일 바닥 — A-602 Owner 프리뷰(Candidate C, c_floor.js)가 측정·검증한 그 메커니즘을 값·
@@ -12508,9 +12570,10 @@ function chogHomeMarkupForExplore() {
   // [A-849 UI-24] WAIT state (picks exist, 0 candidates, no read in flight): Chog says the two Owner lines, stacked.
   if (state.scene === "explore" && sj?.step === "candidates" && secondLaneMode(sj) && sj.laneReading !== true
       && secondPickedErrandIds(sj).length > 0 && secondLaneDestinations(sj).length === 0) {
-    const two = `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)"><span class="chogCheckLine__line">oh… no jobs to go.</span><span class="chogCheckLine__line">wait for the next bell?</span></span>`;
+    const two = `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)">${chogLinesMarkup("exploreWait", ["oh… no jobs to go.", "wait for the next bell?"])}</span>`;
     return markup.replace('<div class="chogHome__hit"', `${two}<div class="chogHome__hit"`);
   }
+  chogLinesRestart("exploreWait"); // left the WAIT state: next time the two lines are said one at a time again
   // [A-893 CG-05] the line is derived from the CURRENT picks at every render, not the value set once at save.
   const confirmLine = state.scene === "explore" && sj?.step === "candidates" ? exploreChogConfirmLine(sj) : null;
   if (!confirmLine) return markup;
@@ -12556,16 +12619,16 @@ function insertChogCueLine(id, text) {
   // Two given lines use the existing two-line speech layout, so a long line is never cut on a narrow phone.
   line.classList.toggle("chogCheckLine--two", Array.isArray(text) && text.length > 1);
   if (Array.isArray(text) && text.length > 1) {
-    line.replaceChildren(...text.map((t) => { const l = document.createElement("span"); l.className = "chogCheckLine__line"; l.textContent = t; return l; }));
+    line.replaceChildren(...chogLineNodes(id, text));
   } else line.textContent = Array.isArray(text) ? text.join(" ") : text;
   return true;
 }
 
 // CG-01: once on the first arrival after Name save (isFirstArrival; revisits, reloads and added Piggies never reach it).
 // It starts before the card, is restored after the card render, and the first Send tap clears it.
-const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job.";
+const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work\nyour money does the job.";
 // The first job line is said in two beats: "work's coming!" when Piggy sits, the job itself once the card is up.
-const FIRST_SEND_CUE_PARTS = FIRST_SEND_CUE_LINE.split(/(?<=!) (?=let's)|(?<=—) /);
+const FIRST_SEND_CUE_PARTS = FIRST_SEND_CUE_LINE.split(/(?<=!) (?=let's)|\n/);
 function sayFirstSendCue(stage = "job") {
   if (state.appLock || state.scene !== "sendstay" || sendBusy()) return false;
   const inserted = insertChogCueLine("firstSendChogCue", stage === "coming" ? FIRST_SEND_CUE_PARTS.slice(0, 1) : FIRST_SEND_CUE_PARTS.slice(1));
@@ -13812,7 +13875,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         render();
         sceneTimeout(() => {
           sayFirstSendCue("job");
-          sceneTimeout(armSend, FIRST_SEND_CUE_PARTS.slice(1).reduce((ms, line) => ms + chogSpeakMs(line), 0) + PACE_SEND_ARM_MS);
+          sceneTimeout(armSend, chogLinesMs(FIRST_SEND_CUE_PARTS.slice(1)) - PACE_BREATH_MS + PACE_SEND_ARM_MS);
         }, PACE_BREATH_MS);
       };
       const announceFirstSend = () => {
@@ -14184,6 +14247,18 @@ function mountSendCardWorkPose({
     }
     if (!alive()) return;
     const renderer = createDepartRenderer(canvas, { images, mode: "work" });
+    // [A-1281] a failed Send/Job draws the sulky face on this same picture (sulkyFace()); after the cue the frame loop has stopped
+    workPoseFace = { canvas, alive, redraw: () => renderer.drawAt(Math.max(WORK_CUE.total, (performance.now() - workStartedAt) / 1000)), setFace: renderer.setFace };
+    if (workFace && Date.now() < workFaceUntil) { // a sulky beat that began before this picture was ready; it ends on its own time
+      renderer.setFace(workFace); canvas.dataset.face = workFace; canvas.classList.add("is-sulky-dip");
+      const until = workFaceUntil;
+      setTimeout(() => {
+        if (workFaceUntil !== until) return; // a newer beat owns the face (its own end resets this picture)
+        workFace = null;
+        renderer.setFace(null); delete canvas.dataset.face; canvas.classList.remove("is-sulky-dip");
+        if (alive()) renderer.drawAt(Math.max(WORK_CUE.total, (performance.now() - workStartedAt) / 1000));
+      }, workFaceUntil - Date.now() + 50);
+    } else workFace = null;
     // 캔버스가 실제로 그릴 준비가 된 지금에서야 옛 seat.svg 를 숨긴다 — 자산이
     // 늦게 오는 동안은 seat.svg 가 계속 보여서 "Piggy 없음" 프레임이 생기지 않는다.
     if (seatImg) seatImg.style.visibility = "hidden";
@@ -14532,7 +14607,7 @@ const A891_SECOND_INTRO_LINES = ["I found a few things.", "wanna see a few more?
 // Reading hold for the filed line before Home settles = the existing A-725 Chog-line hold (1.5 s); not an Owner number, tune on device.
 const A891_FILED_LINE_HOLD_MS = A891_TAP_CUE_TIMING.holdMs;
 // Intro line → Explore Paper = the existing short beat before a card (HOME_FIRST_JOURNEY_CARD_MS, 1.2 s); not an Owner number, tune on device.
-const A891_SECOND_INTRO_TO_PAPER_MS = HOME_FIRST_JOURNEY_CARD_MS + 1500; // + a 1.5 s breath to read the intro lines before the Explore paper
+const A891_SECOND_INTRO_TO_PAPER_MS = Math.max(HOME_FIRST_JOURNEY_CARD_MS + 1500, chogLinesMs(A891_SECOND_INTRO_LINES)); // both intro lines read one at a time (+ a breath) before the Explore paper
 const SECOND_INTRO_SEEN_KEY = scopedSecondKey("araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
 let a891FirstArrivalHold = null; // { t } silent frame clock of the removed first-arrival cue (keeps the First Send reveal timing)
 let a1206SwitchIntroPending = false; // UI-only boot handoff; consumed once by the existing CG-05 intro
@@ -14575,12 +14650,7 @@ function a891ChogSay(chogRoot, id, lines) {
   if (lines.length > 1) {
     span.className = "chogCheckLine chogCheckLine--two";
     span.style.transform = "translateX(-50%)";
-    for (const text of lines) {
-      const line = document.createElement("span");
-      line.className = "chogCheckLine__line";
-      line.textContent = text;
-      span.append(line);
-    }
+    span.append(...chogLineNodes(id, lines));
   } else {
     span.className = "chogCheckLine";
     span.textContent = lines[0];
