@@ -47,7 +47,7 @@ check("onOpenFilebox/onError/onIdleEnter all route to finishSecondJourney",
 
 // ── 3. First 최초 정착의 Send 카드 reveal 은 그대로 ─────────────────────────────────
 check("First reveal pacing: 2 s breath → \"work's coming!\" → card at max(arrival + 20 s, grant + 25 s) → job lines",
-  /if \(isFirstArrival && !state\.sendCardVisible\) \{[\s\S]*prefetchFirstGrant\(\);[\s\S]*Math\.max\(arrivedAt \+ PACE_HOME_TO_CARD_MIN_MS, firstGrantReadyAt\)[\s\S]*sayFirstSendCue\("coming"\);[\s\S]*sceneTimeout\(announceFirstSend, PACE_SEAT_BREATH_MS\);/.test(settleSrc), true);
+  /if \(isFirstArrival && !state\.sendCardVisible\) \{[\s\S]*prefetchFirstGrant\(\);[\s\S]*const minAt = arrivedAt \+ PACE_HOME_TO_CARD_MIN_MS;[\s\S]*Math\.max\(minAt, firstGrantReadyAt\)[\s\S]*sayFirstSendCue\("coming"\);[\s\S]*sceneTimeout\(announceFirstSend, PACE_SEAT_BREATH_MS\);/.test(settleSrc), true);
 
 // ── 4. First 실패 뒤 reload/redeploy: testnet의 미완료 Home만 Send 카드 복구 ─────────
 check("First re-entry restores Send only after the initial scene is known", reentrySendAt > initialSceneAt && initialSceneAt > 0, true);

@@ -24,7 +24,7 @@ assert.match(MAIN, /const POST_FILE_QUIET_HOME_MS = 8000;/);
 assert.match(cue, /const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job\.";/);
 assert.doesNotMatch(cue, /!state\.sendCardVisible/);
 assert.match(settle, /const announceFirstSend = \(\) => \{[\s\S]*sayFirstSendCue\("coming"\);\s*sceneTimeout\(revealSendCard, chogSpeakMs\(FIRST_SEND_CUE_PARTS\[0\]\) \+ PACE_BREATH_MS\);[\s\S]*sceneTimeout\(announceFirstSend, PACE_SEAT_BREATH_MS\);/);
-assert.match(settle, /const readyAt = firstGrantReadyAt === null \? Infinity : Math\.max\(arrivedAt \+ PACE_HOME_TO_CARD_MIN_MS, firstGrantReadyAt\);/);
+assert.match(settle, /const minAt = arrivedAt \+ PACE_HOME_TO_CARD_MIN_MS;\s*const readyAt = firstGrantReadyAt === null \? \(Date\.now\(\) >= minAt \? minAt : Infinity\) : Math\.max\(minAt, firstGrantReadyAt\);/);
 assert.match(settle, /state\.sendCardVisible = true;\s*render\(\);\s*sceneTimeout\(\(\) => \{\s*sayFirstSendCue\("job"\);\s*sceneTimeout\(armSend, [^;]*PACE_SEND_ARM_MS\);\s*\}, PACE_BREATH_MS\);/);
 assert.match(cue, /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*document\.querySelector\("#firstSendChogCue"\)\?\.remove\(\);[\s\S]*\{ once: true \}/);
 

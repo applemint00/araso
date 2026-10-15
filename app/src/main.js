@@ -3382,8 +3382,9 @@ function syncSendButton() {
   const sealed = typeof LEGACY_TESTNET_PATH === "boolean" && LEGACY_TESTNET_PATH !== true;
   const held = typeof state === "object" && state?.sendHold === true; // a pacing beat (job lines · sulky face) still owns the button
   // An unsettled record leaves the button pressable as a read-only re-check (sendPiggy); only a running send or re-check locks it.
-  const recheckOnly = !sendInFlight && !sendRecheckBusy && !!readSendPending();
-  const locked = sealed || !isAllowedPiggyRpId() || (sendBusy() && !recheckOnly) || sendRecheckBusy || held;
+  const rechecking = typeof sendRecheckBusy !== "undefined" && sendRecheckBusy === true;
+  const recheckOnly = typeof reconcileSendPending === "function" && !sendInFlight && !rechecking && !!readSendPending();
+  const locked = sealed || !isAllowedPiggyRpId() || (sendBusy() && !recheckOnly) || rechecking || held;
   btn.disabled = locked;
   if (locked) btn.setAttribute("aria-disabled", "true");
   else btn.removeAttribute("aria-disabled");
@@ -3407,7 +3408,7 @@ async function sendPiggy() {
     setScene("sendstay", "Piggy is home.", "Confirmation is still catching up.");
     // Money may be mid-flight: the button re-checks the chain (read only) instead of sending again; a proven never-sent
     // deposit is released by the same reconcile, and only then does the next tap send.
-    if (!sendRecheckBusy) {
+    if (typeof reconcileSendPending === "function" && typeof sendRecheckBusy !== "undefined" && !sendRecheckBusy) {
       sendRecheckBusy = true;
       syncSendButton();
       reconcileSendPending(pending, { watch: false }).catch(() => {}).finally(() => { sendRecheckBusy = false; syncSendButton(); });

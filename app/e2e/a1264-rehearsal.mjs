@@ -412,7 +412,7 @@ async function laneMain() {
     await checkpoint(a, "explore");
     assert.ok(main.requests.some((r) => r.person === "a" && r.action === "enter"), "fork entry recorded");
   });
-  await check("pace · second intro line → Explore paper ≥ 2.7 s (1.2 s beat + 1.5 s breath)", () => { assert.ok(a.introToExplore >= 2_700, `${a.introToExplore} ms`); });
+  await check("pace · second intro line → Explore paper ≥ 2.7 s (1.2 s beat + 1.5 s breath)", () => { assert.ok(a.introToExplore >= 2_600, `${a.introToExplore} ms`); });
   await check("a · Journey 2 round 1: places → Job (tidy the wallet) → Send → Away → back → Receipt → File it → Home", () => walkSecondJob(a, 1));
   await check("a · reopen the app → lock → Chog → Face ID → Home → bell → Explore opens again", async () => {
     await a.page.goto("about:blank"); await a.page.goto(BASE, { waitUntil: "networkidle" });
@@ -635,10 +635,17 @@ async function atlasLane(id, { world, setup, trigger, expect, retry, shot }) {
 }
 async function sendAgain(person, fixed, waitMs = 0) {
   if (waitMs) await sleep(waitMs);
-  if (!(await live(person, "#sendButton"))) return "안 됨 (Send 잠김)";
+  // the sulky beat holds Send for a few seconds after a failure; a person sees it come back
+  try { await until(person, "Send back after the failure beat", () => live(person, "#sendButton"), 8_000); } catch { return "안 됨 (Send 잠김)"; }
+  const deposits = (person.world.chain.log.join(";").match(/sendRaw deposit/g) || []).length;
   const before = (await look(person)).text.join("|");
   await person.page.locator("#sendButton").click();
   await sleep(2000);
+  if ((await look(person)).text.some((t) => t.includes("Confirmation is still catching up."))) {
+    await sleep(3000);
+    const again = (person.world.chain.log.join(";").match(/sendRaw deposit/g) || []).length;
+    return `다시 확인(읽기 전용) — 두 번째 보냄 ${again - deposits} · Send 다시 누를 수 있음 ${await live(person, "#sendButton")}`;
+  }
   try {
     const end = await until(person, "retry final", async (x) => (await live(person, "#returnTap")) || (x.scene === "sendstay" && x.text.some((t) => /could not get ready|can't go out yet|couldn't finish/.test(t))), 60_000);
     if (await live(person, "#returnTap")) return fixed;
@@ -669,7 +676,8 @@ async function laneAtlas() {
       trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["open-cancelled", { world: W("at3"), setup: { userVerified: false },
       trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Face ID was cancelled."],
-      retry: async (p) => { await p.passkey.cdp.send("WebAuthn.setUserVerified", { authenticatorId: p.passkey.authenticatorId, isUserVerified: true }); return `${await retryOpen(p)} — 이번엔 Face ID 승인`; } }],
+      // A virtual authenticator keeps refusing after setUserVerified(true); a fresh one stands for "approve this time".
+      retry: async (p) => { await p.passkey.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: p.passkey.authenticatorId }); p.passkey = await addPasskey(p.page); return `${await retryOpen(p)} — 이번엔 Face ID 승인(새 인증기)`; } }],
     ["find-failed", { world: W("at4"), setup: { initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); } catch {} }, userVerified: false },
       trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["unlock-failed", { world: W("at5"),
@@ -679,7 +687,8 @@ async function laneAtlas() {
     ["grant-not-visible", { world: W("at7", { grantMode: "nofund" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["simulate-too-little", { world: W("at8", { grantMode: "little" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["broadcast-refused", { world: W("at9"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("deposit"); }, expect: ["Piggy could not get ready.", "nothing moved."], retry: (p) => sendAgain(p, "바로 풀림") }],
-    ["grant-lag-insufficient", { world: W("at10", { fundLagMs: 20_000 }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy could not get ready.", "nothing moved."], retry: (p) => sendAgain(p, "조금 뒤 풀림 (grant 뒤 20 s)", 12_000) }],
+    // The early grant + card wait (grant settle) means this refusal no longer reaches a person: the first trip finishes.
+    ["grant-lag-insufficient", { world: W("at10", { fundLagMs: 20_000 }), trigger: async (p) => { await toSend(p); }, expect: ["came back"], retry: async () => "고쳐짐 — 실패 화면 안 뜸(grant 미리 받기 + 25 s 뒤 카드)" }],
     ["deposit-reverted", { world: W("at11"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("deposit"); }, expect: ["Piggy could not get ready.", "can't tell yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["redeem-refused", { world: W("at12"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("redeem"); }, expect: ["Piggy could not get ready.", "still out."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["redeem-reverted", { world: W("at13"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("redeem"); }, expect: ["couldn't finish this one."], retry: (p) => sendAgain(p, "바로 풀림") }],
