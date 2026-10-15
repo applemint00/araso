@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,7 @@ const T0 = Date.now();
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const results = [];
 const screenshots = [];
+const allWorlds = [];
 
 function record(label, ok, why = "") { results.push({ label, ok }); console.log(`${ok ? "PASS" : "FAIL"} ${label}${ok ? "" : ` — ${why}`}`); }
 async function check(label, fn) { try { await fn(); record(label, true); } catch (error) { record(label, false, String(error?.message || error).split("\n")[0]); } }
@@ -72,7 +73,7 @@ async function scenarioGasPrice() {
 const GAS_PRICE_WEI = await scenarioGasPrice();
 console.log(`A1264_GAS ${GAS} ${Number(GAS_PRICE_WEI / 10n ** 6n) / 1000} gwei`);
 
-function createWorld(label, { fundLagMs = 0 } = {}) {
+function createWorld(label, { fundLagMs = 0, grantMode = "ok" } = {}) {
   const chain = createChain({ gasPriceWei: GAS_PRICE_WEI, fundLagMs });
   const forkChain = createChain({ chainId: 31337143, gasPriceWei: GAS_PRICE_WEI, erc20: { defaultAllowance: 5_000_000n, defaultBalance: 0n }, guard: { guard: "araso-a949-public-guard", chainId: 31337143, forkInstanceId: FORK_INSTANCE, forkStartBlock: 110874000 } });
   const granted = new Set();
@@ -88,7 +89,7 @@ function createWorld(label, { fundLagMs = 0 } = {}) {
     if (url.hostname === FORK_HOST) {
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(await forkChain.handle(request.postData())) });
     }
-    if (url.hostname !== "localhost") return route.abort();
+    if (url.hostname !== "localhost" && url.hostname !== "127.0.0.1") return route.abort();
     if (url.pathname.startsWith("/api/")) {
       let body = null; try { body = JSON.parse(request.postData() || "null"); } catch {}
       const invite = request.headers()["x-araso-invite"] || null;
@@ -99,7 +100,9 @@ function createWorld(label, { fundLagMs = 0 } = {}) {
         const address = String(body?.address || "").toLowerCase();
         if (!/^0x[0-9a-f]{40}$/.test(address)) return json(400, { ok: false, error: "bad address" });
         if (granted.has(address)) return json(403, { ok: false, error: "already funded" });
-        granted.add(address); chain.fund(address, 200_000_000_000_000_000n);
+        if (grantMode === "down") return json(500, { ok: false, error: "relayer down" });
+        granted.add(address);
+        if (grantMode !== "nofund") chain.fund(address, grantMode === "little" ? 5_000_000_000_000_000n : 200_000_000_000_000_000n);
         return json(200, { ok: true, txHash: `0x${"a1".repeat(32)}` });
       }
       if (url.pathname === "/api/fork-entry") {
@@ -129,7 +132,9 @@ function createWorld(label, { fundLagMs = 0 } = {}) {
     const contentType = ({ ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".webp": "image/webp", ".svg": "image/svg+xml", ".json": "application/json", ".woff2": "font/woff2" })[path.extname(actual)] || "application/octet-stream";
     return route.fulfill({ status: 200, contentType, body: readFileSync(actual) });
   }
-  return { label, chain, forkChain, requests, events, fork, route };
+  const world = { label, chain, forkChain, requests, events, fork, route };
+  allWorlds.push(world);
+  return world;
 }
 
 // ── one person = one browser context with its own virtual passkey ─────────────────────────────────────
@@ -141,22 +146,24 @@ async function addPasskey(page, credential = null) {
     hasUserVerification: true, isUserVerified: true, hasPrf: true, automaticPresenceSimulation: true,
   } });
   if (credential) await cdp.send("WebAuthn.addCredential", { authenticatorId, credential });
-  return { cdp, authenticatorId, credential: async () => (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials[0] || null };
+  return { cdp, authenticatorId, page, credential: async () => (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials[0] || null };
 }
 
-async function openPerson(browser, world, id, { storageState, invite, credential, viewport } = {}) {
+async function openPerson(browser, world, id, { storageState, invite, credential, viewport, initScript, base, userVerified } = {}) {
   const phone = Number(process.env.ARASO_REHEARSAL_WIDTH) > 0 ? { width: Number(process.env.ARASO_REHEARSAL_WIDTH), height: 932 } : { width: 390, height: 844 };
   const context = await browser.newContext({ viewport: viewport || phone, ...(storageState ? { storageState } : {}) });
   const tag = { id };
   await context.route("**/*", (route) => world.route(route, tag.id));
   if (invite) await context.addInitScript((token) => { try { if (!localStorage.getItem("araso.forkInvite.v1")) localStorage.setItem("araso.forkInvite.v1", token); } catch {} }, invite);
+  if (initScript) await context.addInitScript(initScript);
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error.message).slice(0, 160)));
   if (process.env.ARASO_REHEARSAL_DEBUG === "1") page.on("console", (m) => { if (m.type() !== "log" || /A1265|fork|entry|switch|journey/i.test(m.text())) console.log(`CONSOLE ${id} ${m.type()} ${m.text().slice(0, 200)}`); });
   const passkey = await addPasskey(page, credential);
+  if (userVerified === false) await passkey.cdp.send("WebAuthn.setUserVerified", { authenticatorId: passkey.authenticatorId, isUserVerified: false });
   const person = { id, tag, world, context, page, passkey, errors, name: `P${id}`, copy: new Map(), steps: 0 };
-  await page.goto(BASE, { waitUntil: "networkidle" });
+  await page.goto(base || BASE, { waitUntil: "networkidle" });
   return person;
 }
 
@@ -197,7 +204,7 @@ async function click(person, selector, label) {
 }
 
 // First Journey by hand. Returns when the filed receipt has settled back to Home.
-async function walkFirstJourney(person) {
+async function walkFirstJourney(person, { send = true } = {}) {
   await until(person, "envelope", (s) => s.scene === "received");
   await checkpoint(person, "envelope");
   await click(person, "#inviteFaceButton", "envelope Face ID");
@@ -211,6 +218,7 @@ async function walkFirstJourney(person) {
   await click(person, ".nameScene__save", "name save");
   await until(person, "Home Send card", () => live(person, "#sendButton"), 30_000);
   await checkpoint(person, "home-send");
+  if (!send) return;
   await person.page.locator("#sendButton").click();
   person.sentAt = Date.now();
 }
@@ -456,9 +464,109 @@ async function laneFaults() {
   await k.context.close();
 }
 
+// ── Failure atlas (ARASO_REHEARSAL_ONLY=atlas): each lane forces one failure screen on the current app and screenshots it ──
+const ATLAS_DIR = privatePath("ops", "receipts", "failure_atlas_20261015");
+const atlasRows = [];
+async function atlasShot(person, name) {
+  const seen = await look(person);
+  mkdirSync(ATLAS_DIR, { recursive: true });
+  await person.page.screenshot({ path: path.join(ATLAS_DIR, `${name}.png`) });
+  return seen;
+}
+async function atlasLane(id, { world, setup, trigger, expect, retry, shot }) {
+  const row = { id, shot: `${id}.png`, text: [], retry: "—", ok: false, why: "" };
+  let person = null;
+  try {
+    person = await openPerson(browser, world, id, setup || {}); people.push(person);
+    await trigger(person);
+    const seen = await until(person, `${id} failure screen`, (x) => expect.every((e) => x.text.some((t) => t.includes(e))), 60_000);
+    row.text = seen.text.filter((t) => expect.some((e) => t.includes(e)) || /could|can't|couldn|not |nothing|still|Not from/i.test(t));
+    await atlasShot(person, id);
+    row.ok = true;
+    if (retry) row.retry = await retry(person);
+  } catch (error) { row.why = String(error?.message || error).split("\n")[0].slice(0, 200); }
+  atlasRows.push(row);
+  record(`atlas ${id} shows ${expect.join(" · ")}`, row.ok, row.why);
+  await person?.context.close().catch(() => {});
+}
+async function sendAgain(person, fixed, waitMs = 0) {
+  if (waitMs) await sleep(waitMs);
+  if (!(await live(person, "#sendButton"))) return "안 됨 (Send 잠김)";
+  const before = (await look(person)).text.join("|");
+  await person.page.locator("#sendButton").click();
+  await sleep(2000);
+  try {
+    const end = await until(person, "retry final", async (x) => (await live(person, "#returnTap")) || (x.scene === "sendstay" && x.text.some((t) => /could not get ready|can't go out yet|couldn't finish/.test(t))), 60_000);
+    if (await live(person, "#returnTap")) return fixed;
+    return "안 됨 (같은 실패)";
+  } catch { return `모름 (60 s 안에 끝 0 · 앞 화면 ${before.slice(0, 40)})`; }
+}
+async function retryOpen(p) {
+  const ids = await p.page.$$eval("button,[role=button]", (bs) => bs.filter((x) => x.getBoundingClientRect().width > 0).map((x) => x.id).filter(Boolean));
+  const btn = ["authTryAgainButton", "unlockRetryButton", "loginChogButton", "inviteFaceButton"].find((x) => ids.includes(x));
+  if (!btn) return `안 됨 (누를 버튼 없음: ${ids.join("/") || "—"})`;
+  await p.page.locator(`#${btn}`).click();
+  await sleep(2500);
+  if ((await look(p)).scene === "received" && (await live(p, "#inviteFaceButton"))) { await p.page.locator("#inviteFaceButton").click(); }
+  try { await until(p, "after retry", (s) => ["hatch", "name", "sendstay"].includes(s.scene), 12_000); return `바로 풀림 (#${btn})`; } catch { return `안 됨 (#${btn} 뒤 같은 실패 · 원인 지속)`; }
+}
+async function retryHomeLive(p, label) { return (await live(p, "#sendButton")) ? `Send 다시 누를 수 있음 (${label})` : `안 됨 (${label})`; }
+async function laneAtlas() {
+  const W = (label, o) => createWorld(label, o);
+  const toSend = (p) => walkFirstJourney(p);
+  const lanes = [
+    ["open-unsupported", { world: W("at1"), setup: { initScript: () => { try { delete window.PublicKeyCredential; Object.defineProperty(navigator, "credentials", { value: undefined, configurable: true }); } catch {} } },
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "This device can't use Face ID or a passkey here."], retry: retryOpen }],
+    ["open-not-this-site", { world: W("at2"), setup: { base: "http://127.0.0.1:5944" },
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Piggy opens in the real app."], retry: retryOpen }],
+    ["find-not-this-site", { world: W("at2b"), setup: { base: "http://127.0.0.1:5944", initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); } catch {} } },
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+    ["find-unsupported", { world: W("at1b"), setup: { initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); delete window.PublicKeyCredential; Object.defineProperty(navigator, "credentials", { value: undefined, configurable: true }); } catch {} } },
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+    ["open-cancelled", { world: W("at3"), setup: { userVerified: false },
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Face ID was cancelled."],
+      retry: async (p) => { await p.passkey.cdp.send("WebAuthn.setUserVerified", { authenticatorId: p.passkey.authenticatorId, isUserVerified: true }); return `${await retryOpen(p)} — 이번엔 Face ID 승인`; } }],
+    ["find-failed", { world: W("at4"), setup: { initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); } catch {} }, userVerified: false },
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+    ["unlock-failed", { world: W("at5"),
+      trigger: async (p) => { await toSend(p); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); await until(p, "lock", (s) => s.scene === "birth", 20_000); await p.passkey.cdp.send("WebAuthn.clearCredentials", { authenticatorId: p.passkey.authenticatorId }); await click(p, "#loginChogButton", "lock Chog"); },
+      expect: ["Couldn't open Piggy"], retry: retryOpen }],
+    ["grant-down", { world: W("at6", { grantMode: "down" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    ["grant-not-visible", { world: W("at7", { grantMode: "nofund" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    ["simulate-too-little", { world: W("at8", { grantMode: "little" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    ["broadcast-refused", { world: W("at9"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("deposit"); }, expect: ["Piggy could not get ready.", "nothing moved."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    ["grant-lag-insufficient", { world: W("at10", { fundLagMs: 20_000 }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy could not get ready.", "nothing moved."], retry: (p) => sendAgain(p, "조금 뒤 풀림 (grant 뒤 20 s)", 12_000) }],
+    ["deposit-reverted", { world: W("at11"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("deposit"); }, expect: ["Piggy could not get ready.", "can't tell yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    ["redeem-refused", { world: W("at12"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("redeem"); }, expect: ["Piggy could not get ready.", "still out."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    ["redeem-reverted", { world: W("at13"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("redeem"); }, expect: ["couldn't finish this one."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    ["receipt-missing-reopen", { world: W("at14"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await click(p, "#loginChogButton", "lock Chog"); },
+      expect: ["still out"], retry: (p) => retryHomeLive(p, "확인 올 때까지 Away") }],
+    ["job-reverted", { world: W("at16"), trigger: async (p) => { await toSend(p); await walkReturnAndFile(p); await enterSecond(p); p.world.forkChain.faults.revert.add("approve");
+        await p.page.locator('input[data-errand-id="clean"]').check(); await click(p, "#exploreSaveButton", "explore save"); await click(p, ".secondJourney__pick", "job pick"); await click(p, "#secondOkButton", "job ok");
+        await until(p, "Job Send", () => live(p, "#secondSendButton"), 20_000); await p.page.locator("#secondSendButton").click(); await until(p, "Away", (s) => s.scene === "secondAway", 15_000); await until(p, "back home", (s) => s.scene === "sendstay", 90_000); },
+      expect: ["still in home"], retry: (p) => retryHomeLive(p, "2차 Job 실패 = 조용히 홈 · 문구 0") }],
+    ["balance-read-failed", { world: W("at15"), trigger: async (p) => { await walkFirstJourney(p, { send: false }); p.world.chain.faults.balanceError = true; await p.page.evaluate(() => document.querySelector("#stayButton")?.click()); await sleep(2000); await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); }, expect: ["couldn't read the balance."], retry: async (p) => { await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); await sleep(800); await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); await sleep(2500); return (await look(p)).text.some((t) => t.includes("couldn't read the balance.")) ? "안 됨 (읽기 실패 동안)" : "바로 풀림"; } }],
+  ];
+  // Revert proof: the same lanes without their fault must reach the Receipt (no failure screen).
+  if (process.env.ARASO_ATLAS_REVERT === "1") {
+    for (const [id, grantMode] of [["revert-grant-ok", "ok"], ["revert-no-refusal", "ok"]]) {
+      const p = await openPerson(browser, W(id, { grantMode }), id); people.push(p);
+      await check(`atlas revert ${id}: without the fault the first send reaches the Receipt`, async () => { await toSend(p); await until(p, "Receipt", () => live(p, "#returnTap"), 60_000); });
+      await p.context.close();
+    }
+    return;
+  }
+  const queue = [...lanes];
+  await Promise.all(Array.from({ length: 5 }, async () => { while (queue.length) { const [id, o] = queue.shift(); await atlasLane(id, o); } }));
+  const out = path.join(ATLAS_DIR, "atlas.json");
+  writeFileSync(out, JSON.stringify(atlasRows.map((r) => ({ ...r, events: eventsOfAll(r.id) })), null, 2));
+  console.log(`A1264_ATLAS ${atlasRows.filter((r) => r.ok).length}/${atlasRows.length} → ${out}`);
+}
+function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id); if (e.length) return e; } return []; }
+
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop()].filter(Boolean));
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });

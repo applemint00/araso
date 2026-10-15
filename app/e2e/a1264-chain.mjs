@@ -39,7 +39,8 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
   const nonce = new Map();
   const receipts = new Map();
   const txs = new Map();
-  const faults = { sendErrors: [], estimateOkLeft: Infinity }; // sendErrors: -32000 refusals queue · estimateOkLeft: eth_estimateGas calls that pass before "insufficient funds"
+  // refuse / revert: Sets of function names (deposit · redeem · approve) · hideReceipts · balanceError: plain switches.
+  const faults = { sendErrors: [], estimateOkLeft: Infinity, refuse: new Set(), revert: new Set(), hideReceipts: false, balanceError: false }; // sendErrors: -32000 refusals queue · estimateOkLeft: eth_estimateGas calls that pass before "insufficient funds"
   const log = [];
   const unknown = [];
   let block = 1000n;
@@ -67,6 +68,10 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
   async function sendRaw(raw) {
     if (faults.sendErrors.length) { faults.sendErrors.shift(); log.push("sendRaw refused -32000"); return { error: { code: -32000, message: "a1264 injected refusal" } }; }
     const tx = parseTransaction(raw);
+    let fname = "other";
+    try { fname = decodeFunctionData({ abi: key(tx.to) === SHMON ? ABI : ERC20, data: tx.data || "0x" }).functionName; } catch {}
+    if (faults.refuse.has(fname)) { log.push(`sendRaw refused ${fname}`); return { error: { code: -32000, message: "transaction rejected" } }; }
+    const reverted = faults.revert.has(fname);
     const from = key(await recoverTransactionAddress({ serializedTransaction: raw }));
     const hash = keccak256(raw);
     if (receipts.has(hash)) return { result: hash };
@@ -83,7 +88,8 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
     const logs = [];
     let approved = null;
     if (erc20 && key(tx.to) !== SHMON && tx.data) { try { approved = decodeFunctionData({ abi: ERC20, data: tx.data }); } catch {} }
-    if (approved?.functionName === "approve") {
+    if (reverted) log.push(`sendRaw ${fname} reverted nonce=${tx.nonce}`);
+    else if (approved?.functionName === "approve") {
       allowance.set(`${key(tx.to)}|${from}|${key(approved.args[0])}`, approved.args[1]);
       logs.push({ address: tx.to, topics: [APPROVAL, pad(from), pad(key(approved.args[0]))], data: word(approved.args[1]) });
       log.push(`sendRaw approve ${approved.args[0]}=${approved.args[1]} nonce=${tx.nonce}`);
@@ -95,7 +101,7 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
     } else log.push(`sendRaw other nonce=${tx.nonce}`);
     block += 1n;
     txs.set(hash, { hash, from, to: tx.to, input: tx.data || "0x", value: hex(value), nonce: hex(tx.nonce), blockNumber: hex(block), blockHash: word(block), transactionIndex: "0x0", gas: hex(gasLimit), gasPrice: hex(price), chainId: hex(chainId), type: "0x0", v: "0x0", r: word(1), s: word(1) });
-    receipts.set(hash, { transactionHash: hash, from, to: tx.to, status: "0x1", blockNumber: hex(block), blockHash: word(block), transactionIndex: "0x0", gasUsed: hex(gasLimit), cumulativeGasUsed: hex(gasLimit), effectiveGasPrice: hex(price),
+    receipts.set(hash, { transactionHash: hash, from, to: tx.to, status: reverted ? "0x0" : "0x1", blockNumber: hex(block), blockHash: word(block), transactionIndex: "0x0", gasUsed: hex(gasLimit), cumulativeGasUsed: hex(gasLimit), effectiveGasPrice: hex(price),
       logs: logs.map((l, i) => ({ ...l, blockNumber: hex(block), blockHash: word(block), transactionHash: hash, transactionIndex: "0x0", logIndex: hex(i), removed: false })), logsBloom: `0x${"0".repeat(512)}`, contractAddress: null, type: "0x0" });
     return { result: hash };
   }
@@ -107,7 +113,7 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
       case "eth_chainId": return { result: hex(chainId) };
       case "net_version": return { result: String(chainId) };
       case "eth_blockNumber": return { result: hex(block) };
-      case "eth_getBalance": return { result: hex(get(balance, p[0])) };
+      case "eth_getBalance": return faults.balanceError ? { error: { code: -32603, message: "internal error" } } : { result: hex(get(balance, p[0])) };
       case "eth_getTransactionCount": return { result: hex(get(nonce, p[0])) };
       case "eth_gasPrice": return { result: hex(GAS_PRICE) };
       case "eth_maxPriorityFeePerGas": return { result: hex(PRIORITY) };
@@ -118,7 +124,7 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
       case "eth_feeHistory": return { result: { oldestBlock: hex(block), baseFeePerGas: [hex(BASE_FEE), hex(BASE_FEE)], gasUsedRatio: [0.5], reward: [[hex(PRIORITY)]] } };
       case "eth_call": return { result: call(p[0] || {}) };
       case "eth_sendRawTransaction": return sendRaw(p[0]);
-      case "eth_getTransactionReceipt": return { result: receipts.get(key(p[0])) || null };
+      case "eth_getTransactionReceipt": return { result: faults.hideReceipts ? null : receipts.get(key(p[0])) || null };
       case "eth_getTransactionByHash": return { result: txs.get(key(p[0])) || null };
       case "eth_getCode": return { result: "0x00" };
       case "araso_guardInfo": return guard ? { result: guard } : { error: { code: -32601, message: "not a guard" } };
