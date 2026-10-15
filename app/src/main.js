@@ -130,7 +130,7 @@ import { PROMOTION_TARGET_SCOPE, scopedSecondKey, selectBootProfile } from "./bo
 import { storedJourney } from "./boot-profile.js"; import { RELEASE_LEVEL, journeyFeatureOpen } from "./release-gate.js"; import { registerJourneySessionDisposer } from "./journey-switch.js"; // [A-948]
 import { mountForkVirtualMoneyBadge } from "./fork-virtual-money-badge.js";
 import { legacyTestnetPathOpen, profileScope, resolveChainProfile } from "./chain-profile.js";
-import { reconcileConfirmedFunding } from "./funding-reconcile.js";
+import { measuredHoldingRow, readErc20Balance, reconcileConfirmedFunding } from "./funding-reconcile.js";
 import {
   decodeReceiptRow,
   encodeReceiptRow,
@@ -15560,6 +15560,52 @@ function a977ForkClients() {
     native: (address) => publicClient.getBalance({ address }),
   };
   return { chain, transport, publicClient, read };
+}
+// ── [A-1285] Fork Money: the first Piggy that came 1st testnet → 2nd fork stands in Money (name · home · pickable for Gift) ──────────────────
+// The fork registry gets rows only from createPiggy (a Piggy born on the fork) and the funding reconcile (needs a row already), so the first
+// Piggy of a person who did Journey 1 on testnet had none: Money read it as the legacy "unknown" row (id for a name, never selectable) and
+// Gift a Piggy stayed off. Once, on the fork, after Journey 2, while the fork registry is empty: seat THIS device's first Piggy (the testnet
+// index row with the same address and no sequence) as an identity row at home: id · name · address · locator from that row, assets = the
+// fork USDC it holds now (measured; none when unreadable), valuation unknown (no $1 assumption, as the funding reconcile). Not the A-897
+// mainnet promotion (no promotedAt, no stamp, mainnet path untouched). The fork Piggy index is NOT written, so no birth mark or issuance
+// right reaches the fork: + Piggy's origin check still refuses with origin_index_missing (99d:303).
+const A1285_FIRST_PIGGY_SOURCE_SCOPE = "monad-testnet";
+let a1285Seating = null;
+async function a1285SeatFirstPiggyOnFork({ client = null, storage = safeLocalStorage(), now = () => new Date().toISOString() } = {}) {
+  const scope = secondJourneyScope();
+  if (!storage || !scope.accountId || scope.chainId === A1285_FIRST_PIGGY_SOURCE_SCOPE || state.secondJourneyCompletedOnce !== true) return { seated: false, reason: "not_here" };
+  const before = loadRegistry(storage, scope);
+  if (before.error && before.error !== "absent") return { seated: false, reason: "registry_unreadable" };
+  if (before.registry.piggies.length > 0) return { seated: false, reason: "registry_has_rows" };
+  const here = String(scope.accountId).toLowerCase();
+  let row = null;
+  try { row = loadMyPiggiesIndex(storage, A1285_FIRST_PIGGY_SOURCE_SCOPE).index.piggies.find((p) => !p.sequence && String(p.address).toLowerCase() === here) || null; } catch { row = null; }
+  if (!row) return { seated: false, reason: "no_first_piggy_row" };
+  const usdc = CHAIN_PROFILE.usdc;
+  let assets = [];
+  if (client && usdc?.address) {
+    const read = await readErc20Balance({ client, tokenAddress: usdc.address, holderAddress: row.address });
+    const holding = read.error ? null : measuredHoldingRow({ raw: read.raw, decimals: usdc.decimals, tokenSymbol: "USDC", assetId: usdc.address, measuredAt: now(), blockNumber: read.blockNumber });
+    if (holding) assets = [holding];
+  }
+  const { piggy, error } = normalizePiggy({ id: row.id, name: row.name || state.piggyName || null, address: row.address, locator: row.locator || null, location: "home", assets, valuation: null, createdAt: row.createdAt || null });
+  if (error || !piggy) return { seated: false, reason: error || "row_invalid" };
+  const again = loadRegistry(storage, scope); // the read above awaited: another tab / path may have written meanwhile
+  if ((again.error && again.error !== "absent") || again.registry.piggies.length > 0 || secondJourneyScope().accountId !== scope.accountId) return { seated: false, reason: "registry_changed" };
+  const saved = saveRegistry(storage, scope, { ...again.registry, piggies: [piggy] });
+  return saved.saved ? { seated: true, reason: null, piggy } : { seated: false, reason: saved.error || "save_failed" };
+}
+if (A977_FORK) {
+  const a1285PrevOpenMoney = a905OpenMoneyTab;
+  a905OpenMoneyTab = function a905OpenMoneyTabA1285(...args) {
+    const out = a1285PrevOpenMoney(...args);
+    if (!a1285Seating) {
+      a1285Seating = a1285SeatFirstPiggyOnFork({ client: a977ForkClients().publicClient })
+        .then((r) => { if (r.seated && state.a905Money) a911Sync(); return r; }, () => ({ seated: false, reason: "threw" }))
+        .finally(() => { a1285Seating = null; });
+    }
+    return out;
+  };
 }
 if (A977_FORK) {
   exploreWhyLane = true; // [A-1283] Jobs can run here, so Chog can say why only one goes

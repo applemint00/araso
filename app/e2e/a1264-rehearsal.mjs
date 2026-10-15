@@ -74,7 +74,8 @@ async function scenarioGasPrice() {
 const GAS_PRICE_WEI = await scenarioGasPrice();
 console.log(`A1264_GAS ${GAS} ${Number(GAS_PRICE_WEI / 10n ** 6n) / 1000} gwei`);
 
-function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0 } = {}) {
+const FORK_USDC = "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"; // funding-context.js "monad-fork" USDC
+function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0, forkEntryUsdcRaw = 0n } = {}) {
   const chain = createChain({ gasPriceWei: GAS_PRICE_WEI, fundLagMs });
   const forkChain = createChain({ chainId: 31337143, gasPriceWei: GAS_PRICE_WEI, erc20: { defaultAllowance: 5_000_000n, defaultBalance: 0n }, guard: { guard: "araso-a949-public-guard", chainId: 31337143, forkInstanceId: FORK_INSTANCE, forkStartBlock: 110874000 } });
   const granted = new Set();
@@ -123,6 +124,7 @@ function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0 }
           return json(200, { ok: true, nonce, message, expiresAt });
         }
         if (action === "enter") forkChain.fund(String(body?.piggyAddress || ""), 10n ** 19n); // the server tops up fork MON on entry
+        if (action === "enter" && forkEntryUsdcRaw > 0n) forkChain.fundToken(FORK_USDC, String(body?.piggyAddress || ""), forkEntryUsdcRaw); // and USDC, like the real entry grant (A-966: 100 USDC)
         if (action === "enter") return json(200, { ok: true, allowed: true, forkScope: "monad-fork", forkInstanceId: FORK_INSTANCE, grants: [] });
         return json(400, { ok: false, reason: "a1264_unexpected_action" });
       }
@@ -754,6 +756,54 @@ async function laneJarTap() {
   });
   await q.context.close();
 }
+// [A-1285] Fork Gift for a person who came 1st testnet → 2nd fork: jar → Money → Gift a Piggy → as far as it goes, measuring what Money reads.
+async function giftMeasure(g, label) {
+  const m = await g.page.evaluate(() => {
+    const ls = {}; for (const k of Object.keys(localStorage)) if (/^araso\.(piggyRegistry|myPiggiesIndex|secondJourneyClosed|piggyAddress|piggyName)/.test(k)) ls[k] = localStorage.getItem(k);
+    const btn = [...document.querySelectorAll(".a911-screen button")].filter((b) => b.getBoundingClientRect().width > 0).map((b) => `${b.id || b.dataset.a898Act || b.dataset.a905Act || b.className.split(" ")[0]}${b.disabled ? "(off)" : ""}`);
+    return { ls, btn };
+  });
+  const addr = await g.page.evaluate(() => { for (const k of Object.keys(localStorage)) { const a = /(0x[0-9a-fA-F]{40})/.exec(k); if (a && /^araso\./.test(k)) return a[1]; } return null; });
+  m.address = addr;
+  const s = await look(g);
+  const out = { label, text: s.text.slice(-14), buttons: m.btn, storage: m.ls, forkUsdcRaw: addr ? String(g.world.forkChain.tokenBalanceOf(FORK_USDC, addr)) : "no-address", forkMonWei: addr ? String(g.world.forkChain.balanceOf(addr)) : "no-address" };
+  console.log(`GIFTMEASURE ${JSON.stringify(out)}`);
+  const file = path.join(OUT, `gr-${label}.png`); await g.page.screenshot({ path: file }); screenshots.push(file);
+  return out;
+}
+async function laneGiftRun() {
+  const w = createWorld("giftrun", { forkEntryUsdcRaw: 100_000_000n });
+  const g = await openPerson(browser, w, "gr"); people.push(g); g.world = w;
+  await check("gift · walk: first Journey (testnet) → Journey 2 round 1 (fork) → Home", async () => { await walkFirstJourney(g); await walkReturnAndFile(g); await enterSecond(g); await walkSecondJob(g, 1); });
+  await check("gift · jar → Money: Gift a Piggy is on, and the Piggy row says its name (not a legacy id)", async () => {
+    await until(g, "jar", () => jarShown(g), 20_000); await sleep(2500);
+    await g.page.locator("#a905Jar").click();
+    await until(g, "Money", async () => g.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000); await sleep(800);
+    const m = await giftMeasure(g, "gift-1-money");
+    assert.ok(!m.text.some((t) => /^legacy-0x/.test(t)), `legacy id shown as the name: ${JSON.stringify(m.text)}`);
+    assert.ok(!(await g.page.locator("#a905GiftPiggy").isDisabled()), `Gift a Piggy is off · buttons=${m.buttons.join("|")}`);
+  });
+  await check("gift · Gift a Piggy → pick a card → $20: the letter is from this Piggy (its name), amounts offered", async () => {
+    await click(g, "#a905GiftPiggy", "Gift a Piggy"); await sleep(1500);
+    await giftMeasure(g, "gift-2-fan");
+    await g.page.locator(".a911-card.is-centre .a911-cardTap").click().catch(() => {}); await sleep(1800);
+    await giftMeasure(g, "gift-3-picked");
+    const chip = g.page.locator('[data-a898-act="gift-amount"]').first(); if (await chip.count()) { await chip.click().catch(() => {}); await sleep(1200); }
+    const to = g.page.locator(".a911-letter__in--to"); if (await to.count()) await to.fill("Mina").catch(() => {});
+    await sleep(1500);
+    const m = await giftMeasure(g, "gift-4-amount");
+    assert.ok(m.text.includes("Pgr") || m.text.some((t) => t === g.name), `sender name not on the letter: ${JSON.stringify(m.text)}`);
+    assert.ok(m.text.includes("$20") && m.text.includes("$100"), `amounts: ${JSON.stringify(m.text)}`);
+  });
+  // KNOWN in this build: the fork Gift build config (VITE_ARASO_FORK_GIFT_*: sponsor · gas units · MON price) is not set for the rehearsal build,
+  // so the fee line is unknown and Send waits (fee_unknown) — the same for every fork person, not the Money row. The tx part runs in the A-1285
+  // real-fork harness (handoff harness/a1285-app-run.mjs: anvil fork + the real sponsor/entry handlers, no registry seed).
+  await knownCheck("gift · Send → Face ID → the Gift link (fork tx) — needs the fork Gift build config", async () => {
+    const send = g.page.locator('[data-a898-act="gift-faceid"]');
+    assert.ok(!(await send.isDisabled()), "Send waits: fee unknown (fork Gift build config not set in this build)");
+  });
+  await g.context.close();
+}
 async function laneJarPiggy() {
   const w = createWorld("jarpiggy");
   const p = await openPerson(browser, w, "jp"); people.push(p);
@@ -878,7 +928,7 @@ async function laneFaults() {
 }
 
 // ── Failure atlas (ARASO_REHEARSAL_ONLY=atlas): each lane forces one failure screen on the current app and screenshots it ──
-const ATLAS_DIR = privatePath("ops", "receipts", "failure_atlas_20261015");
+const ATLAS_DIR = process.env.ARASO_ATLAS_DIR || privatePath("ops", "receipts", "failure_atlas_20261015"); // [A-1285] a side run (base / revert) writes elsewhere
 const atlasRows = [];
 async function atlasShot(person, name) {
   const seen = await look(person);
@@ -985,6 +1035,12 @@ async function laneAtlas() {
       expect: ["Couldn't open Piggy", "Face ID was cancelled."], retry: async (p) => { await p.passkey.cdp.send("WebAuthn.setUserVerified", { authenticatorId: p.passkey.authenticatorId, isUserVerified: true }); return `${await retryOpen(p)} — 이번엔 Face ID 승인`; } }],
     ["j2-entry-refused", { world: W("at20"), trigger: async (p) => { p.world.fork.refuseChallenge = 99; await toSend(p); await walkReturnAndFile(p); await sleep(20_000); },
       expect: ["still in home"], retry: async (p) => { const s = await look(p); return s.text.includes("tap me!") ? "tap me 있음" : `안 됨 (조용한 홈 · tap me 0 · fork 입장 요청 ${p.world.requests.filter((r) => r.person === p.id && r.action === "challenge").length}회 거절)`; } }],
+    // [A-1285] fork Gift for a 1st testnet → 2nd fork person: the Money screen after the jar. Before the fix Gift a Piggy was off and the Piggy row said legacy-0x…
+    ["fork-gift-off", { world: W("at21", { forkEntryUsdcRaw: 100_000_000n }), trigger: async (p) => { await toSend(p); await walkReturnAndFile(p); await enterSecond(p); await walkSecondJob(p, 1);
+        await until(p, "jar", () => jarShown(p), 20_000); await sleep(2500); await p.page.locator("#a905Jar").click();
+        await until(p, "Money", async () => p.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000); await sleep(1500); },
+      expect: ["Money", "> Gift a Piggy"], retry: async (p) => { const off = await p.page.locator("#a905GiftPiggy").isDisabled().catch(() => true); const legacy = (await look(p)).text.find((t) => /^legacy-0x/.test(t));
+        return off || legacy ? `안 됨 (Gift a Piggy ${off ? "꺼짐" : "켜짐"} · 이름 자리 ${legacy ? "legacy id" : "Piggy 이름"})` : "고쳐짐 — Gift a Piggy 켜짐 · 이름 = Piggy 이름 (fork 레지스트리 정체성 행)"; } }],
     ["balance-read-failed", { world: W("at15"), trigger: async (p) => { await walkFirstJourney(p, { send: false }); p.world.chain.faults.balanceError = true; await p.page.evaluate(() => document.querySelector("#stayButton")?.click()); await sleep(2000); await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); }, expect: ["couldn't read the balance."], retry: async (p) => { await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); await sleep(800); await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); await sleep(2500); return (await look(p)).text.some((t) => t.includes("couldn't read the balance.")) ? "안 됨 (읽기 실패 동안)" : "바로 풀림"; } }],
   ];
   // Revert proof: the same lanes without their fault must reach the Receipt (no failure screen).
@@ -1016,8 +1072,8 @@ async function laneAtlas() {
 function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id); if (e.length) return e; } return []; }
 
 try {
-  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap()].filter(Boolean));
+  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy,giftrun").split(",");
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });

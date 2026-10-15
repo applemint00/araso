@@ -47,6 +47,8 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
   const key = (a) => String(a || "").toLowerCase();
   const get = (m, a) => m.get(key(a)) || 0n;
 
+  const tokenBal = new Map(); // `${token}|${holder}` → raw (a top-up a server made; otherwise erc20.defaultBalance)
+  function fundToken(token, address, raw) { const k = `${key(token)}|${key(address)}`; tokenBal.set(k, (tokenBal.get(k) ?? 0n) + BigInt(raw)); }
   function fund(address, wei) { preFund.set(key(address), get(balance, address)); fundedAt.set(key(address), Date.now()); balance.set(key(address), get(balance, address) + BigInt(wei)); }
   function blockObj(n = block) {
     return { number: hex(n), hash: word(n), parentHash: word(n - 1n), timestamp: hex(1760000000n + n), baseFeePerGas: hex(BASE_FEE), gasLimit: hex(30_000_000n), gasUsed: "0x0", transactions: [], miner: `0x${"0".repeat(40)}`, difficulty: "0x0", totalDifficulty: "0x0", extraData: "0x", size: "0x0", nonce: "0x0000000000000000", sha3Uncles: word(0), logsBloom: `0x${"0".repeat(512)}`, transactionsRoot: word(0), stateRoot: word(0), receiptsRoot: word(0), uncles: [], mixHash: word(0) };
@@ -56,7 +58,7 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
       try {
         const { functionName, args } = decodeFunctionData({ abi: ERC20, data });
         if (functionName === "allowance") { const k = `${key(to)}|${key(args[0])}|${key(args[1])}`; return word(allowance.has(k) ? allowance.get(k) : erc20.defaultAllowance || 0n); }
-        if (functionName === "balanceOf") return word(erc20.defaultBalance || 0n);
+        if (functionName === "balanceOf") { const k = `${key(to)}|${key(args[0])}`; return word(tokenBal.has(k) ? tokenBal.get(k) : erc20.defaultBalance || 0n); }
       } catch {}
     }
     if (key(to) !== SHMON || !data) { unknown.push(`eth_call ${to} ${String(data).slice(0, 10)}`); return word(0); }
@@ -136,5 +138,5 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
     const one = async (r) => ({ jsonrpc: "2.0", id: r.id, ...(await answer(r)) });
     return Array.isArray(body) ? Promise.all(body.map(one)) : one(body);
   }
-  return { calls, handle, fund, faults, log, unknown, nonceOf: (a) => Number(get(nonce, a)), sharesOf: (a) => get(shares, a), balanceOf: (a) => get(balance, a) };
+  return { calls, handle, fund, fundToken, tokenBalanceOf: (t, a) => tokenBal.get(`${key(t)}|${key(a)}`) ?? (erc20?.defaultBalance || 0n), faults, log, unknown, nonceOf: (a) => Number(get(nonce, a)), sharesOf: (a) => get(shares, a), balanceOf: (a) => get(balance, a) };
 }
