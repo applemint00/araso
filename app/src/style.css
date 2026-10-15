@@ -6854,3 +6854,25 @@ html .nameScene__say.chogCheckLine { left: 0; top: auto; bottom: 104%; transform
 /* + Piggy is not open yet: the tab keeps its place, greyed, with "soon" (main.js markPlusPiggySoon) */
 .homePaper .homePlusPiggyTab.is-soon { cursor: default; }
 .homePaper .homePlusPiggyTab.is-soon .homePlusPiggyTab__label { color: rgba(20, 18, 16, 0.55); } /* [A-1286] only the words go grey: the Home paper's own secondary colour (.homePaper__state) */
+
+/* [A-1288] Money's "Gift a Piggy" until the first Gift tap = design D: the words keep their black; a gold light sweeps over them (2.4 s) and
+   three stars blink, our gold #E0B100 (main.js giftSparkleApply). Reduced motion: no sweep, one still star. */
+html .a911-row#a905GiftPiggy .a1288Txt { position: relative; display: inline-block; }
+html .a911-row#a905GiftPiggy .a1288Txt::after {
+  content: attr(data-text); position: absolute; inset: 0; white-space: nowrap; pointer-events: none;
+  background: linear-gradient(100deg, transparent 0 40%, #E0B100 48%, #fff3b0 50%, #E0B100 52%, transparent 60% 100%);
+  background-size: 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: a1288Sweep 2.4s ease-in-out infinite;
+}
+@keyframes a1288Sweep { 0% { background-position: 100% 0; } 60%, 100% { background-position: 0% 0; } }
+html .a911-row#a905GiftPiggy .a1288Star { position: absolute; font-style: normal; line-height: 1; pointer-events: none; opacity: 0; animation: a1288Twinkle 2.4s ease-in-out infinite; }
+html .a911-row#a905GiftPiggy .a1288Star::before { content: "\2726"; color: #E0B100; }
+html .a911-row#a905GiftPiggy .a1288Star--1 { left: -0.53em; top: -0.42em; font-size: 0.58em; }
+html .a911-row#a905GiftPiggy .a1288Star--2 { left: 6.42em; top: -0.53em; font-size: 0.74em; animation-delay: 0.5s; }
+html .a911-row#a905GiftPiggy .a1288Star--3 { left: 7.9em; top: 0.74em; font-size: 0.47em; animation-delay: 1s; }
+@keyframes a1288Twinkle { 0%, 100% { opacity: 0; transform: scale(0.4); } 25% { opacity: 1; transform: scale(1); } 50% { opacity: 0; transform: scale(0.4); } }
+@media (prefers-reduced-motion: reduce) {
+  html .a911-row#a905GiftPiggy .a1288Txt::after { animation: none; background: none; }
+  html .a911-row#a905GiftPiggy .a1288Star { animation: none; opacity: 0; }
+  html .a911-row#a905GiftPiggy .a1288Star--2 { opacity: 1; transform: none; }
+}

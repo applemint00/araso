@@ -775,6 +775,14 @@ async function giftMeasure(g, label) {
   const file = path.join(OUT, `gr-${label}.png`); await g.page.screenshot({ path: file }); screenshots.push(file);
   return out;
 }
+async function giftSparkleState(g) {
+  return g.page.evaluate(() => {
+    const row = document.querySelector("#a905GiftPiggy"); if (!row) return null;
+    const txt = row.querySelector(".a1288Txt") || row; const after = getComputedStyle(txt, "::after");
+    const star = row.querySelector(".a1288Star"); const starStyle = star ? getComputedStyle(star, "::before") : null;
+    return { sparkle: row.getAttribute("data-gift-sparkle"), color: getComputedStyle(txt).color, stars: row.querySelectorAll(".a1288Star").length, sweep: after.animationName, sweepDur: after.animationDuration, starColor: starStyle ? starStyle.color : null };
+  });
+}
 async function laneGiftRun() {
   const w = createWorld("giftrun", { forkEntryUsdcRaw: 100_000_000n });
   const g = await openPerson(browser, w, "gr"); people.push(g); g.world = w;
@@ -784,8 +792,20 @@ async function laneGiftRun() {
     await g.page.locator("#a905Jar").click();
     await until(g, "Money", async () => g.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000); await sleep(800);
     const m = await giftMeasure(g, "gift-1-money");
+    g.giftSparkle = await giftSparkleState(g);
+    if (process.env.ARASO_GIFT_FRAMES) for (let f = 0; f < 30; f += 1) { await g.page.screenshot({ path: path.join(process.env.ARASO_GIFT_FRAMES, `f${String(f).padStart(2, "0")}.png`) }); await sleep(100); } // 3 s at 390 for the HANDOFF
     assert.ok(!m.text.some((t) => /^legacy-0x/.test(t)), `legacy id shown as the name: ${JSON.stringify(m.text)}`);
     assert.ok(!(await g.page.locator("#a905GiftPiggy").isDisabled()), `Gift a Piggy is off · buttons=${m.buttons.join("|")}`);
+  });
+  // [A-1288] design D: the words keep their black, a gold light sweeps over them (2.4 s loop) and 3 stars blink, until the first Gift tap
+  await check("gift · Money's Gift a Piggy sparkles (design D): black words · gold sweep 2.4 s · 3 stars", () => {
+    const st = g.giftSparkle;
+    assert.ok(st, "no Gift a Piggy row");
+    assert.equal(st.sparkle, "1", `data-gift-sparkle ${st.sparkle}`);
+    assert.equal(st.color, "rgb(20, 18, 16)", `word colour ${st.color}`);
+    assert.equal(st.stars, 3, `stars ${st.stars}`);
+    assert.ok(/a1288Sweep/.test(st.sweep) && /2\.4s/.test(st.sweepDur), `sweep ${st.sweep} ${st.sweepDur}`);
+    assert.ok(st.starColor === "rgb(224, 177, 0)", `star colour ${st.starColor}`);
   });
   await check("gift · Gift a Piggy → pick a card → $20: the letter is from this Piggy (its name), amounts offered", async () => {
     await click(g, "#a905GiftPiggy", "Gift a Piggy"); await sleep(1500);
@@ -795,6 +815,7 @@ async function laneGiftRun() {
     const chip = g.page.locator('[data-a898-act="gift-amount"]').first(); if (await chip.count()) { await chip.click().catch(() => {}); await sleep(1200); }
     const to = g.page.locator(".a911-letter__in--to"); if (await to.count()) await to.fill("Mina").catch(() => {});
     await sleep(1500);
+    g.sparkleDone = await g.page.evaluate(() => localStorage.getItem("araso.giftSparkle"));
     const m = await giftMeasure(g, "gift-4-amount");
     assert.ok(m.text.includes("Pgr") || m.text.some((t) => t === g.name), `sender name not on the letter: ${JSON.stringify(m.text)}`);
     assert.ok(m.text.includes("$20") && m.text.includes("$100"), `amounts: ${JSON.stringify(m.text)}`);
@@ -805,6 +826,13 @@ async function laneGiftRun() {
   await knownCheck("gift · Send → Face ID → the Gift link (fork tx) — needs the fork Gift build config", async () => {
     const send = g.page.locator('[data-a898-act="gift-faceid"]');
     assert.ok(!(await send.isDisabled()), "Send waits: fee unknown (fork Gift build config not set in this build)");
+  });
+  await check("gift · after the first Gift tap the sparkle is gone (stored once): back to Money → plain row", async () => {
+    assert.equal(g.sparkleDone, "done", `stored ${g.sparkleDone}`);
+    for (let i = 0; i < 4 && !(await g.page.locator("#a905GiftPiggy").count()); i += 1) { await g.page.locator('.a911-back').first().click().catch(() => {}); await sleep(900); }
+    const st = await giftSparkleState(g);
+    assert.ok(st, "could not get back to Money");
+    assert.ok(st.sparkle !== "1" && st.stars === 0, `still sparkling ${JSON.stringify(st)}`);
   });
   await g.context.close();
 }

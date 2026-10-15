@@ -11909,6 +11909,41 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" &
 }
 // ── [/A-904] ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
+// [A-1288] Money's "Gift a Piggy" row sparkles (the jar is the way to Gift) until the first Gift tap; stored once, storage unreadable = no sparkle.
+// When it shows (design D, Owner 19:3x): the words keep their own colour; a gold light sweeps over them and three stars blink (CSS .a1288Txt / .a1288Star).
+// The stars are empty marks drawn by CSS, so the row's words stay exactly the same.
+function giftSparkleOn() { try { return localStorage.getItem("araso.giftSparkle") !== "done"; } catch { return false; } }
+function giftSparkleApply() {
+  const row = document.querySelector("#a905GiftPiggy");
+  if (!row) return;
+  const on = giftSparkleOn();
+  let txt = row.querySelector(".a1288Txt");
+  if (on && !txt) {
+    const words = [...row.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+    if (!words) return;
+    txt = document.createElement("span");
+    txt.className = "a1288Txt";
+    txt.dataset.text = words.textContent;
+    words.replaceWith(txt);
+    txt.append(words);
+    for (const k of [1, 2, 3]) { const st = document.createElement("i"); st.className = `a1288Star a1288Star--${k}`; st.setAttribute("aria-hidden", "true"); txt.append(st); }
+  } else if (!on && txt) {
+    txt.querySelectorAll(".a1288Star").forEach((st) => st.remove());
+    txt.replaceWith(...txt.childNodes);
+  }
+  if (on) row.setAttribute("data-gift-sparkle", "1"); else row.removeAttribute("data-gift-sparkle");
+}
+if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" && document.body) {
+  new MutationObserver((records) => {
+    for (const r of records) for (const n of r.addedNodes) if (n.nodeType === 1 && (n.id === "a905GiftPiggy" || n.querySelector?.("#a905GiftPiggy"))) { giftSparkleApply(); return; }
+  }).observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("click", (event) => {
+    if (!event.target?.closest?.("#a905GiftPiggy")) return;
+    try { localStorage.setItem("araso.giftSparkle", "done"); } catch {}
+    giftSparkleApply();
+  }, true);
+}
+
 // Jar + bell Chog guide (Owner copy and timing): the Home right after the first Second finishes, once: a breath, the jar drops and sparkles, then Chog points at it and tells about the bell; the first bell waits for the guide.
 function a904GuideLines() { return { jar: "the jar's sparkling. wanna tap it?", bell: "when there's a new job for piggy, the bell will ring." }; }
 function a904GuideStart(token) {
