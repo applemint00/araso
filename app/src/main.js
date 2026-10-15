@@ -2937,6 +2937,7 @@ function computeTripClosed({ tripClosedFlag, txHash, pending }) {
 function sendBusy() {
   return sendInFlight || !!readSendPending();
 }
+let sendRecheckBusy = false;
 
 // 확정 성공 뒤에만: txHash 확정값 저장. 미확정 기록 제거는 finishTrip 이 영수증 저장·재읽기 확인 뒤에 한다([A-699]). tripClosed 는 finishTrip 이 세운다.
 function commitSendSuccess(redeemTxHash) {
@@ -3380,7 +3381,9 @@ function syncSendButton() {
   // this function cut out on stubs where the module const does not exist; in the app it always does.
   const sealed = typeof LEGACY_TESTNET_PATH === "boolean" && LEGACY_TESTNET_PATH !== true;
   const held = typeof state === "object" && state?.sendHold === true; // a pacing beat (job lines · sulky face) still owns the button
-  const locked = sealed || !isAllowedPiggyRpId() || sendBusy() || held;
+  // An unsettled record leaves the button pressable as a read-only re-check (sendPiggy); only a running send or re-check locks it.
+  const recheckOnly = !sendInFlight && !sendRecheckBusy && !!readSendPending();
+  const locked = sealed || !isAllowedPiggyRpId() || (sendBusy() && !recheckOnly) || sendRecheckBusy || held;
   btn.disabled = locked;
   if (locked) btn.setAttribute("aria-disabled", "true");
   else btn.removeAttribute("aria-disabled");
@@ -3396,11 +3399,19 @@ async function sendPiggy() {
     setScene("sendstay", "Piggy can't go out yet.", "");
     return;
   }
-  if (readSendPending()) {
+  const pending = readSendPending();
+  if (pending) {
     // 새 문구 0 — 기존 「확인 중」 표현을 그대로 쓴다(finishTrip 의 미확정 경로와 같은 말).
     // [A-556] A-555 S4 가 여기 넣었던 fail-safe endActiveSession() 호출은 없앴다 — Owner
     // 정책 위반(행동마다 즉시 세션 종료)이었다. 서명자는 자기 5분 절대 타이머로만 끝난다.
     setScene("sendstay", "Piggy is home.", "Confirmation is still catching up.");
+    // Money may be mid-flight: the button re-checks the chain (read only) instead of sending again; a proven never-sent
+    // deposit is released by the same reconcile, and only then does the next tap send.
+    if (!sendRecheckBusy) {
+      sendRecheckBusy = true;
+      syncSendButton();
+      reconcileSendPending(pending, { watch: false }).catch(() => {}).finally(() => { sendRecheckBusy = false; syncSendButton(); });
+    }
     return;
   }
   sendInFlight = true;
@@ -13744,7 +13755,9 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
           return;
         }
         // The card waits for both: time to understand Home, and the grant to be spendable on the node.
-        const readyAt = firstGrantReadyAt === null ? Infinity : Math.max(arrivedAt + PACE_HOME_TO_CARD_MIN_MS, firstGrantReadyAt);
+        // A grant that has not answered by then never holds the card: the Send tap asks again and shows its own failure.
+        const minAt = arrivedAt + PACE_HOME_TO_CARD_MIN_MS;
+        const readyAt = firstGrantReadyAt === null ? (Date.now() >= minAt ? minAt : Infinity) : Math.max(minAt, firstGrantReadyAt);
         if (Date.now() < readyAt) {
           sceneTimeout(revealSendCard, readyAt === Infinity ? 500 : Math.max(50, readyAt - Date.now()));
           return;

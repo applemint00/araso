@@ -44,8 +44,8 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "try again", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "try again", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -73,7 +73,7 @@ async function scenarioGasPrice() {
 const GAS_PRICE_WEI = await scenarioGasPrice();
 console.log(`A1264_GAS ${GAS} ${Number(GAS_PRICE_WEI / 10n ** 6n) / 1000} gwei`);
 
-function createWorld(label, { fundLagMs = 0, grantMode = "ok" } = {}) {
+function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0 } = {}) {
   const chain = createChain({ gasPriceWei: GAS_PRICE_WEI, fundLagMs });
   const forkChain = createChain({ chainId: 31337143, gasPriceWei: GAS_PRICE_WEI, erc20: { defaultAllowance: 5_000_000n, defaultBalance: 0n }, guard: { guard: "araso-a949-public-guard", chainId: 31337143, forkInstanceId: FORK_INSTANCE, forkStartBlock: 110874000 } });
   const granted = new Set();
@@ -96,6 +96,7 @@ function createWorld(label, { fundLagMs = 0, grantMode = "ok" } = {}) {
       requests.push({ person, path: url.pathname, action: body?.action || null, invite, bodyInvite: !!(body && Object.hasOwn(body, "invite") && body.invite) });
       const json = (status, out) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(out) });
       if (url.pathname === "/api/event") { events.push({ person, step: body?.step, code: body?.code, at: Date.now() - T0 }); return route.fulfill({ status: 204, body: "" }); }
+      if (url.pathname === "/api/grant" && grantHangMs > 0) { await sleep(grantHangMs); return route.abort(); } // relayer never answers
       if (url.pathname === "/api/grant") {
         const address = String(body?.address || "").toLowerCase();
         if (!/^0x[0-9a-f]{40}$/.test(address)) return json(400, { ok: false, error: "bad address" });
@@ -496,6 +497,59 @@ async function laneDesktop() {
   await e.context.close();
 }
 
+// Every failure leaves a place to press again (canon: no dead end). Money that may be mid-flight keeps the double-send guard:
+// Send turns into a read-only re-check — it never broadcasts a second deposit.
+async function laneStuck() {
+  const oc = createWorld("stuck-oc");
+  const p = await openPerson(browser, oc, "s-oc", { userVerified: false }); people.push(p);
+  await check("stuck · create Face ID cancelled → Make new → Face ID approved → Piggy hatches (no dead end)", async () => {
+    await until(p, "envelope", (s) => s.scene === "received");
+    await click(p, "#inviteFaceButton", "envelope Face ID");
+    await until(p, "cancel card", (s) => s.text.includes("Face ID was cancelled."), 20_000);
+    await checkpoint(p, "create-cancelled");
+    const dump = () => p.page.evaluate(() => ({ ss: Object.fromEntries(Object.keys(sessionStorage).map((k) => [k, sessionStorage.getItem(k).slice(0, 40)])), ls: Object.keys(localStorage).filter((k) => /araso/.test(k)) }));
+    if (process.env.ARASO_REHEARSAL_DEBUG === "1") console.log("STUCK after cancel", JSON.stringify(await dump()));
+    // Chromium's virtual authenticator keeps refusing after setUserVerified(true); a fresh one stands for "approve this time".
+    await p.passkey.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: p.passkey.authenticatorId });
+    p.passkey = await addPasskey(p.page);
+    await click(p, "#authTryAgainButton", "Make new");
+    await until(p, "envelope again", (s) => s.scene === "received", 10_000);
+    if (process.env.ARASO_REHEARSAL_DEBUG === "1") console.log("STUCK before retry", JSON.stringify(await dump()));
+    await click(p, "#inviteFaceButton", "envelope Face ID again");
+    if (process.env.ARASO_REHEARSAL_DEBUG === "1") { await sleep(4000); console.log("STUCK after retry", JSON.stringify(await dump()), JSON.stringify(eventsOf(oc, "s-oc"))); }
+    await until(p, "hatch or name", (s) => ["hatch", "name"].includes(s.scene), 25_000);
+  });
+  await p.context.close();
+  const hw = createWorld("stuck-hang", { grantHangMs: 120_000 });
+  const h = await openPerson(browser, hw, "s-gh"); people.push(h);
+  await check("stuck · relayer never answers the early grant → the Send card still comes (≤ 26 s after Home incl. the walk), not held forever", async () => {
+    await walkFirstJourney(h);
+    const tl = await readTimeline(h);
+    const homeAt = (tl.find((e) => e.k === "scene" && e.v === "sendstay") || {}).t;
+    const cardAt = (tl.find((e) => e.k === "card" && e.v === true && e.t >= homeAt) || {}).t;
+    assert.ok(cardAt - homeAt <= 26_000, `${((cardAt - homeAt) / 1000).toFixed(1)} s`);
+  });
+  await h.context.close();
+  for (const [id, fault, expect] of [["s-dr", "revert:deposit", "can't tell yet."], ["s-rf", "refuse:redeem", "still out."], ["s-rr", "revert:redeem", "couldn't finish this one."]]) {
+    const w = createWorld(`stuck-${id}`);
+    const q = await openPerson(browser, w, id); people.push(q);
+    await check(`stuck · ${fault} → "${expect}" → Send stays pressable as a re-check; pressing never broadcasts a second deposit`, async () => {
+      await walkFirstJourney(q);
+      const [kind, fn] = fault.split(":"); w.chain.faults[kind].add(fn);
+      await until(q, expect, (s) => s.text.some((t) => t.includes(expect)), 60_000);
+      await checkpoint(q, `money-stuck-${fn}-${kind}`);
+      await until(q, "re-check pressable", () => live(q, "#sendButton"), 10_000);
+      const deposits = () => (w.chain.log.join(";").match(/sendRaw deposit/g) || []).length;
+      const before = deposits();
+      await q.page.locator("#sendButton").click();
+      await sleep(3000);
+      assert.equal(deposits(), before, `a re-check must not send again: ${w.chain.log.join(";")}`);
+      await until(q, "still a place to press after the re-check", () => live(q, "#sendButton"), 10_000);
+    });
+    await q.context.close();
+  }
+}
+
 async function laneFaults() {
   const f = await openPerson(browser, fault1, "f1"); people.push(f);
   await check("fault · first deposit -32000 once → retried → Return", async () => {
@@ -684,8 +738,8 @@ async function laneAtlas() {
 function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id); if (e.length) return e; } return []; }
 
 try {
-  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas()].filter(Boolean));
+  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck").split(",");
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });
