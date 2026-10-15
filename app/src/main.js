@@ -1077,8 +1077,8 @@ function sendFailureCopy(scene, message, detail) {
 
 let awayShownAt = 0;
 function setScene(scene, message = "", detail = "") {
-  if (scene !== state.scene && typeof chogHelpForget === "function") chogHelpForget(); // [A-1293] the ? replays only what Chog said on this screen
   ({ message, detail } = sendFailureCopy(scene, message, detail));
+  if (scene !== state.scene && typeof chogHelpForget === "function") chogHelpForget(); // [A-1293] the ? replays only what Chog said on this screen
   // Away is the only proof Piggy left: keep it on screen long enough to be seen before Return replaces it.
   if (scene === "return" && state.scene === "away" && Date.now() - awayShownAt < PACE_OUTSIDE_MIN_MS) {
     const token = awayShownAt;
