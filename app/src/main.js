@@ -6493,6 +6493,33 @@ function loginCheckingMarkup(phase) {
   `;
 }
 
+// [A-1290 · Owner 19:5x "페이스 아이디 열리게 하고 멀티피기일때는 여러개가 뜨면 안돼" · Cowork 20:1x (가)] Coming back: the same
+// Piggy face logo as the first visit (A-1289), and Face ID is asked once by itself right after it is drawn (like a bank app). That
+// one ask is the existing unlockApp() (state.credential only → one sheet, also with several Piggies: the root passkey). A cancel /
+// failure / time-out = the existing failure card (Try again) and no automatic retry; anywhere on the logo is the tap target meanwhile.
+// Same switch as the first-visit entry: off = the old Checking lock (loginCheckingMarkup, untouched) with no automatic ask.
+const LOCK_AUTO_FACE_ID_MS = 600; // the logo is seen first, then the sheet
+function appLockLogoMarkup(phase) {
+  return `
+    <section class="stage stage--lockLogo" data-scene="birth" data-app-lock="${phase}">
+      ${arasoBrandMarkup()}
+      <button class="lockLogo__tap" id="loginChogButton" type="button" aria-label="Face ID">
+        <span class="entryChog__logo" aria-hidden="true">${ENTRY_LOGO_SVG}<img class="entryChog__word" src="/entry/araso_logo_white.png" alt="" /></span>
+      </button>
+    </section>
+  `;
+}
+// The lock is drawn outside the scene system, so the eye roll runs on its own frames until the logo leaves the page.
+function mountLockLogo(logo) {
+  mountEntryLogo(logo, { reduced: prefersReducedMotion(), onFrame: (step) => { const tick = (now) => { if (logo.isConnected && step(now) !== false) requestAnimationFrame(tick); }; requestAnimationFrame(tick); } });
+}
+function askLockFaceIdOnce() {
+  const lock = state.appLock;
+  if (!lock || lock.phase !== "waiting" || lock.autoAsked) return;
+  lock.autoAsked = true; // once per lock: a failed ask leaves the failure card, never asks again by itself
+  setTimeout(() => { if (state.appLock === lock && lock.phase === "waiting") unlockApp(); }, LOCK_AUTO_FACE_ID_MS);
+}
+
 function renderAppLock() {
   clearInviteTimers();
   if (typeof noteAwayLocked === "function") noteAwayLocked(); // [A-893b F1] lock seen while an Away is mounted
@@ -6507,8 +6534,13 @@ function renderAppLock() {
         chogTap: !failed,
         unlockRetry: true,
       })
-    : loginCheckingMarkup(state.appLock.phase);
+    : ENTRY_CHOG_FIRST ? appLockLogoMarkup(state.appLock.phase) : loginCheckingMarkup(state.appLock.phase);
   mountInviteChog();
+  const lockLogo = !failed && ENTRY_CHOG_FIRST ? document.querySelector(".stage--lockLogo .entryChog__logo") : null;
+  if (lockLogo) { // [A-1290]
+    mountLockLogo(lockLogo);
+    askLockFaceIdOnce();
+  }
   if (failed) {
     document.querySelector("#unlockRetryButton")?.addEventListener("click", unlockApp);
   } else {

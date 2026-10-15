@@ -310,9 +310,16 @@ async function trace(person, label, ms) {
 async function waitTapMe(person, timeout) {
   try { await until(person, "tap me!", (s) => s.text.includes("tap me!"), timeout); return true; } catch { return false; }
 }
+// [A-1290] the lock asks Face ID by itself once; a person taps only if the lock is still there after that ask settles
+async function tapLockIfStill(person, waitMs = 3000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < waitMs) { if ((await look(person)).scene !== "birth") return false; await sleep(250); }
+  if ((await look(person)).scene === "birth" && (await live(person, "#loginChogButton"))) { await person.page.locator("#loginChogButton").click(); return true; }
+  return false;
+}
 async function unlockIfLocked(person) {
   const s = await until(person, "boot surface", (x) => ["birth", "sendstay", "received", "name", "hatch"].includes(x.scene), 20_000);
-  if (s.scene === "birth") { await checkpoint(person, "lock"); await click(person, "#loginChogButton", "lock Chog"); }
+  if (s.scene === "birth") { await checkpoint(person, "lock"); await tapLockIfStill(person); }
   await until(person, "Home after unlock", (x) => x.scene === "sendstay", 20_000);
 }
 async function enterSecond(person) {
@@ -479,12 +486,17 @@ async function laneMain() {
   });
   // c = the same person reopening: same passkey, same storage, page opened again → lock → Chog → Face ID → Home.
   const c = a; c.id = c.tag.id = "c"; c.steps = 0;
-  await check("c · same passkey + same storage, reopened: lock → Chog → Face ID → Home (no hatch/name)", async () => {
+  await check("c · same passkey + same storage, reopened: lock (Piggy logo) → Face ID asked once by itself (no tap) → Home (no hatch/name)", async () => {
+    const getsBefore = eventsOf(main, "c").filter((e) => e.startsWith("passkey_get/")).length;
     await c.page.goto("about:blank"); await c.page.goto(BASE, { waitUntil: "networkidle" });
     await until(c, "lock surface", (s) => s.scene === "birth", 20_000);
     await checkpoint(c, "lock");
-    await click(c, "#loginChogButton", "lock Chog");
+    const lockLook = await c.page.evaluate(() => ({ logo: !!document.querySelector(".stage--lockLogo .entryChog__logo svg"), checking: [...document.querySelectorAll("h1")].some((h) => /Checking/.test(h.textContent)) }));
+    const tapped = await tapLockIfStill(c, 6000);
     await until(c, "Home", (s) => s.scene === "sendstay", 20_000);
+    assert.equal(tapped, false, "Home came without a tap on the lock");
+    assert.ok(lockLook.logo && !lockLook.checking, `lock look ${JSON.stringify(lockLook)}`);
+    assert.equal(eventsOf(main, "c").filter((e) => e.startsWith("passkey_get/")).length - getsBefore, 1, `one Face ID ask: ${eventsOf(main, "c").join(",")}`);
     await checkpoint(c, "home");
     assert.ok(eventsOf(main, "c").includes("passkey_get/ok"), eventsOf(main, "c").join(","));
   });
@@ -619,10 +631,9 @@ async function laneUnlockWhy() {
     const p = await openPerson(browser, w, id); people.push(p);
     await check(`unlock why · ${word}: the unlock failure is recorded with its own cause word (unlock_why/${word})`, async () => {
       await walkFirstJourney(p);
+      await arm(p); // [A-1290] before reopening: the lock asks Face ID by itself
       await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
       await until(p, "lock", (s) => s.scene === "birth", 20_000);
-      await arm(p);
-      await click(p, "#loginChogButton", "lock Chog");
       await until(p, "unlock failed card", async () => live(p, "#unlockRetryButton"), 60_000);
       assert.ok(eventsOf(w, id).includes(`unlock_why/${word}`), `events: ${eventsOf(w, id).join(",")}`);
     });
@@ -690,6 +701,27 @@ async function laneEntryShots() {
       assert.equal(await live(p, "#inviteFaceButton"), true, "Face ID visible after two taps");
     });
   }));
+}
+// [A-1290] two passkeys for this site on the device: reopening asks Face ID once, naming only this Piggy's passkey (no chooser)
+async function laneLockMulti() {
+  const w = createWorld("lock-multi");
+  const p = await openPerson(browser, w, "lm"); people.push(p);
+  await check("lock · two passkeys on the device: reopen asks Face ID once by itself, for one passkey only (no chooser) → Home", async () => {
+    await walkFirstJourney(p);
+    const mine = await p.passkey.credential();
+    const other = { ...mine, credentialId: Buffer.from(`other-piggy-${Date.now()}`).toString("base64"), userHandle: Buffer.from("other-piggy-user").toString("base64"), signCount: 0 };
+    await p.passkey.cdp.send("WebAuthn.addCredential", { authenticatorId: p.passkey.authenticatorId, credential: other });
+    const count = (await p.passkey.cdp.send("WebAuthn.getCredentials", { authenticatorId: p.passkey.authenticatorId })).credentials.length;
+    await p.context.addInitScript(() => { if (!navigator.credentials?.get) return; const get = navigator.credentials.get.bind(navigator.credentials); window.__gets = []; navigator.credentials.get = (o) => { window.__gets.push((o?.publicKey?.allowCredentials || []).length); return get(o); }; });
+    await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
+    await until(p, "lock", (s) => s.scene === "birth", 20_000);
+    const tapped = await tapLockIfStill(p, 6000);
+    await until(p, "Home", (s) => s.scene === "sendstay", 20_000);
+    const gets = await p.page.evaluate(() => window.__gets);
+    assert.ok(count >= 2, `passkeys on the device: ${count}`);
+    assert.equal(tapped, false, "no tap needed");
+    assert.deepEqual(gets, [1], `get() calls (allowCredentials length each): ${JSON.stringify(gets)}`);
+  });
 }
 async function laneJobFail() {
   const cases = [
@@ -892,7 +924,7 @@ async function laneAtlas() {
     ["find-failed", { world: W("at4"), setup: { initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); } catch {} }, userVerified: false },
       trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["unlock-failed", { world: W("at5"),
-      trigger: async (p) => { await toSend(p); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); await until(p, "lock", (s) => s.scene === "birth", 20_000); await p.passkey.cdp.send("WebAuthn.clearCredentials", { authenticatorId: p.passkey.authenticatorId }); await click(p, "#loginChogButton", "lock Chog"); },
+      trigger: async (p) => { await toSend(p); await p.passkey.cdp.send("WebAuthn.clearCredentials", { authenticatorId: p.passkey.authenticatorId }); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); await until(p, "lock", (s) => s.scene === "birth", 20_000); await tapLockIfStill(p); },
       expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["grant-down", { world: W("at6", { grantMode: "down" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["grant-not-visible", { world: W("at7", { grantMode: "nofund" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
@@ -903,7 +935,7 @@ async function laneAtlas() {
     ["deposit-reverted", { world: W("at11"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("deposit"); }, expect: ["Piggy could not get ready.", "can't tell yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["redeem-refused", { world: W("at12"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("redeem"); }, expect: ["Piggy could not get ready.", "still out."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["redeem-reverted", { world: W("at13"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("redeem"); }, expect: ["couldn't finish this one."], retry: (p) => sendAgain(p, "바로 풀림") }],
-    ["receipt-missing-reopen", { world: W("at14"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await click(p, "#loginChogButton", "lock Chog"); },
+    ["receipt-missing-reopen", { world: W("at14"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await tapLockIfStill(p); },
       expect: ["still out"], retry: (p) => retryHomeLive(p, "확인 올 때까지 Away") }],
     ["job-reverted", { world: W("at16"), trigger: async (p) => { await toSend(p); await walkReturnAndFile(p); await enterSecond(p); p.world.forkChain.faults.revert.add("approve");
         await p.page.locator('input[data-errand-id="clean"]').check(); await click(p, "#exploreSaveButton", "explore save"); await click(p, ".secondJourney__pick", "job pick"); await click(p, "#secondOkButton", "job ok");
@@ -915,7 +947,7 @@ async function laneAtlas() {
         await p.page.locator("#sendButton").click(); },
       expect: ["Confirmation is still catching up."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["away-second-open", { world: W("at18"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000);
-        await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await click(p, "#loginChogButton", "lock Chog");
+        await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await tapLockIfStill(p);
         await until(p, "still out working.", (s) => s.text.some((t) => t.includes("still out working.")), 30_000);
         // leave the app and come back (the phone's app switcher) — the same Away opened a second time
         await p.page.evaluate(() => { const set = (v) => { Object.defineProperty(document, "visibilityState", { value: v, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); }; set("hidden"); set("visible"); }); },
@@ -959,7 +991,7 @@ function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("entryshots") && laneEntryShots()].filter(Boolean));
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });
