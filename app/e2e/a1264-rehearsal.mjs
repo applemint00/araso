@@ -45,7 +45,7 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
@@ -263,7 +263,10 @@ async function walkReturnAndFile(person) {
   await until(person, "Return receipt", () => live(person, "#returnTap"), 60_000);
   person.receiptText = (await checkpoint(person, "return")).text;
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `receipt tap ${i + 1}`); await sleep(400); }
+  // [A-1297] the filed line is read before Home comes (≥ 3 s, Owner "3초정도")
+  person.filedLineAt = await until(person, "filed line", (s) => s.text.includes("I'll keep the details at home."), 8_000).then(() => Date.now(), () => null);
   await until(person, "filed → quiet Home", (s) => s.scene === "sendstay", 30_000);
+  person.filedHomeAt = Date.now();
   await checkpoint(person, "home-filed");
 }
 async function readTimeline(person) {
@@ -309,9 +312,13 @@ async function walkSecondJob(person, round, { tapHome = true } = {}) {
     await person.page.locator('input[data-errand-id="clean"]').check();
     await click(person, "#exploreSaveButton", "explore save");
   }
-  await click(person, ".secondJourney__pick", "job pick");
-  await checkpoint(person, `j${round}-candidate`);
-  await click(person, "#secondOkButton", "job ok");
+  // [A-1297] one Job that can go = straight to the one-line card (no pick list); two or more = pick one, then ok
+  await until(person, "pick list or the one-line card", async () => (await live(person, ".secondJourney__pick")) || (await live(person, "#secondSendButton")), 20_000);
+  if (await live(person, ".secondJourney__pick")) {
+    await click(person, ".secondJourney__pick", "job pick");
+    await checkpoint(person, `j${round}-candidate`);
+    await click(person, "#secondOkButton", "job ok");
+  }
   await until(person, "Job Send", () => live(person, "#secondSendButton"), 20_000);
   await checkpoint(person, `j${round}-job`);
   await person.page.locator("#secondSendButton").click();
@@ -320,6 +327,8 @@ async function walkSecondJob(person, round, { tapHome = true } = {}) {
   await until(person, "Job Receipt", () => live(person, "#returnTap"), 90_000);
   await checkpoint(person, `j${round}-return`);
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `job receipt tap ${i + 1}`); await sleep(400); }
+  person.secondDone = person.secondDone || {};
+  person.secondDone[round] = await until(person, "done!", (s) => s.text.includes("done!"), 10_000).then(async () => (await person.page.evaluate(() => [...document.querySelectorAll(".chogCheckLine")].filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.textContent.trim()))), () => null); // [A-1297] the lines Chog shows then
   // A person may tap the folder's Home, or just wait: Home must come either way.
   if (tapHome) await until(person, "Second Receipt Home or settled Home", async (s) => s.scene === "sendstay" || (await live(person, "#returnOpen")), 20_000);
   if (tapHome && (await live(person, "#returnOpen"))) await person.page.locator("#returnOpen").click().catch(() => {});
@@ -397,7 +406,7 @@ async function laneMain() {
     const first = tl.find((e) => e.k === "chog" && e.v && e.t >= homeAt);
     assert.equal(first?.v, "work's coming!", `first Home line: ${first?.v}`);
     const jobLine = tl.find((e) => e.k === "chog" && /let's send Piggy to work/.test(e.v || ""));
-    assert.ok(jobLine && jobLine.t >= cardAt + 1000, `job lines at ${jobLine?.t} · card at ${cardAt}`);
+    assert.ok(jobLine && jobLine.t >= cardAt + 1000 - 50, `job lines at ${jobLine?.t} · card at ${cardAt}`); // 50 ms = the timeline's sampling step
   });
   await check("pace · two job lines come one at a time: the first stays, the second joins after it is read (+1 s)", () => {
     const one = tl.find((e) => e.k === "chog" && e.v === "let's send Piggy to work");
@@ -426,7 +435,8 @@ async function laneMain() {
     await until(a, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
     if ((await look(a)).scene === "explore") {
       const t2 = await readTimeline(a);
-      const intro = t2.find((e) => e.k === "chog" && /I found a few things/.test(e.v || ""));
+      const intro = t2.find((e) => e.k === "chog" && /let's try more kinds of jobs!/.test(e.v || ""));
+      a.introLines = t2.filter((e) => e.k === "chog" && /let's try more kinds of jobs!|work's coming!|I found a few things|wanna see a few more/.test(e.v || "") && (!intro || e.t >= intro.t)).map((e) => ({ t: e.t, v: e.v, scene: (t2.filter((x) => x.k === "scene" && x.t <= e.t).pop() || {}).v }));
       const exp = t2.find((e) => e.k === "scene" && e.v === "explore" && (!intro || e.t >= intro.t));
       a.introToExplore = intro && exp ? exp.t - intro.t : null;
     }
@@ -437,7 +447,18 @@ async function laneMain() {
     assert.ok(main.requests.some((r) => r.person === "a" && r.action === "enter"), "fork entry recorded");
   });
   await check("pace · second intro line → Explore paper ≥ 2.7 s (1.2 s beat + 1.5 s breath)", () => { assert.ok(a.introToExplore >= 2_600, `${a.introToExplore} ms`); });
+  await check("chog · Journey 2 starts on Home: \"let's try more kinds of jobs!\" then \"work's coming!\" one at a time (the first stays); Explore paper says nothing", () => {
+    const L = a.introLines || [];
+    const one = L.find((e) => e.v === "let's try more kinds of jobs!"), both = L.find((e) => e.v === "let's try more kinds of jobs! work's coming!");
+    assert.ok(one && both && both.t - one.t >= chogMs("let's try more kinds of jobs!") + 1000 - 300, `intro ${JSON.stringify(L.slice(0, 6))}`);
+    assert.ok(L.every((e) => e.scene === "sendstay"), `said on Home only ${JSON.stringify(L.map((e) => e.scene))}`);
+    assert.ok(!L.some((e) => /I found a few things|wanna see a few more/.test(e.v)), "the old intro lines are gone");
+  });
+  await check("chog · after the first receipt: \"I'll keep the details at home.\" and Home comes ≥ 3 s later", () => {
+    assert.ok(a.filedLineAt && a.filedHomeAt - a.filedLineAt >= 3000 - 300, `line ${a.filedLineAt} → Home ${a.filedHomeAt} (${a.filedHomeAt - a.filedLineAt} ms)`);
+  });
   await check("a · Journey 2 round 1: places → Job (tidy the wallet) → Send → Away → back → Receipt → File it → Home", () => walkSecondJob(a, 1));
+  await check("chog · after the Journey 2 receipt is filed: \"done!\" (one bubble)", () => { assert.deepEqual(a.secondDone?.[1], ["done!"]); });
   await check("a · reopen the app → lock → Chog → Face ID → Home → bell → Explore opens again", async () => {
     await a.page.goto("about:blank"); await a.page.goto(BASE, { waitUntil: "networkidle" });
     await unlockIfLocked(a);
@@ -576,14 +597,18 @@ async function laneStuck() {
 
 // Journey 2 Job failures must not be silent: Chog says try again over the screen it happened on, Piggy looks sulky,
 // and the server learns why (job_why) — before Away (still on Explore) or after Away (back Home).
+// [A-1297] after save: a pick list only when two or more Jobs can go; one = straight to the one-line card
+async function pickJobIfListed(person) {
+  await until(person, "pick list or the one-line card", async () => (await live(person, ".secondJourney__pick")) || (await live(person, "#secondSendButton")), 20_000);
+  if (await live(person, ".secondJourney__pick")) { await person.page.locator(".secondJourney__pick").first().click(); await click(person, "#secondOkButton", "job ok"); }
+}
 async function walkToJobSend(person) {
   await walkFirstJourney(person);
   await walkReturnAndFile(person);
   await enterSecond(person);
   await person.page.locator('input[data-errand-id="clean"]').check();
   await click(person, "#exploreSaveButton", "explore save");
-  await click(person, ".secondJourney__pick", "job pick");
-  await click(person, "#secondOkButton", "job ok");
+  await pickJobIfListed(person);
   await until(person, "Job Send", () => live(person, "#secondSendButton"), 20_000);
 }
 // Unlock failures are told apart by cause (the screen copy stays): cancelled vs the app's own wait running out.
@@ -608,18 +633,21 @@ async function laneUnlockWhy() {
 
 // A-1283: after "these two?" / "all of them?" and checking…, Chog says why only one goes (or none), one line at a time; then the one card.
 const FORK_RUNNABLE_ERRANDS = ["market", "order", "clean", "grow", "lp"]; // second-job-readiness.js FORK_JOB_ROWS errand ids
+// [A-1297 · Owner 03:0x–03:4x] Journey 2 picking: save → Chog "let me see which jobs can go." → the second card shows only the Jobs
+// that can go → pick one → the one-line card with Send (one = straight to that card · none = back to the paper)
+const XW_CHECK = "let me see which jobs can go.";
 async function laneExploreWhy() {
   const cases = [
-    ["xw-two", ["market", "order"], "these two?", "both can go. sending one for now."],
-    ["xw-all", ["market", "order", "clean"], "all of them?", "all of them work. let's try one first."],
-    // the next Explore set (save with nothing picked) holds errands with no fork Job row: some / none can go
-    ["xw-some", "one-of-two", "these two?", "only this one can go today."],
-    ["xw-none", "none-of-two", "these two?", "none of these can go now. something else?"],
+    ["xw-two", ["market", "order"], "two can go. pick one?", 2],
+    ["xw-three", ["market", "order", "clean"], "pick one of these.", 3],
+    // the next Explore set (save with nothing picked) holds errands with no fork Job row: one / none can go
+    ["xw-one", "one-of-two", "only this one can go. go?", 1],
+    ["xw-none", "none-of-two", "none of these can go now. something else?", 0],
   ];
-  await Promise.all(cases.map(async ([id, picks, first, second]) => {
+  await Promise.all(cases.map(async ([id, picks, line, can]) => {
     const w = createWorld(`explorewhy-${id}`);
     const p = await openPerson(browser, w, id); people.push(p);
-    await check(`explore why · ${typeof picks === "string" ? picks : `${picks.length} picked, all can go`} → "${first}" then "${second}" one at a time, then the one-line card with Send`, async () => {
+    await check(`explore pick · ${can} can go → "${XW_CHECK}" then "${line}" · ${can >= 2 ? `only those ${can} on the card, pick one → Send` : can === 1 ? "straight to the one-line card" : "back to the paper"}`, async () => {
       await walkFirstJourney(p);
       await walkReturnAndFile(p);
       await enterSecond(p);
@@ -635,22 +663,32 @@ async function laneExploreWhy() {
         }
         assert.ok(chosen, `no Explore set for ${picks}: last ${JSON.stringify(shown)}`);
       }
-      assert.ok(chosen.every((x) => shown.includes(x)) && (chosen.length === 2 ? shown.length > 2 : shown.length === chosen.length), `Explore shows ${JSON.stringify(shown)}`);
       for (const x of chosen) await p.page.locator(`input[data-errand-id="${x}"]`).check();
+      const savedAt = Date.now();
       await click(p, "#exploreSaveButton", "explore save");
-      await until(p, "second line", (st) => st.text.includes(second), 15_000).then(() => checkpoint(p, "why-two-lines"), () => {});
-      const none = picks === "none-of-two";
-      const sendAt = await until(p, none ? "back to the Explore paper" : "one-line card Send", async () => (none ? (await p.page.locator("input[data-errand-id]").count()) > 0 : live(p, "#secondSendButton")), 25_000).then(() => Date.now(), () => null);
+      await until(p, "result line", (st) => st.text.includes(line) || (can === 0 && st.text.includes("something else?")), 15_000).then(() => checkpoint(p, "pick-line"), () => {});
+      let rows = 0;
+      if (can >= 2) {
+        await until(p, "pick list", () => live(p, ".secondJourney__pick"), 15_000);
+        rows = await p.page.locator(".secondJourney__pick").count();
+        p.listAt = Date.now();
+        await checkpoint(p, "pick-list");
+        await p.page.locator(".secondJourney__pick").first().click();
+        await click(p, "#secondOkButton", "ok");
+      }
+      const endAt = await until(p, can === 0 ? "back to the Explore paper" : "one-line card Send", async () => (can === 0 ? (await p.page.locator("input[data-errand-id]").count()) > 0 : live(p, "#secondSendButton")), 25_000).then(() => Date.now(), () => null);
       const tl = await readTimeline(p);
-      const seen = tl.filter((e) => e.k === "chog" && e.v).map((e) => e.v);
-      const one = tl.find((e) => e.k === "chog" && e.v === first);
-      const both = tl.find((e) => e.k === "chog" && e.v === `${first} ${second}`);
-      assert.ok(one && both, `Chog said ${JSON.stringify([...new Set(seen)].slice(-6))}`);
-      assert.ok(both.t - one.t >= chogMs(first) + 1000 - 300, `second line ${both.t - one.t} ms after the first`);
-      assert.ok(sendAt && sendAt - both.t >= chogMs(second) + 1000 - 400, `${none ? "paper" : "card"} ${sendAt ? sendAt - both.t : "never"} ms after both lines`);
-      assert.equal(await p.page.locator(".secondJourney__pick").count(), 0, none ? "back on the Explore paper (no pick list)" : "the card is the one-line card (no pick list)");
-      if (none) assert.equal(await live(p, "#secondSendButton"), false, "nothing to send");
-      await checkpoint(p, "why-card");
+      const said = tl.filter((e) => e.k === "chog" && e.v && e.t >= savedAt - 200).map((e) => e.v);
+      assert.ok(said.includes(XW_CHECK) && said.includes(line), `Chog said ${JSON.stringify([...new Set(said)])}`);
+      assert.ok(said.indexOf(XW_CHECK) < said.indexOf(line), "the check line comes first");
+      assert.ok(!said.some((v) => /these two\?|all of them\?|both can go|all of them work|only this one can go today/.test(v)), `old lines gone ${JSON.stringify([...new Set(said)])}`);
+      if (can >= 2) {
+        assert.equal(rows, can, `the second card lists only the ${can} that can go (saw ${rows})`);
+        assert.ok(p.listAt - savedAt >= chogMs(XW_CHECK) - 400, `the list waited for the check line (${p.listAt - savedAt} ms)`);
+      }
+      assert.ok(endAt, can === 0 ? "back to the paper" : "the one-line card with Send");
+      if (can === 0) assert.equal(await live(p, "#secondSendButton"), false, "nothing to send");
+      await checkpoint(p, "pick-end");
     });
   }));
 }
@@ -1096,7 +1134,7 @@ async function laneAtlas() {
     ["receipt-missing-reopen", { world: W("at14"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await click(p, "#loginChogButton", "lock Chog"); },
       expect: ["still out"], retry: (p) => retryHomeLive(p, "확인 올 때까지 Away") }],
     ["job-reverted", { world: W("at16"), trigger: async (p) => { await toSend(p); await walkReturnAndFile(p); await enterSecond(p); p.world.forkChain.faults.revert.add("approve");
-        await p.page.locator('input[data-errand-id="clean"]').check(); await click(p, "#exploreSaveButton", "explore save"); await click(p, ".secondJourney__pick", "job pick"); await click(p, "#secondOkButton", "job ok");
+        await p.page.locator('input[data-errand-id="clean"]').check(); await click(p, "#exploreSaveButton", "explore save"); await pickJobIfListed(p);
         await until(p, "Job Send", () => live(p, "#secondSendButton"), 20_000); await p.page.locator("#secondSendButton").click(); await until(p, "Away", (s) => s.scene === "secondAway", 15_000); await until(p, "back home", (s) => s.scene === "sendstay", 90_000); },
       expect: ["still in home"], retry: (p) => retryHomeLive(p, "2차 Job 실패 = 조용히 홈 · 문구 0") }],
     ["two-tabs-send", { world: W("at17"), trigger: async (p) => { await walkFirstJourney(p, { send: false });

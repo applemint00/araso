@@ -4651,7 +4651,8 @@ function handleExploreSave(ids) {
   // this keeps only the set the picks were made from. sj.chogSay mirrors the derived line for existing readers.
   sj.exploreOfferedIds = displayedIds;
   sj.chogSay = exploreChogConfirmLine(sj);
-  chogLinesRestart("exploreWhy"); // [A-1283] a new save says its lines again from the first
+  sj.whySavedAt = Date.now(); // [A-1297] the check line starts now
+  sj.whyResultAt = 0;
   sj.exploreWhyWent = false;
   // [A-849 UI-24] no fake "checking…": rows show immediately. The pinned render() reveal block (CANDIDATES_REVEAL_MS) is
   // only entered while candidatesRevealed is false, so it stays true here and that block never runs.
@@ -5425,6 +5426,7 @@ function mountSecondReturn() {
   runSceneFrames(() => {
     if (!valid()) return false;
     if (!returnView?.filed) return true;
+    a891ChogSay(document.querySelector("#returnChogHop #chogHome"), "secondDoneLine", [A1297_SECOND_DONE_LINE]); // [A-1297 · Owner 03:3x]
     sceneTimeout(() => { if (valid() && state.scene === "secondReturn") finishSecondJourney({ persist: true }); }, A891_FILED_LINE_HOLD_MS);
     return false;
   });
@@ -12697,11 +12699,13 @@ function homeCharacter(name) {
 function chogHomeMarkupForExplore() {
   const markup = chogHomeMarkup({ padMarkup: homePadMarkup(state.scene) });
   const sj = state.secondJourney;
-  // [A-1283] after "these two?" / "all of them?" and the read: Chog adds why only one goes (or none), the first line stays.
-  const why = state.scene === "explore" && sj?.step === "candidates" ? exploreChogWhy(sj) : null;
-  if (why) {
-    const two = `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)">${chogLinesMarkup("exploreWhy", why.lines)}</span>`;
-    return markup.replace('<div class="chogHome__hit"', `${two}<div class="chogHome__hit"`);
+  // [A-1297] Journey 2 picking: "let me see which jobs can go." while checking, then one line for what can go (one bubble).
+  const pick = explorePickState(sj);
+  if (pick) {
+    const say = pick.lines.length > 1
+      ? `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)">${chogLinesMarkup("explorePick", pick.lines)}</span>`
+      : `<span class="chogCheckLine" id="exploreChogSay" style="transform:translateX(-50%)">${escapeHtml(pick.line)}</span>`;
+    return markup.replace('<div class="chogHome__hit"', `${say}<div class="chogHome__hit"`);
   }
   // [A-849 UI-24] WAIT state (picks exist, 0 candidates, no read in flight): Chog says the two Owner lines, stacked.
   if (state.scene === "explore" && sj?.step === "candidates" && secondLaneMode(sj) && sj.laneReading !== true
@@ -12711,7 +12715,7 @@ function chogHomeMarkupForExplore() {
   }
   chogLinesRestart("exploreWait"); // left the WAIT state: next time the two lines are said one at a time again
   // [A-893 CG-05] the line is derived from the CURRENT picks at every render, not the value set once at save.
-  const confirmLine = state.scene === "explore" && sj?.step === "candidates" ? exploreChogConfirmLine(sj) : null;
+  const confirmLine = !exploreWhyLane && state.scene === "explore" && sj?.step === "candidates" ? exploreChogConfirmLine(sj) : null; // [A-1297] not where Jobs run
   if (!confirmLine) return markup;
   // [Owner 2026-09-19 "초그 발화 위치 머리 위에" · A-429] 머리 위 좌표는 이제 .chogCheckLine
   // 한 곳(style.css)에 있다 — 귀환 알람과 같은 자리. 값 = INFERRED.
@@ -12721,46 +12725,53 @@ function chogHomeMarkupForExplore() {
   return markup.replace('<div class="chogHome__hit"', `${say}<div class="chogHome__hit"`);
 }
 
-// [A-1283 · Owner 14:3x–14:4x] After the read settles, Chog says why only one goes (or none) under the confirmation line; once both
-// lines are read (+ a breath) the existing one-line card with Send opens for one of them (none: back to the Explore paper). "Can go" is
-// what the read already decided (a fork Job row = JOB_READY); nothing new is computed. Only where Jobs can run (the fork lane).
-// Owner lines exactly; a case with no Owner line (some but more than one of "all" go) says nothing new (UNKNOWN, never invented).
+// [A-1297 · Owner 03:0x–03:4x · replaces A-1283's automatic narrowing] Journey 2 picking where Jobs run (the fork lane): after save Chog
+// says "let me see which jobs can go." and the second card waits for both that line and the read (max of the two). Then the card shows
+// only the Jobs that can go (the read's own JOB_READY rows; nothing new is computed) with one line: two → "two can go. pick one?",
+// three → "pick one of these." (the person picks one, then the existing one-line card with Send) · one → "only this one can go. go?"
+// and that card opens by itself once the line is read · none → "none of these can go now. something else?" and back to the paper.
 let exploreWhyLane = false; // turned on where fork Jobs run (A977_FORK below)
-const EXPLORE_WHY_LINES = Object.freeze({
-  both: "both can go. sending one for now.",
-  all: "all of them work. let's try one first.",
-  one: "only this one can go today.",
+const EXPLORE_CHECK_LINE = "let me see which jobs can go.";
+const EXPLORE_PICK_LINES = Object.freeze({
+  two: "two can go. pick one?",
+  many: "pick one of these.",
+  one: "only this one can go. go?",
   none: "none of these can go now. something else?",
 });
-function exploreChogWhy(sj) {
-  if (!exploreWhyLane || sj?.laneReading === true) return null;
-  const first = exploreChogConfirmLine(sj);
-  if (!first) return null;
+function explorePickState(sj) {
+  if (!exploreWhyLane || state.scene !== "explore" || sj?.step !== "candidates" || secondPickedErrandIds(sj).length === 0) return null;
+  const checkingUntil = (sj.whySavedAt || 0) + chogSpeakMs(EXPLORE_CHECK_LINE);
+  if (sj.laneReading === true || Date.now() < checkingUntil) return { kind: "checking", line: EXPLORE_CHECK_LINE, lines: [EXPLORE_CHECK_LINE], until: checkingUntil };
   const ready = secondLaneDestinations(sj).filter((d) => d.derivedStatus === "JOB_READY");
-  const picks = secondPickedErrandIds(sj).length;
-  const kind = ready.length === 0 ? "none"
-    : first === "these two?" && ready.length === 2 ? "both"
-      : first === "all of them?" && ready.length === picks ? "all"
-        : ready.length === 1 ? "one" : null;
-  return kind ? { kind, lines: [first, EXPLORE_WHY_LINES[kind]], go: ready.find((d) => d.id === sj.pickedCandidateId) || ready[0] || null } : null;
+  const kind = ready.length === 0 ? "none" : ready.length === 1 ? "one" : ready.length === 2 ? "two" : "many";
+  const line = EXPLORE_PICK_LINES[kind];
+  const lines = kind === "none" ? ["none of these can go now.", "something else?"] : [line]; // same words; two stacked lines fit on 390 (Cowork 04:5x)
+  return { kind, line, lines, go: ready.find((d) => d.id === sj.pickedCandidateId) || ready[0] || null };
 }
-// Called after each explore render: when both lines have been read, open the one card (or go back to the paper for none).
+// Called after each explore render: hide the list while checking, then show it (two / many) or move on by itself (one / none).
 function scheduleExploreWhyNext() {
   const sj = state.secondJourney;
-  const why = state.scene === "explore" && sj?.step === "candidates" ? exploreChogWhy(sj) : null;
-  if (!why || sj.exploreWhyWent) return; // once per save: Back from the card stays on the picks
-  const startedAt = chogLinesStartedAt.get("exploreWhy")?.at ?? Date.now();
+  const pick = explorePickState(sj);
+  if (!pick) return;
+  if (typeof chogHelpRemember === "function") chogHelpRemember("exploreChogSay", pick.lines); // [A-1293] the ? says it again
+  const hideList = pick.kind !== "two" && pick.kind !== "many";
+  if (hideList) document.querySelectorAll(".secondJourney__pick").forEach((btn) => { btn.hidden = true; });
+  if (pick.kind === "checking") {
+    if (sj.laneReading !== true) sceneTimeout(() => { if (state.scene === "explore" && state.secondJourney === sj && sj.step === "candidates") render(); }, Math.max(0, pick.until - Date.now()) + 30);
+    return;
+  }
+  if (!hideList || sj.exploreWhyWent) return;
+  if (!sj.whyResultAt) sj.whyResultAt = Date.now();
   sceneTimeout(() => {
-    const now = state.secondJourney;
-    if (state.scene !== "explore" || now !== sj || sj.step !== "candidates") return;
-    const again = exploreChogWhy(sj);
-    if (!again || again.kind !== why.kind) return;
+    if (state.scene !== "explore" || state.secondJourney !== sj || sj.step !== "candidates" || sj.exploreWhyWent) return;
+    const again = explorePickState(sj);
+    if (!again || again.kind !== pick.kind) return;
     sj.exploreWhyWent = true;
     if (again.kind === "none") { sj.step = "interests"; render(); return; }
     sj.pickedCandidateId = again.go.id;
     persistSecondDraft();
     handleCandidateOk();
-  }, Math.max(0, startedAt + chogLinesMs(why.lines) - Date.now()));
+  }, Math.max(0, sj.whyResultAt + chogLinesMs(pick.lines) - Date.now())); // all lines read, a breath after
 }
 
 // [A-1293] The ? help sticker (Owner 20:1x): under the bell's spot on the right, on a screen where Chog has spoken; a tap = Chog says that
@@ -14825,10 +14836,12 @@ function endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid) {
 //   completed = quiet Home only (A-411-n §2). Reduced motion = same order (the cue is a still label, no wave). Copy = locked lines only.
 import { TAP_CUE_TIMING as A891_TAP_CUE_TIMING } from "./chog-home.js";
 const POST_FILE_QUIET_HOME_MS = 8000; // Owner 2026-10-08 ~8 s, tune on device (replaces the HOME_FIRST_JOURNEY_CARD_MS reuse on this path only)
-const A891_FILED_LINE = "I'll keep it here.";
-const A891_SECOND_INTRO_LINES = ["I found a few things.", "wanna see a few more?"];
+const A891_FILED_LINE = "I'll keep the details at home."; // [A-1297 · Owner 03:3x]
+const A1297_SECOND_DONE_LINE = "done!"; // [A-1297 · Owner 03:3x] after the Journey 2 receipt is filed
+const A891_SECOND_INTRO_LINES = ["let's try more kinds of jobs!", "work's coming!"]; // [A-1297 · Owner 03:0x/03:3x] Home only; the Explore paper says nothing
 // Reading hold for the filed line before Home settles = the existing A-725 Chog-line hold (1.5 s); not an Owner number, tune on device.
 const A891_FILED_LINE_HOLD_MS = A891_TAP_CUE_TIMING.holdMs;
+const A891_FILED_LINE_READ_MS = Math.max(3000, chogSpeakMs(A891_FILED_LINE)); // [A-1297 · Owner "3초정도"] the first filed line is read before Home (never shorter than its read time)
 // Intro line → Explore Paper = the existing short beat before a card (HOME_FIRST_JOURNEY_CARD_MS, 1.2 s); not an Owner number, tune on device.
 const A891_SECOND_INTRO_TO_PAPER_MS = Math.max(HOME_FIRST_JOURNEY_CARD_MS + 1500, chogLinesMs(A891_SECOND_INTRO_LINES)); // both intro lines read one at a time (+ a breath) before the Explore paper
 const SECOND_INTRO_SEEN_KEY = scopedSecondKey("araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
@@ -14896,7 +14909,7 @@ function a891AfterFiling(returnView, valid) {
     // left set it would make the Home after filing replay the First arrival (First Send card) instead of the quiet Home.
     state.homeArrival = false;
     if (teach) a891ChogSay(document.querySelector("#returnChogHop #chogHome"), "returnKeepLine", [A891_FILED_LINE]);
-    sceneTimeout(() => { if (valid() && state.scene === "return") goHomeFromFilebox(); }, A891_FILED_LINE_HOLD_MS);
+    sceneTimeout(() => { if (valid() && state.scene === "return") goHomeFromFilebox(); }, teach ? A891_FILED_LINE_READ_MS : A891_FILED_LINE_HOLD_MS);
     return false;
   });
 }
@@ -14936,7 +14949,6 @@ function a891HomeChogTap() {
     openSecondJourneyExplore();
     if (state.scene !== "explore") { homeSay?.remove(); return; }
     // The same two lines stay over Chog on the Paper's first view (until its next render) so they can be read.
-    a891ChogSay(document.querySelector('.stage[data-scene="explore"] #chogHome'), "secondIntroLine", A891_SECOND_INTRO_LINES);
   }, A891_SECOND_INTRO_TO_PAPER_MS);
 }
 
