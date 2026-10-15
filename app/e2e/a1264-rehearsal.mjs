@@ -46,7 +46,7 @@ const COPY_ALLOW = new Set([
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
   "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -796,19 +796,21 @@ async function laneJarPiggy() {
     const t = (await checkpoint(p, "jar-r2")).text;
     assert.ok(!t.includes(JAR_LINE) && !t.includes(BELL_LINE), `guide again: ${JSON.stringify(t.slice(-6))}`);
   });
-  // KNOWN until the fork-scope origin index is decided: after the Journey 2 switch the app runs in the fork scope, whose Piggy index is empty
-  // (the first Piggy and its birth mark live in the testnet scope), so + Piggy stops before Face ID (origin_index_missing) and nothing shows.
-  await knownCheck("piggy · Chog opens the Home paper → + Piggy → a new Piggy is made (Name it)", async () => {
+  // + Piggy is not open yet: the tab stays where it is, grey with "soon", and a tap starts nothing (no Face ID, no index read, no Name it).
+  await check("piggy · Chog opens the Home paper → + Piggy is grey with \"soon\" → a tap does nothing", async () => {
     await click(p, "#chogHomeHit", "Chog");
     await sleep(2500); // the paper has finished opening (a person reads it before tapping)
-    await click(p, ".homePlusPiggyTab", "+ Piggy");
-    await checkpoint(p, "plus-piggy");
-    try { await until(p, "Name it for the new Piggy", (s) => s.scene === "name", 20_000); }
-    catch (e) {
-      const idx = await p.page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("araso.myPiggiesIndex.v1.")).join(","));
-      throw new Error(`${e.message} · Piggy index keys: ${idx || "none"}`);
-    }
-    await checkpoint(p, "plus-piggy-name");
+    const tab = await p.page.evaluate(() => { const t = document.querySelector(".homePlusPiggyTab"); if (!t) return null; const cs = getComputedStyle(t); return { text: t.textContent.replace(/\s+/g, " ").trim(), disabled: t.getAttribute("aria-disabled"), filter: cs.filter, opacity: cs.opacity }; });
+    assert.ok(tab, "no + Piggy tab");
+    assert.ok(/\bsoon\b/.test(tab.text), `tab text: ${tab.text}`);
+    assert.equal(tab.disabled, "true", `aria-disabled ${tab.disabled}`);
+    assert.ok(/grayscale/.test(tab.filter), `not grey: filter ${tab.filter}`);
+    const before = eventsOf(w, "jp").filter((e) => e.startsWith("passkey_get")).length;
+    await p.page.locator(".homePlusPiggyTab").click({ force: true });
+    await sleep(3000);
+    await checkpoint(p, "plus-piggy-soon");
+    assert.equal((await look(p)).scene, "sendstay", "a tap moved the scene");
+    assert.equal(eventsOf(w, "jp").filter((e) => e.startsWith("passkey_get")).length, before, "a tap asked for Face ID");
   });
   await p.context.close();
 }

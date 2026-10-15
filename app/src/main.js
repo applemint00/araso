@@ -10682,6 +10682,22 @@ function homePaperVisiblyOpen() {
   return typeof progress === "number" && progress >= 0.99;
 }
 
+// Owner: more Piggies are not open yet — the tab stays in its place, greyed, with "soon", and does nothing.
+const PLUS_PIGGY_SOON = true;
+function markPlusPiggySoon(paper) {
+  paper.querySelectorAll(".homePlusPiggyTab").forEach((tab) => {
+    tab.classList.add("is-soon");
+    tab.setAttribute("aria-disabled", "true");
+    const label = tab.querySelector(".homePlusPiggyTab__label");
+    if (label && !label.querySelector(".homePlusPiggyTab__soon")) {
+      const soon = document.createElement("span");
+      soon.className = "homePlusPiggyTab__soon";
+      soon.textContent = "soon";
+      label.append(" ", soon);
+    }
+  });
+}
+
 function mountHomeResidentModule({ reopen = false } = {}) {
   teardownHomeResidentModule();
   // 다음 render() 의 teardownScene() 이(=씬이 통째로 바뀔 때) 이 mount 도 함께 정리한다.
@@ -10701,6 +10717,8 @@ function mountHomeResidentModule({ reopen = false } = {}) {
       // 모든 탭(1마리 탭 · 접힘용 복제 · 창 안 탭)과 pointer/touch/keyboard 가 이 콜백 하나로 모이므로
       // 여기서 막는다 — 픽셀·위치·열린 종이 동작 변화 0.
       if (!homePaperVisiblyOpen()) return;
+      // + Piggy is not open yet (grey "soon"): a tap starts nothing — no Face ID, no index read.
+      if (PLUS_PIGGY_SOON) return;
       // [A-531] 그대로 재사용 — 새 인증/탄생 경로 0.
       beginAddPiggy().then(() => render()).catch(() => render());
     },
@@ -10747,7 +10765,7 @@ function mountHomeResidentModule({ reopen = false } = {}) {
       if (!showAddPiggyTab(state.scene, "home")) {
         paper.querySelectorAll(".homePlusPiggyTab, .homePeekBody, .homePeekHandClip").forEach((el) => el.remove());
         paper.querySelectorAll(".hasPeek").forEach((el) => el.classList.remove("hasPeek"));
-      }
+      } else if (PLUS_PIGGY_SOON) markPlusPiggySoon(paper);
       // [A-624] 폭 경계를 넘은 재mount 는 펼침 상태를 그대로 되살린다(1마리 모듈은 open() no-op).
       if (reopen) api.open();
     })
