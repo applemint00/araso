@@ -100,7 +100,7 @@ await check("W4 turned on but unusable => refused BEFORE Face ID (escrow unset /
   assert.equal(why({}), null);
   assert.equal(load({ cfg: CFG({ escrowAddress: undefined }) }).api.a915GiftCreateExecutor(), null, "no executor for a bad config");
 });
-await check("W5 happy path: ONE signer session, approve -> create -> gas deposit in order (exact shapes), then register { action, giftId, gasTx }, link issued", async () => {
+await check("W5 happy path: ONE signer session, approve -> create -> gas deposit in order, then register letter hash, link issued", async () => {
   const regs = []; const { api, chain, storage } = load({ cfg: CFG(), client: okReg(regs) });
   const p = await plan(api); assert.equal(p.ok, true, p.reason);
   assert.ok(p.gasDeposit && p.gasDeposit.chainId === 143 && p.gasDeposit.to === SPONSOR);
@@ -112,10 +112,12 @@ await check("W5 happy path: ONE signer session, approve -> create -> gas deposit
   assert.equal(dap.functionName, "approve"); assert.equal(dap.args[0].toLowerCase(), ESCROW.toLowerCase()); assert.equal(dap.args[1], BigInt(p.escrowCreateArgs.amount)); assert.notEqual(dap.args[1], maxUint256);
   assert.equal(cr.to.toLowerCase(), ESCROW.toLowerCase()); const dcr = decodeFunctionData({ abi: ABI, data: cr.data }); assert.equal(dcr.functionName, "create"); assert.equal(dcr.args[0], p.giftId);
   assert.equal(dp.to.toLowerCase(), SPONSOR.toLowerCase()); assert.equal(dp.data, p.giftId); assert.equal(dp.value, p.gasDeposit.value);
-  assert.equal(regs.length, 1); assert.deepEqual(Object.keys(regs[0]), ["action", "giftId", "gasTx"]);
+  assert.equal(regs.length, 1); assert.deepEqual(Object.keys(regs[0]), ["action", "giftId", "gasTx", "note", "letterHash"]);
   assert.equal(regs[0].action, "register_gas_tx"); assert.equal(regs[0].giftId, p.giftId); assert.equal(regs[0].gasTx, keccak256(chain.log.sent[2]));
+  assert.equal(regs[0].note, p.record.note); assert.equal(regs[0].letterHash, p.record.letterHash);
   const st = api.a915StoreRead(); assert.equal(st.length, 1); assert.equal(st[0].gasDeposit.registered, true); assert.equal(st[0].gasDeposit.txHash, regs[0].gasTx);
-  const raw = [...storage._m.values()].join(""); assert.equal(raw.includes(p.fragment.token), false, "claim token never stored"); assert.equal(raw.includes("note"), false);
+  assert.equal(st[0].note, p.record.note); assert.equal(st[0].letterHash, p.record.letterHash);
+  const raw = [...storage._m.values()].join(""); assert.equal(raw.includes(p.fragment.token), false, "claim token never stored");
   // after the step every shape is closed again
   for (const c of buildGiftCreateStepCalls(p, { escrowAddress: ESCROW }).calls) assert.equal(preparedSignProblem({ chainId: 143, type: "eip1559", nonce: 1, gas: 100_000n, maxFeePerGas: 200_000_000_000n, maxPriorityFeePerGas: 1n, to: c.to, data: c.data, value: c.value }), "chain_id_mismatch", `${c.label} closed after the step`);
 });

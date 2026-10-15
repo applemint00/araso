@@ -89,6 +89,36 @@ async function sha256Hex(text) {
   return Array.from(new Uint8Array(digest)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+const GIFT_LETTER_FRONTS = new Set(["01", "02", "04"]);
+const GIFT_LETTER_HASH = /^[0-9a-f]{64}$/;
+const GIFT_LETTER_CONTROLS = /[\u0000-\u0009\u000b-\u001f\u007f]/;
+
+/** Canonical server-side Gift letter payload. Newlines separate front / TO / message / FROM. */
+export function normalizeGiftLetter(note) {
+  if (typeof note !== "string" || note.length > 140 || note.includes("\r") || GIFT_LETTER_CONTROLS.test(note)) return null;
+  const parts = note.split("\n");
+  if (parts.length !== 4 || !GIFT_LETTER_FRONTS.has(parts[0])) return null;
+  const [front, to, message, from] = parts;
+  if (to.length > 80 || message.length > 140 || from.length > 40) return null;
+  return Object.freeze({ front, to, message, from, note: parts.join("\n") });
+}
+
+export async function hashGiftLetter(note) {
+  const normalized = normalizeGiftLetter(note);
+  return normalized ? sha256Hex(normalized.note) : null;
+}
+
+/** Bad server metadata hides letter fields, but a valid front still leaves the Gift card usable. */
+export async function verifyGiftLetter({ note, letterHash } = {}) {
+  const front = typeof note === "string" && GIFT_LETTER_FRONTS.has(note.slice(0, 2)) ? note.slice(0, 2) : null;
+  const normalized = normalizeGiftLetter(note);
+  if (!normalized || typeof letterHash !== "string" || !GIFT_LETTER_HASH.test(letterHash)) {
+    return front ? { front, to: "", message: "", from: "", verified: false } : null;
+  }
+  const actual = await sha256Hex(normalized.note);
+  return timingSafeEqualHex(actual, letterHash) ? { ...normalized, verified: true } : { front: normalized.front, to: "", message: "", from: "", verified: false };
+}
+
 /** raw claim token 한 개. **돌려주는 즉시 잊는 값이다** — 어디에도 저장하지 않는다. */
 export function mintClaimToken(byteLength = 32) {
   const n = Number.isInteger(byteLength) && byteLength >= 16 && byteLength <= 64 ? byteLength : 32;
@@ -208,13 +238,11 @@ export function isStorableLinkRecord(record) {
 /**
  * 링크 URL. 토큰은 **fragment 에** 둔다 — query 였다면 서버 로그·Referer 로 새어 나간다.
  */
-export function buildClaimUrl(origin, { giftId, token, note = "", amountUsd = null } = {}) {
+export function buildClaimUrl(origin, { giftId, token } = {}) {
   const base = typeof origin === "string" ? origin.replace(/\/+$/, "") : "";
   if (!base || typeof giftId !== "string" || !giftId) return null;
   if (typeof token !== "string" || !TOKEN.test(token)) return null;
-  const display = typeof note === "string" && note ? `&n=${encodeURIComponent(note.slice(0, 140))}` : "";
-  const amount = [20, 50, 100].includes(Number(amountUsd)) ? `&a=${Number(amountUsd)}` : "";
-  return `${base}/claim#g=${encodeURIComponent(giftId)}&t=${token}&v=${GIFT_LINK_VERSION}${display}${amount}`;
+  return `${base}/gift#g=${encodeURIComponent(giftId)}&t=${token}&v=${GIFT_LINK_VERSION}`;
 }
 
 /** 받는 쪽이 연 URL 을 읽는다. 잘못된 링크를 **조용히 고치지 않는다**. */
@@ -229,9 +257,7 @@ export function parseClaimUrl(url) {
   if (!giftId) return { ok: false, reason: "no_gift_id" };
   if (!TOKEN.test(token)) return { ok: false, reason: "bad_token" };
   if (version !== GIFT_LINK_VERSION) return { ok: false, reason: "version_mismatch" };
-  const note = params.get("n") || "";
-  const amountUsd = Number(params.get("a"));
-  return { ok: true, giftId, token, note: note.slice(0, 140), amountUsd: [20, 50, 100].includes(amountUsd) ? amountUsd : null };
+  return { ok: true, giftId, token };
 }
 
 /**

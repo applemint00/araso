@@ -27,7 +27,7 @@ const B32 = /^0x[0-9a-f]{64}$/;
 export function createVercelKvGiftSponsorStore({ url, token, fetchImpl = globalThis.fetch, prefix = "gift-sponsor", timeoutMs = 8000 } = {}) {
   if (typeof url !== "string" || !/^https:\/\/[^\s/]+\/?$/.test(url) || typeof token !== "string" || token === "") return null;
   const base = url.replace(/\/$/, "");
-  const K = { gift: (id) => `${prefix}:gift:${id}`, ids: `${prefix}:ids`, dep: (tx) => `${prefix}:dep:${tx}`, gastx: (id) => `${prefix}:gastx:${id}`, lease: `${prefix}:lease`, arch: (id) => `${prefix}:arch:${id}:${Date.now()}` };
+  const K = { gift: (id) => `${prefix}:gift:${id}`, ids: `${prefix}:ids`, dep: (tx) => `${prefix}:dep:${tx}`, gastx: (id) => `${prefix}:gastx:${id}`, letter: (id) => `${prefix}:letter:${id}`, lease: `${prefix}:lease`, arch: (id) => `${prefix}:arch:${id}:${Date.now()}` };
 
   async function cmd(...args) {
     const ac = new AbortController(); const t = setTimeout(() => ac.abort(), timeoutMs);
@@ -74,6 +74,14 @@ export function createVercelKvGiftSponsorStore({ url, token, fetchImpl = globalT
       idOk(giftId);
       const r = Number(await cmd("EVAL", REGISTER, 2, K.gastx(giftId), K.dep(hash), hash, giftId));
       return ({ 1: "created", 2: "same", 3: "conflict", 4: "reused" })[r] ?? "conflict";
+    },
+    async letterOf(giftId) { const raw = await cmd("GET", K.letter(idOk(giftId))); return raw ? JSON.parse(raw) : null; },
+    async registerLetter(giftId, letter) {
+      idOk(giftId);
+      const raw = JSON.stringify(letter);
+      const prior = await cmd("GET", K.letter(giftId));
+      if (prior) return prior === raw ? "same" : "conflict";
+      return (await cmd("SET", K.letter(giftId), raw, "NX")) === "OK" ? "created" : ((await cmd("GET", K.letter(giftId))) === raw ? "same" : "conflict");
     },
     /** [F-6] fixed-window counter; resolves to the count INCLUDING this hit. Callers compare to their injected limit. */
     async hit(bucket, windowSeconds) { return Number(await cmd("EVAL", RATE, 1, `${prefix}:rl:${bucket}`, Math.floor(windowSeconds))); },

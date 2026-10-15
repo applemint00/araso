@@ -86,13 +86,14 @@ const vercelMatch = (source, p) => {
   throw new Error(`unexpected vercel source form: ${source}`);
 };
 
-await check("S1 vercel.json: rewrites /claim and /j2 → /index.html (SPA); nothing rewrites /api/*; root and /?i= stay unrewritten", () => {
+await check("S1 vercel.json: /gift has a fixed OG page; /claim and /j2 remain SPAs", () => {
   // [A-946 RE-PIN] + /j2 (the shared-fork boot path). pre-A-946: exactly [{ source: "/claim", destination: "/index.html" }]
-  deq(VERCEL.rewrites, [{ source: "/claim", destination: "/index.html" }, { source: "/j2", destination: "/index.html" }]);
+  deq(VERCEL.rewrites, [{ source: "/gift", destination: "/gift.html" }, { source: "/claim", destination: "/index.html" }, { source: "/j2", destination: "/index.html" }]);
   for (const p of ["/api/grant", "/api/grant/", "/api", "/", "/index.html", "/assets/x.js", "/claimx", "/claim/x"]) {
     assert.equal(VERCEL.rewrites.some((r) => vercelMatch(r.source, p)), false, `rewrite must not match ${p}`);
   }
   assert.equal(vercelMatch("/claim", "/claim"), true);
+  assert.equal(vercelMatch("/gift", "/gift"), true);
   assert.equal(vercelMatch("/j2", "/j2"), true); assert.equal(VERCEL.rewrites.some((r) => vercelMatch(r.source, "/j2/x")), false); // [A-946]
   assert.equal(VERCEL.redirects, undefined, "no redirects (a redirect would drop/expose nothing, but none is needed)");
 });
@@ -106,15 +107,15 @@ await check("S3 vercel.json: /api/grant function config, build/output/install un
       "api/gift-sponsor.js": { maxDuration: 60, includeFiles: "relayer/src/**" }, "api/gift-sponsor-reconcile.js": { maxDuration: 60, includeFiles: "relayer/src/**" } } }); // pre-A-913 baseline: only "api/grant.js"
   deq(Object.keys(VERCEL).sort(), ["buildCommand", "crons", "functions", "headers", "installCommand", "outputDirectory", "rewrites"]); // pre-A-913 baseline: no "crons"
 });
-await check("S4 claim URL contract: buildClaimUrl → fragment-only identity plus optional display metadata; query never carries it", () => {
+await check("S4 claim URL contract: /gift fragment carries identity only; display metadata stays server-side", () => {
   const { token, url } = mintLink("https://arasoo.vercel.app", "gift s4/é");
-  assert.match(url, /^https:\/\/arasoo\.vercel\.app\/claim#g=gift%20s4%2F%C3%A9&t=[^&]+&v=1$/);
+  assert.match(url, /^https:\/\/arasoo\.vercel\.app\/gift#g=gift%20s4%2F%C3%A9&t=[^&]+&v=1$/);
   const u = new URL(url);
-  assert.equal(u.pathname, "/claim");
+  assert.equal(u.pathname, "/gift");
   assert.equal(u.search, "");
   assert.equal(u.hash.includes(token), true);
-  deq(parseClaimUrl(url), { ok: true, giftId: "gift s4/é", token, note: "", amountUsd: null });
-  deq(readClaimFragment(`https://x.test/claim?i=tester01${url.slice(url.indexOf("#"))}`), { status: GIFT_ENTRY_STATUS.READY, giftId: "gift s4/é", token, note: "", amountUsd: null }, "?i= + #g coexist");
+  deq(parseClaimUrl(url), { ok: true, giftId: "gift s4/é", token });
+  deq(readClaimFragment(`https://x.test/gift?i=tester01${url.slice(url.indexOf("#"))}`), { status: GIFT_ENTRY_STATUS.READY, giftId: "gift s4/é", token }, "?i= + #g coexist");
 });
 await check("S5 live Gift stays fail-closed: GIFT_RECORD_CONFIG / GIFT_CLAIM_SUBMIT_CONFIG / ISSUANCE_AUTHORITY are null literals; source/submitter derive only from them", () => {
   assert.match(CODE, /^const GIFT_RECORD_CONFIG = null;/m);

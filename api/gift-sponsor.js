@@ -14,6 +14,8 @@ export const MAX_RESPONSE_BYTES = 16384;
 
 const TOP_KEYS = ["giftId", "authorization", "revokeAuthorization", "delegation", "claim"]; // + optional "gasTx" (must equal the registered hash)
 const REGISTER_KEYS = ["action", "giftId", "gasTx"];
+const REGISTER_LETTER_KEYS = [...REGISTER_KEYS, "note", "letterHash"];
+const READ_KEYS = ["action", "giftId"];
 const AUTH_KEYS = ["chainId", "address", "nonce", "r", "s", "yParity"];
 const DELEG_KEYS = ["delegate", "delegator", "authority", "caveats", "salt", "signature"];
 const CAVEAT_KEYS = ["enforcer", "terms", "args"];
@@ -33,7 +35,8 @@ function authOk(a) {
 /** Shape allowlist only (keys + primitive types). Value semantics are the service's job. */
 const exactTransport = (b, keys) => exact(b, keys) || exact(b, [...keys, ...FORK_KEYS]);
 const forkBindingOk = (b) => !Object.hasOwn(b, "forkInstanceId") || (isStr(b.forkInstanceId) && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(b.forkInstanceId) && isStr(b.escrowAddress));
-export function isRegisterBody(b) { return exactTransport(b, REGISTER_KEYS) && forkBindingOk(b) && b.action === "register_gas_tx" && isStr(b.giftId) && isStr(b.gasTx); }
+export function isRegisterBody(b) { return (exactTransport(b, REGISTER_KEYS) || exactTransport(b, REGISTER_LETTER_KEYS)) && forkBindingOk(b) && b.action === "register_gas_tx" && isStr(b.giftId) && isStr(b.gasTx) && (!Object.hasOwn(b, "note") || (isStr(b.note) && isStr(b.letterHash))); }
+export function isReadLetterBody(b) { return exactTransport(b, READ_KEYS) && forkBindingOk(b) && b.action === "read_letter" && isStr(b.giftId); }
 
 export function isAllowedSponsorBody(b) {
   if (!(exactTransport(b, TOP_KEYS) || exactTransport(b, [...TOP_KEYS, "gasTx"])) || !forkBindingOk(b) || !isStr(b.giftId) || (Object.hasOwn(b, "gasTx") && !isStr(b.gasTx))) return false;
@@ -106,7 +109,8 @@ export function createGiftSponsorHandler({ getRuntime = () => getGiftSponsorRunt
       let parsed;
       try { parsed = JSON.parse(buf.toString("utf8")); } catch { return respond(res, 400, { ok: false, error: "bad_request" }); }
       const registering = isRegisterBody(parsed);
-      if (!registering && !isAllowedSponsorBody(parsed)) return respond(res, 400, { ok: false, error: "bad_request" });
+      const reading = isReadLetterBody(parsed);
+      if (!registering && !reading && !isAllowedSponsorBody(parsed)) return respond(res, 400, { ok: false, error: "bad_request" });
       let rt;
       try { rt = getRuntime(); } catch { rt = null; }                                          // misconfigured env == OFF (never half-running)
       if (!rt || !rt.service || rt.service.ready !== true) return respond(res, 503, { ok: false, error: "unavailable_not_sent" });
@@ -117,7 +121,7 @@ export function createGiftSponsorHandler({ getRuntime = () => getGiftSponsorRunt
         try { allowed = (await rt.rateLimit({ ip: clientIp(req), giftId: parsed.giftId })) === true; } catch { return respond(res, 503, { ok: false, error: "unavailable_not_sent" }); }
         if (!allowed) return respond(res, 429, { ok: false, error: "rate_limited" });
       }
-      const r = registering ? await rt.service.register(serviceBody) : await rt.service.handle(serviceBody);                                  // validated object only (JSON.parse keeps the last duplicate key)
+      const r = registering ? await rt.service.register(serviceBody) : reading ? await rt.service.readLetter(serviceBody) : await rt.service.handle(serviceBody); // validated object only
       if (!r || ![200, 400, 409, 503].includes(r.status) || !isObj(r.body)) return respond(res, 503, { ok: false, error: "unavailable" });
       return respond(res, r.status, r.body);
     } catch {

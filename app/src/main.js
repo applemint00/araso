@@ -66,7 +66,7 @@ import {
   loadLastSplit, saveLastSplit, prefillFromLastSplit,
 } from "./add-money.js";
 import { CONTROL_MODE_OPTIONS, isControlMode, loadControlMode, saveControlMode } from "./piggy-control-mode.js";
-import { CLAIM_RESULT, claimStatement } from "./gift-piggy-claim-link.js";
+import { CLAIM_RESULT, claimStatement, verifyGiftLetter } from "./gift-piggy-claim-link.js";
 import {
   beginGiftClaim,
   bindGiftToNewPiggy,
@@ -110,7 +110,7 @@ import { checkIntentFunding, fundingRequestForShortfall, resumeAfterFunding, mar
 import { buildFundingContext, validateFundingContext, scopeForChainId, FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "./funding-context.js";
 // ── [A-898] imports (Funding Paper + Send a Piggy; logic lives in the two modules) ──
 import { FUNDING_PAPER_CONFIG, fundingPaperBalanceGrew, fundingPaperMarkup, fundingPaperReduce, fundingPaperReturnsToDraft, fundingPaperView, openFundingPaper } from "./funding-paper.js";
-import { GIFT_SEND_CONFIG, giftDraftRestore, giftDraftSnapshot, giftSendEvaluate, giftSendFundingArgs, giftSendPaperMarkup, giftSendReduce, giftSendResumeCheck, giftSendView, lockQuote, openGiftSend, planGiftSend, quoteRefreshDue, reconcileQuote, unpackGiftNote } from "./gift-send-paper.js";
+import { GIFT_SEND_CONFIG, giftDraftRestore, giftDraftSnapshot, giftSendEvaluate, giftSendFundingArgs, giftSendPaperMarkup, giftSendReduce, giftSendResumeCheck, giftSendView, lockQuote, openGiftSend, planGiftSend, quoteRefreshDue, reconcileQuote } from "./gift-send-paper.js";
 // ── [A-898] end imports ──
 // ── [A-905] imports (honey jar + Money tab; logic lives in the two modules) ──
 import { JAR_BUMP_FALLBACK_MS, JAR_MIN_TAP_PX, bumpJarElement, createJarArrivals, honeyJarLayerMarkup, jarGate, planJarSlot } from "./honey-jar.js";
@@ -1988,6 +1988,23 @@ let giftPaperOffered = false;
 let giftReceiveFlipped = false;
 // 테스트 관찰용(렌더되지 않는다) — settleBoundGiftClaim() 이 마지막으로 낸 결과.
 let lastGiftClaimSettlement = null;
+
+async function loadPendingGiftDisplay(claim) {
+  if (!claim || claim !== pendingGiftClaim || !claim.giftId) return false;
+  try {
+    const res = await fetch("/api/gift-sponsor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "read_letter", giftId: claim.giftId }) });
+    const body = await res.json();
+    if (!res.ok || body?.ok !== true || body.giftId !== claim.giftId) return false;
+    const letter = await verifyGiftLetter({ note: body.note, letterHash: body.letterHash });
+    const raw = typeof body.amountAtomic === "string" && /^\d+$/.test(body.amountAtomic) ? BigInt(body.amountAtomic) : 0n;
+    const decimals = body.decimals === 6 ? 6 : null;
+    const amountUsd = decimals === 6 && raw % 1000000n === 0n ? Number(raw / 1000000n) : null;
+    if (!letter || ![20, 50, 100].includes(amountUsd) || claim !== pendingGiftClaim) return false;
+    claim.display = { ...letter, amountUsd };
+    render();
+    return true;
+  } catch { return false; }
+}
 
 // [A-579 Lane G] Gift intent 는 **새 Piggy 를 만드는 흐름의 시작**에서 꺼낸다(메모리만 — 저장 0). 흐름이
 // 끝까지 가서 그 새 Piggy 에 묶이면 소비되고, 못 가면 restorePendingGiftClaim 으로 되돌린다.
@@ -6352,8 +6369,8 @@ function renderReceived() {
   inviteKind = wantedInviteKind();
   // [A-734] Gift Open 종이 = 같은 Invite 판, 손글씨 두 줄과 버튼 첫 문구만 캐논 문구. null 이면 기존 Invite 그대로.
   const gift = giftPaperKind();
-  const received = gift && pendingGiftClaim ? unpackGiftNote(pendingGiftClaim.note) : null;
-  if (received) return `<section class="stage stage--giftReceive" data-scene="received" data-gift-card="${received.front}">${a911GiftReceiveMarkup({ front: received.front, fields: received, amountUsd: pendingGiftClaim.amountUsd, flipped: giftReceiveFlipped })}</section>`;
+  const received = gift && pendingGiftClaim ? pendingGiftClaim.display : null;
+  if (received) return `<section class="stage stage--giftReceive" data-scene="received" data-gift-card="${received.front}">${a911GiftReceiveMarkup({ front: received.front, fields: received, amountUsd: received.amountUsd, flipped: giftReceiveFlipped })}</section>`;
   return `
     <section class="stage stage--invite" data-scene="received"${gift ? ` data-gift-paper="${gift}"` : ""}>
       ${arasoBrandMarkup()}
@@ -11353,7 +11370,7 @@ function a915PlanExtras() {
   return { expiry: Number(c.giftExpiryUnix()), gas, sponsor: { sponsorAddress: c.sponsorAddress, chainId: c.chainId } };
 }
 
-// sender's record store: non-secret projection only (giftId · chain · gasDeposit · step hashes). Never the claim token, never the note.
+// Sender retry record. The capability token stays out; the non-secret letter and its hash remain until sponsor registration succeeds.
 function a915StoreRead() {
   try {
     const v = JSON.parse(localStorage.getItem(A915_STORE_KEY) || "[]");
@@ -11409,7 +11426,7 @@ function a915RegisterClient() {
 }
 
 async function a915Register(entry, cfg) {
-  const out = await registerGasDeposit({ record: { giftId: entry.giftId, gasDeposit: entry.gasDeposit }, client: cfg.client || a915RegisterClient() });
+  const out = await registerGasDeposit({ record: { giftId: entry.giftId, gasDeposit: entry.gasDeposit, note: entry.note, letterHash: entry.letterHash }, client: cfg.client || a915RegisterClient() });
   if (out.record && out.record.gasDeposit) a915StorePut({ ...entry, gasDeposit: out.record.gasDeposit });
   return out;
 }
@@ -11434,7 +11451,7 @@ function a915GiftCreateExecutor() {
     if (!plan || plan.ok !== true || !plan.claimUrl || String(plan.record?.senderAddress || "").toLowerCase() !== String(account.address).toLowerCase()) return { ok: false, reason: "executor_unavailable" };
     const built = buildGiftCreateStepCalls(plan, { escrowAddress: cfg.escrowAddress });
     if (!built.ok) return { ok: false, reason: built.reason };
-    const entry = { giftId: plan.giftId, chainId: plan.record.chainId, createdAt: plan.record.createdAt, gasDeposit: plan.record.gasDeposit, steps: {} };
+    const entry = { giftId: plan.giftId, chainId: plan.record.chainId, createdAt: plan.record.createdAt, note: plan.record.note, letterHash: plan.record.letterHash, gasDeposit: plan.record.gasDeposit, steps: {} };
     let clients;
     try { clients = cfg.makeClients(account); } catch { clients = null; }
     const ran = await runGiftCreateCalls({
@@ -17056,8 +17073,9 @@ if (!a1206SwitchUnlocked && state.credential && (state.scene === "name" || state
 if (typeof location !== "undefined") {
   const pendingRead = readClaimFragment(location.href);
   if (pendingRead.status === GIFT_ENTRY_STATUS.READY) {
-    pendingGiftClaim = { giftId: pendingRead.giftId, token: pendingRead.token, note: pendingRead.note || "", amountUsd: pendingRead.amountUsd ?? null };
+    pendingGiftClaim = { giftId: pendingRead.giftId, token: pendingRead.token, display: null };
     stripClaimFragmentFromUrl();
+    void loadPendingGiftDisplay(pendingGiftClaim);
   }
 }
 

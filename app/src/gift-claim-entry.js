@@ -60,7 +60,7 @@ export function readClaimFragment(href) {
     }
     return { status: GIFT_ENTRY_STATUS.MALFORMED, reason: parsed.reason };
   }
-  return { status: GIFT_ENTRY_STATUS.READY, giftId: parsed.giftId, token: parsed.token, note: parsed.note || "", amountUsd: parsed.amountUsd ?? null };
+  return { status: GIFT_ENTRY_STATUS.READY, giftId: parsed.giftId, token: parsed.token };
 }
 
 /**

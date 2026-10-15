@@ -135,10 +135,11 @@ await check("fork profile without its config (or with bad values) → BLOCKED, n
     assert.equal(p.status, "blocked", JSON.stringify(env)); assert.equal(profileScope(p), "");
   }
 });
-await check("fork id named in the build config outside \"/j2\" → BLOCKED; other paths (\"/j2/\", \"/J2\", \"/claim\") never pick the fork", () => {
+await check("fork id named in the build config outside Gift routes → BLOCKED; /gift is the receiver fork route", () => {
   assert.equal(selectBootProfile({ pathname: "/", env: { VITE_ARASO_CHAIN_PROFILE: "monad-fork", ...FORK_ENV }, releaseLevel: 2 }).status, "blocked");
   assert.equal(resolveChainProfile("monad-fork").status, "blocked");
   for (const pathname of ["/j2/", "/J2", "/claim", "/j2x", ""]) assert.equal(selectBootProfile({ pathname, env: { ...FORK_ENV }, releaseLevel: 2 }).id, CHAIN_PROFILE_ID.TESTNET, pathname);
+  assert.equal(selectBootProfile({ pathname: "/gift", env: { ...FORK_ENV }, releaseLevel: 2 }).id, "monad-fork");
 });
 await check("main.js picks the profile once at boot through selectBootProfile (one line, page path, build env)", () => {
   // [A-948 RE-PIN] + journey: storedJourney(). pre-A-948: ... env: import.meta.env });
@@ -289,9 +290,9 @@ await check("(g) passkey credential + PRF salt storage keys unchanged (araso.pas
   // [A-983 re-pin] HEAD lines → sha256 of the same lines at de8c9c8. pre-A-983: if (head !== null) assert.deepEqual(lines(MAIN), lines(head)) with head = git show HEAD:app/src/main.js
   assert.equal(sha(lines(MAIN).join("\n")), BASE_CREDENTIAL_LINES_SHA256);
 });
-await check("vercel.json: /j2 → /index.html added, /claim kept, build command unchanged", () => {
+await check("vercel.json: /gift has its OG entry page; /claim and /j2 stay routed", () => {
   const v = JSON.parse(src("vercel.json"));
-  assert.deepEqual(v.rewrites, [{ source: "/claim", destination: "/index.html" }, { source: "/j2", destination: "/index.html" }]);
+  assert.deepEqual(v.rewrites, [{ source: "/gift", destination: "/gift.html" }, { source: "/claim", destination: "/index.html" }, { source: "/j2", destination: "/index.html" }]);
   assert.equal(v.buildCommand, "npm run build");
 });
 await check("no fork RPC value / admin URL in shipped source (build env only)", () => {

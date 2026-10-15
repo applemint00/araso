@@ -87,12 +87,14 @@ await atest("claimUrl is built only when origin is given, via the real buildClai
   assert.equal(withoutOrigin.claimUrl, null);
 });
 
-await atest("claimUrl carries the selected card letter and amount for the recipient screen", async () => {
+await atest("claimUrl stays short; the selected letter is hash-bound only in the registration record", async () => {
   const note = "02\nDana\nfor you\nSam";
   const plan = await validPlan({ note, presetLabel: 20 });
   const parsed = parseClaimUrl(plan.claimUrl);
-  assert.equal(parsed.note, note);
-  assert.equal(parsed.amountUsd, 20);
+  assert.deepEqual(parsed, { ok: true, giftId: plan.giftId, token: plan.fragment.token });
+  assert.equal(plan.claimUrl.includes("&n="), false);
+  assert.equal(plan.claimUrl.includes("&a="), false);
+  assert.match(plan.record.letterHash, HEX64);
 });
 
 // ── claimTokenHash: same commitment record <-> escrow args, and matches the real getter shape ──
