@@ -48,6 +48,10 @@
           "value": "nosniff"
         },
         {
+          "key": "X-Robots-Tag",
+          "value": "noai, noimageai"
+        },
+        {
           "key": "Permissions-Policy",
           "value": "publickey-credentials-create=(self), publickey-credentials-get=(self), accelerometer=(), camera=(), display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), serial=(), usb=(), interest-cohort=()"
         }

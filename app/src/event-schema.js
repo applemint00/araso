@@ -1,6 +1,6 @@
 // Fixed vocabulary only: no user identifiers, error messages or arbitrary metadata.
 export const EVENT_CODES = Object.freeze(Object.fromEntries(Object.entries({
-  os: ['ios18_7', 'ios18', 'ios17', 'ios_old', 'ipados', 'android', 'mac', 'windows', 'other'],
+  os: ['ios18_7', 'ios18', 'ios17', 'ios_old', 'ipados', 'android', 'mac', 'windows', 'other', 'bot'],
   entry_shown: ['invite', 'public', 'used'],
   entry_blocked: ['invite_only', 'used', 'unsupported_origin'],
   inapp: ['kakao', 'line', 'instagram', 'facebook', 'other'],

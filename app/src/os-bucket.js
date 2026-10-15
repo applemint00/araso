@@ -2,6 +2,8 @@
 // the user agent, version numbers and device model never leave this function.
 export function coarseOsBucket(userAgent) {
   const ua = typeof userAgent === "string" ? userAgent : "";
+  // Crawlers and link-preview fetchers first: many borrow a phone/desktop UA, and they must not read as a person.
+  if (/[\w-]*(?:bot|spider|crawler)\/|compatible;\s*[\w-]*(?:bot|spider)\b|\bBytespider\b|HeadlessChrome|facebookexternalhit|kakaotalk-scrap|\bSlackbot\b|\bTelegramBot\b/i.test(ua)) return "bot";
   if (/\biPad\b/i.test(ua)) return "ipados";
 
   const ios = ua.match(/\b(?:iPhone|iPod)\b[^)]*\bOS (\d+)[._](\d+)/i);
