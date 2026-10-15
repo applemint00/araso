@@ -4649,6 +4649,8 @@ function handleExploreSave(ids) {
   // this keeps only the set the picks were made from. sj.chogSay mirrors the derived line for existing readers.
   sj.exploreOfferedIds = displayedIds;
   sj.chogSay = exploreChogConfirmLine(sj);
+  chogLinesRestart("exploreWhy"); // [A-1283] a new save says its lines again from the first
+  sj.exploreWhyWent = false;
   // [A-849 UI-24] no fake "checking…": rows show immediately. The pinned render() reveal block (CANDIDATES_REVEAL_MS) is
   // only entered while candidatesRevealed is false, so it stays true here and that block never runs.
   sj.candidatesRevealed = true;
@@ -7164,7 +7166,8 @@ function chogLinesRestart(key) { chogLinesStartedAt.delete(key); }
 function chogLineWaits(key, lines) { // ms each line still waits before it shows (0 = showing)
   const sig = lines.join("\n");
   const was = chogLinesStartedAt.get(key);
-  if (!was || was.sig !== sig) chogLinesStartedAt.set(key, { sig, at: Date.now() });
+  if (!was || (was.sig !== sig && !sig.startsWith(`${was.sig}\n`))) chogLinesStartedAt.set(key, { sig, at: Date.now() }); // added lines keep the clock
+  else if (was.sig !== sig) was.sig = sig;
   const elapsed = Date.now() - chogLinesStartedAt.get(key).at;
   let at = 0;
   return lines.map((t) => { const wait = Math.max(0, at - elapsed); at += chogSpeakMs(t) + PACE_BREATH_MS; return wait; });
@@ -12567,6 +12570,12 @@ function homeCharacter(name) {
 function chogHomeMarkupForExplore() {
   const markup = chogHomeMarkup({ padMarkup: homePadMarkup(state.scene) });
   const sj = state.secondJourney;
+  // [A-1283] after "these two?" / "all of them?" and the read: Chog adds why only one goes (or none), the first line stays.
+  const why = state.scene === "explore" && sj?.step === "candidates" ? exploreChogWhy(sj) : null;
+  if (why) {
+    const two = `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)">${chogLinesMarkup("exploreWhy", why.lines)}</span>`;
+    return markup.replace('<div class="chogHome__hit"', `${two}<div class="chogHome__hit"`);
+  }
   // [A-849 UI-24] WAIT state (picks exist, 0 candidates, no read in flight): Chog says the two Owner lines, stacked.
   if (state.scene === "explore" && sj?.step === "candidates" && secondLaneMode(sj) && sj.laneReading !== true
       && secondPickedErrandIds(sj).length > 0 && secondLaneDestinations(sj).length === 0) {
@@ -12580,8 +12589,51 @@ function chogHomeMarkupForExplore() {
   // [Owner 2026-09-19 "초그 발화 위치 머리 위에" · A-429] 머리 위 좌표는 이제 .chogCheckLine
   // 한 곳(style.css)에 있다 — 귀환 알람과 같은 자리. 값 = INFERRED.
   // [A-431] A-429 가 없앤 인라인 transform 만 되돌린다 — Explore 발화 글자 비율(scaleY 없음) 보존.
+  chogLineWaits("exploreWhy", [confirmLine]); // the why line (A-1283) joins this one on the same clock
   const say = `<span class="chogCheckLine" id="exploreChogSay" style="transform:translateX(-50%)">${escapeHtml(confirmLine)}</span>`;
   return markup.replace('<div class="chogHome__hit"', `${say}<div class="chogHome__hit"`);
+}
+
+// [A-1283 · Owner 14:3x–14:4x] After the read settles, Chog says why only one goes (or none) under the confirmation line; once both
+// lines are read (+ a breath) the existing one-line card with Send opens for one of them (none: back to the Explore paper). "Can go" is
+// what the read already decided (a fork Job row = JOB_READY); nothing new is computed. Only where Jobs can run (the fork lane).
+// Owner lines exactly; a case with no Owner line (some but more than one of "all" go) says nothing new (UNKNOWN, never invented).
+let exploreWhyLane = false; // turned on where fork Jobs run (A977_FORK below)
+const EXPLORE_WHY_LINES = Object.freeze({
+  both: "both can go. sending one for now.",
+  all: "all of them work. let's try one first.",
+  one: "only this one can go today.",
+  none: "none of these can go now. something else?",
+});
+function exploreChogWhy(sj) {
+  if (!exploreWhyLane || sj?.laneReading === true) return null;
+  const first = exploreChogConfirmLine(sj);
+  if (!first) return null;
+  const ready = secondLaneDestinations(sj).filter((d) => d.derivedStatus === "JOB_READY");
+  const picks = secondPickedErrandIds(sj).length;
+  const kind = ready.length === 0 ? "none"
+    : first === "these two?" && ready.length === 2 ? "both"
+      : first === "all of them?" && ready.length === picks ? "all"
+        : ready.length === 1 ? "one" : null;
+  return kind ? { kind, lines: [first, EXPLORE_WHY_LINES[kind]], go: ready.find((d) => d.id === sj.pickedCandidateId) || ready[0] || null } : null;
+}
+// Called after each explore render: when both lines have been read, open the one card (or go back to the paper for none).
+function scheduleExploreWhyNext() {
+  const sj = state.secondJourney;
+  const why = state.scene === "explore" && sj?.step === "candidates" ? exploreChogWhy(sj) : null;
+  if (!why || sj.exploreWhyWent) return; // once per save: Back from the card stays on the picks
+  const startedAt = chogLinesStartedAt.get("exploreWhy")?.at ?? Date.now();
+  sceneTimeout(() => {
+    const now = state.secondJourney;
+    if (state.scene !== "explore" || now !== sj || sj.step !== "candidates") return;
+    const again = exploreChogWhy(sj);
+    if (!again || again.kind !== why.kind) return;
+    sj.exploreWhyWent = true;
+    if (again.kind === "none") { sj.step = "interests"; render(); return; }
+    sj.pickedCandidateId = again.go.id;
+    persistSecondDraft();
+    handleCandidateOk();
+  }, Math.max(0, startedAt + chogLinesMs(why.lines) - Date.now()));
 }
 
 // ── [A-893] Wave 5 Chog cues ─────────────────────────────────────────────────────────────────────────
@@ -15434,6 +15486,7 @@ function a977ForkClients() {
   return { chain, transport, publicClient, read };
 }
 if (A977_FORK) {
+  exploreWhyLane = true; // [A-1283] Jobs can run here, so Chog can say why only one goes
   const fork = a977ForkClients();
   const isForkJob = (id) => typeof id === "string" && a977JobKeys.includes(id);
   secondLaneRows = () => a977Rows({ doneJobKeys: a977DoneJobKeys() });
@@ -16397,6 +16450,7 @@ function render() {
     if (state.secondJourney.step === "note") {
       sceneTimeout(advanceExploreNote, EXPLORE_NOTE_MS);
     }
+    if (state.secondJourney.step === "candidates") scheduleExploreWhyNext(); // [A-1283]
     if (state.secondJourney.step === "candidates" && !state.secondJourney.candidatesRevealed) {
       const picks = [...document.querySelectorAll(".secondJourney__pick")];
       picks.forEach((btn) => { btn.hidden = true; });

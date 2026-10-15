@@ -45,7 +45,7 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
 ]);
 function normaliseLine(line, name) {
@@ -602,6 +602,54 @@ async function laneUnlockWhy() {
   }));
 }
 
+// A-1283: after "these two?" / "all of them?" and checking…, Chog says why only one goes (or none), one line at a time; then the one card.
+const FORK_RUNNABLE_ERRANDS = ["market", "order", "clean", "grow", "lp"]; // second-job-readiness.js FORK_JOB_ROWS errand ids
+async function laneExploreWhy() {
+  const cases = [
+    ["xw-two", ["market", "order"], "these two?", "both can go. sending one for now."],
+    ["xw-all", ["market", "order", "clean"], "all of them?", "all of them work. let's try one first."],
+    // the next Explore set (save with nothing picked) holds errands with no fork Job row: some / none can go
+    ["xw-some", "one-of-two", "these two?", "only this one can go today."],
+    ["xw-none", "none-of-two", "these two?", "none of these can go now. something else?"],
+  ];
+  await Promise.all(cases.map(async ([id, picks, first, second]) => {
+    const w = createWorld(`explorewhy-${id}`);
+    const p = await openPerson(browser, w, id); people.push(p);
+    await check(`explore why · ${typeof picks === "string" ? picks : `${picks.length} picked, all can go`} → "${first}" then "${second}" one at a time, then the one-line card with Send`, async () => {
+      await walkFirstJourney(p);
+      await walkReturnAndFile(p);
+      await enterSecond(p);
+      const errands = () => p.page.evaluate(() => [...document.querySelectorAll("input[data-errand-id]")].map((e) => e.dataset.errandId));
+      let shown = await errands();
+      let chosen = picks;
+      if (typeof picks === "string") {
+        for (let r = 0; r < 4; r += 1) {
+          const run = shown.filter((x) => FORK_RUNNABLE_ERRANDS.includes(x)); const rest = shown.filter((x) => !FORK_RUNNABLE_ERRANDS.includes(x));
+          chosen = picks === "one-of-two" ? (run.length && rest.length ? [run[0], rest[0]] : null) : (rest.length >= 2 && shown.length > 2 ? rest.slice(0, 2) : null);
+          if (chosen) break;
+          await click(p, "#exploreSaveButton", "explore save with nothing (next set)"); await sleep(800); shown = await errands();
+        }
+        assert.ok(chosen, `no Explore set for ${picks}: last ${JSON.stringify(shown)}`);
+      }
+      assert.ok(chosen.every((x) => shown.includes(x)) && (chosen.length === 2 ? shown.length > 2 : shown.length === chosen.length), `Explore shows ${JSON.stringify(shown)}`);
+      for (const x of chosen) await p.page.locator(`input[data-errand-id="${x}"]`).check();
+      await click(p, "#exploreSaveButton", "explore save");
+      await until(p, "second line", (st) => st.text.includes(second), 15_000).then(() => checkpoint(p, "why-two-lines"), () => {});
+      const none = picks === "none-of-two";
+      const sendAt = await until(p, none ? "back to the Explore paper" : "one-line card Send", async () => (none ? (await p.page.locator("input[data-errand-id]").count()) > 0 : live(p, "#secondSendButton")), 25_000).then(() => Date.now(), () => null);
+      const tl = await readTimeline(p);
+      const seen = tl.filter((e) => e.k === "chog" && e.v).map((e) => e.v);
+      const one = tl.find((e) => e.k === "chog" && e.v === first);
+      const both = tl.find((e) => e.k === "chog" && e.v === `${first} ${second}`);
+      assert.ok(one && both, `Chog said ${JSON.stringify([...new Set(seen)].slice(-6))}`);
+      assert.ok(both.t - one.t >= chogMs(first) + 1000 - 300, `second line ${both.t - one.t} ms after the first`);
+      assert.ok(sendAt && sendAt - both.t >= chogMs(second) + 1000 - 400, `${none ? "paper" : "card"} ${sendAt ? sendAt - both.t : "never"} ms after both lines`);
+      assert.equal(await p.page.locator(".secondJourney__pick").count(), 0, none ? "back on the Explore paper (no pick list)" : "the card is the one-line card (no pick list)");
+      if (none) assert.equal(await live(p, "#secondSendButton"), false, "nothing to send");
+      await checkpoint(p, "why-card");
+    });
+  }));
+}
 async function laneJobFail() {
   const cases = [
     ["jf-reverted", "after Away · the Job tx reverts", (w) => w.forkChain.faults.revert.add("approve"), "failed"],
@@ -869,7 +917,7 @@ function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames()].filter(Boolean));
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });
