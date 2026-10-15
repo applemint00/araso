@@ -1077,6 +1077,7 @@ function sendFailureCopy(scene, message, detail) {
 
 let awayShownAt = 0;
 function setScene(scene, message = "", detail = "") {
+  if (scene !== state.scene && typeof chogHelpForget === "function") chogHelpForget(); // [A-1293] the ? replays only what Chog said on this screen
   ({ message, detail } = sendFailureCopy(scene, message, detail));
   // Away is the only proof Piggy left: keep it on screen long enough to be seen before Return replaces it.
   if (scene === "return" && state.scene === "away" && Date.now() - awayShownAt < PACE_OUTSIDE_MIN_MS) {
@@ -12761,6 +12762,46 @@ function scheduleExploreWhyNext() {
   }, Math.max(0, startedAt + chogLinesMs(why.lines) - Date.now()));
 }
 
+// [A-1293] The ? help sticker (Owner 20:1x): under the bell's spot on the right, on a screen where Chog has spoken; a tap = Chog says that
+// screen's last line(s) again, one line at a time (no new copy). No line on this screen yet = no ?.
+let chogHelpSaid = null; // { scene, id, lines }
+function chogHelpRemember(id, text) {
+  const lines = (Array.isArray(text) ? text : [text]).filter((t) => typeof t === "string" && t.trim());
+  if (!lines.length || !state.scene) return;
+  chogHelpSaid = { scene: state.scene, id, lines };
+  chogHelpMount();
+}
+function chogHelpForget() {
+  chogHelpSaid = null;
+  document.querySelector("#chogHelp")?.remove();
+}
+function chogHelpMount() {
+  if (typeof document === "undefined") return;
+  const said = chogHelpSaid && chogHelpSaid.scene === state.scene ? chogHelpSaid : null;
+  const stage = document.querySelector(`.stage[data-scene="${state.scene}"]`);
+  const help = document.querySelector("#chogHelp");
+  if (!said || !stage) { help?.remove(); return; }
+  if (help && help.parentElement === stage) return;
+  help?.remove();
+  const btn = document.createElement("button");
+  btn.id = "chogHelp";
+  btn.className = "chogHelp";
+  btn.type = "button";
+  btn.setAttribute("aria-label", "?");
+  btn.innerHTML = '<img src="/card/help-sticker.svg" alt="" draggable="false" />';
+  btn.addEventListener("click", () => {
+    const now = chogHelpSaid && chogHelpSaid.scene === state.scene ? chogHelpSaid : null;
+    if (!now) return;
+    document.querySelector(`#chogHome #${now.id}`)?.remove(); // said again from the start (the one-line-at-a-time clock restarts)
+    chogLinesRestart(now.id);
+    insertChogCueLine(now.id, now.lines);
+  });
+  stage.appendChild(btn);
+}
+if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" && document.body) {
+  new MutationObserver(() => { if (chogHelpSaid && !document.querySelector("#chogHelp")) chogHelpMount(); }).observe(document.body, { childList: true, subtree: true });
+}
+
 // ── [A-893] Wave 5 Chog cues ─────────────────────────────────────────────────────────────────────────
 // Copy = 94_VISUAL_DIRECTION §[2026-10-08 Owner] "Chog copy locked", exactly; no other lines. Every cue reuses the existing
 // .chogCheckLine (same head-top slot, font and colour as the Explore say / away line) — no new speech system, asset, timer
@@ -12785,6 +12826,7 @@ function insertChogCueLine(id, text) {
   const root = document.querySelector("#chogHome");
   const hit = root?.querySelector(".chogHome__hit");
   if (!root || !hit) return false;
+  if (typeof chogHelpRemember === "function") chogHelpRemember(id, text); // [A-1293]
   let line = root.querySelector(`#${id}`);
   if (!line) {
     line = document.createElement("span");
@@ -14823,6 +14865,7 @@ function a891FirstArrivalHoldRemainingMs() {
 // Chog speech through the existing .chogCheckLine slot inside .chogHome (same as the Return alarm / Explore say / A-849 two lines).
 function a891ChogSay(chogRoot, id, lines) {
   if (!chogRoot || chogRoot.querySelector(`#${id}`)) return null;
+  if (typeof chogHelpRemember === "function") chogHelpRemember(id, lines); // [A-1293]
   const hit = chogRoot.querySelector(".chogHome__hit");
   const span = document.createElement("span");
   span.id = id;

@@ -739,6 +739,7 @@ async function laneJarTap() {
   await check("guide · tap path: first Journey → Journey 2 round 1 → Home", async () => {
     await walkFirstJourney(q); await walkReturnAndFile(q); await enterSecond(q); await walkSecondJob(q, 1);
   });
+  q.helpBeforeSpeech = await q.page.evaluate(() => { const h = document.querySelector("#chogHelp"); return !!h && h.getBoundingClientRect().width > 0; }); // [A-1293] no line on this Home yet
   await check("guide · tap the sparkling jar → Money → back → 1 s → Chog adds the bell line under the jar line", async () => {
     await watchJarGuide(q);
     await checkpoint(q, "guide-jar-line");
@@ -757,6 +758,20 @@ async function laneJarTap() {
     while (Date.now() - seenFrom < speakMs(BELL_LINE) + 1500) { if ((await look(q)).text.includes(BELL_LINE)) seenUntil = Date.now(); else break; await sleep(150); }
     assert.ok(seenUntil - seenFrom >= speakMs(BELL_LINE) - 300, `bell line seen ${seenUntil - seenFrom} ms (read time ${speakMs(BELL_LINE)} ms)`);
     await checkpoint(q, "guide-bell-line");
+  });
+  // [A-1293] the ? help sticker: under the bell's spot on the right; a tap = Chog says this screen's line again, one line at a time; no line yet = no ?
+  await check("help · ? sticker under the bell spot (right) only once Chog has spoken here; a tap = the jar line again, then the bell line", async () => {
+    assert.equal(q.helpBeforeSpeech, false, "? shown on a Home where Chog had said nothing yet");
+    const pos = await q.page.evaluate(() => { const h = document.querySelector("#chogHelp"); if (!h) return null; const r = h.getBoundingClientRect(); const st = h.closest(".stage").getBoundingClientRect(); return { w: r.width, right: st.right - r.right, top: r.top - st.top, sw: st.width, sh: st.height, src: h.querySelector("img")?.getAttribute("src") }; });
+    assert.ok(pos && pos.w >= 28 && pos.w <= 32, `? size ${JSON.stringify(pos)}`);
+    assert.ok(pos.right < pos.sw * 0.2 && pos.top > pos.sh * 0.05 + 50 && pos.top < pos.sh * 0.3, `? place ${JSON.stringify(pos)}`);
+    assert.equal(pos.src, "/card/help-sticker.svg");
+    await checkpoint(q, "help-sticker");
+    await q.page.locator("#chogHelp").click();
+    await sleep(500);
+    const first = await look(q);
+    assert.ok(first.text.includes(JAR_LINE) && !first.text.includes(BELL_LINE), `after the tap: ${JSON.stringify(first.text.slice(-4))}`);
+    await until(q, "bell line again", (x) => x.text.includes(BELL_LINE), speakMs(JAR_LINE) + 2500);
   });
   await q.context.close();
 }
