@@ -204,6 +204,7 @@ let pass = 0;
 function check(label, fn) { fn(); console.log(`PASS  ${label}`); pass += 1; }
 
 const FIVE_MIN = 5 * 60 * 1000;
+const CLOSING = 10 * 60 * 1000 - 30 * 1000; // [A-1298] "closing soon." 30 s before the lock
 const TEN_MIN = 10 * 60 * 1000;
 const DEST = "0x00000000000000000000000000000000000000a1";
 
@@ -220,24 +221,26 @@ function heldEnvelopeFor(piggyId, signerAddress) {
 }
 
 // ══ 1. auth opens both the signer's 5m absolute timer and the app-idle 10m timer ══════════════
-await check("1. a successful auth arms exactly two timers — signer 5m absolute + app-idle 10m", async () => {
+// [A-1298 · Owner 04:0x "10분하자 심플하게" · "샌드는 트잭이라 해야해"] supersedes A-556's 5-minute signer + reuse: one 10-minute clock (the key
+// ends with the app-idle window, no separate signer timer) and every money Send asks Face ID.
+await check("1. a successful auth arms exactly two timers — the 9:30 closing-soon line + app-idle 10m (no separate signer timer)", async () => {
   const app = buildApp();
   assert.deepEqual(app.clock.pending(), []);
   await app.sendPiggy();
   await tick(); await tick();
   assert.equal(app.authCalls.count, 1);
   assert.equal(app.get().hasSigner, true);
-  assert.deepEqual(app.clock.pending().sort((a, b) => a - b), [FIVE_MIN, TEN_MIN]);
+  assert.deepEqual(app.clock.pending().sort((a, b) => a - b), [CLOSING, TEN_MIN]);
 });
 
 // ══ 2. same-Piggy second send within <5m reuses the live signer — no second auth call ══════════
-await check("2. same Piggy, second send 2 minutes later: no new Face ID/auth call, signer reused", async () => {
+await check("2. same Piggy, second send 2 minutes later: Face ID again (a money Send never uses the live key)", async () => {
   const app = buildApp();
   await app.sendPiggy(); await tick(); await tick();
   assert.equal(app.authCalls.count, 1);
   app.clock.advance(2 * 60 * 1000);
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 1, "authCalls stayed at 1 — sendPiggyOnce's activeAccount/activeSession reuse branch, not recoverPiggy");
+  assert.equal(app.authCalls.count, 2, "the second Send asked Face ID again (recoverPiggy) — no reuse branch any more");
   assert.equal(app.get().hasSigner, true);
 });
 
@@ -259,17 +262,16 @@ await check("3. consuming a permission invalidates its nonce — but the live si
 });
 
 // ══ 4. signer expires at 5m absolute despite app activity/another send in between ══════════════
-await check("4. signer's 5m absolute cap fires even though a second send touched the app 4 minutes in", async () => {
+await check("4. no 5-minute cap: the key outlives 5 minutes while the app is in use and ends with the 10-minute idle window", async () => {
   const app = buildApp();
-  await app.sendPiggy(); await tick(); await tick(); // auth at t=0 — arms signer@5m, idle@10m
+  await app.sendPiggy(); await tick(); await tick(); // Face ID at t=0 — arms closing@9:30, idle@10m
   app.clock.advance(4 * 60 * 1000); // t=4m
-  await app.sendPiggy(); await tick(); await tick(); // 2nd send: touches app-idle only (item 2/PHASE 1)
-  assert.equal(app.authCalls.count, 1);
-  assert.equal(app.get().hasSigner, true, "still alive right after the t=4m send");
-  const scenesBefore = app.calls.scenes.length;
-  app.clock.advance(1 * 60 * 1000 + 1000); // total elapsed since AUTH = 5m1s
-  assert.equal(app.get().hasSigner, false, "the signer's absolute 5m cap (armed at t=0) fired — the t=4m send never extended it");
-  assert.equal(app.calls.scenes.length, scenesBefore, "signer-expiry alone forces no scene reset (card PHASE 1)");
+  await app.sendPiggy(); await tick(); await tick(); // 2nd send: Face ID again, the app clock starts over
+  assert.equal(app.authCalls.count, 2);
+  app.clock.advance(1 * 60 * 1000 + 1000); // 5m1s after the first Face ID
+  assert.equal(app.get().hasSigner, true, "no 5-minute signer cap any more");
+  app.clock.advance(TEN_MIN); // well past 10 minutes since the last touch
+  assert.equal(app.get().hasSigner, false, "the key ended with the app-idle window");
 });
 
 // ══ 5. app-idle expiry at 10m ends the signer and enters the existing resting/locked behavior ══
@@ -319,7 +321,7 @@ await check("8. a send that fails at grant leaves auth's own timers alone — no
   assert.equal(app.state.moneyIntent, null, "no permission fabricated");
   assert.equal(app.calls.finished.length, 0, "no receipt/finishTrip fabricated");
   assert.equal(app.storage.has("araso.sendPending"), false, "no pending written before broadcast");
-  assert.deepEqual(app.clock.pending().sort((a, b) => a - b), [FIVE_MIN, TEN_MIN], "exactly the two timers the one real auth armed — nothing extra, nothing cancelled");
+  assert.deepEqual(app.clock.pending().sort((a, b) => a - b), [CLOSING, TEN_MIN], "exactly the two timers the one real auth armed — nothing extra, nothing cancelled");
 });
 
 console.log(`\n${pass}/${pass} PASS`);

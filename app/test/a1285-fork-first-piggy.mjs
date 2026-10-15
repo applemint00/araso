@@ -164,7 +164,12 @@ await check("P2 mainnet path unchanged: the A-897 functions are byte-identical t
 });
 await check("P3 Gift send / Money read code byte-identical to ea9f22a", () => {
   assert.ok(BASE, "git base ea9f22a unreadable");
-  for (const n of ["a898FaceId", "a898SignerForPayer", "a898Holdings", "a898RegistryPiggy", "moneyPiggiesSnapshot", "secondPiggyRegistrySnapshot", "indexedResidents"]) assert.equal(cutFn(MAIN, n), cutFn(BASE, n), `${n} changed`);
+  // [A-1298] the only allowed delta: a money Send asks Face ID even with a live key (fresh) — everything else byte-identical
+  const undo1298 = (src) => String(src || "")
+    .replace("a898SignerForPayer(piggy, { fresh: true }); // [A-1298] a Gift Send moves money: Face ID every time", "a898SignerForPayer(piggy);")
+    .replace("{ allowDeviceCredential = false, fresh = false }", "{ allowDeviceCredential = false }")
+    .replace("if (!fresh && activeAccount", "if (activeAccount");
+  for (const n of ["a898FaceId", "a898SignerForPayer", "a898Holdings", "a898RegistryPiggy", "moneyPiggiesSnapshot", "secondPiggyRegistrySnapshot", "indexedResidents"]) assert.equal(undo1298(cutFn(MAIN, n)), cutFn(BASE, n), `${n} changed`);
 });
 
 console.log(`\n${pass}/${pass + fail} PASS`);

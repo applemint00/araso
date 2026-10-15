@@ -219,7 +219,8 @@ await check("6. after a successful proof, the temporary signer is gone but the a
   const out = await app.prove(piggy);
   assert.equal(out.error, null);
   assert.equal(app.get().hasSigner, false, "the temporary proof signer does not survive the call");
-  assert.deepEqual(app.timers.pending(), [TEN_MIN], "exactly the 10m app-idle timer survives — the 5m signer-absolute timer was cleared with the signer, app-idle was NOT touched by teardown");
+  // [A-1298] one clock: the 9:30 closing-soon timer rides with the app-idle timer; there is no 5-minute signer timer at all
+  assert.deepEqual(app.timers.pending(), [TEN_MIN - 30 * 1000, TEN_MIN], "exactly the 10m app-idle timer (and its 9:30 closing-soon line) survives — the 5m signer-absolute timer was cleared with the signer, app-idle was NOT touched by teardown");
 });
 
 // ══ 2. wrong root credential — different underlying secret derives a different address ═════════
@@ -236,7 +237,7 @@ await check("2. wrong root credential (different secret, same label+salt) → he
   assert.equal(out.proof, null, "no usable proof — must not fall back to any ambient signer/address");
   assert.equal(out.error, "signer_mismatch");
   assert.equal(app.get().hasSigner, false, "the mismatched temporary signer is still torn down");
-  assert.deepEqual(app.timers.pending(), [TEN_MIN], "activateSigningSession still ran (it derived a real, live, just-wrong signer) — app-idle survives, signer timer cleared, same as the success path");
+  assert.deepEqual(app.timers.pending(), [TEN_MIN - 30 * 1000, TEN_MIN], "[A-1298 one clock] activateSigningSession still ran (it derived a real, live, just-wrong signer) — app-idle survives, signer timer cleared, same as the success path");
 });
 
 // ══ 3. wrong salt — same root credential, but the locator's own salt derives a different key ═══

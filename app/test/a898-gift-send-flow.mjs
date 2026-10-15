@@ -490,7 +490,7 @@ await check("E3 main.js: Send a Piggy is wired from the selected Piggy only, pay
   const b = MAIN.slice(MAIN.indexOf("// ── [A-898] Funding Paper"), MAIN.indexOf("// ── [A-898] end ──"));
   assert.ok(b.includes("openGiftSend({ piggy, selected: state.selectedPiggy"));
   assert.ok(b.includes("state.selectedPiggy.id !== d0.payer.id"));
-  assert.ok(/async function a898FaceId[\s\S]*lockQuote\(ev0\)[\s\S]*a898SignerForPayer\(piggy\)[\s\S]*faceid_result/.test(b));
+  assert.ok(/async function a898FaceId[\s\S]*lockQuote\(ev0\)[\s\S]*a898SignerForPayer\(piggy, \{ fresh: true \}\)[\s\S]*faceid_result/.test(b)); // [A-1298] Face ID every Gift Send
   assert.ok(b.includes("GIFT_SEND_CONFIG.executor") && b.includes("reconcileQuote(lock"));
   assert.ok(b.includes("#homeSendPiggy") === false && MAIN.includes('closest("#homeSendPiggy")'));
   assert.equal(/\*\//.test(b), false);

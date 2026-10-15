@@ -77,6 +77,9 @@ function makeSend({ grantGranted = false, balances = [], simThrows = false, send
     keccak256,
     activeSession: { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } },
     setScene: (...a) => { calls.scenes.push(a); btn.disabled = true; },
+    // [A-1298] every money Send now asks Face ID (the recover path runs each time): the person approves; no other attempt is open
+    authAttempt: null, platformAuthInflight: null, webAuthnUnsupported: () => false, beginAuthAttempt: () => ({ live: true }),
+    boundAuthAttempt: (_a, p) => p, trackPlatformAuth: (p) => p, finishAuthAttempt: () => true, clearOwnSendPending: () => {},
     recoverPiggy: async () => {}, noteRecoverSuccess() {}, noteRecoverFailure() {}, isCancelledAuthError: () => false,
     requestGrant: async () => ({ granted: grantGranted, txHash: grantGranted ? "0xgrant" : "" }),
     simulateSend: async () => { calls.sim += 1; if (simThrows) throw leakyError(); return { depositTx: {}, before: 1n, beforeShares: 0n }; },

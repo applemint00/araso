@@ -75,7 +75,7 @@ await check("W1 source: marker blocks, live config OFF, // comments only, no dir
 await check("W2 a898FaceId hooks: typeof-guarded, before faceid_start, executor fallback keeps GIFT_SEND_CONFIG.executor, plan extras last", () => {
   const f = MAIN.slice(MAIN.indexOf("async function a898FaceId() {"), MAIN.indexOf("async function a898Act("));
   assert.ok(f.indexOf("a915PreFaceIdRefusal") > 0 && f.indexOf("a915PreFaceIdRefusal") < f.indexOf('type: "faceid_start"'));
-  assert.ok(f.indexOf("a898SignerForPayer(piggy)") > f.indexOf('type: "faceid_start"'));
+  assert.ok(f.indexOf("a898SignerForPayer(piggy") > f.indexOf('type: "faceid_start"')); // [A-1298] now with { fresh: true } (a money Send asks Face ID)
   assert.match(f, /typeof a915PreFaceIdRefusal === "function"/); assert.match(f, /typeof a915GiftCreateExecutor === "function"/); assert.match(f, /typeof a915PlanExtras === "function"/);
   assert.match(f, /const executor = GIFT_SEND_CONFIG\.executor \|\| \(typeof a915GiftCreateExecutor/);
   assert.match(f, /origin: location\.origin, \.\.\.\(typeof a915PlanExtras === "function" \? a915PlanExtras\(\) : \{\}\) \}\)/);

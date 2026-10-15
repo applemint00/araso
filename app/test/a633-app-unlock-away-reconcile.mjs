@@ -210,7 +210,7 @@ await check("B2 same PRF unlocks and arms signer; no money or address persistenc
   await flush();
   assert.equal(app.state.appLock, null, "unlocked");
   assert.equal(app.calls.sess, 1);
-  deq(app.get(), { hasSigner: true, signerArmed: true, idleArmed: true });
+  deq(app.get(), { hasSigner: true, signerArmed: false, idleArmed: true }); // [A-1298] one clock: no separate signer timer (the key ends with app-idle)
   assert.equal(app.state.activeSignerAddress, app.state.address);
   assert.equal(app.state.moneyIntent, null);
   assert.ok(app.calls.prfOutputs[0].every((b) => b === 0), "PRF output bytes zeroed");
@@ -281,7 +281,8 @@ await check("C3 web (1440) idle behavior unchanged: existing resting setScene, n
   assert.equal(app.state.appLock, null);
   deq(app.calls.scenes.at(-1), ["sendstay", "Piggy is resting.", "Open again when you need it."]);
 });
-await check("C4 new authenticated unlock arms exactly five minutes; activity does not extend it", async () => {
+// [A-1298 · one clock] supersedes the 5-minute signer: after an unlock the key lives with the app-idle window; activity extends both
+await check("C4 new authenticated unlock: the key lives with the app-idle window (no 5-minute cap); activity extends it", async () => {
   const app = buildUnlockApp();
   app.state.appLock = null;
   app.activateSigningSession(new Uint8Array(32).fill(7), { persistAddress: false }); // initial signer
@@ -293,8 +294,10 @@ await check("C4 new authenticated unlock arms exactly five minutes; activity doe
   app.touchAppSession();
   assert.equal(app.get().hasSigner, true);
   app.clock.advance(60 * 1000 + 1);
-  assert.equal(app.get().hasSigner, false, "signer expired five minutes after fresh unlock");
-  assert.equal(app.get().idleArmed, true, "app-idle still running from the unlock");
+  assert.equal(app.get().hasSigner, true, "no 5-minute cap after a fresh unlock");
+  assert.equal(app.get().idleArmed, true, "app-idle still running (the press at 4 min refreshed it)");
+  app.clock.advance(10 * 60 * 1000);
+  assert.equal(app.get().hasSigner, false, "10 minutes with no press: the key ended with the app session");
 });
 
 // ═══ D. pending reconcile matrix ═══════════════════════════════════════════════════════════

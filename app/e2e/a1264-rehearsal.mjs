@@ -45,7 +45,7 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
@@ -188,6 +188,18 @@ async function openPerson(browser, world, id, { storageState, invite, credential
       } catch (e) { window.__arasoTimelineError = String(e); }
     }, 100);
   });
+  // [A-1298] every real Face ID ask (WebAuthn get) is counted; the count survives reloads (sessionStorage)
+  await context.addInitScript(() => {
+    if (!navigator.credentials?.get) return;
+    const get = navigator.credentials.get.bind(navigator.credentials);
+    navigator.credentials.get = (o) => {
+      try {
+        sessionStorage.setItem("__arasoGets", String(Number(sessionStorage.getItem("__arasoGets") || 0) + 1));
+        const allow = JSON.parse(sessionStorage.getItem("__arasoGetAllow") || "[]"); allow.push((o?.publicKey?.allowCredentials || []).length); sessionStorage.setItem("__arasoGetAllow", JSON.stringify(allow));
+      } catch {}
+      return get(o);
+    };
+  });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error.message).slice(0, 160)));
@@ -276,8 +288,10 @@ async function walkFirstJourney(person, { send = true } = {}) {
     return { explain: pick(".sendCard__explain"), stamp: pick(".trialStamp--send"), chog: pick(".chogCheckLine") };
   });
   if (!send) return;
+  const getsBefore = await getsOf(person);
   await person.page.locator("#sendButton").click();
   person.sentAt = Date.now();
+  person.sendGets = await until(person, "first Send leaves Home", (s) => s.scene === "away" || s.scene === "return", 60_000).then(async () => (await getsOf(person)) - getsBefore, () => null); // [A-1298]
 }
 async function walkReturnAndFile(person) {
   await until(person, "Return receipt", () => live(person, "#returnTap"), 60_000);
@@ -289,6 +303,7 @@ async function walkReturnAndFile(person) {
   person.filedHomeAt = Date.now();
   await checkpoint(person, "home-filed");
 }
+async function getsOf(person) { return person.page.evaluate(() => Number(sessionStorage.getItem("__arasoGets") || 0)).catch(() => -1); }
 async function readTimeline(person) {
   for (let i = 0; i < 10; i += 1) {
     try {
@@ -348,8 +363,10 @@ async function walkSecondJob(person, round, { tapHome = true } = {}) {
   }
   await until(person, "Job Send", () => live(person, "#secondSendButton"), 20_000);
   await checkpoint(person, `j${round}-job`);
+  const jobGetsBefore = await getsOf(person);
   await person.page.locator("#secondSendButton").click();
   await until(person, "Away", (s) => s.scene === "secondAway", 15_000);
+  person.jobGets = person.jobGets || {}; person.jobGets[round] = (await getsOf(person)) - jobGetsBefore; // [A-1298]
   await checkpoint(person, `j${round}-away`);
   await until(person, "Job Receipt", () => live(person, "#returnTap"), 90_000);
   await checkpoint(person, `j${round}-return`);
@@ -494,6 +511,10 @@ async function laneMain() {
   });
   await check("a · Journey 2 round 1: places → Job (tidy the wallet) → Send → Away → back → Receipt → File it → Home", () => walkSecondJob(a, 1));
   await check("chog · after the Journey 2 receipt is filed: \"done!\" (one bubble)", () => { assert.deepEqual(a.secondDone?.[1], ["done!"]); });
+  await check("key · money Sends ask Face ID every time: first Send = 1 · Journey 2 Job Send = 1 (the 10-minute key never signs money)", () => {
+    assert.equal(a.sendGets, 1, `first Send Face ID asks: ${a.sendGets}`);
+    assert.equal(a.jobGets?.[1], 1, `Job Send Face ID asks: ${a.jobGets?.[1]}`);
+  });
   await check("a · reopen the app → lock → Chog → Face ID → Home → bell → Explore opens again", async () => {
     await a.page.goto("about:blank"); await a.page.goto(BASE, { waitUntil: "networkidle" });
     await unlockIfLocked(a);
@@ -754,15 +775,40 @@ async function laneLockMulti() {
     const other = { ...mine, credentialId: Buffer.from(`other-piggy-${Date.now()}`).toString("base64"), userHandle: Buffer.from("other-piggy-user").toString("base64"), signCount: 0 };
     await p.passkey.cdp.send("WebAuthn.addCredential", { authenticatorId: p.passkey.authenticatorId, credential: other });
     const count = (await p.passkey.cdp.send("WebAuthn.getCredentials", { authenticatorId: p.passkey.authenticatorId })).credentials.length;
-    await p.context.addInitScript(() => { if (!navigator.credentials?.get) return; const get = navigator.credentials.get.bind(navigator.credentials); window.__gets = []; navigator.credentials.get = (o) => { window.__gets.push((o?.publicKey?.allowCredentials || []).length); return get(o); }; });
+    const allowBefore = (await p.page.evaluate(() => JSON.parse(sessionStorage.getItem("__arasoGetAllow") || "[]"))).length; // [A-1298] the page-wide counter records each ask
     await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
     await until(p, "lock", (s) => s.scene === "birth", 20_000);
     const tapped = await tapLockIfStill(p, 6000);
     await until(p, "Home", (s) => s.scene === "sendstay", 20_000);
-    const gets = await p.page.evaluate(() => window.__gets);
+    const gets = (await p.page.evaluate(() => JSON.parse(sessionStorage.getItem("__arasoGetAllow") || "[]"))).slice(allowBefore);
     assert.ok(count >= 2, `passkeys on the device: ${count}`);
     assert.equal(tapped, false, "no tap needed");
     assert.deepEqual(gets, [1], `get() calls (allowCredentials length each): ${JSON.stringify(gets)}`);
+  });
+}
+// [A-1298] one 10-minute clock: at 9:30 Chog says it is closing (one line at a time); a tap = 10 more minutes; no tap = lock at 10:00
+async function laneKeyClock() {
+  const w = createWorld("keyclock");
+  const k = await openPerson(browser, w, "kc", { clock: true }); people.push(k);
+  await check("key clock · 9:30 idle → \"closing soon.\" then \"if you want to explore more, tap to wake me up.\" · a tap = no lock 40 s later · no tap = locked at 10:00", async () => {
+    await walkFirstJourney(k, { send: false });
+    await sleep(1000);
+    await k.page.clock.fastForward("09:25");
+    for (let i = 0; i < 16; i += 1) { await k.page.clock.runFor(500); await sleep(60); }
+    const warned = (await look(k)).text;
+    assert.ok(warned.includes("closing soon.") && warned.includes("if you want to explore more, tap to wake me up."), `9:30 lines ${JSON.stringify(warned.filter((t) => /closing|wake/.test(t)))}`);
+    await checkpoint(k, "closing-soon");
+    await k.page.mouse.click(30, 300);
+    await k.page.clock.runFor(40_000); await sleep(300);
+    assert.notEqual((await look(k)).scene, "birth", "a tap gave 10 more minutes");
+    const getsBefore = await getsOf(k);
+    await k.page.clock.fastForward("09:30"); await sleep(200);
+    const lockLook = await k.page.evaluate(() => ({ scene: document.querySelector("[data-scene]")?.dataset.scene, lock: document.querySelector("[data-app-lock]")?.dataset.appLock || null }));
+    await checkpoint(k, "locked");
+    assert.deepEqual(lockLook, { scene: "birth", lock: "waiting" }, "no tap: locked at 10:00 (the logo lock)");
+    await k.page.clock.runFor(2_000); await sleep(800);
+    assert.equal((await getsOf(k)) - getsBefore, 1, "the lock then asks Face ID once by itself (A-1290)");
+
   });
 }
 async function laneJobFail() {
@@ -1267,7 +1313,7 @@ function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy,giftrun").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti()].filter(Boolean));
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti(), only.includes("keyclock") && laneKeyClock()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });

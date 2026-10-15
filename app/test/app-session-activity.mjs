@@ -84,7 +84,7 @@ function makeFakeClock() {
   const timers = new Map();
   return {
     setTimeout: (fn, delay) => {
-      armCount += 1;
+      if (delay === 10 * 60 * 1000) armCount += 1; // [A-1298] counts the app-idle re-arm only (the 9:30 closing-soon timer rides along with it)
       const id = nextId++;
       timers.set(id, { fireAt: now + delay, fn });
       return id;
@@ -193,7 +193,9 @@ check("trusted pointer activity refreshes the app-idle window once a session is 
   const before = app.clock.armCount();
   app.handleTrustedAppActivity(trusted("pointerdown"));
   assert.equal(app.clock.armCount(), before + 1, "touchAppSession() re-armed idle");
-  assert.equal(app.get().signerArmed, true, "signer timer untouched by the activity call");
+  // [A-1298 · one clock] there is no separate 5-minute signer timer any more: the key lives exactly as long as the app-idle window
+  assert.equal(app.get().signerArmed, false, "no separate signer timer (the key ends with the app-idle window)");
+  assert.equal(app.get().hasSigner, true, "the key is still live after the activity call");
 });
 
 // ══ 3. trusted key activity refreshes app-idle ══════════════════════════════════════════════════
@@ -236,16 +238,17 @@ check("throttle: repeated trusted activity inside the window re-arms only once, 
 });
 
 // ══ 6. signer 5m absolute deadline unchanged by continuous activity ═════════════════════════════
-check("signer's 5m absolute deadline fires on schedule despite continuous trusted activity", () => {
+// [A-1298 · one clock] supersedes A-556's 5-minute absolute signer cap: continuous use keeps the key (it only signs non-money things)
+check("one clock: under continuous trusted activity the key lives past 5 minutes; it ends 10 minutes after the last press", () => {
   const app = buildApp();
-  app.activateSigningSession(prfOutput); // t=0: signer@5m, idle@10m
-  for (let i = 0; i < 14; i += 1) {
+  app.activateSigningSession(prfOutput); // t=0: closing@9:30, idle@10m
+  for (let i = 0; i < 30; i += 1) {
     app.clock.advance(20 * 1000); // 20s > throttle — each tap goes through
     app.handleTrustedAppActivity(trusted("pointerdown"));
   }
-  assert.equal(app.get().hasSigner, true, "still alive at t=4m40s under continuous activity");
-  app.clock.advance(20 * 1000); // total elapsed = 5m00s exactly
-  assert.equal(app.get().hasSigner, false, "signer died at exactly its ORIGINAL 5m absolute deadline — activity never extended it");
+  assert.equal(app.get().hasSigner, true, "still alive at t=10m under continuous activity (no 5-minute cap)");
+  app.clock.advance(10 * 60 * 1000 + 1000);
+  assert.equal(app.get().hasSigner, false, "10 minutes with no press: the key ended with the app-idle window");
 });
 
 // ══ 7. no trusted activity at all → 10m idle still locks ════════════════════════════════════════
@@ -258,18 +261,18 @@ check("no trusted activity at all: 10m idle still locks and shows the existing r
   assert.deepEqual(app.calls.scenes.at(-1), ["sendstay", "Piggy is resting.", "Open again when you need it."], "same resting copy as A-556 — no new UI text");
 });
 
-// ══ 8. after signer expiry, activity keeps app-idle alive but signer stays gone ═════════════════
-check("after signer expiry, continued trusted activity keeps the app-idle session alive while the signer stays gone", () => {
+// ══ 8. [A-1298 · one clock] the key and the app-idle window are the same clock: activity keeps both, nothing ends at 5 minutes ═════════
+check("one clock: no separate signer expiry — at 5m01s the key is alive; a press at 9m01s keeps key and app session past the original 10m mark", () => {
   const app = buildApp();
-  app.activateSigningSession(prfOutput); // t=0: signer@5m, idle@10m
-  app.clock.advance(FIVE_MIN + 1000); // t=5m01s — signer's own absolute timer fires
-  assert.equal(app.get().hasSigner, false, "signer expired");
-  assert.equal(app.get().idleArmed, true, "app-idle untouched by signer expiry — endSignerSession never clears idleTimer");
+  app.activateSigningSession(prfOutput); // t=0: closing@9:30, idle@10m
+  app.clock.advance(FIVE_MIN + 1000); // t=5m01s — pre-A-1298 the signer's own 5m timer fired here
+  assert.equal(app.get().hasSigner, true, "no separate signer expiry");
+  assert.equal(app.get().idleArmed, true);
   app.clock.advance(4 * 60 * 1000); // t=9m01s — still inside the ORIGINAL 10m window
-  app.handleTrustedAppActivity(trusted("pointerdown")); // refreshes idle -> new deadline ~t=19m01s
+  app.handleTrustedAppActivity(trusted("pointerdown")); // refreshes the one clock -> new deadline ~t=19m01s
   app.clock.advance(2 * 60 * 1000); // t=11m01s — past the ORIGINAL 10m mark
   assert.equal(app.get().idleArmed, true, "app session is still alive past the original 10m mark because activity refreshed it");
-  assert.equal(app.get().hasSigner, false, "signer stays gone — the hook never calls activateSigningSession/armSignerExpiry");
+  assert.equal(app.get().hasSigner, true, "the key lives with it (it only signs things that move no money)");
 });
 
 // ══ 9. Piggy switch / Gate C money functions are untouched by this card ════════════════════════

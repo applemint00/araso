@@ -812,13 +812,26 @@ function endActiveSession() {
   endSignerSession();
   clearTimeout(idleTimer);
   idleTimer = null;
+  if (typeof closingSoonTimer !== "undefined") { clearTimeout(closingSoonTimer); closingSoonTimer = null; } // [A-1298]
 }
 
 // [A-556] app-idle(10분)만 다시 잰다 — 서명자 5분 절대 만료(armSignerExpiry)는 여기서 늘리지
 // 않는다(카드 PHASE 1: "normal action activity may refresh app idle, but MUST NOT extend
 // signer absolute expiry"). 만료되면 여전히 서명자까지 정리하고(endActiveSession) 기존
 // resting 문구로 돌아간다 — 옛 touchSession() 콜백과 동일, 새 문구 0.
+// [A-1298 · Owner 04:2x] 30 s before the lock Chog says it is closing (one line at a time); any press = 10 more minutes (no Face ID).
+const APP_CLOSING_SOON_LINES = Object.freeze(["closing soon.", "if you want to explore more, tap to wake me up."]);
+let closingSoonTimer = null;
+function sayClosingSoon() {
+  if (typeof insertChogCueLine !== "function" || state.appLock || state.scene === "received" || state.scene === "birth") return;
+  if (typeof chogLinesRestart === "function") chogLinesRestart("closingSoonLine");
+  insertChogCueLine("closingSoonLine", [...APP_CLOSING_SOON_LINES]); // no Chog on this screen (Away) = nothing said; the lock still comes
+}
 function touchAppSession() {
+  // [A-1298] the 9:30 line rides on the same clock (self-contained: slices of this function run without the module around it)
+  if (typeof closingSoonTimer !== "undefined") clearTimeout(closingSoonTimer);
+  if (typeof document !== "undefined") document.querySelector?.("#closingSoonLine")?.remove();
+  closingSoonTimer = typeof sayClosingSoon === "function" ? setTimeout(sayClosingSoon, 10 * 60 * 1000 - 30 * 1000) : null;
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
     endActiveSession();
@@ -862,11 +875,12 @@ function lockAppAfterIdle() {
 // 그 사이 어떤 송금/활동도 이 타이머를 늘리지 않는다(카드 §2: "5 minutes is an absolute
 // signer-session cap from successful auth; sending another transaction does NOT extend that
 // cap"). 만료 콜백은 서명자만 끝낸다 — scene 전환·영수증·pending·history 는 그대로다.
+// [A-1298 · Owner 04:0x "10분하자 심플하게"] one clock: the key (the wallet signer) lives exactly as long as the app session — 10 minutes
+// with no press, refreshed by any press (touchAppSession). The old 5-minute absolute cap is gone; money Sends never use this key (each
+// asks Face ID itself), so the key only signs things that move no money (Journey 2 entry check, invite binding, funding proof).
 function armSignerExpiry() {
   clearTimeout(signerExpiryTimer);
-  signerExpiryTimer = setTimeout(() => {
-    endSignerSession();
-  }, 5 * 60 * 1000);
+  signerExpiryTimer = null;
 }
 
 // [A-512] `persistAddress:false` = 서명자만 세우고 한 마리 경로의 저장 scope(state.address)는 건드리지 않는다.
@@ -923,7 +937,8 @@ function handleTrustedAppActivity(event) {
   if (!event || event.isTrusted !== true) return; // 합성/스크립트 dispatch 는 무시
   if (idleTimer === null) return; // app-idle 이 지금 돌고 있지 않다(인증 전이거나 이미 잠김) — 아무것도 하지 않는다
   const now = Date.now();
-  if (now - lastTrustedAppActivityAt < TRUSTED_APP_ACTIVITY_THROTTLE_MS) return;
+  const waking = typeof document !== "undefined" && !!document.querySelector("#closingSoonLine"); // [A-1298] the wake tap is never throttled
+  if (!waking && now - lastTrustedAppActivityAt < TRUSTED_APP_ACTIVITY_THROTTLE_MS) return;
   lastTrustedAppActivityAt = now;
   touchAppSession(); // app-idle(10분)만 다시 잰다 — armSignerExpiry/activateSigningSession/인증 호출 없음
 }
@@ -3504,15 +3519,11 @@ async function sendPiggyOnce(markSettling) {
   }
   const reservation = reserved.reservation;
 
-  // [A-896 99e M-L-2 · Owner 60 s] 살아 있는 서명자라도 5분 절대 수명이 60초 미만 남았으면(벽시계 기준 — 타이머는 믿지 않는다,
-  // 스로틀·절전으로 늘어날 수 있다) "세션 없음"으로 본다 → 아래 기존 복구 경로(recoverPiggy, Face ID 한 번). 도장이 없거나 시계가
-  // 뒤로 간 경우도 닫는 쪽으로. 5분 상한·연장 없음(A-556)은 그대로.
-  const signerAge = Date.now() - signerSince;
-  // [A-896 R1] 단조 시각도 같은 한도(둘 다 통과해야). performance.now 가 없으면(찍힌 값 -1 포함) 벽시계만.
-  const signerMonoAge = typeof signerMono === "number" && signerMono >= 0 && typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() - signerMono : 0;
-  const signerMarginOk = signerSince > 0 && signerAge >= 0 && signerAge <= 5 * 60 * 1000 - 60 * 1000 && signerMonoAge >= 0 && signerMonoAge <= 5 * 60 * 1000 - 60 * 1000;
+  // [A-1298] pre-A-1298: a live signer with more than 60 s of its 5-minute life left skipped Face ID here (A-896 M-L-2); now every Send asks.
+  // [A-1298 · Owner 04:0x "샌드는 트잭이라 해야해"] a money Send asks Face ID every time, at the tap (no await before the get); the 10-minute
+  // key never signs money. The new signer from this Face ID becomes the app's key (non-money only) from here.
   // 생성 폴백 없음 — 저장된 credential 이 없으면 기존 패스키로 복구를 시도한다.
-  if (!activeAccount || !activeSession || !signerMarginOk) {
+  {
     // [A-698 M3] Send 복구는 Check/Open 과 같은 시도 칸(authAttempt)·플랫폼 요청 표(platformAuthInflight)를 나눠 쓴다 —
     // 이미 살아 있는 시도나 아직 안 끝난 플랫폼 요청이 있으면 두 번째 WebAuthn get 을 겹쳐 내지 않고 기존 실패 문구로
     // fail-closed(자동 재시도 0 · 새 문구 0). get 을 못 쓰는 기기도 시도 토큰 전에 같은 실패로(A-687).
@@ -11021,7 +11032,8 @@ async function a898ProveDestination(paperPiggy) {
 }
 
 // Face ID for the payer Piggy only: derive its signer; the reducer then requires signer == payer (bindSigner).
-async function a898SignerForPayer(piggy, { allowDeviceCredential = false } = {}) {
+// [A-1298] fresh = a money Send (Job Send · Gift Send): Face ID even with a live key — the 10-minute key never signs money
+async function a898SignerForPayer(piggy, { allowDeviceCredential = false, fresh = false } = {}) {
   // [A-1183] Only the fork Job caller may recover the legacy single Piggy with
   // the device pin. An existing (even invalid) locator never falls back.
   const devicePin = allowDeviceCredential && piggy && !piggy.locator && onForkProfile(CHAIN_PROFILE)
@@ -11029,7 +11041,7 @@ async function a898SignerForPayer(piggy, { allowDeviceCredential = false } = {})
     ? state.credential : null;
   const { request, error } = authRequestForPiggy(devicePin ? { ...piggy, locator: devicePin } : piggy);
   if (error || state.appLock) { console.debug("payer_auth", "unavailable"); return { ok: false, reason: error || "locked" }; }
-  if (activeAccount && String(activeAccount.address).toLowerCase() === String(piggy.address).toLowerCase()) return { ok: true, signerAddress: activeAccount.address };
+  if (!fresh && activeAccount && String(activeAccount.address).toLowerCase() === String(piggy.address).toLowerCase()) return { ok: true, signerAddress: activeAccount.address };
   const identity = state.address;
   let result = null;
   try {
@@ -11239,7 +11251,7 @@ async function a898FaceId() {
   // From here a payer signer may be live: it ALWAYS ends (finally), even if the draft is closed or anything throws.
   let result = { ok: false, reason: "executor_unavailable" };
   try {
-    const proving = a898SignerForPayer(piggy);
+    const proving = a898SignerForPayer(piggy, { fresh: true }); // [A-1298] a Gift Send moves money: Face ID every time
     refreshHomePaperMount();
     const proved = await proving;
     // re-read after the await: the draft may have been closed / replaced while the passkey prompt was open
@@ -15842,8 +15854,8 @@ if (A977_FORK) {
       const piggy = a898SenderPiggy();
       if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) { a977Fail("unavailable"); return; }
       // No server await or render before the pinned get: keep the click gesture.
-      if (!activeAccount || a977Lower(activeAccount.address) !== a977Lower(piggy.address)) {
-        const signer = await a898SignerForPayer(piggy, { allowDeviceCredential: true });
+      { // [A-1298] a Job Send moves money: Face ID every time (no await before the get · the key never signs money)
+        const signer = await a898SignerForPayer(piggy, { allowDeviceCredential: true, fresh: true });
         if (!signer.ok) { a977Fail("auth"); return; }
       }
       const account = activeAccount;
