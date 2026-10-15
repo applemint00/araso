@@ -15376,9 +15376,9 @@ if (A977_FORK) {
     void a977Send(sj, jobKey);
     return undefined;
   };
-  // A Job that stops says so: the server learns why (job_why) and the screen it stopped on gets the failed beat.
-  const a977Fail = (word) => { console.debug("fork_send", word); if (typeof track === "function") track("job_why", word); state.jobFailedWhy = word; };
   async function a977Send(sj, jobKey) {
+    // A Job that stops says so: the server learns why (job_why) and the screen it stopped on gets the failed beat.
+    const a977Fail = (word, log = true) => { if (log) console.debug("fork_send", word); if (typeof track === "function") track("job_why", word); state.jobFailedWhy = word; };
     a977Busy = true;
     let started = false;
     try {
@@ -15425,14 +15425,14 @@ if (A977_FORK) {
       const candidate = out.receipt ? a977Candidate(out.receipt, secondJourneyScope()) : null;
       sj.executionReceipt = candidate;
       sj.outcome = candidate && out.status === "returned" && candidate.outcome === "done" ? "done" : "failed";
-      if (sj.outcome !== "done") a977Fail(out.status === "refused" ? "refused" : "failed");
+      if (sj.outcome !== "done") a977Fail(out.status === "refused" ? "refused" : "failed", false);
       if (a977Current) a977Current.finished = true;
       a977Settle(sj);
     } catch {
       console.debug("fork_send", "failed");
     } finally {
       a977Busy = false;
-      if (!started && state.secondJourney === sj && state.scene === "explore") { render(); if (state.jobFailedWhy) sendFailedBeat(); }
+      if (!started && state.secondJourney === sj && state.scene === "explore") { render(); if (state.jobFailedWhy && typeof sendFailedBeat === "function") sendFailedBeat(); }
     }
   }
 }
