@@ -775,6 +775,29 @@ async function giftMeasure(g, label) {
   const file = path.join(OUT, `gr-${label}.png`); await g.page.screenshot({ path: file }); screenshots.push(file);
   return out;
 }
+// [A-1291] the work-pose canvas Piggy as a 24x24 grid of white-outline share over its opaque box (top 8 rows = ears / head top)
+async function workPoseShot(p) {
+  return p.page.evaluate(() => {
+    const c = [...document.querySelectorAll(".departStage")].find((x) => x.getBoundingClientRect().width > 0); if (!c) return null;
+    const x = c.getContext("2d"); const { width: w, height: h } = c; const d = x.getImageData(0, 0, w, h).data;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (let y = 0; y < h; y += 2) for (let i = 0; i < w; i += 2) if (d[(y * w + i) * 4 + 3] > 128) { if (i < x0) x0 = i; if (i > x1) x1 = i; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 <= x0) return null;
+    const N = 24, g = [];
+    for (let gy = 0; gy < N; gy += 1) for (let gx = 0; gx < N; gx += 1) {
+      let wt = 0, n = 0;
+      for (let y = Math.floor(y0 + (gy * (y1 - y0)) / N); y < y0 + ((gy + 1) * (y1 - y0)) / N; y += 1) for (let i = Math.floor(x0 + (gx * (x1 - x0)) / N); i < x0 + ((gx + 1) * (x1 - x0)) / N; i += 1) { const k = (y * w + i) * 4; n += 1; if (d[k + 3] > 128 && d[k] > 200) wt += 1; }
+      g.push(n ? wt / n : 0);
+    }
+    return { box: [x0, y0, x1, y1], g };
+  });
+}
+function shotDiff(a, b) {
+  if (!a || !b) return { top: 0, all: 0 };
+  const N = 24; let top = 0, all = 0;
+  a.g.forEach((v, i) => { const ch = Math.abs(v - b.g[i]) > 0.15 ? 1 : 0; all += ch; if (Math.floor(i / N) < 8) top += ch; });
+  return { top: top / (8 * N), all: all / (N * N) };
+}
 async function giftSparkleState(g) {
   return g.page.evaluate(() => {
     const row = document.querySelector("#a905GiftPiggy"); if (!row) return null;
@@ -916,8 +939,12 @@ async function laneFaults() {
   await check("fault · four refusals: walk to Send", () => walkFirstJourney(g));
   fault4.chain.faults.sendErrors.push(1, 1, 1, 1);
   await check("fault · four refusals + nonce unchanged → never-sent deposit released: \"nothing moved.\", Send pressable again", async () => {
+    let framesOn = !!process.env.ARASO_SULKY_FRAMES; const frames = []; // 390 frames around the beat for the HANDOFF (env only)
+    const frameLoop = (async () => { let i = 0; while (framesOn) { await g.page.screenshot({ path: path.join(process.env.ARASO_SULKY_FRAMES, `s${String(i).padStart(3, "0")}.png`), clip: { x: 200, y: 600, width: 190, height: 220 } }).catch(() => {}); frames.push(Date.now()); i += 1; await sleep(40); } })();
     await until(g, "nothing moved.", (s) => s.text.some((t) => t.startsWith("nothing moved.")), 40_000);
     await until(g, "try again", (s) => s.text.includes("try again"), 5_000);
+    await sleep(400); // past the 0.12 s swap
+    const beatShot = await workPoseShot(g);
     await checkpoint(g, "send-failed-sulky-now");
     if (process.env.ARASO_REHEARSAL_OUT) await g.page.screenshot({ path: path.join(OUT, `${g.id}-sulky-closeup.png`), clip: { x: 230, y: 640, width: 160, height: 170 } }).catch(() => {});
     // only the face changes (and a small dip): no second whole-body picture laid over the seated Piggy
@@ -928,6 +955,12 @@ async function laneFaults() {
     await checkpoint(g, "send-failed-sulky");
     assert.equal(await g.page.evaluate(() => Object.keys(localStorage).filter((k) => /sendPending/i.test(k) && localStorage.getItem(k)).length), 0, "send pending record cleared");
     await until(g, "Send pressable", () => live(g, "#sendButton"), 20_000);
+    await sleep(600);
+    const afterShot = await workPoseShot(g);
+    framesOn = false; await frameLoop; if (process.env.ARASO_SULKY_FRAMES) writeFileSync(path.join(process.env.ARASO_SULKY_FRAMES, "times.json"), JSON.stringify(frames));
+    // [A-1291] design C: during the beat the ears and body are the #2 parts too (not only the face) — the head-top band changes, then comes back
+    const d = shotDiff(beatShot, afterShot);
+    assert.ok(beatShot && afterShot && d.all >= 0.08 && d.top >= 0.01, `ears/body unchanged during sulky: whole Piggy changed ${(d.all * 100).toFixed(1)}% · head-top band ${(d.top * 100).toFixed(1)}% (face-only = 1.0% · 0.0%)`);
     await checkpoint(g, "home-after-refusals");
     assert.doesNotMatch(fault4.chain.log.join(";"), /sendRaw deposit/, "no deposit landed; nonce stays 0");
     assert.ok(eventsOf(fault4, "f4").includes("send_why/broadcast"), `events: ${eventsOf(fault4, "f4").join(",")}`);

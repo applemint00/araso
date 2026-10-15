@@ -7214,6 +7214,18 @@ const SULKY_FACE_MARKUP = `<g class="sulkyFace" transform="translate(152 -94)"><
 let workPoseFace = null; // the live work-pose canvas (mountSendCardWorkPose), when Piggy is drawn there
 let workFace = null; // the face the work pose should wear; a picture mounted during the beat picks it up
 let workFaceUntil = 0; // when that face ends, even if the beat's own timer was cleared by a scene change
+const SULKY_SWAP_MS = 120; // [A-1291] design C: the sulky picture cross-fades in and out
+function workFaceFade(work, from, to, done) {
+  const t0 = performance.now();
+  const step = () => {
+    if (!work.alive() || !work.canvas.isConnected) { done?.(); return; }
+    const k = Math.min(1, (performance.now() - t0) / SULKY_SWAP_MS);
+    work.setFace("sulky", from + (to - from) * k);
+    work.redraw();
+    if (k < 1) requestAnimationFrame(step); else done?.();
+  };
+  step();
+}
 function sulkyFace() {
   const canvas = [...document.querySelectorAll(".departStage")].find((c) => c.getBoundingClientRect().width > 0 && getComputedStyle(c).visibility !== "hidden");
   const live = () => (workPoseFace?.alive() && workPoseFace.canvas.isConnected ? workPoseFace : null);
@@ -7227,12 +7239,12 @@ function sulkyFace() {
     workFace = "sulky";
     workFaceUntil = Date.now() + PACE_SULKY_MS;
     const work = live();
-    if (work) { work.setFace(workFace); work.canvas.dataset.face = workFace; work.redraw(); }
+    if (work) { work.canvas.dataset.face = workFace; workFaceFade(work, 0, 1); }
     target = canvas;
     undo = () => {
       workFace = null;
       const now = live();
-      if (now) { now.setFace(null); delete now.canvas.dataset.face; now.canvas.classList.remove("is-sulky-dip"); now.redraw(); }
+      if (now) { delete now.canvas.dataset.face; now.canvas.classList.remove("is-sulky-dip"); workFaceFade(now, 1, 0, () => { now.setFace(null); now.redraw(); }); }
     };
   } else if (face) {
     const kids = [...face.children];
