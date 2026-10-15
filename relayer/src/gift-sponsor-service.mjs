@@ -595,12 +595,13 @@ export function createGiftSponsorService({ ledger, policy, chain, sponsor, prefl
   }
 
   async function readLetter(body) {
-    if (!(hasOnly(body, ["action", "giftId"]) && body.action === "read_letter" && typeof body.giftId === "string" && B32.test(body.giftId))) return BAD();
+    if (!(hasOnly(body, ["action", "token"]) && body.action === "read_letter" && typeof body.token === "string" && /^[A-Za-z0-9_-]{22}$/.test(body.token))) return BAD();
     if (!ready || typeof ledger.letterOf !== "function") return UNAVAIL_NOT_SENT();
+    const giftId = `0x${createHash("sha256").update(body.token).digest("hex")}`;
     let g; let letter;
-    try { g = await chain.getGift(body.giftId); letter = await ledger.letterOf(body.giftId); } catch { return UNAVAIL_NOT_SENT(); }
+    try { g = await chain.getGift(giftId); letter = await ledger.letterOf(giftId); } catch { return UNAVAIL_NOT_SENT(); }
     if (!g || g.exists !== true || !letter || typeof g.amount !== "bigint" || g.amount <= 0n) return NA();
-    return { status: 200, body: { ok: true, giftId: body.giftId, note: letter.note, letterHash: letter.letterHash, amountAtomic: g.amount.toString(), decimals: 6 } };
+    return { status: 200, body: { ok: true, giftId, note: letter.note, letterHash: letter.letterHash, amountAtomic: g.amount.toString(), decimals: 6 } };
   }
 
   async function processRequest(v) {

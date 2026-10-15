@@ -1990,16 +1990,17 @@ let giftReceiveFlipped = false;
 let lastGiftClaimSettlement = null;
 
 async function loadPendingGiftDisplay(claim) {
-  if (!claim || claim !== pendingGiftClaim || !claim.giftId) return false;
+  if (!claim || claim !== pendingGiftClaim || !claim.token) return false;
   try {
-    const res = await fetch("/api/gift-sponsor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "read_letter", giftId: claim.giftId }) });
+    const res = await fetch("/api/gift-sponsor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "read_letter", token: claim.token }) });
     const body = await res.json();
-    if (!res.ok || body?.ok !== true || body.giftId !== claim.giftId) return false;
+    if (!res.ok || body?.ok !== true || typeof body.giftId !== "string" || !/^0x[0-9a-f]{64}$/.test(body.giftId)) return false;
     const letter = await verifyGiftLetter({ note: body.note, letterHash: body.letterHash });
     const raw = typeof body.amountAtomic === "string" && /^\d+$/.test(body.amountAtomic) ? BigInt(body.amountAtomic) : 0n;
     const decimals = body.decimals === 6 ? 6 : null;
     const amountUsd = decimals === 6 && raw % 1000000n === 0n ? Number(raw / 1000000n) : null;
     if (!letter || ![20, 50, 100].includes(amountUsd) || claim !== pendingGiftClaim) return false;
+    claim.giftId = body.giftId;
     claim.display = { ...letter, amountUsd };
     render();
     return true;
@@ -17073,7 +17074,7 @@ if (!a1206SwitchUnlocked && state.credential && (state.scene === "name" || state
 if (typeof location !== "undefined") {
   const pendingRead = readClaimFragment(location.href);
   if (pendingRead.status === GIFT_ENTRY_STATUS.READY) {
-    pendingGiftClaim = { giftId: pendingRead.giftId, token: pendingRead.token, display: null };
+    pendingGiftClaim = { giftId: null, token: pendingRead.token, display: null };
     stripClaimFragmentFromUrl();
     void loadPendingGiftDisplay(pendingGiftClaim);
   }
@@ -17113,7 +17114,7 @@ function readTesterInviteParam() {
   }
 }
 
-// `i` 만 지우고 나머지 query(debug 등)와 fragment(#g=…)는 그대로 둔다.
+// `i` 만 지우고 나머지 query(debug 등)와 Gift fragment는 그대로 둔다.
 function stripTesterInviteFromUrl() {
   try {
     if (typeof history === "undefined" || typeof location === "undefined") return;

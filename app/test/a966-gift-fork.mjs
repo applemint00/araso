@@ -178,16 +178,16 @@ await check("create arm refuses a mixed pair (fork id + mainnet scope · mainnet
 });
 
 // ── app place 4: the link boots the profile it was made on ──
-await check("link: every Gift link is <origin>/gift#g=…&t=…&v=1 and /gift selects the fork profile when available", async () => {
+await check("link: every Gift link is <origin>/gift#t=…&v=1 and /gift selects the fork profile when available", async () => {
   assert.equal(FORK_GIFT_LINK_PATH, GIFT_BOOT_PATH);
   const f = await plan(FORK_GIFT_SCOPE, FORK_CHAIN_ID);
   const m = await plan("monad-mainnet", GIFT_CREATE_CHAIN_ID);
   const t = await planGiftCreate({ chainScope: "monad-testnet", presetLabel: 20, senderAddress: piggy.address, expiry: NOW + 86400, origin: "http://localhost:5173" });
-  assert.match(f.claimUrl, /^http:\/\/localhost:5173\/gift#g=0x[0-9a-f]{64}&t=[^&]+&v=1$/);
-  assert.match(m.claimUrl, /^http:\/\/localhost:5173\/gift#g=/);
-  assert.match(t.claimUrl, /^http:\/\/localhost:5173\/gift#g=/);
+  assert.match(f.claimUrl, /^http:\/\/localhost:5173\/gift#t=[^&]+&v=1$/);
+  assert.match(m.claimUrl, /^http:\/\/localhost:5173\/gift#t=/);
+  assert.match(t.claimUrl, /^http:\/\/localhost:5173\/gift#t=/);
   const pf = parseClaimUrl(f.claimUrl);
-  assert.deepEqual([pf.ok, pf.giftId, pf.token], [true, f.fragment.giftId, f.fragment.token]);
+  assert.deepEqual([pf.ok, pf.token], [true, f.fragment.token]);
   const env = { VITE_ARASO_FORK_RPC_URL: "https://fork-public.invalid/rpc", VITE_ARASO_FORK_INSTANCE_ID: "fork-1" };
   assert.equal(selectBootProfile({ pathname: new URL(f.claimUrl).pathname, env, releaseLevel: 2 }).id, "monad-fork");
   assert.equal(selectBootProfile({ pathname: new URL(f.claimUrl).pathname, env, releaseLevel: 1 }).id, "monad-testnet"); // level 1: never the fork

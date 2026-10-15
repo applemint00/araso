@@ -97,21 +97,21 @@ test("the token rides in the fragment, never the query", async () => {
   assert.ok(url.indexOf(token) > url.indexOf("#"));
 });
 
-test("a round trip through the URL recovers exactly what was put in", async () => {
+test("a round trip through the URL recovers the one capability token", async () => {
   const { token } = await freshLink();
   const parsed = parseClaimUrl(buildClaimUrl("https://araso.app", { giftId: "g-001", token }));
-  assert.deepEqual(parsed, { ok: true, giftId: "g-001", token });
+  assert.deepEqual(parsed, { ok: true, token });
 });
 
 test("display metadata never rides in the short Gift fragment", async () => {
   const { token } = await freshLink();
   const note = "02\nDana\nfor you\nSam";
   const parsed = parseClaimUrl(buildClaimUrl("https://araso.app", { giftId: "g-001", token, note, amountUsd: 20 }));
-  assert.deepEqual(parsed, { ok: true, giftId: "g-001", token });
+  assert.deepEqual(parsed, { ok: true, token });
   const url = buildClaimUrl("https://araso.app", { giftId: "g-001", token, note, amountUsd: 20 });
   assert.equal(url.includes("&n="), false);
   assert.equal(url.includes("&a="), false);
-  assert.match(url, /\/gift#g=/);
+  assert.match(url, /\/gift#t=/);
 });
 
 test("a link with no fragment or a wrong version is not guessed at", () => {

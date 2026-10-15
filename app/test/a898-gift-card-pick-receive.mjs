@@ -86,7 +86,7 @@ await check("P8 receive side fetches server-bound letter metadata and renders ca
   const screen = SRC("a911-screens.js");
   const main = SRC("main.js");
   assert.ok(link.includes("hashGiftLetter") && link.includes("verifyGiftLetter"));
-  assert.ok(plan.includes("letterHash = note ? await hashGiftLetter(note) : null") && plan.includes("buildClaimUrl(origin, { giftId, token: created.token })"));
+  assert.ok(plan.includes("letterHash = note ? await hashGiftLetter(note) : null") && plan.includes("buildClaimUrl(origin, { token: created.token })") && plan.includes("giftId = `0x${await hashClaimToken(claimToken)}`"));
   assert.ok(screen.includes("export function a911GiftReceiveMarkup") && screen.includes('data-gift-receive="open"'));
   assert.ok(main.includes("loadPendingGiftDisplay") && main.includes("verifyGiftLetter") && main.includes("giftReceiveFlipped") && main.includes("handleGiftOpenActivate"));
 });

@@ -41,7 +41,7 @@ import { GIFT_SPONSOR_REFUSAL, createGiftSponsorSession, normalizeGiftSponsorCon
 
 export const GIFT_ENTRY_STATUS = Object.freeze({
   NO_FRAGMENT: "no_fragment", // 링크 자체가 없다 — 평범한 부팅.
-  MALFORMED: "malformed", // fragment 는 있지만 형식이 깨졌다(버전/토큰 모양/giftId 없음).
+  MALFORMED: "malformed", // fragment 는 있지만 형식이 깨졌다(버전/토큰 모양).
   RECORD_SOURCE_UNAVAILABLE: "record_source_unavailable", // 제품 기본값 — 진짜 외부 blocker.
   UNKNOWN_LINK: "unknown_link", // record source 는 있지만 이 giftId 에 대해 아무것도 없다.
   REFUSED: "refused", // openClaimLink 가 OK 가 아닌 CLAIM_RESULT 를 냈다(bad_token/expired/revoked/already_claimed_by_other).
@@ -60,7 +60,7 @@ export function readClaimFragment(href) {
     }
     return { status: GIFT_ENTRY_STATUS.MALFORMED, reason: parsed.reason };
   }
-  return { status: GIFT_ENTRY_STATUS.READY, giftId: parsed.giftId, token: parsed.token };
+  return { status: GIFT_ENTRY_STATUS.READY, token: parsed.token };
 }
 
 /**

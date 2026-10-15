@@ -120,8 +120,8 @@ export async function verifyGiftLetter({ note, letterHash } = {}) {
 }
 
 /** raw claim token 한 개. **돌려주는 즉시 잊는 값이다** — 어디에도 저장하지 않는다. */
-export function mintClaimToken(byteLength = 32) {
-  const n = Number.isInteger(byteLength) && byteLength >= 16 && byteLength <= 64 ? byteLength : 32;
+export function mintClaimToken(byteLength = 16) {
+  const n = Number.isInteger(byteLength) && byteLength >= 16 && byteLength <= 64 ? byteLength : 16;
   const bytes = new Uint8Array(n);
   webcrypto().getRandomValues(bytes);
   return base64url(bytes);
@@ -238,11 +238,11 @@ export function isStorableLinkRecord(record) {
 /**
  * 링크 URL. 토큰은 **fragment 에** 둔다 — query 였다면 서버 로그·Referer 로 새어 나간다.
  */
-export function buildClaimUrl(origin, { giftId, token } = {}) {
+export function buildClaimUrl(origin, { token } = {}) {
   const base = typeof origin === "string" ? origin.replace(/\/+$/, "") : "";
-  if (!base || typeof giftId !== "string" || !giftId) return null;
+  if (!base) return null;
   if (typeof token !== "string" || !TOKEN.test(token)) return null;
-  return `${base}/gift#g=${encodeURIComponent(giftId)}&t=${token}&v=${GIFT_LINK_VERSION}`;
+  return `${base}/gift#t=${token}&v=${GIFT_LINK_VERSION}`;
 }
 
 /** 받는 쪽이 연 URL 을 읽는다. 잘못된 링크를 **조용히 고치지 않는다**. */
@@ -251,13 +251,11 @@ export function parseClaimUrl(url) {
   const hashAt = url.indexOf("#");
   if (hashAt < 0) return { ok: false, reason: "no_fragment" };
   const params = new URLSearchParams(url.slice(hashAt + 1));
-  const giftId = params.get("g") || "";
   const token = params.get("t") || "";
   const version = Number(params.get("v"));
-  if (!giftId) return { ok: false, reason: "no_gift_id" };
   if (!TOKEN.test(token)) return { ok: false, reason: "bad_token" };
   if (version !== GIFT_LINK_VERSION) return { ok: false, reason: "version_mismatch" };
-  return { ok: true, giftId, token };
+  return { ok: true, token };
 }
 
 /**

@@ -35,6 +35,8 @@ import {
   sealClaimLink,
   buildClaimUrl,
   hashGiftLetter,
+  hashClaimToken,
+  mintClaimToken,
 } from "./gift-piggy-claim-link.js";
 import { buildGiftValueBinding, giftGasBudget, GIFT_VALUE_PRESET_ATOMIC_AMOUNTS, GIFT_GAS_POLICY, GIFT_GAS_BUDGET_STATUS, GIFT_SPONSOR_GAS_STEPS } from "./gift-value-spec.js";
 import { decodeFunctionData, encodeFunctionData, getAddress } from "viem";
@@ -49,22 +51,6 @@ function forkClaimUrl(url) {
   if (typeof url !== "string") return null;
   const at = url.indexOf("/gift#");
   return at > 0 && url.indexOf("/gift#", at + 1) < 0 ? url : null;
-}
-
-function webcrypto() {
-  const c = globalThis.crypto;
-  if (!c || !c.subtle || typeof c.getRandomValues !== "function") {
-    throw new Error("WebCrypto unavailable — refusing to invent a weaker id");
-  }
-  return c;
-}
-
-/** Fresh `0x` + 64-hex `bytes32`, matching the escrow's `giftId` type exactly — no derivation
- * scheme, just randomness, the same way `mintClaimToken()` mints its own capability token. */
-function mintGiftId() {
-  const bytes = new Uint8Array(32);
-  webcrypto().getRandomValues(bytes);
-  return `0x${Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
 }
 
 /** unix seconds -> ISO 8601, same math `gift-record-source.js`'s own (unexported) `toIsoExpiry`
@@ -142,7 +128,8 @@ export async function planGiftCreate({
   const { value, error: valueError } = buildGiftValueBinding({ chainScope, presetLabel });
   if (!value) return { ok: false, reason: valueError };
 
-  const giftId = mintGiftId();
+  const claimToken = mintClaimToken(16);
+  const giftId = `0x${await hashClaimToken(claimToken)}`;
 
   const created = createClaimLink({
     giftId,
@@ -151,6 +138,7 @@ export async function planGiftCreate({
     createdAt,
     expiresAt,
     note,
+    token: claimToken,
   });
   if (!created.ok) return { ok: false, reason: created.reason };
 
@@ -166,7 +154,7 @@ export async function planGiftCreate({
     : { ...sealed0, ...(letterHash ? { letterHash } : {}) };
 
   const claimUrl0 = typeof origin === "string" && origin
-    ? buildClaimUrl(origin, { giftId, token: created.token })
+    ? buildClaimUrl(origin, { token: created.token })
     : null;
   // Gift links use the dedicated /gift boot path; fork links keep the same identity-only URL.
   const claimUrl = chainScope === FORK_GIFT_SCOPE ? forkClaimUrl(claimUrl0) : claimUrl0;
@@ -178,7 +166,7 @@ export async function planGiftCreate({
     record: sealed,
     // The ONLY place the raw capability token appears. Caller puts this in the URL fragment
     // (never a query string — see `buildClaimUrl`) and does not persist it.
-    fragment: Object.freeze({ giftId, token: created.token, version: GIFT_LINK_VERSION }),
+    fragment: Object.freeze({ token: created.token, version: GIFT_LINK_VERSION }),
     claimUrl,
     // Exactly the adopted A escrow's `create(bytes32,address,uint256,uint64,bytes32)` args
     // (A-570/A-575) — no `claimSigner` field exists in that contract.

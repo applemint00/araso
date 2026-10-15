@@ -61,11 +61,11 @@ await atest("valid plan: ok, giftId is bytes32", async () => {
   assert.match(plan.giftId, BYTES32);
 });
 
-await atest("giftId identical across record, fragment, and escrowCreateArgs", async () => {
+await atest("giftId is the token commitment across record and escrow args", async () => {
   const plan = await validPlan();
   assert.equal(plan.record.giftId, plan.giftId);
-  assert.equal(plan.fragment.giftId, plan.giftId);
   assert.equal(plan.escrowCreateArgs.giftId, plan.giftId);
+  assert.equal(plan.giftId, `0x${await hashClaimToken(plan.fragment.token)}`);
 });
 
 await atest("two plans mint different giftId values (real randomness, not a fixed id)", async () => {
@@ -82,7 +82,7 @@ await atest("fragment.token matches the primitive's own capability-token shape",
 
 await atest("claimUrl is built only when origin is given, via the real buildClaimUrl", async () => {
   const withOrigin = await validPlan({ origin: "https://araso.app" });
-  assert.ok(typeof withOrigin.claimUrl === "string" && withOrigin.claimUrl.includes("#g="));
+  assert.ok(typeof withOrigin.claimUrl === "string" && withOrigin.claimUrl.includes("#t="));
   const withoutOrigin = await validPlan({ origin: null });
   assert.equal(withoutOrigin.claimUrl, null);
 });
@@ -91,7 +91,7 @@ await atest("claimUrl stays short; the selected letter is hash-bound only in the
   const note = "02\nDana\nfor you\nSam";
   const plan = await validPlan({ note, presetLabel: 20 });
   const parsed = parseClaimUrl(plan.claimUrl);
-  assert.deepEqual(parsed, { ok: true, giftId: plan.giftId, token: plan.fragment.token });
+  assert.deepEqual(parsed, { ok: true, token: plan.fragment.token });
   assert.equal(plan.claimUrl.includes("&n="), false);
   assert.equal(plan.claimUrl.includes("&a="), false);
   assert.match(plan.record.letterHash, HEX64);

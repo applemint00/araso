@@ -99,8 +99,8 @@ const BASE_GIFT_FNS = { // file → [function name, sha256(fnSrc)] in file order
 function undoGiftForkCreate(t) {
   const swaps = [
     [/\n\/\/ \[gift-fork\] the shared mainnet fork: its scope[\s\S]*?\n}\n/, "\n"],
-    [/  const claimUrl0 = typeof origin === "string" && origin\n    \? buildClaimUrl\(origin, \{ giftId, token: created\.token \}\)\n    : null;\n  \/\/ \[gift-fork\][^\n]*\n  \/\/[^\n]*\n  const claimUrl = chainScope === FORK_GIFT_SCOPE \? forkClaimUrl\(claimUrl0\) : claimUrl0;\n/,
-      '  const claimUrl = typeof origin === "string" && origin\n    ? buildClaimUrl(origin, { giftId, token: created.token })\n    : null;\n'],
+    [/  const claimUrl0 = typeof origin === "string" && origin\n    \? buildClaimUrl\(origin, \{ token: created\.token \}\)\n    : null;\n  \/\/ \[gift-fork\][^\n]*\n  \/\/[^\n]*\n  const claimUrl = chainScope === FORK_GIFT_SCOPE \? forkClaimUrl\(claimUrl0\) : claimUrl0;\n/,
+      '  const claimUrl = typeof origin === "string" && origin\n    ? buildClaimUrl(origin, { token: created.token })\n    : null;\n'],
     [/    \/\/ \[gift-fork\] pre: gasDeposit\.chainId[^\n]*\n    \/\/[^\n]*\n    const armChainId = [^\n]*\n    if \(!plan \|\| plan\.ok !== true \|\| !plan\.gasDeposit \|\| \(armChainId[^\n]*\n    const armScope = [^\n]*\n    if \(plan\.record\?\.chainId !== armScope\)[^\n]*\n/,
       '    if (!plan || plan.ok !== true || !plan.gasDeposit || plan.gasDeposit.chainId !== GIFT_CREATE_CHAIN_ID) return { ok: false, reason: "sponsor_chain_invalid" };\n    if (plan.record?.chainId !== GIFT_CREATE_CHAIN_SCOPE) return { ok: false, reason: "sponsor_chain_invalid" };\n'],
     ["FUNDING_CONTEXT_TOKEN_ALLOWLIST[armScope]?.USDC?.assetId;", "FUNDING_CONTEXT_TOKEN_ALLOWLIST[GIFT_CREATE_CHAIN_SCOPE]?.USDC?.assetId;"],

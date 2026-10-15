@@ -109,13 +109,13 @@ await check("S3 vercel.json: /api/grant function config, build/output/install un
 });
 await check("S4 claim URL contract: /gift fragment carries identity only; display metadata stays server-side", () => {
   const { token, url } = mintLink("https://arasoo.vercel.app", "gift s4/é");
-  assert.match(url, /^https:\/\/arasoo\.vercel\.app\/gift#g=gift%20s4%2F%C3%A9&t=[^&]+&v=1$/);
+  assert.match(url, /^https:\/\/arasoo\.vercel\.app\/gift#t=[^&]+&v=1$/);
   const u = new URL(url);
   assert.equal(u.pathname, "/gift");
   assert.equal(u.search, "");
   assert.equal(u.hash.includes(token), true);
-  deq(parseClaimUrl(url), { ok: true, giftId: "gift s4/é", token });
-  deq(readClaimFragment(`https://x.test/gift?i=tester01${url.slice(url.indexOf("#"))}`), { status: GIFT_ENTRY_STATUS.READY, giftId: "gift s4/é", token }, "?i= + #g coexist");
+  deq(parseClaimUrl(url), { ok: true, token });
+  deq(readClaimFragment(`https://x.test/gift?i=tester01${url.slice(url.indexOf("#"))}`), { status: GIFT_ENTRY_STATUS.READY, token }, "?i= + #t coexist");
 });
 await check("S5 live Gift stays fail-closed: GIFT_RECORD_CONFIG / GIFT_CLAIM_SUBMIT_CONFIG / ISSUANCE_AUTHORITY are null literals; source/submitter derive only from them", () => {
   assert.match(CODE, /^const GIFT_RECORD_CONFIG = null;/m);
