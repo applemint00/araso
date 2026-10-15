@@ -850,11 +850,13 @@ async function laneJarPiggy() {
   await check("piggy · Chog opens the Home paper → + Piggy is grey with \"soon\" → a tap does nothing", async () => {
     await click(p, "#chogHomeHit", "Chog");
     await sleep(2500); // the paper has finished opening (a person reads it before tapping)
-    const tab = await p.page.evaluate(() => { const t = document.querySelector(".homePlusPiggyTab"); if (!t) return null; const cs = getComputedStyle(t); return { text: t.textContent.replace(/\s+/g, " ").trim(), disabled: t.getAttribute("aria-disabled"), filter: cs.filter, opacity: cs.opacity }; });
+    const tab = await p.page.evaluate(() => { const t = document.querySelector(".homePlusPiggyTab"); if (!t) return null; const cs = getComputedStyle(t); const lab = t.querySelector(".homePlusPiggyTab__label"); return { text: t.textContent.replace(/\s+/g, " ").trim(), disabled: t.getAttribute("aria-disabled"), filter: cs.filter, opacity: cs.opacity, label: lab ? getComputedStyle(lab).color : null }; });
     assert.ok(tab, "no + Piggy tab");
     assert.ok(/\bsoon\b/.test(tab.text), `tab text: ${tab.text}`);
     assert.equal(tab.disabled, "true", `aria-disabled ${tab.disabled}`);
-    assert.ok(/grayscale/.test(tab.filter), `not grey: filter ${tab.filter}`);
+    // [A-1286] only the words go grey, in the Home paper's own secondary colour (.homePaper__state); the tab paper is not dimmed
+    assert.equal(tab.label, "rgba(20, 18, 16, 0.55)", `label colour ${tab.label}`);
+    assert.ok(!/grayscale/.test(tab.filter), `tab paper greyed: filter ${tab.filter}`);
     const before = eventsOf(w, "jp").filter((e) => e.startsWith("passkey_get")).length;
     await p.page.locator(".homePlusPiggyTab").click({ force: true });
     await sleep(3000);

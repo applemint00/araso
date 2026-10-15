@@ -6852,4 +6852,5 @@ html .nameScene__say.chogCheckLine { left: 0; top: auto; bottom: 104%; transform
 @media (prefers-reduced-motion: reduce) { #sendButton.is-armed { animation: none; } .is-sulky-dip { transition: none; } }
 
 /* + Piggy is not open yet: the tab keeps its place, greyed, with "soon" (main.js markPlusPiggySoon) */
-.homePaper .homePlusPiggyTab.is-soon { filter: grayscale(1); opacity: 0.55; cursor: default; }
+.homePaper .homePlusPiggyTab.is-soon { cursor: default; }
+.homePaper .homePlusPiggyTab.is-soon .homePlusPiggyTab__label { color: rgba(20, 18, 16, 0.55); } /* [A-1286] only the words go grey: the Home paper's own secondary colour (.homePaper__state) */
