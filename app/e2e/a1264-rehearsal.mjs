@@ -288,10 +288,9 @@ async function walkFirstJourney(person, { send = true } = {}) {
     return { explain: pick(".sendCard__explain"), stamp: pick(".trialStamp--send"), chog: pick(".chogCheckLine") };
   });
   if (!send) return;
-  const getsBefore = await getsOf(person);
+  person.sendGetsBefore = await getsOf(person); // [A-1298] the Send's Face ID count is read at filing (never wait here: fault lanes arm right after the tap)
   await person.page.locator("#sendButton").click();
   person.sentAt = Date.now();
-  person.sendGets = await until(person, "first Send leaves Home", (s) => s.scene === "away" || s.scene === "return", 60_000).then(async () => (await getsOf(person)) - getsBefore, () => null); // [A-1298]
 }
 async function walkReturnAndFile(person) {
   await until(person, "Return receipt", () => live(person, "#returnTap"), 60_000);
@@ -302,6 +301,9 @@ async function walkReturnAndFile(person) {
   await until(person, "filed → quiet Home", (s) => s.scene === "sendstay", 30_000);
   person.filedHomeAt = Date.now();
   await checkpoint(person, "home-filed");
+  // [A-1298] after the first receipt: "tap me to find out" (once); no tap = Journey 2 by the key (no Face ID)
+  person.filedGets = await getsOf(person);
+  person.findOutCue = await until(person, "tap me to find out", (s) => s.text.includes("tap me to find out"), 6_000).then(() => true, () => false);
 }
 async function getsOf(person) { return person.page.evaluate(() => Number(sessionStorage.getItem("__arasoGets") || 0)).catch(() => -1); }
 async function readTimeline(person) {
@@ -344,8 +346,10 @@ async function unlockIfLocked(person) {
 }
 async function enterSecond(person) {
   await until(person, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
-  if ((await look(person)).text.includes("tap me!")) { await checkpoint(person, "tapme"); await click(person, "#chogHomeHit", "tap me"); }
+  person.sawPlainTapMe = (await look(person)).text.includes("tap me!");
+  if (person.sawPlainTapMe) { await checkpoint(person, "tapme"); await click(person, "#chogHomeHit", "tap me"); }
   await until(person, "Explore", (s) => s.scene === "explore", 30_000);
+  person.exploreGets = await getsOf(person);
   await checkpoint(person, "explore");
 }
 async function walkSecondJob(person, round, { tapHome = true } = {}) {
@@ -492,8 +496,10 @@ async function laneMain() {
       const exp = t2.find((e) => e.k === "scene" && e.v === "explore" && (!intro || e.t >= intro.t));
       a.introToExplore = intro && exp ? exp.t - intro.t : null;
     }
-    if ((await look(a)).text.includes("tap me!")) { await checkpoint(a, "tapme"); await click(a, "#chogHomeHit", "tap me"); }
+    a.sawPlainTapMe = (await look(a)).text.includes("tap me!");
+    if (a.sawPlainTapMe) { await checkpoint(a, "tapme"); await click(a, "#chogHomeHit", "tap me"); }
     await until(a, "Explore", (s) => s.scene === "explore", 30_000);
+    a.exploreGets = await getsOf(a); // [A-1298]
     await sleep(1500);
     await checkpoint(a, "explore");
     assert.ok(main.requests.some((r) => r.person === "a" && r.action === "enter"), "fork entry recorded");
@@ -509,10 +515,16 @@ async function laneMain() {
   await check("chog · after the first receipt: \"I'll keep the details at home.\" and Home comes ≥ 3 s later", () => {
     assert.ok(a.filedLineAt && a.filedHomeAt - a.filedLineAt >= 3000 - 300, `line ${a.filedLineAt} → Home ${a.filedHomeAt} (${a.filedHomeAt - a.filedLineAt} ms)`);
   });
+  await check("first end · \"tap me to find out\" shows after the first receipt; no tap = Journey 2 starts by the key (no Face ID until the Job Send)", async () => {
+    assert.equal(a.findOutCue, true, "the cue showed");
+    assert.equal(a.exploreGets, a.filedGets, `Face ID asks between filing and Explore: ${a.exploreGets - a.filedGets}`);
+    assert.equal(a.sawPlainTapMe, false, "no plain \"tap me!\" on the way");
+  });
   await check("a · Journey 2 round 1: places → Job (tidy the wallet) → Send → Away → back → Receipt → File it → Home", () => walkSecondJob(a, 1));
   await check("chog · after the Journey 2 receipt is filed: \"done!\" (one bubble)", () => { assert.deepEqual(a.secondDone?.[1], ["done!"]); });
   await check("key · money Sends ask Face ID every time: first Send = 1 · Journey 2 Job Send = 1 (the 10-minute key never signs money)", () => {
-    assert.equal(a.sendGets, 1, `first Send Face ID asks: ${a.sendGets}`);
+    const sendGets = a.filedGets - a.sendGetsBefore; // Face ID asks from the first Send tap to the filed Home = the Send's own
+    assert.equal(sendGets, 1, `first Send Face ID asks: ${sendGets}`);
     assert.equal(a.jobGets?.[1], 1, `Job Send Face ID asks: ${a.jobGets?.[1]}`);
   });
   await check("a · reopen the app → lock → Chog → Face ID → Home → bell → Explore opens again", async () => {
@@ -810,6 +822,35 @@ async function laneKeyClock() {
     assert.equal((await getsOf(k)) - getsBefore, 1, "the lock then asks Face ID once by itself (A-1290)");
 
   });
+}
+// [A-1298 ⑤⑥] after the first receipt: a tap on "tap me to find out" opens the Home paper (Journey 2 waits); closing it starts Journey 2.
+// Reopening before Journey 2: the lock asks Face ID by itself, then Journey 2's two lines — no tap me.
+async function laneFirstEnd() {
+  const runs = [["fe-tap", "tap"], ["fe-reopen", "reopen"]];
+  await Promise.all(runs.map(async ([id, mode]) => {
+    const w = createWorld(`firstend-${id}`);
+    const p = await openPerson(browser, w, id); people.push(p);
+    await check(`first end · ${mode === "tap" ? "tap \"tap me to find out\" → the Home paper opens, Journey 2 waits; close it → Journey 2" : "reopen before Journey 2 → lock + Face ID by itself → Journey 2's two lines, no tap me"}`, async () => {
+      await walkFirstJourney(p);
+      await walkReturnAndFile(p);
+      if (mode === "tap") {
+        assert.equal(p.findOutCue, true, "the cue showed");
+        await p.page.locator("#chogHomeHit").click();
+        await sleep(6500);
+        const open = await p.page.evaluate(() => ({ scene: document.querySelector("[data-scene]")?.dataset.scene, paper: !!document.querySelector(".homePaper") && getComputedStyle(document.querySelector(".homePaper")).visibility !== "hidden" }));
+        await checkpoint(p, "home-paper");
+        assert.deepEqual(open, { scene: "sendstay", paper: true }, "the Home paper is open and Journey 2 waits (no 5 s jump)");
+        await p.page.locator("#chogHomeHit").click();
+        await until(p, "Journey 2 after closing the paper", (s) => s.scene === "explore" || s.text.includes("let's try more kinds of jobs!"), 30_000);
+      } else {
+        await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
+        await until(p, "lock", (s) => s.scene === "birth", 20_000);
+        let plain = false;
+        await until(p, "Journey 2's first line", async (s) => { if (s.text.includes("tap me!") || s.text.includes("tap me to find out")) plain = true; return s.text.includes("let's try more kinds of jobs!") || s.scene === "explore"; }, 40_000);
+        assert.equal(plain, false, "no tap me on reopen");
+      }
+    });
+  }));
 }
 async function laneJobFail() {
   const cases = [
@@ -1313,7 +1354,7 @@ function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy,giftrun").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti(), only.includes("keyclock") && laneKeyClock()].filter(Boolean));
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti(), only.includes("keyclock") && laneKeyClock(), only.includes("firstend") && laneFirstEnd()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });

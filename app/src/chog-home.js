@@ -715,12 +715,12 @@ export function mountChogHome(root, opts) {
   // 호출부(main.js mountHome settle())가 "Save 직후 첫 도착" 사실(isFirstArrival)로만 부른다 —
   // 새 저장 키 0. 한 인스턴스에 한 번. 공통 카드 자리가 이미 다른 카드 몫이면(cardClaimed)
   // Chog 탭이 종이를 못 여니 가르칠 것이 없다 → 띄우지 않는다.
-  function startTapCue() {
+  function startTapCue(text = "tap me!") { // [A-1298] the first end says "tap me to find out" in the same cue
     if (destroyed || cardClaimed || tapCue || !hit) return false;
     const label = document.createElement("div");
     label.className = "chogHome__tapCue";
     label.setAttribute("aria-hidden", "true"); // 탭 대상(#chogHomeHit "Chog")이 이미 AX 에 있다
-    label.textContent = "tap me!";
+    label.textContent = text;
     label.style.opacity = reduced ? "1" : "0";
     root.append(label);
     tapCue = { t: 0, label, hidden: false, measure: true };
@@ -994,6 +994,7 @@ export function mountChogHome(root, opts) {
     wake,
     hover: requestHover,
     closeCard,
+    hideTapCue, // [A-1298] the first end's cue goes away by itself after 5 s with no tap
     // 로컬 검토용 — 3분을 기다리지 않고 앉기/졸기 경로를 눈으로 보려고 쓴다.
     // 시간을 앞당길 뿐 수식은 그대로라, 이것만으로 실시간 PASS 를 주장하지 않는다.
     previewSit: sit,

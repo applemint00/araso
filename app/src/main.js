@@ -14926,36 +14926,44 @@ const A891_FILED_LINE_READ_MS = Math.max(3000, chogSpeakMs(A891_FILED_LINE)); //
 // Intro line → Explore Paper = the existing short beat before a card (HOME_FIRST_JOURNEY_CARD_MS, 1.2 s); not an Owner number, tune on device.
 const A891_SECOND_INTRO_TO_PAPER_MS = Math.max(HOME_FIRST_JOURNEY_CARD_MS + 1500, chogLinesMs(A891_SECOND_INTRO_LINES)); // both intro lines read one at a time (+ a breath) before the Explore paper
 const SECOND_INTRO_SEEN_KEY = scopedSecondKey("araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
-let a891FirstArrivalHold = null; // { t } silent frame clock of the removed first-arrival cue (keeps the First Send reveal timing)
 let a1206SwitchIntroPending = false; // UI-only boot handoff; consumed once by the existing CG-05 intro
+// [A-1298 ⑤ · Owner 04:2x "tap me to find out … 탭 안 하면 바로 2차"] once, on the Home right after the first receipt (the key is live): Chog's cue
+// says "tap me to find out" · a tap = the Home paper opens as usual and Journey 2 waits until it is closed · no tap for 5 s = Journey 2 starts
+// with the key (no Face ID). Any other Home (a reopen, a later visit) goes in directly — no tap me.
+let a1298FindOutPending = false;
+let a1298FindOutChog = null;
+const A1298_FIND_OUT_MS = 5000;
+function a1298FindOut(enter) {
+  const chog = homeChog;
+  if (!chog || !chog.startTapCue?.("tap me to find out")) { enter(); return; }
+  a1298FindOutChog = chog;
+  const scene = state.scene;
+  setTimeout(() => { // not a scene timer: a redraw of Home must not lose the 5 s
+    if (a1298FindOutChog !== chog) return; // tapped: the Home paper path owns the next step
+    a1298FindOutChog = null;
+    chog.hideTapCue?.();
+    if (state.scene === scene && chog === homeChog && !state.appLock) enter();
+  }, A1298_FIND_OUT_MS);
+}
+// The tap on that cue: the Home paper opens (chog-home pins it); Journey 2 starts once the person closes it.
+function a1298FindOutTap(chog, enter) {
+  if (a1298FindOutChog !== chog) return false;
+  a1298FindOutChog = null;
+  const wait = () => {
+    if (state.scene !== "sendstay" || chog !== homeChog || state.appLock) return;
+    if (chog.state?.pinned) { setTimeout(wait, 300); return; }
+    enter();
+  };
+  setTimeout(wait, 300);
+  return true;
+}
 let a891CueChog = null;          // the Home Chog instance that is currently showing the post-file "tap me!"
 
 function a891SecondIntroSeen() {
   try { return localStorage.getItem(SECOND_INTRO_SEEN_KEY) === "1"; } catch { return false; }
 }
 
-// Same clock rule as chog-home.js tapCue.t (frame dt, capped 50 ms, 0 while hidden), so revealSendCard waits exactly what the cue
-// (delay + wave + fade + A-725 hold = TAP_CUE_TIMING.readyMs) used to give. Reduced motion = 0, as the reduced cue gave 0.
-function a891StartFirstArrivalHold() {
-  a891FirstArrivalHold = null;
-  if (prefersReducedMotion()) return;
-  const hold = { t: 0 };
-  a891FirstArrivalHold = hold;
-  let last = 0;
-  runSceneFrames((now) => {
-    if (a891FirstArrivalHold !== hold) return false;
-    const dt = last && !document.hidden ? Math.min(now - last, 50) : 0;
-    last = now;
-    hold.t += dt;
-    return hold.t < A891_TAP_CUE_TIMING.readyMs;
-  });
-  onSceneTeardown(() => { if (a891FirstArrivalHold === hold) a891FirstArrivalHold = null; });
-}
-
-function a891FirstArrivalHoldRemainingMs() {
-  const hold = a891FirstArrivalHold;
-  return hold ? Math.max(0, A891_TAP_CUE_TIMING.readyMs - hold.t) : 0;
-}
+// [A-1298 ⑦] the silent first-arrival hold (an empty clock of the removed first-arrival cue, never started) is gone.
 
 // Chog speech through the existing .chogCheckLine slot inside .chogHome (same as the Return alarm / Explore say / A-849 two lines).
 function a891ChogSay(chogRoot, id, lines) {
@@ -14990,6 +14998,7 @@ function a891AfterFiling(returnView, valid) {
     // left set it would make the Home after filing replay the First arrival (First Send card) instead of the quiet Home.
     state.homeArrival = false;
     if (teach) a891ChogSay(document.querySelector("#returnChogHop #chogHome"), "returnKeepLine", [A891_FILED_LINE]);
+    if (teach) a1298FindOutPending = true; // [A-1298 ⑤] the Home right after the first receipt teaches the house once
     sceneTimeout(() => { if (valid() && state.scene === "return") goHomeFromFilebox(); }, teach ? A891_FILED_LINE_READ_MS : A891_FILED_LINE_HOLD_MS);
     return false;
   });
@@ -15017,7 +15026,6 @@ function a891ArmPostFileQuietHome() {
 // CG-05 intro: the opening tap on the post-file cue. chog-home.js toggle() already hid the cue; the intro answers the tap, so the
 // Home pad is closed before it draws. A1206 Owner 2026-10-14: one-use switch boot may also start this intro automatically.
 function a891HomeChogTap() {
-  a891FirstArrivalHold = null; // a real Chog tap ended the old first-arrival cue (hideTapCue → hold 0); the silent hold does the same
   const chog = a891CueChog;
   if (!chog || chog !== homeChog || state.scene !== "sendstay") return;
   a891CueChog = null;
@@ -15175,6 +15183,7 @@ async function a956Enter({ reenter = false } = {}) {
       if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }
       if (state.appLock) return;
       if (activeAccount && String(activeAccount.address || "").toLowerCase() === String(state.address || "").toLowerCase()) {
+        if (typeof a1298FindOutPending !== "undefined" && a1298FindOutPending) { a1298FindOutPending = false; a1298FindOut(() => { void a956Enter(); }); return; } // [A-1298 ⑤]
         void a956Enter();
         return;
       }
@@ -15187,7 +15196,7 @@ async function a956Enter({ reenter = false } = {}) {
   const a956BaseTap = a891HomeChogTap;
   a891HomeChogTap = (...args) => {
     if (!entryOpen()) return a956BaseTap(...args);
-    a891FirstArrivalHold = null;
+    if (typeof a1298FindOutTap === "function" && a1298FindOutTap(homeChog, () => { void a956Enter(); })) return undefined; // [A-1298 ⑤] the Home paper stays open; Journey 2 after it closes
     const chog = a891CueChog;
     if (!chog || chog !== homeChog || state.scene !== "sendstay") return undefined;
     a891CueChog = null;
