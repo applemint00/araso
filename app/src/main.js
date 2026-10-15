@@ -1146,6 +1146,7 @@ function savePiggyName(event) {
   }
   // 「이름 저장 완료」= 이 한 줄. Piggy 받음·최초 연출 처리와 별개로 기록한다(번호 8).
   localStorage.setItem(PIGGY_NAME_KEY, name);
+  if (typeof renamePasskeyForPiggy === "function") renamePasskeyForPiggy(name);
   // [A-520] 이미 색인에 있는 그 Piggy 의 이름만 바꾼다(없으면 아무것도 등록하지 않는다).
   if (state.address) {
     try { renameIndexedPiggy(safeLocalStorage(), secondJourneyScope().chainId, { id: indexedPiggyId(state.address), name }); } catch {}
@@ -1636,10 +1637,39 @@ function a1214ClearPendingBirth() {
 
 // A1202/A1212: observe creation independently; never let Mera start an automatic
 // fallback assertion. Pending metadata also survives reload in this tab (A1214).
-function a1202CreatePasskey(options, stage, enableOnly = false) {
+// A per-create passkey name so a person with several passkeys can tell them apart in the system picker (no locale words).
+function passkeyCreateName(now = new Date()) {
+  const p = (n) => String(n).padStart(2, "0");
+  return `Araso Piggy · ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}`;
+}
+// Passkey ids this device already knows for this site: another create here would only duplicate it in the picker.
+function knownLocalPasskeyIds() {
+  const ids = [];
+  try { const c = readCredential(); if (c?.credentialId) ids.push(c.credentialId); } catch { /* none known */ }
+  try { if (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential?.credentialId) ids.push(lateCreatedCredential.credentialId); } catch { /* none known */ }
+  try { const b = typeof a1214ReadPendingBirth === "function" ? a1214ReadPendingBirth() : null; if (b?.credentialId) ids.push(b.credentialId); } catch { /* none known */ }
+  return [...new Set(ids)].filter((id) => typeof id === "string" && /^[A-Za-z0-9_-]+$/.test(id));
+}
+// The user handle of the passkey made here (not a secret): the Signal API needs it to rename that passkey later.
+const PASSKEY_USER_HANDLE_KEY = "araso.pkUserHandle.v1";
+const passkeyB64Url = (bytes) => btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const passkeyFromB64Url = (id) => Uint8Array.from(atob(id.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((id.length + 3) % 4)), (c) => c.charCodeAt(0));
+// Where the browser supports it, the picker shows the Piggy's name instead of the creation date; elsewhere nothing happens.
+function renamePasskeyForPiggy(name) {
+  try {
+    const PKC = globalThis.PublicKeyCredential;
+    const userId = localStorage.getItem(PASSKEY_USER_HANDLE_KEY);
+    if (typeof PKC?.signalCurrentUserDetails !== "function" || !userId || !name) return false;
+    Promise.resolve(PKC.signalCurrentUserDetails({ rpId: getRpId(), userId, name, displayName: name })).catch(() => {});
+    return true;
+  } catch { return false; }
+}
+
+function a1202CreatePasskey(options, stage, enableOnly = false, excludeIds = []) {
   const browserCreate = async request => {
     const credential = await globalThis.navigator?.credentials?.create({ publicKey: {
       rp: request.rp, user: request.user, challenge: request.challenge,
+      ...(excludeIds.length ? { excludeCredentials: excludeIds.map((id) => ({ type: "public-key", id: passkeyFromB64Url(id) })) } : {}),
       pubKeyCredParams: request.algorithms.map(alg => ({ type: "public-key", alg })),
       ...(request.timeout !== undefined ? { timeout: request.timeout } : {}),
       attestation: request.attestation,
@@ -1666,6 +1696,7 @@ function a1202CreatePasskey(options, stage, enableOnly = false) {
         if (typeof a1212ClearCreateAttempt === "function") a1212ClearCreateAttempt(createAttemptKey);
       }
       stage.value = "created";
+      try { localStorage.setItem(PASSKEY_USER_HANDLE_KEY, passkeyB64Url(new Uint8Array(request.user.id))); } catch { /* rename stays unavailable */ }
       if (typeof track === "function") track("passkey_create", "ok");
       if (created.prfOutput === undefined) {
         stage.pin = {
@@ -1735,14 +1766,15 @@ async function openPiggy() {
   try {
     // Keep the existing invite marker accurate for a reload during this ceremony.
     try { if (a1210Invite) sessionStorage.setItem(a1158AttemptKey(a1210Invite), "attempted"); } catch { /* existing storage guard */ }
+    const passkeyName = typeof passkeyCreateName === "function" ? passkeyCreateName() : "Araso Piggy";
     const creating = a1202CreatePasskey({
       rp: { id: getRpId(), name: "Araso" },
-      user: { name: "araso-owner", displayName: "Araso" },
+      user: { name: passkeyName, displayName: passkeyName },
       timeout: 120_000,
       // LOCAL_ONLY. 둘 다 잠금이 걸리면 빈 객체 → 기존 경로·기본 salt 그대로.
       ...localTestWebAuthnOption(),
       ...localTestPrfSaltOption(),
-    }, createStage, typeof a1212CreateEnableOnly === "function" && a1212CreateEnableOnly());
+    }, createStage, typeof a1212CreateEnableOnly === "function" && a1212CreateEnableOnly(), giftIntent || typeof knownLocalPasskeyIds !== "function" ? [] : knownLocalPasskeyIds());
     // [A-667 R5] 시간이 다 된(또는 bfcache 복원으로 만료된) 뒤 늦게 온 생성 성공: 화면·서명자·저장 0, PRF 는 지운다.
     // 남는 부작용(정직 기록): 플랫폼에는 패스키가 **이미 만들어져** 있다. 그래서 이번 세션의 다음 Open 이 곧바로 또
     // 만들지 않도록 find-first 를 다시 켠다(freshRecoveryTried=false, 메모리만) — 다음 Open 은 먼저 그 패스키를 찾는다.

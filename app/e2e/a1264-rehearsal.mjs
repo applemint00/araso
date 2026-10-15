@@ -614,6 +614,42 @@ async function laneJobFail() {
   }));
 }
 
+// Each passkey made here carries its own name (picker shows them apart); a saved Piggy name renames it where the Signal API exists.
+async function laneNames() {
+  const w = createWorld("names");
+  const signalStub = () => { try { const PKC = window.PublicKeyCredential; if (PKC) PKC.signalCurrentUserDetails = (o) => { window.__arasoSignal = o; return Promise.resolve(); }; } catch {} };
+  const made = [];
+  for (const id of ["n1", "n2"]) {
+    const p = await openPerson(browser, w, id, { initScript: signalStub }); people.push(p);
+    await check(`names · ${id}: create a Piggy and name it`, () => walkFirstJourney(p, { send: false }));
+    const creds = (await p.passkey.cdp.send("WebAuthn.getCredentials", { authenticatorId: p.passkey.authenticatorId })).credentials;
+    made.push({ p, cred: creds[0], signal: await p.page.evaluate(() => window.__arasoSignal || null), handle: await p.page.evaluate(() => localStorage.getItem("araso.pkUserHandle.v1")) });
+  }
+  await check("names · two passkeys made on this site have different names (not one constant)", () => {
+    const names = made.map((m) => m.cred?.userName);
+    assert.ok(names.every(Boolean), `names: ${JSON.stringify(names)}`);
+    assert.ok(names.every((n) => /^Araso Piggy · \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(n)), `names: ${JSON.stringify(names)}`);
+    assert.ok(!names.includes("araso-owner"), `names: ${JSON.stringify(names)}`);
+    const handles = made.map((m) => m.cred?.userHandle);
+    assert.notEqual(handles[0], handles[1], "user handles stay unique");
+  });
+  await check("names · saving the Piggy name asks the browser to rename that passkey (Signal API, same user handle)", () => {
+    for (const m of made) {
+      assert.ok(m.signal && m.signal.name === m.p.name && m.signal.displayName === m.p.name, `signal: ${JSON.stringify(m.signal)}`);
+      assert.equal(m.signal.userId, m.handle, "renames the passkey made here");
+      assert.equal(Buffer.from(m.cred.userHandle, "base64").toString("base64url"), m.handle, "stored handle = the authenticator's user handle");
+    }
+  });
+  for (const m of made) await m.p.context.close();
+  // Real Signal API (no stub): does this browser's authenticator take the new name? Recorded, not judged (support varies by browser).
+  const r = await openPerson(browser, w, "n3"); people.push(r);
+  await walkFirstJourney(r, { send: false }).catch(() => {});
+  await sleep(1500);
+  const after = (await r.passkey.cdp.send("WebAuthn.getCredentials", { authenticatorId: r.passkey.authenticatorId })).credentials[0];
+  console.log(`NAMES real-signal userName after naming = ${JSON.stringify(after?.userName)} (Piggy ${r.name})`);
+  await r.context.close();
+}
+
 async function laneFaults() {
   const f = await openPerson(browser, fault1, "f1"); people.push(f);
   await check("fault · first deposit -32000 once → retried → Return", async () => {
@@ -811,8 +847,8 @@ async function laneAtlas() {
 function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id); if (e.length) return e; } return []; }
 
 try {
-  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy()].filter(Boolean));
+  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names").split(",");
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });
