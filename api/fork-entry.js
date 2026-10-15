@@ -17,6 +17,7 @@ import { createMemoryForkLedgerStore } from "./_lib/fork-ledger-store-contract.j
 import { inviteStoreFromEnv } from "./_lib/invite-redis-store.js";
 
 import { publicEntryConfig } from "./_lib/public-entry.js";
+import { grantStatusFromEnv } from "./_lib/grant-room.js"; // [A-1299]
 
 export const FORK_ENTRY_MAX_BODY = 8 * 1024;
 export const FORK_INVITE_HEADER = "x-araso-invite";
@@ -71,7 +72,7 @@ async function readBody(req) {
 }
 
 /** Handler over an injected service (tests + the local server). allowedOrigins = code-only list of local dev origins. */
-export function createForkEntryHandler({ service, inviteStore = null, publicEntry = null, now = () => Date.now(), allowedOrigins = [] } = {}) {
+export function createForkEntryHandler({ service, inviteStore = null, publicEntry = null, grantStatus = null, now = () => Date.now(), allowedOrigins = [] } = {}) {
   return async function handler(req, res) {
     if (req.method !== "POST") return respond(res, 405, { ok: false, reason: "method_not_allowed" });
     if (!service && !inviteStore && !publicEntry) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
@@ -85,7 +86,12 @@ export function createForkEntryHandler({ service, inviteStore = null, publicEntr
     const action = typeof b.action === "string" && Object.prototype.hasOwnProperty.call(ACTION_FIELDS, b.action) ? b.action : null;
     if (!action) return respond(res, 400, { ok: false, reason: "bad_action" });
     if (Object.keys(b).some((k) => !ACTION_FIELDS[action].includes(k))) return respond(res, 400, { ok: false, reason: "unexpected_field" });
-    if (action === "public_state") return respond(res, 200, { ok: true, publicEntry: publicEntry?.enabled === true && publicEntry.cap > 0 });
+    if (action === "public_state") {
+      const out = { ok: true, publicEntry: publicEntry?.enabled === true && publicEntry.cap > 0 };
+      // [A-1299] words only (grantRoom ok|low|full · grantWallet ok|low|unknown) when the status reads are wired; never a number or an address
+      if (typeof grantStatus === "function") { try { Object.assign(out, await grantStatus()); } catch { /* public_state stays as it was */ } }
+      return respond(res, 200, out);
+    }
     const inviteToken = typeof headers[FORK_INVITE_HEADER] === "string" ? headers[FORK_INVITE_HEADER] : null;
     // First-journey metadata only. No bind, grant, identity disclosure or Journey 2 release-gate change.
     if (action === "invite_state") {
@@ -182,7 +188,7 @@ let defaultHandler = null;
 export default async function handler(req, res) {
   if (!defaultHandler) {
     const appOrigin = appOriginOk(process.env[FORK_ENTRY_ENV.appOrigin]) ? process.env[FORK_ENTRY_ENV.appOrigin] : null;
-    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), inviteStore: inviteStoreFromEnv(process.env), publicEntry: publicEntryConfig(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
+    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), inviteStore: inviteStoreFromEnv(process.env), publicEntry: publicEntryConfig(process.env), grantStatus: grantStatusFromEnv(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
   }
   return defaultHandler(req, res);
 }
