@@ -93,5 +93,24 @@ await check("E1 env wiring: counter = GET on the public counter key only · wall
   assert.equal(GR.publicCountKeyFor("araso:v1", "default"), "araso:v1:grant:default:public:n");
 });
 
+// ═══ Part L ═══ [A-1301] wallet "low" = remaining public spots × GRANT_WEI, never under GRANT_WEI × 20 (Owner 06:2x)
+await check("L1 cap 150 · counter 10 · wallet 5 MON → grantWallet low (140 spots × 0.1 = 14 MON needed)", async () => {
+  assert.ok(GR, "grant-room module missing");
+  const r = await publicState(createForkEntryHandler({ publicEntry: PUBLIC, grantStatus: statusOf({ cap: 150, count: 10, wallet: GRANT_WEI * 50n }) }));
+  assert.equal(r.json.grantWallet, "low", JSON.stringify(r.json));
+  assert.equal(GR.grantWalletWord(GRANT_WEI * 50n, { cap: 150, count: 10 }), "low");
+  assert.equal(GR.grantWalletWord(GRANT_WEI * 140n, { cap: 150, count: 10 }), "ok");
+});
+await check("L2 room full + wallet 2.5 MON → ok (floor 2 MON) · cap or counter unreadable → the 2 MON floor · still words only", async () => {
+  assert.ok(GR, "grant-room module missing");
+  assert.equal(GR.grantWalletWord(GRANT_WEI * 25n, { cap: 150, count: 150 }), "ok");
+  assert.equal(GR.grantWalletWord(GRANT_WEI * 25n, { cap: 150, count: 170 }), "ok"); // over the cap = 0 spots left
+  assert.equal(GR.grantWalletWord(GRANT_WEI * 19n, { cap: 0, count: 10 }), "low");
+  assert.equal(GR.grantWalletWord(GRANT_WEI * 25n, { cap: 150, count: null }), "ok");
+  const r = await publicState(createForkEntryHandler({ publicEntry: PUBLIC, grantStatus: statusOf({ cap: 150, count: new Error("redis"), wallet: GRANT_WEI * 25n }) }));
+  assert.equal(r.json.grantWallet, "ok");
+  assert.equal(/\d{2,}|0x[0-9a-f]/i.test(JSON.stringify(r.json)), false, JSON.stringify(r.json));
+});
+
 console.log(`\n${pass}/${pass + fail} PASS`);
 process.exit(fail ? 1 : 0);

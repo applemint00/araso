@@ -10,7 +10,7 @@ import { DEFAULT_EPOCH } from "./grant-store-contract.js";
 import { publicEntryConfig } from "./public-entry.js";
 
 export const GRANT_ROOM_LOW_SHARE = 0.8; // public counter / cap at or above this = "low"; at or above 1 = "full"
-export const GRANT_WALLET_LOW_WEI = GRANT_WEI * 20n; // fewer than 20 grants left in the grant wallet = "low"
+export const GRANT_WALLET_LOW_WEI = GRANT_WEI * 20n; // the floor: fewer than 20 grants left in the grant wallet is always "low"
 
 /** "ok" | "low" | "full", or null when it cannot be said (no cap, unreadable count). */
 export function grantRoomWord(count, cap) {
@@ -18,10 +18,18 @@ export function grantRoomWord(count, cap) {
   const share = count / cap;
   return share >= 1 ? "full" : share >= GRANT_ROOM_LOW_SHARE ? "low" : "ok";
 }
+/** [A-1301] The wallet must cover every public spot still open: max(spots left × GRANT_WEI, the 20-grant floor). Unreadable cap or
+ *  counter = the floor alone. Uses only values already read. */
+export function grantWalletNeedWei({ cap, count } = {}) {
+  if (!(typeof cap === "number" && cap > 0) || typeof count !== "number" || !Number.isFinite(count)) return GRANT_WALLET_LOW_WEI;
+  const left = BigInt(Math.max(0, Math.floor(cap - count)));
+  const need = left * GRANT_WEI;
+  return need > GRANT_WALLET_LOW_WEI ? need : GRANT_WALLET_LOW_WEI;
+}
 /** "ok" | "low" | "unknown" (unreadable). */
-export function grantWalletWord(balanceWei) {
+export function grantWalletWord(balanceWei, room = {}) {
   if (typeof balanceWei !== "bigint" || balanceWei < 0n) return "unknown";
-  return balanceWei < GRANT_WALLET_LOW_WEI ? "low" : "ok";
+  return balanceWei < grantWalletNeedWei(room) ? "low" : "ok";
 }
 
 const within = (p, ms) => Promise.race([Promise.resolve().then(p), new Promise((_, no) => setTimeout(() => no(new Error("slow")), ms))]);
@@ -36,7 +44,7 @@ export function createGrantStatus({ cap, readPublicCount, readWalletBalance, ttl
       typeof readWalletBalance === "function" ? within(readWalletBalance, timeoutMs).catch(() => null) : null,
     ]);
     const room = grantRoomWord(count, cap);
-    last = Object.freeze({ ...(room ? { grantRoom: room } : {}), grantWallet: grantWalletWord(balance) });
+    last = Object.freeze({ ...(room ? { grantRoom: room } : {}), grantWallet: grantWalletWord(balance, { cap, count }) });
     at = now();
     return last;
   };
