@@ -149,13 +149,14 @@ async function addPasskey(page, credential = null) {
   return { cdp, authenticatorId, page, credential: async () => (await cdp.send("WebAuthn.getCredentials", { authenticatorId })).credentials[0] || null };
 }
 
-async function openPerson(browser, world, id, { storageState, invite, credential, viewport, initScript, base, userVerified } = {}) {
+async function openPerson(browser, world, id, { storageState, invite, credential, viewport, initScript, base, userVerified, clock } = {}) {
   const phone = Number(process.env.ARASO_REHEARSAL_WIDTH) > 0 ? { width: Number(process.env.ARASO_REHEARSAL_WIDTH), height: 932 } : { width: 390, height: 844 };
   const context = await browser.newContext({ viewport: viewport || phone, ...(storageState ? { storageState } : {}) });
   const tag = { id };
   await context.route("**/*", (route) => world.route(route, tag.id));
   if (invite) await context.addInitScript((token) => { try { if (!localStorage.getItem("araso.forkInvite.v1")) localStorage.setItem("araso.forkInvite.v1", token); } catch {} }, invite);
   if (initScript) await context.addInitScript(initScript);
+  if (clock) await context.clock.install();
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error.message).slice(0, 160)));
@@ -503,7 +504,7 @@ async function sendAgain(person, fixed, waitMs = 0) {
 }
 async function retryOpen(p) {
   const ids = await p.page.$$eval("button,[role=button]", (bs) => bs.filter((x) => x.getBoundingClientRect().width > 0).map((x) => x.id).filter(Boolean));
-  const btn = ["authTryAgainButton", "unlockRetryButton", "loginChogButton", "inviteFaceButton"].find((x) => ids.includes(x));
+  const btn = ["authTryAgainButton", "unlockRetryButton", "checkButton", "loginChogButton", "inviteFaceButton"].find((x) => ids.includes(x));
   if (!btn) return `안 됨 (누를 버튼 없음: ${ids.join("/") || "—"})`;
   await p.page.locator(`#${btn}`).click();
   await sleep(2500);
@@ -545,10 +546,39 @@ async function laneAtlas() {
         await p.page.locator('input[data-errand-id="clean"]').check(); await click(p, "#exploreSaveButton", "explore save"); await click(p, ".secondJourney__pick", "job pick"); await click(p, "#secondOkButton", "job ok");
         await until(p, "Job Send", () => live(p, "#secondSendButton"), 20_000); await p.page.locator("#secondSendButton").click(); await until(p, "Away", (s) => s.scene === "secondAway", 15_000); await until(p, "back home", (s) => s.scene === "sendstay", 90_000); },
       expect: ["still in home"], retry: (p) => retryHomeLive(p, "2차 Job 실패 = 조용히 홈 · 문구 0") }],
+    ["two-tabs-send", { world: W("at17"), trigger: async (p) => { await walkFirstJourney(p, { send: false });
+        // the record another tab of the same phone writes when it pressed Send first (same storage key and shape)
+        await p.page.evaluate(() => localStorage.setItem("araso.sendPending", JSON.stringify({ stage: "reserved", reservationId: "othertab.0001", tabId: "othertab", at: Date.now() })));
+        await p.page.locator("#sendButton").click(); },
+      expect: ["Confirmation is still catching up."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    ["away-second-open", { world: W("at18"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000);
+        await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await click(p, "#loginChogButton", "lock Chog");
+        await until(p, "still out working.", (s) => s.text.some((t) => t.includes("still out working.")), 30_000);
+        // leave the app and come back (the phone's app switcher) — the same Away opened a second time
+        await p.page.evaluate(() => { const set = (v) => { Object.defineProperty(document, "visibilityState", { value: v, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); }; set("hidden"); set("visible"); }); },
+      expect: ["not back yet."], retry: (p) => retryHomeLive(p, "확인 올 때까지 Away") }],
+    ["signer-expired-send", { world: W("at19"), setup: { clock: true }, trigger: async (p) => { await walkFirstJourney(p, { send: false });
+        await p.page.clock.fastForward("05:05"); await sleep(500);
+        await p.passkey.cdp.send("WebAuthn.setUserVerified", { authenticatorId: p.passkey.authenticatorId, isUserVerified: false });
+        await p.page.locator("#sendButton").click(); },
+      expect: ["Couldn't open Piggy", "Face ID was cancelled."], retry: async (p) => { await p.passkey.cdp.send("WebAuthn.setUserVerified", { authenticatorId: p.passkey.authenticatorId, isUserVerified: true }); return `${await retryOpen(p)} — 이번엔 Face ID 승인`; } }],
+    ["j2-entry-refused", { world: W("at20"), trigger: async (p) => { p.world.fork.refuseChallenge = 99; await toSend(p); await walkReturnAndFile(p); await sleep(20_000); },
+      expect: ["still in home"], retry: async (p) => { const s = await look(p); return s.text.includes("tap me!") ? "tap me 있음" : `안 됨 (조용한 홈 · tap me 0 · fork 입장 요청 ${p.world.requests.filter((r) => r.person === p.id && r.action === "challenge").length}회 거절)`; } }],
     ["balance-read-failed", { world: W("at15"), trigger: async (p) => { await walkFirstJourney(p, { send: false }); p.world.chain.faults.balanceError = true; await p.page.evaluate(() => document.querySelector("#stayButton")?.click()); await sleep(2000); await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); }, expect: ["couldn't read the balance."], retry: async (p) => { await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); await sleep(800); await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); await sleep(2500); return (await look(p)).text.some((t) => t.includes("couldn't read the balance.")) ? "안 됨 (읽기 실패 동안)" : "바로 풀림"; } }],
   ];
   // Revert proof: the same lanes without their fault must reach the Receipt (no failure screen).
   if (process.env.ARASO_ATLAS_REVERT === "1") {
+    // the four forecast lanes without their fault
+    {
+      const p = await openPerson(browser, W("revert-one-tab"), "revert-one-tab"); people.push(p);
+      await check("atlas revert two-tabs-send: no other tab record → Receipt", async () => { await toSend(p); await until(p, "Receipt", () => live(p, "#returnTap"), 60_000); }); await p.context.close();
+      const q = await openPerson(browser, W("revert-signer-ok", {}), "revert-signer-ok", { clock: true }); people.push(q);
+      await check("atlas revert signer-expired-send: expired signer + Face ID ok → wakes and reaches Receipt", async () => { await walkFirstJourney(q, { send: false }); await q.page.clock.fastForward("05:05"); await sleep(500); await q.page.locator("#sendButton").click(); await until(q, "Receipt", () => live(q, "#returnTap"), 60_000); }); await q.context.close();
+      const r = await openPerson(browser, W("revert-entry-ok"), "revert-entry-ok"); people.push(r);
+      await check("atlas revert j2-entry-refused: entry allowed → Explore", async () => { await toSend(r); await walkReturnAndFile(r); await enterSecond(r); }); await r.context.close();
+      const t = await openPerson(browser, W("revert-receipt-ok"), "revert-receipt-ok"); people.push(t);
+      await check("atlas revert away-second-open: receipts arrive → Return (no Away restore line)", async () => { await toSend(t); await until(t, "Receipt", () => live(t, "#returnTap"), 60_000); }); await t.context.close();
+    }
     for (const [id, grantMode] of [["revert-grant-ok", "ok"], ["revert-no-refusal", "ok"]]) {
       const p = await openPerson(browser, W(id, { grantMode }), id); people.push(p);
       await check(`atlas revert ${id}: without the fault the first send reaches the Receipt`, async () => { await toSend(p); await until(p, "Receipt", () => live(p, "#returnTap"), 60_000); });
