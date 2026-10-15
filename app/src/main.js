@@ -1242,10 +1242,28 @@ function safeRpcMessagePrefix(error) {
   if (/fee|maxfeepergas|maxpriorityfeepergas|gas price|base fee/.test(text)) return "fee";
   return "other";
 }
+// Where a First send broke, as one fixed word for the event log (no message text, address or hash leaves the phone).
+function sendFailureWhy(error) {
+  const message = typeof error?.message === "string" ? error.message : "";
+  if (/^send_prepared_refused/.test(message)) return "refused";
+  if (/^send_hash_mismatch/.test(message)) return "mismatch";
+  if (/^deposit unconfirmed/.test(message)) return "unconfirmed";
+  if (/^send_redeem_nonce_unexpected/.test(message)) return "redeem";
+  if (/^(app_locked_before_sign|send_lock_not_held|send_pending_not_owned)/.test(message)) return "locked";
+  if (/^(send_nonce_missing|send_sign_failed)/.test(message)) return "sign";
+  if (/^(NotAllowedError|InvalidStateError|AbortError|SecurityError)$/.test(safeErrorCategory(error))) return "auth";
+  const bucket = safeRpcMessagePrefix(error);
+  if (bucket !== "other") return bucket;
+  for (let current = error, depth = 0; current && depth < 4; current = current.cause, depth += 1) {
+    if (current?.name === "InvalidInputRpcError" || Number(current?.code) === -32000) return "broadcast";
+  }
+  return "other";
+}
 function recordSafeError(phase, error) {
   if (typeof track === "function") {
     const sendCode = ({ recover: "auth", grant: "grant", "grant-visibility": "grant", simulate: "simulate", send: "fail" })[phase];
     if (sendCode) track("send", sendCode);
+    if (phase === "send") track("send_why", sendFailureWhy(error));
     else track("flow_error", ({ open: "open", unlock: "unlock", "home-money": "home_money", prf_unavailable: "prf_unavailable" })[phase] || "other");
   }
   const entry = { at: Date.now(), phase, category: safeErrorCategory(error), code: safeErrorCode(error), messagePrefix: safeRpcMessagePrefix(error) };
@@ -12395,7 +12413,11 @@ function insertChogCueLine(id, text) {
     line.style.transform = "translateX(-50%)";
     root.insertBefore(line, hit);
   }
-  line.textContent = text;
+  // Two given lines use the existing two-line speech layout, so a long line is never cut on a narrow phone.
+  if (Array.isArray(text) && text.length > 1) {
+    line.classList.add("chogCheckLine--two");
+    line.replaceChildren(...text.map((t) => { const l = document.createElement("span"); l.className = "chogCheckLine__line"; l.textContent = t; return l; }));
+  } else line.textContent = Array.isArray(text) ? text.join(" ") : text;
   return true;
 }
 
@@ -12404,7 +12426,7 @@ function insertChogCueLine(id, text) {
 const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work — your money does the job.";
 function sayFirstSendCue() {
   if (state.appLock || state.scene !== "sendstay" || sendBusy()) return false;
-  const inserted = insertChogCueLine("firstSendChogCue", FIRST_SEND_CUE_LINE);
+  const inserted = insertChogCueLine("firstSendChogCue", FIRST_SEND_CUE_LINE.split(/(?<=—) /));
   if (inserted && state.sendCardVisible) {
     document.querySelector("#sendButton")?.addEventListener("click", () => {
       document.querySelector("#firstSendChogCue")?.remove();

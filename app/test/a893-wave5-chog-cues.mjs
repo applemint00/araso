@@ -61,7 +61,8 @@ function sandbox({ scene = "away", awayRestore = null, sendCardVisible = false, 
     visibilityState: "visible",
     restoreLine: null,
     querySelector: (sel) => (sel === "#chogHome" ? root : sel === "#awayRestoreLine" ? doc.restoreLine : lines.find((l) => `#${l.id}` === sel) || null),
-    createElement: () => { const el = { className: "", id: "", style: {}, textContent: "", getBoundingClientRect: () => cueRect, remove: () => { const i = lines.indexOf(el); if (i >= 0) lines.splice(i, 1); } }; return el; },
+    createElement: () => { const el = { className: "", id: "", style: {}, textContent: "", children: [], getBoundingClientRect: () => cueRect, remove: () => { const i = lines.indexOf(el); if (i >= 0) lines.splice(i, 1); },
+      classList: { add: (c) => { el.className = `${el.className} ${c}`.trim(); } }, replaceChildren: (...kids) => { el.children = kids; el.textContent = kids.map((k) => k.textContent).join(" "); } }; return el; },
   };
   const state = { scene, awayRestore, sendCardVisible, appLock, departureArrival };
   const timers = [];
@@ -153,7 +154,8 @@ await check("N4 CG-01: said before the first card, restored after its render, an
   assert.equal(ok.api.sayFirstSendCue(), true);
   assert.equal(ok.text("firstSendChogCue"), "work's coming! let's send Piggy to work — your money does the job.");
   assert.equal(ok.lines.length, 1);
-  assert.equal(ok.lines[0].className, "chogCheckLine", "reuses the existing Chog line style");
+  assert.equal(ok.lines[0].className, "chogCheckLine chogCheckLine--two", "reuses the existing two-line Chog speech style");
+  assert.deepEqual(ok.lines[0].children.map((l) => [l.className, l.textContent]), [["chogCheckLine__line", "work's coming! let's send Piggy to work —"], ["chogCheckLine__line", "your money does the job."]], "same words, two lines (Owner: two rows, never cut)");
   assert.equal(sandbox({ scene: "sendstay", sendCardVisible: false }).api.sayFirstSendCue(), true, "cue may precede the card");
   for (const [why, opts] of [["busy", { scene: "sendstay", sendCardVisible: true, busy: true }], ["locked", { scene: "sendstay", sendCardVisible: true, appLock: { phase: "waiting" } }], ["other scene", { scene: "explore", sendCardVisible: true }]]) {
     const s = sandbox(opts);

@@ -13,6 +13,7 @@ export const EVENT_CODES = Object.freeze(Object.fromEntries(Object.entries({
   home_reached: ['ok'],
   send_tap: ['ok'],
   send: ['ok', 'auth', 'grant', 'simulate', 'unconfirmed', 'fail'],
+  send_why: ['auth', 'sign', 'refused', 'broadcast', 'mismatch', 'unconfirmed', 'redeem', 'locked', 'insufficient', 'nonce', 'fee', 'other'],
   gift: ['ok', 'auth', 'requote', 'unavailable', 'fail'],
   js_error: ['error', 'type', 'range', 'reference', 'syntax', 'rejection'],
 }).map(([step, codes]) => [step, Object.freeze(codes)])));
