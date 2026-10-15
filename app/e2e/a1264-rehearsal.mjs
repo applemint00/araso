@@ -43,7 +43,7 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "virtual money · fork",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "virtual money · fork",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
 ]);
 function normaliseLine(line, name) {
@@ -131,7 +131,8 @@ async function addPasskey(page, credential = null) {
 }
 
 async function openPerson(browser, world, id, { storageState, invite, credential, viewport } = {}) {
-  const context = await browser.newContext({ viewport: viewport || { width: 390, height: 844 }, ...(storageState ? { storageState } : {}) });
+  const phone = Number(process.env.ARASO_REHEARSAL_WIDTH) > 0 ? { width: Number(process.env.ARASO_REHEARSAL_WIDTH), height: 932 } : { width: 390, height: 844 };
+  const context = await browser.newContext({ viewport: viewport || phone, ...(storageState ? { storageState } : {}) });
   const tag = { id };
   await context.route("**/*", (route) => world.route(route, tag.id));
   if (invite) await context.addInitScript((token) => { try { if (!localStorage.getItem("araso.forkInvite.v1")) localStorage.setItem("araso.forkInvite.v1", token); } catch {} }, invite);
@@ -276,6 +277,7 @@ const main = createWorld("main");     // a → c (reopen) → d (fresh device, s
 const side = createWorld("side");     // b (stored used invite)
 const fault1 = createWorld("fault1"); // first deposit refused once
 const fault4 = createWorld("fault4"); // deposit refused four times, nonce unchanged
+const faultEst = createWorld("faultEst"); // second gas estimate refused (grant seen by one node, not the next)
 const desk = createWorld("desk");     // e (desktop width, public, no invite)
 const people = [];
 
@@ -408,21 +410,34 @@ async function laneFaults() {
     await until(g, "Send pressable", () => live(g, "#sendButton"), 20_000);
     await checkpoint(g, "home-after-refusals");
     assert.doesNotMatch(fault4.chain.log.join(";"), /sendRaw deposit/, "no deposit landed; nonce stays 0");
+    assert.ok(eventsOf(fault4, "f4").includes("send_why/broadcast"), `events: ${eventsOf(fault4, "f4").join(",")}`);
   });
   await g.context.close();
+
+  // A node that saw the grant answers the first gas estimate; the next one (prepare, after Away) says "insufficient funds".
+  const h = await openPerson(browser, faultEst, "f5"); people.push(h);
+  await check("fault · second gas estimate refused: walk to Send", () => walkFirstJourney(h));
+  faultEst.chain.faults.estimateOkLeft = 1;
+  await check("fault · estimate refused after Away → \"Piggy could not get ready. · nothing moved.\" · send_why/insufficient (not broadcast)", async () => {
+    await until(h, "nothing moved.", (s) => s.text.some((t) => t.startsWith("nothing moved.")), 40_000);
+    assert.doesNotMatch(faultEst.chain.log.join(";"), /sendRaw/, "nothing broadcast");
+    const ev = eventsOf(faultEst, "f5");
+    assert.ok(ev.includes("send/fail") && ev.includes("send_why/insufficient"), `events: ${ev.join(",")}`);
+  });
+  await h.context.close();
 }
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk").split(",");
   await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop()].filter(Boolean));
-  await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, desk]) publicInviteZero(w, people.map((p) => p.id)); });
+  await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });
   await check("fault · fork status reenter:true is wired back through entry (source pin, main.js)", () => {
     assert.match(MAIN, /if \(r\.reenter === true\) return \(await a956Enter\(\{ reenter: true \}\)\) === true;/);
   });
   await check("stand-in chain saw no unhandled RPC method", () => {
-    const u = [...new Set([main, side, fault1, fault4, desk].flatMap((w) => w.chain.unknown))].filter((m) => m !== "eth_fillTransaction");
+    const u = [...new Set([main, side, fault1, fault4, faultEst, desk].flatMap((w) => w.chain.unknown))].filter((m) => m !== "eth_fillTransaction");
     assert.deepEqual(u, []);
   });
 } finally {
@@ -431,7 +446,7 @@ try {
 
 const failed = results.filter((r) => !r.ok);
 console.log(`A1264 ${results.length - failed.length} PASS / ${failed.length} FAIL / ${known.length} KNOWN · ${Math.round((Date.now() - T0) / 1000)} s`);
-console.log(`A1264_EVENTS ${JSON.stringify(Object.fromEntries([main, side, fault1, fault4, desk].flatMap((w) => [...new Set(w.events.map((e) => e.person))].map((id) => [id, eventsOf(w, id)]))))}`);
+console.log(`A1264_EVENTS ${JSON.stringify(Object.fromEntries([main, side, fault1, fault4, faultEst, desk].flatMap((w) => [...new Set(w.events.map((e) => e.person))].map((id) => [id, eventsOf(w, id)]))))}`);
 console.log(`A1264_SCREENSHOTS=${screenshots.length}`);
 console.log(`A1264_SCREENSHOT_DIR=${OUT}`);
 process.exit(failed.length ? 1 : 0);

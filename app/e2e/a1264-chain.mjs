@@ -31,7 +31,7 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null } = {}
   const nonce = new Map();
   const receipts = new Map();
   const txs = new Map();
-  const faults = { sendErrors: [] }; // queue of -32000 refusals for eth_sendRawTransaction
+  const faults = { sendErrors: [], estimateOkLeft: Infinity }; // sendErrors: -32000 refusals queue · estimateOkLeft: eth_estimateGas calls that pass before "insufficient funds"
   const log = [];
   const unknown = [];
   let block = 1000n;
@@ -97,7 +97,9 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null } = {}
       case "eth_getTransactionCount": return { result: hex(get(nonce, p[0])) };
       case "eth_gasPrice": return { result: hex(GAS_PRICE) };
       case "eth_maxPriorityFeePerGas": return { result: hex(1_000_000_000n) };
-      case "eth_estimateGas": return { result: hex(GAS_USED) };
+      case "eth_estimateGas":
+        if (faults.estimateOkLeft <= 0) return { error: { code: -32000, message: "insufficient funds for gas * price + value" } };
+        faults.estimateOkLeft -= 1; return { result: hex(GAS_USED) };
       case "eth_getBlockByNumber": return { result: blockObj() };
       case "eth_feeHistory": return { result: { oldestBlock: hex(block), baseFeePerGas: [hex(GAS_PRICE / 2n), hex(GAS_PRICE / 2n)], gasUsedRatio: [0.5], reward: [[hex(1_000_000_000n)]] } };
       case "eth_call": return { result: call(p[0] || {}) };
