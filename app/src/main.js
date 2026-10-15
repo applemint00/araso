@@ -1086,7 +1086,7 @@ function setScene(scene, message = "", detail = "") {
   }
   if (scene === "away" && state.scene !== "away") awayShownAt = Date.now();
   state.sendHold = false; // every new scene starts free; a pacing beat re-holds Send after its own render
-  state.sendFailedBeat = scene === "sendstay" && SEND_FAILURE_MESSAGES.has(message);
+  state.sendFailedBeat = scene === "sendstay" && (SEND_FAILURE_MESSAGES.has(message) || !!state.jobFailedWhy);
   // [A-383 §4] "닫으면 원래 Home 그대로" — 기록 카드는 render() 를 부르지 않는 직접 DOM
   // 토글로만 열린다(openRecordsCard, §5 주석). 그래서 어떤 이유로든 씬을 다시 그리면
   // (Send/Stay 결과, 재방문 등) 기록 카드는 항상 닫힌 채로 새로 시작한다 — 다른 씬 전환에
@@ -2346,6 +2346,12 @@ function settleUnlock(result, error, pinned, attempt = null) {
       lock.phase = "failed";
       lock.cancelled = !!error && isCancelledAuthError(error);
       if (error) recordSafeError("unlock", error);
+      // Why the unlock stopped, as one word (the screen copy is unchanged). The browser reports "cancelled" and
+      // "no passkey on this device" the same way, so they stay one word; a passkey that answers but is not this Piggy is "identity".
+      if (typeof track === "function") track("unlock_why", !error ? (result ? "identity" : "other")
+        : error.name === "AuthWaitTimeout" || error.name === "UnlockWaitTimeout" ? "timeout"
+        : error.name === "WebAuthnUnsupported" ? "unsupported"
+        : isCancelledAuthError(error) ? "cancelled" : "other");
       render();
       return;
     }
@@ -7130,7 +7136,9 @@ function prefetchFirstGrant() {
 // then the face comes back and Send can be pressed again.
 function sendFailedBeat() {
   state.sendFailedBeat = false;
-  const why = (() => { try { return sendFailureWhy(JSON.parse(localStorage.getItem(LAST_SEND_ERROR_KEY) || "null")); } catch { return "other"; } })();
+  const jobWhy = state.jobFailedWhy;
+  state.jobFailedWhy = null;
+  const why = jobWhy || (() => { try { return sendFailureWhy(JSON.parse(localStorage.getItem(LAST_SEND_ERROR_KEY) || "null")); } catch { return "other"; } })();
   const reason = SEND_FAILURE_REASON_LINES[why];
   insertChogCueLine("sendFailedChogCue", reason ? [reason, "try again"] : ["try again"]);
   const seat = document.querySelector("#homeSeat");
@@ -15368,25 +15376,27 @@ if (A977_FORK) {
     void a977Send(sj, jobKey);
     return undefined;
   };
+  // A Job that stops says so: the server learns why (job_why) and the screen it stopped on gets the failed beat.
+  const a977Fail = (word) => { console.debug("fork_send", word); if (typeof track === "function") track("job_why", word); state.jobFailedWhy = word; };
   async function a977Send(sj, jobKey) {
     a977Busy = true;
     let started = false;
     try {
       const piggy = a898SenderPiggy();
-      if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) { console.debug("fork_send", "unavailable"); return; }
+      if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) { a977Fail("unavailable"); return; }
       // No server await or render before the pinned get: keep the click gesture.
       if (!activeAccount || a977Lower(activeAccount.address) !== a977Lower(piggy.address)) {
         const signer = await a898SignerForPayer(piggy, { allowDeviceCredential: true });
-        if (!signer.ok) { console.debug("fork_send", "auth_failed"); return; }
+        if (!signer.ok) { a977Fail("auth"); return; }
       }
       const account = activeAccount;
-      if (!account || a977Lower(account.address) !== a977Lower(piggy.address)) { console.debug("fork_send", "signer_mismatch"); return; }
-      if (!(await a956ForkMoneyAllowed())) { console.debug("fork_send", "server_refused"); return; }
+      if (!account || a977Lower(account.address) !== a977Lower(piggy.address)) { a977Fail("signer"); return; }
+      if (!(await a956ForkMoneyAllowed())) { a977Fail("server_refused"); return; }
       const current = () => !state.appLock && activeAccount === account && a977Lower(state.address) === a977Lower(piggy.address) && state.secondJourney === sj && sj.chosenDestinationId === jobKey && state.scene === "explore";
-      if (!current()) { console.debug("fork_send", "changed"); return; }
+      if (!current()) { a977Fail("changed"); return; }
       let forkBlock;
-      try { forkBlock = Number(await fork.publicClient.getBlockNumber()); } catch { console.debug("fork_send", "read_failed"); return; }
-      if (!current() || !Number.isSafeInteger(forkBlock)) { console.debug("fork_send", "changed"); return; }
+      try { forkBlock = Number(await fork.publicClient.getBlockNumber()); } catch { a977Fail("read_failed"); return; }
+      if (!current() || !Number.isSafeInteger(forkBlock)) { a977Fail("changed"); return; }
       sj.decisionEventSeq += 1;
       const eventId = `fork-job:${jobKey}:${new Date().toISOString()}:${sj.decisionEventSeq}`;
       sj.mockReceipt = null;
@@ -15415,13 +15425,14 @@ if (A977_FORK) {
       const candidate = out.receipt ? a977Candidate(out.receipt, secondJourneyScope()) : null;
       sj.executionReceipt = candidate;
       sj.outcome = candidate && out.status === "returned" && candidate.outcome === "done" ? "done" : "failed";
+      if (sj.outcome !== "done") a977Fail(out.status === "refused" ? "refused" : "failed");
       if (a977Current) a977Current.finished = true;
       a977Settle(sj);
     } catch {
       console.debug("fork_send", "failed");
     } finally {
       a977Busy = false;
-      if (!started && state.secondJourney === sj && state.scene === "explore") render();
+      if (!started && state.secondJourney === sj && state.scene === "explore") { render(); if (state.jobFailedWhy) sendFailedBeat(); }
     }
   }
 }

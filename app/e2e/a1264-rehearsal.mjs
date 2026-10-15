@@ -44,7 +44,7 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "try again", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
 ]);
 function normaliseLine(line, name) {
@@ -112,6 +112,7 @@ function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0 }
         if (action === "status") {
           fork.statusCalls += 1;
           if (fork.reenterOnce) { fork.reenterOnce = false; return json(200, { ok: true, allowed: false, reenter: true }); }
+          if (fork.refuseStatus) return json(403, { ok: false, allowed: false, reason: "not_allowed" });
           return json(200, { ok: true, allowed: true, forkScope: "monad-fork", forkInstanceId: FORK_INSTANCE });
         }
         if (action === "challenge" && fork.refuseChallenge > 0) { fork.refuseChallenge -= 1; return json(503, { ok: false, reason: "entry_unavailable" }); }
@@ -550,6 +551,63 @@ async function laneStuck() {
   }
 }
 
+// Journey 2 Job failures must not be silent: Chog says try again over the screen it happened on, Piggy looks sulky,
+// and the server learns why (job_why) — before Away (still on Explore) or after Away (back Home).
+async function walkToJobSend(person) {
+  await walkFirstJourney(person);
+  await walkReturnAndFile(person);
+  await enterSecond(person);
+  await person.page.locator('input[data-errand-id="clean"]').check();
+  await click(person, "#exploreSaveButton", "explore save");
+  await click(person, ".secondJourney__pick", "job pick");
+  await click(person, "#secondOkButton", "job ok");
+  await until(person, "Job Send", () => live(person, "#secondSendButton"), 20_000);
+}
+// Unlock failures are told apart by cause (the screen copy stays): cancelled vs the app's own wait running out.
+async function laneUnlockWhy() {
+  const runs = [["uw-cancel", "cancelled", async (p) => { await p.passkey.cdp.send("WebAuthn.setUserVerified", { authenticatorId: p.passkey.authenticatorId, isUserVerified: false }); }],
+    ["uw-timeout", "timeout", async (p) => { await p.passkey.cdp.send("WebAuthn.setAutomaticPresenceSimulation", { authenticatorId: p.passkey.authenticatorId, enabled: false }); }]];
+  await Promise.all(runs.map(async ([id, word, arm]) => {
+    const w = createWorld(`unlock-${id}`);
+    const p = await openPerson(browser, w, id); people.push(p);
+    await check(`unlock why · ${word}: the unlock failure is recorded with its own cause word (unlock_why/${word})`, async () => {
+      await walkFirstJourney(p);
+      await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
+      await until(p, "lock", (s) => s.scene === "birth", 20_000);
+      await arm(p);
+      await click(p, "#loginChogButton", "lock Chog");
+      await until(p, "unlock failed card", async () => live(p, "#unlockRetryButton"), 60_000);
+      assert.ok(eventsOf(w, id).includes(`unlock_why/${word}`), `events: ${eventsOf(w, id).join(",")}`);
+    });
+    await p.context.close();
+  }));
+}
+
+async function laneJobFail() {
+  const cases = [
+    ["jf-reverted", "after Away · the Job tx reverts", (w) => w.forkChain.faults.revert.add("approve"), "failed"],
+    ["jf-refused", "after Away · the node refuses the Job tx", (w) => w.forkChain.faults.refuse.add("approve"), "failed"],
+    ["jf-server", "before Away · the server refuses the fork re-check", (w) => { w.fork.refuseStatus = true; }, "server_refused"],
+    ["jf-read", "before Away · the fork chain cannot be read", (w) => { w.forkChain.faults.blockError = true; }, "read_failed"],
+  ];
+  await Promise.all(cases.map(async ([id, label, inject, word]) => {
+    const w = createWorld(`jobfail-${id}`);
+    const p = await openPerson(browser, w, id); people.push(p);
+    await check(`job fail · ${label} → Chog "try again" + sulky Piggy on that screen · event job_why/${word}`, async () => {
+      await walkToJobSend(p);
+      inject(w);
+      await p.page.locator("#secondSendButton").click();
+      await until(p, "try again", (s) => s.text.includes("try again"), 60_000);
+      const face = await p.page.evaluate(() => document.querySelectorAll(".homeChar__seat--sulky").length);
+      assert.ok(face > 0, "sulky face missing");
+      await checkpoint(p, `job-failed-${word}`);
+      const ok = word === "failed" ? eventsOf(w, id).some((e) => e === "job_why/failed" || e === "job_why/refused") : eventsOf(w, id).includes(`job_why/${word}`);
+      assert.ok(ok, `events: ${eventsOf(w, id).join(",")}`);
+    });
+    await p.context.close();
+  }));
+}
+
 async function laneFaults() {
   const f = await openPerson(browser, fault1, "f1"); people.push(f);
   await check("fault · first deposit -32000 once → retried → Return", async () => {
@@ -747,8 +805,8 @@ async function laneAtlas() {
 function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id); if (e.length) return e; } return []; }
 
 try {
-  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck()].filter(Boolean));
+  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy").split(",");
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });

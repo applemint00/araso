@@ -40,7 +40,7 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
   const receipts = new Map();
   const txs = new Map();
   // refuse / revert: Sets of function names (deposit · redeem · approve) · hideReceipts · balanceError: plain switches.
-  const faults = { sendErrors: [], estimateOkLeft: Infinity, refuse: new Set(), revert: new Set(), hideReceipts: false, balanceError: false }; // sendErrors: -32000 refusals queue · estimateOkLeft: eth_estimateGas calls that pass before "insufficient funds"
+  const faults = { sendErrors: [], estimateOkLeft: Infinity, refuse: new Set(), revert: new Set(), hideReceipts: false, balanceError: false, blockError: false }; // sendErrors: -32000 refusals queue · estimateOkLeft: eth_estimateGas calls that pass before "insufficient funds"
   const log = [];
   const unknown = [];
   let block = 1000n;
@@ -112,7 +112,7 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
     switch (req.method) {
       case "eth_chainId": return { result: hex(chainId) };
       case "net_version": return { result: String(chainId) };
-      case "eth_blockNumber": return { result: hex(block) };
+      case "eth_blockNumber": return faults.blockError ? { error: { code: -32603, message: "internal error" } } : { result: hex(block) };
       case "eth_getBalance": return faults.balanceError ? { error: { code: -32603, message: "internal error" } } : { result: hex(get(balance, p[0])) };
       case "eth_getTransactionCount": return { result: hex(get(nonce, p[0])) };
       case "eth_gasPrice": return { result: hex(GAS_PRICE) };

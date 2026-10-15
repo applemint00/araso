@@ -14,6 +14,8 @@ export const EVENT_CODES = Object.freeze(Object.fromEntries(Object.entries({
   send_tap: ['ok'],
   send: ['ok', 'auth', 'grant', 'simulate', 'unconfirmed', 'fail'],
   send_why: ['auth', 'sign', 'refused', 'broadcast', 'mismatch', 'unconfirmed', 'redeem', 'locked', 'insufficient', 'nonce', 'fee', 'other'],
+  job_why: ['unavailable', 'auth', 'signer', 'server_refused', 'changed', 'read_failed', 'refused', 'failed'],
+  unlock_why: ['cancelled', 'timeout', 'identity', 'unsupported', 'other'],
   gift: ['ok', 'auth', 'requote', 'unavailable', 'fail'],
   js_error: ['error', 'type', 'range', 'reference', 'syntax', 'rejection'],
 }).map(([step, codes]) => [step, Object.freeze(codes)])));
