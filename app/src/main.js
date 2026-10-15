@@ -15,6 +15,7 @@ import { createPublicClient, createWalletClient, encodeFunctionData, formatEther
 import { chogHomeMarkup, mountChogHome, CHOG_HOME_GEOMETRY, pairConvergenceEase } from "./chog-home.js";
 import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-invite.js";
 import { WORK_CUE, createDepartPlayback, createDepartRenderer, loadDepartAssets } from "./piggy-depart.js";
+import { ENTRY_LOGO_SVG, mountEntryLogo } from "./entry-logo.js";
 import {
   assignHomeAmbient,
   buildPiggyMotionStateMap,
@@ -5948,6 +5949,7 @@ function wantedInviteKind() {
 function fitInvite() {
   const board = document.querySelector(".invite");
   if (!board) return;
+  if (board.classList?.contains("entryChog")) return; // [A-1289] its own responsive layout (no artboard scale)
   if (wantedInviteKind() !== inviteKind) {
     // [A-819 UI-03] crossing INVITE_WIDE_MIN swaps the artboard (a legitimate family-boundary composition change), but
     // the re-render used to rebuild the board in phase "closed" with every animation at 0 — an in-flight envelope
@@ -6144,7 +6146,7 @@ function playInviteTimelineAfterAuth(destination) {
   setScene("received", "", "");
   inviteAuthPresentation = false;
   const board = document.querySelector(".invite");
-  if (!board) {
+  if (!board || board.classList?.contains("entryChog")) { // [A-1289] no envelope on the Chog entry: straight to Hatch / Name
     setScene(destination.scene, destination.message, destination.detail);
     return Promise.resolve();
   }
@@ -6344,10 +6346,45 @@ function renderInviteOnly(used = false) {
   </section>`;
 }
 
+// [A-1289 · Owner 19:5x "get your piggy 탭 make passkey to hatch the piggy 그리고 페이스 아이디 나타나자 부화 네임"]
+// First visit without the envelope: the Piggy face logo + ARASO → tap → Chog "get your piggy" → tap → "make passkey to hatch
+// the piggy" (the first line stays) with the same Face ID button. The button is the existing #inviteFaceButton → openInvite
+// (same tap call stack, the same create / find-first branches); after auth the envelope timeline is skipped (nothing to open),
+// so it goes straight to the existing Hatch → Name. The envelope is not deleted (Owner 20:0x): false = the envelope entry exactly
+// as before. Gift Open paper keeps the envelope board.
+const ENTRY_CHOG_FIRST = (() => { try { return localStorage.getItem("araso.entryEnvelope.v1") !== "1"; } catch { return true; } })(); // the switch; "1" = the envelope entry (old browser tests keep it)
+const ENTRY_CHOG_LINES = Object.freeze(["get your piggy", "make passkey to hatch the piggy"]);
+const ENTRY_STEP_GAP_MS = 600; // a double tap does not skip a line
+let entryStepAt = 0;
+let entryStep = 0; // kept across renders (a failed Face ID comes back to the line with the button)
+function renderEntryChog() {
+  return `
+    <section class="stage stage--invite stage--entry" data-scene="received">
+      ${arasoBrandMarkup()}
+      <div class="invite entryChog" data-kind="entry" data-phase="closed" data-step="${entryStep}">
+        <div class="entryChog__logo" aria-hidden="true">${ENTRY_LOGO_SVG}<img class="entryChog__word" src="/entry/araso_logo_white.png" alt="" /></div>
+        <p class="entryChog__say" role="status">${ENTRY_CHOG_LINES.map((t, i) => `<span class="entryChog__line entryChog__line--${i + 1}">${escapeHtml(t)}</span>`).join("")}</p>
+        <div class="entryChog__chog" aria-hidden="true">${chogInviteMarkup()}</div>
+        ${inviteFace(false)}
+      </div>
+    </section>
+  `;
+}
+function advanceEntryChog(event) {
+  const board = document.querySelector(".entryChog");
+  if (!board || board.dataset.phase !== "closed" || event?.target?.closest?.("#inviteFaceButton")) return;
+  const step = Number(board.dataset.step || 0);
+  if (step >= 2 || Date.now() - entryStepAt < ENTRY_STEP_GAP_MS) return;
+  entryStepAt = Date.now();
+  entryStep = step + 1;
+  board.dataset.step = String(entryStep);
+}
+
 function renderReceived() {
   inviteKind = wantedInviteKind();
   // [A-734] Gift Open 종이 = 같은 Invite 판, 손글씨 두 줄과 버튼 첫 문구만 캐논 문구. null 이면 기존 Invite 그대로.
   const gift = giftPaperKind();
+  if (ENTRY_CHOG_FIRST && !gift) return renderEntryChog();
   return `
     <section class="stage stage--invite" data-scene="received"${gift ? ` data-gift-paper="${gift}"` : ""}>
       ${arasoBrandMarkup()}
@@ -6467,6 +6504,33 @@ function loginCheckingMarkup(phase) {
   `;
 }
 
+// [A-1290 · Owner 19:5x "페이스 아이디 열리게 하고 멀티피기일때는 여러개가 뜨면 안돼" · Cowork 20:1x (가)] Coming back: the same
+// Piggy face logo as the first visit (A-1289), and Face ID is asked once by itself right after it is drawn (like a bank app). That
+// one ask is the existing unlockApp() (state.credential only → one sheet, also with several Piggies: the root passkey). A cancel /
+// failure / time-out = the existing failure card (Try again) and no automatic retry; anywhere on the logo is the tap target meanwhile.
+// Same switch as the first-visit entry: off = the old Checking lock (loginCheckingMarkup, untouched) with no automatic ask.
+const LOCK_AUTO_FACE_ID_MS = 600; // the logo is seen first, then the sheet
+function appLockLogoMarkup(phase) {
+  return `
+    <section class="stage stage--lockLogo" data-scene="birth" data-app-lock="${phase}">
+      ${arasoBrandMarkup()}
+      <button class="lockLogo__tap" id="loginChogButton" type="button" aria-label="Face ID">
+        <span class="entryChog__logo" aria-hidden="true">${ENTRY_LOGO_SVG}<img class="entryChog__word" src="/entry/araso_logo_white.png" alt="" /></span>
+      </button>
+    </section>
+  `;
+}
+// The lock is drawn outside the scene system, so the eye roll runs on its own frames until the logo leaves the page.
+function mountLockLogo(logo) {
+  mountEntryLogo(logo, { reduced: prefersReducedMotion(), onFrame: (step) => { const tick = (now) => { if (logo.isConnected && step(now) !== false) requestAnimationFrame(tick); }; requestAnimationFrame(tick); } });
+}
+function askLockFaceIdOnce() {
+  const lock = state.appLock;
+  if (!lock || lock.phase !== "waiting" || lock.autoAsked) return;
+  lock.autoAsked = true; // once per lock: a failed ask leaves the failure card, never asks again by itself
+  setTimeout(() => { if (state.appLock === lock && lock.phase === "waiting") unlockApp(); }, LOCK_AUTO_FACE_ID_MS);
+}
+
 function renderAppLock() {
   clearInviteTimers();
   if (typeof noteAwayLocked === "function") noteAwayLocked(); // [A-893b F1] lock seen while an Away is mounted
@@ -6481,8 +6545,13 @@ function renderAppLock() {
         chogTap: !failed,
         unlockRetry: true,
       })
-    : loginCheckingMarkup(state.appLock.phase);
+    : ENTRY_CHOG_FIRST ? appLockLogoMarkup(state.appLock.phase) : loginCheckingMarkup(state.appLock.phase);
   mountInviteChog();
+  const lockLogo = !failed && ENTRY_CHOG_FIRST ? document.querySelector(".stage--lockLogo .entryChog__logo") : null;
+  if (lockLogo) { // [A-1290]
+    mountLockLogo(lockLogo);
+    askLockFaceIdOnce();
+  }
   if (failed) {
     document.querySelector("#unlockRetryButton")?.addEventListener("click", unlockApp);
   } else {
@@ -16610,6 +16679,11 @@ function render() {
   if (state.scene === "received") {
     fitInvite();
     mountInviteChog();
+    const entry = document.querySelector(".entryChog");
+    if (entry) { // [A-1289] (the double-tap guard counts from the last advance only, never from a redraw)
+      mountEntryLogo(entry.querySelector(".entryChog__logo"), { reduced: prefersReducedMotion(), onFrame: (step) => runSceneFrames(step) });
+      document.querySelector(".stage--entry")?.addEventListener("click", advanceEntryChog);
+    }
   }
   // [A-391 / A-391-a] 승인 인증실패 카드(birth)의 옆 Chog — Invite/Hatch 와 똑같이
   // mountInviteChog() 를 그대로 불러 [data-chog-invite] 를 붙인다. 새 mount 로직 0.

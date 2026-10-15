@@ -138,8 +138,14 @@ check("N5 zero-regression: the already-fixed selectors from the prior card keep 
   assert.deepEqual(allDecls(hatchName, "min-height"), ["100vh", "100dvh"], "hatch/name must be unchanged");
 });
 
-check("N6 tap-to-unlock wiring is untouched: unlockApp is still bound only to a real click on #loginChogButton, no auto-call anywhere in renderAppLock", () => {
+// [A-1290 · Owner 2026-10-15 19:5x "페이스 아이디 열리게 하고"] supersedes the tap-only rule for the logo lock: Face ID is asked ONCE by itself
+// (askLockFaceIdOnce · once per lock · no retry), the taps stay exactly as below, and renderAppLock itself still has no timer/frame/await.
+check("N6 tap-to-unlock wiring is untouched: unlockApp is bound to a real click on #loginChogButton; the only automatic ask is askLockFaceIdOnce (once per lock, no retry)", () => {
   const rAL = fnBody("renderAppLock");
+  const once = fnBody("askLockFaceIdOnce");
+  assert.match(once, /if \(!lock \|\| lock\.phase !== "waiting" \|\| lock\.autoAsked\) return;\s*lock\.autoAsked = true;/, "one automatic ask per lock");
+  assert.equal((once.match(/unlockApp\(\)/g) || []).length, 1, "a single unlockApp() call, no retry loop");
+  assert.equal((rAL.match(/askLockFaceIdOnce\(\)/g) || []).length, 1);
   assert.ok(rAL.includes('document.querySelector("#loginChogButton")?.addEventListener("click", unlockApp);'), "click wiring must be present");
   assert.equal(rAL.includes("unlockApp()"), false, "renderAppLock must never call unlockApp() directly — only pass it as a click listener reference");
   assert.equal((rAL.match(/\bunlockApp\b/g) || []).length, 2, "unlockApp must appear exactly twice: the waiting-branch Chog tap and the failed-branch Try again tap (A-667: #unlockRetryButton, was #checkButton), both as listener references");
