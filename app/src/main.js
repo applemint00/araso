@@ -1581,6 +1581,12 @@ function piggyFindAfterGetCode(error) {
   if (error?.name === "PiggyIdentityWriteFailed") return "after_get_save";
   return "after_get_other";
 }
+// [A-1315 · Owner 15:4x] the find failure as one word for every branch: a passkey answered or the wait timed out = the after_get_*
+// words above (unchanged); no passkey answered = ③, cancelled (get_cancel) or anything else (get_fail). The screen is the same for all.
+function piggyFindFailCode(error, credentialFound) {
+  if (credentialFound || error?.name === "AuthWaitTimeout") return piggyFindAfterGetCode(error);
+  return isCancelledAuthError(error) ? "get_cancel" : "get_fail";
+}
 
 // A1212/A1254: a create that never returned leaves a short-lived cross-tab marker.
 // Only that earlier unresolved create may retry enable-only; ordinary creation still
@@ -2335,9 +2341,7 @@ async function checkPiggy() {
     noteRecoverFailure();
     state.authPhase = "idle";
     state.authCancelled = isCancelledAuthError(error);
-    if ((credentialFound || error?.name === "AuthWaitTimeout") && typeof track === "function") {
-      track("piggy_find", piggyFindAfterGetCode(error));
-    }
+    if (typeof track === "function") track("piggy_find", piggyFindFailCode(error, credentialFound)); // [A-1315] ③ too
     // [A-389-a] 복구 실패는 짧고 구분되는 원인만 보여준다 — cancelled 는 renderAuthCard 가
     // "Face ID was cancelled."로 따로 가로챈다(authCancelled). 그 외(NotFound 등)는 원본
     // 기술 에러 문자열(formatError) 대신 이 짧은 문구를 쓴다. 두 버튼 다시 보이는 것은
