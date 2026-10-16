@@ -1,5 +1,6 @@
 import { track } from "./track.js";
 import { coarseOsBucket } from "./os-bucket.js";
+import { mountFeedback, postFeedback } from "./feedback-form.js";
 import { handleInAppBrowser } from "./inapp.js";
 import { waitForPasskey } from "./passkey-wait.js";
 import { createResponsiveLayout, responsiveFrame } from "./responsive-layout.js";
@@ -12119,6 +12120,11 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" &
   }, true);
 }
 
+// Tester feedback from the Home paper foot; the thank-you line is Home Chog's own gold line (design D: no new screen).
+if (typeof document !== "undefined" && document.body) {
+  mountFeedback({ post: (body) => postFeedback(body), say: (line) => a891ChogSay(document.querySelector("#chogHome"), "feedbackThanks", [line]) });
+}
+
 // Jar + bell Chog guide (Owner copy and timing): the Home right after the first Second finishes, once: a breath, the jar drops and sparkles, then Chog points at it and tells about the bell; the first bell waits for the guide.
 function a904GuideLines() { return { jar: "the jar's sparkling. wanna tap it?", bell: "when there's a new job for piggy, the bell will ring." }; }
 function a904GuideStart(token) {
@@ -12211,7 +12217,7 @@ a905OpenMoneyTab = function a905OpenMoneyTabA911() {
 };
 
 function a911Root() {
-  return typeof document !== "undefined" ? document.querySelector(".a911-screen") : null;
+  return typeof document !== "undefined" ? document.querySelector('.a911-screen:not([data-a911="feedback"])') : null; // the feedback paper keeps its own life (feedback-form.js)
 }
 
 function a911Remove() {

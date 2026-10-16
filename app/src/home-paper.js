@@ -13,6 +13,7 @@
 // 동적 값(이름/상태/시간)은 실제 데이터다. 샘플 "Honeybun"/"6:04 PM"을 그대로 쓰지 않는다.
 
 import { soundIsOn } from "./sound.js"; // [A-902]
+import { feedbackEntryMarkup } from "./feedback-form.js";
 
 const CARD_DIR = "/card";
 
@@ -123,6 +124,7 @@ export function homePaperMarkup({
           </button>
           <img class="homePaper__logo" src="${CARD_DIR}/araso-logo.png" alt="ARASO" />
         </div>
+        ${mode === "home" ? feedbackEntryMarkup() : ""}
       </div>
     </div>
   `;

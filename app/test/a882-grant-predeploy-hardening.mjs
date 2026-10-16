@@ -101,7 +101,7 @@ await check("R every non-underscore api/**/*.js is a handler (default export fun
     }
   };
   walk("api");
-  assert.deepEqual(found, ["api/event.js", "api/fork-entry.js", "api/gift-sponsor-reconcile.js", "api/gift-sponsor.js", "api/grant.js", "api/relay-quote.js"]); // [A-1234] + same-origin enum-only api/event.js. [A-956 RE-PIN] + api/fork-entry.js (local-only Journey 2 entry route; refuses production markers). pre-A-956: the 4 routes after it. // [A-913] pre-A-913 baseline: ["api/grant.js", "api/relay-quote.js"] ([A-901] pre-A-901 baseline: ["api/grant.js"])
+  assert.deepEqual(found, ["api/event.js", "api/feedback.js", "api/fork-entry.js", "api/gift-sponsor-reconcile.js", "api/gift-sponsor.js", "api/grant.js", "api/relay-quote.js"]); // [A-1327] + same-origin api/feedback.js (words + two fixed words, no identifiers). [A-1234] + same-origin enum-only api/event.js. [A-956 RE-PIN] + api/fork-entry.js (local-only Journey 2 entry route; refuses production markers). pre-A-956: the 4 routes after it. // [A-913] pre-A-913 baseline: ["api/grant.js", "api/relay-quote.js"] ([A-901] pre-A-901 baseline: ["api/grant.js"])
   for (const p of found) {
     const m = await import(pathToFileURL(rel(p)).href);
     assert.equal(typeof m.default, "function", p);

@@ -6923,3 +6923,30 @@ html .a911-row#a905GiftPiggy .a1288Star--3 { left: 7.9em; top: 0.74em; font-size
 .stage--lockLogo .arasoBrand { opacity: 0; }
 .lockLogo__tap { position: absolute; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: pointer; }
 .stage--lockLogo[data-app-lock="checking"] .lockLogo__tap { cursor: default; }
+
+/* [A-1327] Tester feedback (design feedback_form_sian_20261016 A5 · C · D). Home paper foot: handwritten "feedback" + a line heart, centred
+   under the ARASO logo in the paper's own 400x568 units (54 free under the mark); the tap box is 63 tall (44 on screen at 390, scale .706)
+   and hangs past the paper edge instead of pushing anything. Nothing else on the paper moves. */
+.homePaper .homeFeedback {
+  position: absolute; left: 50%; bottom: -8px; transform: translateX(-50%);
+  height: 63px; padding: 0 18px; margin: 0; border: 0; background: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  color: #141210; font: 400 19px / 1 var(--font-cj); cursor: pointer; pointer-events: auto; -webkit-tap-highlight-color: transparent;
+}
+.homePaper .homeFeedback__heart { width: 17px; height: 16px; flex: none; }
+.homePaper .homeFeedback:active { transform: translateX(-50%) translateY(1px); }
+.homePaper .homeFeedback:focus-visible { outline: 2px solid var(--gold); outline-offset: -6px; border-radius: 10px; }
+/* the form = one a911 paper: Gift letter grammar (underlined handwriting, 16 px+ input), Send at the a911 act spot, keyboard lifts the paper */
+html .a911-screen[data-a911="feedback"] .fb-paper { font-style: normal; }
+html .a911-screen[data-a911="feedback"] .fb-title { margin: 0; font: 400 var(--a911-title) / 1.1 var(--font-cj); }
+html .a911-screen[data-a911="feedback"] .fb-hint { margin: 4px 0 0; font: italic var(--a911-label) / 1.3 var(--a911-serif); opacity: 0.75; }
+html .a911-screen[data-a911="feedback"] .fb-text {
+  display: block; width: 100%; margin-top: calc(14px * var(--a911-z)); resize: none;
+  height: calc(4 * 1.75em); font: 400 max(16px, calc(18px * var(--a911-z))) / 1.75em var(--font-cj); color: var(--a911-ink);
+  background: repeating-linear-gradient(to bottom, transparent 0 calc(1.75em - 1.5px), rgba(20, 18, 16, 0.55) calc(1.75em - 1.5px) 1.75em);
+}
+html .a911-screen[data-a911="feedback"] .fb-with { margin: calc(12px * var(--a911-z)) 0 0; font: italic var(--a911-detail) / 1.3 var(--a911-serif); opacity: 0.6; }
+html .a911-screen[data-a911="feedback"] .fb-paper.is-folding { transform-origin: 50% 0; animation: fbFold 320ms cubic-bezier(0.5, 0, 0.75, 0.2) forwards; }
+@keyframes fbFold { to { transform: scaleY(0.04); opacity: 0; } }
+html .a911-screen[data-a911="feedback"] .fb-thanks { position: static; transform: none; font-size: calc(24px * var(--a911-z)); }
+@media (prefers-reduced-motion: reduce) { html .a911-screen[data-a911="feedback"] .fb-paper.is-folding { animation: none; opacity: 0; } }
