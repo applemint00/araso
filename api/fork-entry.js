@@ -16,7 +16,8 @@ import { forkAdminClientFromEnv, guardOrigin } from "./_lib/fork-grant-client.js
 import { createMemoryForkLedgerStore } from "./_lib/fork-ledger-store-contract.js";
 import { inviteStoreFromEnv } from "./_lib/invite-redis-store.js";
 
-import { publicEntryConfig } from "./_lib/public-entry.js";
+import { createHash, timingSafeEqual } from "node:crypto";
+import { holdConfig, publicEntryConfig } from "./_lib/public-entry.js";
 import { grantStatusFromEnv } from "./_lib/grant-room.js"; // [A-1299]
 
 export const FORK_ENTRY_MAX_BODY = 8 * 1024;
@@ -34,6 +35,7 @@ const GRANT_VERSION_RE = /^[a-z0-9][a-z0-9._-]{0,31}$/;
 const INVITE_REFUSALS = new Set(["not_invited", "invite_not_bound", "invite_bound_to_other_piggy", "piggy_bound_to_other_tester"]);
 const ACTION_FIELDS = Object.freeze({
   public_state: ["action"],
+  hold_pass: ["action", "token"], // [A-1305 ⑥]
   invite_state: ["action"],
   challenge: ["action", "piggyAddress"],
   enter: ["action", "nonce", "signature", "piggyAddress", "journey1"],
@@ -72,7 +74,14 @@ async function readBody(req) {
 }
 
 /** Handler over an injected service (tests + the local server). allowedOrigins = code-only list of local dev origins. */
-export function createForkEntryHandler({ service, inviteStore = null, publicEntry = null, grantStatus = null, now = () => Date.now(), allowedOrigins = [] } = {}) {
+// [A-1305 ⑥] constant-time: sha256(token) vs the configured hex digest. Nothing about the token is logged or echoed.
+function holdPassOk(hold, token) {
+  if (!hold?.passSha256 || typeof token !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(token)) return false;
+  const want = Buffer.from(hold.passSha256, "hex");
+  const got = createHash("sha256").update(token, "utf8").digest();
+  return want.length === got.length && timingSafeEqual(want, got);
+}
+export function createForkEntryHandler({ service, inviteStore = null, publicEntry = null, grantStatus = null, hold = null, now = () => Date.now(), allowedOrigins = [] } = {}) {
   return async function handler(req, res) {
     if (req.method !== "POST") return respond(res, 405, { ok: false, reason: "method_not_allowed" });
     if (!service && !inviteStore && !publicEntry) return respond(res, 503, { ok: false, reason: "entry_unavailable" });
@@ -90,8 +99,10 @@ export function createForkEntryHandler({ service, inviteStore = null, publicEntr
       const out = { ok: true, publicEntry: publicEntry?.enabled === true && publicEntry.cap > 0 };
       // [A-1299] words only (grantRoom ok|low|full · grantWallet ok|low|unknown) when the status reads are wired; never a number or an address
       if (typeof grantStatus === "function") { try { Object.assign(out, await grantStatus()); } catch { /* public_state stays as it was */ } }
+      if (hold?.enabled === true) out.hold = true; // [A-1305 ⑥] only while ARASO_HOLD=1: a hold-off answer stays as it was
       return respond(res, 200, out);
     }
+    if (action === "hold_pass") return respond(res, 200, { ok: holdPassOk(hold, b.token) }); // [A-1305 ⑥]
     const inviteToken = typeof headers[FORK_INVITE_HEADER] === "string" ? headers[FORK_INVITE_HEADER] : null;
     // First-journey metadata only. No bind, grant, identity disclosure or Journey 2 release-gate change.
     if (action === "invite_state") {
@@ -188,7 +199,7 @@ let defaultHandler = null;
 export default async function handler(req, res) {
   if (!defaultHandler) {
     const appOrigin = appOriginOk(process.env[FORK_ENTRY_ENV.appOrigin]) ? process.env[FORK_ENTRY_ENV.appOrigin] : null;
-    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), inviteStore: inviteStoreFromEnv(process.env), publicEntry: publicEntryConfig(process.env), grantStatus: grantStatusFromEnv(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
+    defaultHandler = createForkEntryHandler({ service: forkEntryServiceFromEnv(process.env), inviteStore: inviteStoreFromEnv(process.env), publicEntry: publicEntryConfig(process.env), grantStatus: grantStatusFromEnv(process.env), hold: holdConfig(process.env), allowedOrigins: appOrigin ? [appOrigin] : [] });
   }
   return defaultHandler(req, res);
 }

@@ -2352,6 +2352,7 @@ async function checkPiggy() {
 // [A-667] 한 탭 = 한 시도(attempt 토큰). requestPrf 를 **부른 뒤에만** 화면 대기 상한 타이머를 걸고 확인 중 모습을
 // 그린다(render) — WebAuthn 호출 앞 동기 체인은 그대로다. 시도는 성공 또는 재시도 가능한 실패 카드로 반드시 끝난다.
 function unlockApp() {
+  if (typeof a1305HoldGate === "function" && a1305HoldGate()) return; // [A-1305 ⑥] behind the hold gate: no Face ID
   const lock = state.appLock;
   if (!lock || lock.phase === "checking") return;
   const pinned = state.credential;
@@ -6377,11 +6378,14 @@ function inviteOnlyEntry() {
   return !a1160PublicEntryOpen() && !a1209EntryInvite() && !readCredential() && !hasReceivedPiggy() && !state.address;
 }
 
-function renderInviteOnly(used = false) {
+function renderInviteOnly(used = false, hold = false) {
+  // [A-1305 ⑥] hold = the same picture and place, one line only.
+  const copy = hold ? `<p>Major change coming.</p>`
+    : `<p>${used ? "This invite was already used." : "Araso is invite-only for now."}</p><p>${used ? "If it was you, open Araso where you made your Piggy." : "Opens to everyone at 12:00 KST."}</p>`;
   return `<section class="inviteOnly" data-scene="invite-only">
     <div class="inviteOnly__content">
       <img src="/og-invite.png" width="1200" height="630" alt="" />
-      <div class="inviteOnly__copy"><p>${used ? "This invite was already used." : "Araso is invite-only for now."}</p><p>${used ? "If it was you, open Araso where you made your Piggy." : "Opens to everyone at 12:00 KST."}</p></div>
+      <div class="inviteOnly__copy">${copy}</div>
     </div>
   </section>`;
 }
@@ -6570,7 +6574,8 @@ function askLockFaceIdOnce() {
   const lock = state.appLock;
   if (!lock || lock.phase !== "waiting" || lock.autoAsked) return;
   lock.autoAsked = true; // once per lock: a failed ask leaves the failure card, never asks again by itself
-  setTimeout(() => { if (state.appLock === lock && lock.phase === "waiting") unlockApp(); }, LOCK_AUTO_FACE_ID_MS);
+  // [A-1305 ⑥] the automatic ask also waits for the boot public read (≤ 5 s), so a hold answer can close the door before any Face ID
+  setTimeout(() => { void a1265AwaitPublicState().then(() => { if (state.appLock === lock && lock.phase === "waiting" && !a1305HoldGate()) unlockApp(); }); }, LOCK_AUTO_FACE_ID_MS);
 }
 
 function renderAppLock() {
@@ -15298,15 +15303,54 @@ function a1265AwaitPublicState() {
   return state.a1223PublicPending === false && a1265PublicDone === null ? Promise.resolve()
     : Promise.race([a1265PublicSettled, new Promise((resolve) => setTimeout(resolve, 6000))]);
 }
+// [A-1305 ⑥ · Owner 10:0x (가)] "Major change coming." hold. While the server says hold:true, every device without the pass mark
+// (a Piggy on it too) sees only the gate: no Face ID ask, no Home, no Send/Gift. `#hold-pass=<token>` leaves the address bar at boot
+// (memory only); the server checks it once (hold_pass) and a yes stores one boolean mark — never the token. hold off/unknown = as before.
+const A1305_HOLD_MARK = "araso.holdPass.v1";
+let a1305Hold = false;
+let a1305HoldToken = null;
+function a1305TakeHoldPass() {
+  try {
+    const m = /^#hold-pass=([A-Za-z0-9_-]{1,128})$/.exec(location.hash || "");
+    if (!m) return;
+    a1305HoldToken = m[1];
+    history.replaceState(history.state, "", location.pathname + location.search);
+  } catch { /* no pass */ }
+}
+function a1305HoldPassed() {
+  try { return safeLocalStorage()?.getItem(A1305_HOLD_MARK) === "1"; } catch { return false; }
+}
+function a1305HoldGate() {
+  return a1305Hold === true && !a1305HoldPassed();
+}
+async function a1305CheckHoldPass() {
+  const token = a1305HoldToken;
+  a1305HoldToken = null;
+  if (!token || a1305HoldPassed()) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetch("/api/fork-entry", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "hold_pass", token }), cache: "no-store", signal: controller.signal });
+    const out = response.ok ? await response.json() : null;
+    if (out?.ok === true) safeLocalStorage()?.setItem(A1305_HOLD_MARK, "1");
+  } catch { /* the gate stays; no retry */ } finally { clearTimeout(timer); }
+}
 async function a1160RefreshPublicEntry() {
   state.publicEntryOpen = false;
   state.a1223PublicPending = true;
+  a1305TakeHoldPass();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch("/api/fork-entry", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ action: "public_state" }), cache: "no-store", signal: controller.signal });
     const out = response.ok ? await response.json() : null;
+    if (out?.ok === true && out.hold === true) { // [A-1305 ⑥]
+      a1305Hold = true;
+      await a1305CheckHoldPass();
+      if (a1305HoldGate()) { render(); return; } // finally still settles the public read
+    }
     if (out?.ok === true && out.publicEntry === true && RELEASE_LEVEL >= 2) {
       state.publicEntryOpen = true;
       render(); // metadata only; no authentication, selection or payment
@@ -16710,6 +16754,12 @@ function render() {
   if (holdInviteAuthPresentation()) return;
   resetRecordsForFullRender();
   teardownScene();
+  if (a1305HoldGate()) { // [A-1305 ⑥] before every surface: no lock, no Home, no envelope
+    clearInviteTimers();
+    app.innerHTML = renderInviteOnly(false, true);
+    if (typeof track === "function") track("entry_blocked", "hold");
+    return;
+  }
   if (a1223EntryWaiting()) {
     clearInviteTimers();
     app.innerHTML = a1223LoadingMarkup();
@@ -17316,7 +17366,7 @@ function removeTesterIntro() {
 }
 
 function startTesterIntro() {
-  if (inviteOnlyEntry() || a1223EntryWaiting() || a1223UsedInviteBlocked()) return;
+  if (a1305HoldGate() || inviteOnlyEntry() || a1223EntryWaiting() || a1223UsedInviteBlocked()) return;
   if (!testerIntroPending) return;
   testerIntroPending = false;
   if (state.scene !== "received" || state.appLock) return;
