@@ -37,13 +37,13 @@ async function check(name, fn) {
 // ── Part N ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 await check("N1 copy: the locked lines appear verbatim, exactly once each, only inside the A-891 block; no other Chog line is added", () => {
   assert.ok(BLOCK.length > 0, "A-891 block delimited");
-  for (const line of ["I'll keep it here.", "I found a few things.", "wanna see a few more?"]) {
+  for (const line of ["I'll keep the details at home.", "let's try more kinds of jobs!", "work's coming!"]) {
     assert.equal(strip(MAIN).split(line).length - 1, 1, `${line} once in main.js code`);
     assert.ok(BLOCK.includes(`"${line}"`), `${line} inside the block`);
   }
   // every string literal in the block's code is one of: the locked lines, ids/selectors/keys/class names, or DOM vocabulary.
   const lits = [...strip(BLOCK).matchAll(/"([^"\\]*)"/g)].map((m) => m[1]);
-  const allowed = new Set(["I'll keep it here.", "I found a few things.", "wanna see a few more?", "araso.secondIntroSeen", "./chog-home.js",
+  const allowed = new Set(["I'll keep the details at home.", "let's try more kinds of jobs!", "work's coming!", "araso.secondIntroSeen", "./chog-home.js",
     ".chogHome__hit", "role", "status", "chogCheckLine chogCheckLine--two", "translateX(-50%)", "span", "chogCheckLine__line", "chogCheckLine",
     "#returnChogHop #chogHome", "returnKeepLine", "return", "sendstay", "1", '.stage[data-scene="sendstay"] #chogHome', "secondIntroLine",
     "explore", '.stage[data-scene="explore"] #chogHome', "filebox", "#fileboxPaper", "keydown", "Enter", " ", "undefined", "click"]);
@@ -107,7 +107,7 @@ function makeWorld({ seen = false, secondDone = false, records = false, pinned =
     A891_TAP_CUE_TIMING: TAP_CUE_TIMING, HOME_FIRST_JOURNEY_CARD_MS: 1200,
     scopedSecondKey, RUNTIME_CHAIN_SCOPE: "monad-testnet", // [A-946 RE-PIN] pre-A-946: not needed (the key line was a plain literal)
   });
-  const decl = BLOCK.split("\n").filter((l) => /^const (POST_FILE_QUIET_HOME_MS|A891_FILED_LINE|A891_SECOND_INTRO_LINES|A891_FILED_LINE_HOLD_MS|A891_SECOND_INTRO_TO_PAPER_MS|SECOND_INTRO_SEEN_KEY)\b/.test(l)).join("\n");
+  const decl = BLOCK.split("\n").filter((l) => /^const (POST_FILE_QUIET_HOME_MS|A891_FILED_LINE|A891_SECOND_INTRO_LINES|A891_FILED_LINE_HOLD_MS|A891_FILED_LINE_READ_MS|A1297_SECOND_DONE_LINE|A891_SECOND_INTRO_TO_PAPER_MS|SECOND_INTRO_SEEN_KEY)\b/.test(l)).join("\n");
   // [A-1281] two-line Chog speech helpers (one line at a time) that the block's lines and intro timer now use
   const chogHelpers = `const chogLinesStartedAt = new Map();\n${["chogSpeakMs", "chogLinesMs", "chogLineWaits", "chogLineNodes"].map((n) => cutFn(MAIN, n)).join("\n")}`;
   vm.runInContext(`${chogHelpers}\n${decl}\nlet a891FirstArrivalHold = null; let a891CueChog = null;\n${["a891SecondIntroSeen", "a891ChogSay", "a891AfterFiling", "a891ArmPostFileQuietHome", "a891HomeChogTap"].map((n) => cutFn(MAIN, n)).join("\n")}
@@ -141,7 +141,7 @@ await check("N7 CG-05 intro: the tap on the cue → seen stored, Home pad closed
   w.ctx.tap();
   assert.equal(w.store.get("araso.secondIntroSeen"), "1");
   assert.equal(w.calls.closeCard, 1);
-  assert.deepEqual(w.said, [{ where: "home", id: "secondIntroLine", text: ["I found a few things.", "wanna see a few more?"] }]);
+  assert.deepEqual(w.said, [{ where: "home", id: "secondIntroLine", text: ["let's try more kinds of jobs!", "work's coming!"] }]);
   assert.deepEqual(w.timers.map((t) => t.ms), [6920], "[A-1281] both lines read one at a time (+ a breath after each) before the Paper; pre-A-1281: 1200");
   assert.equal(w.calls.explore, 0, "Paper only after the line");
   w.ctx.tap(); assert.equal(w.timers.length, 1, "a second tap does nothing");
@@ -160,8 +160,9 @@ await check("N8 CG-03 filing: the line only AFTER filed (never before), once; Ho
   assert.equal(w.said.length, 0, "no line before filing completes");
   view.filed = true;
   assert.equal(w.ctx.frame(), false);
-  assert.deepEqual(w.said, [{ where: "return", id: "returnKeepLine", text: ["I'll keep it here."] }]);
-  assert.deepEqual(w.timers.map((t) => t.ms), [TAP_CUE_TIMING.holdMs]);
+  // [A-1297 · Owner 03:3x] the line = "I'll keep the details at home." and Home waits max(3 s, its read time); pre-A-1297: "I'll keep the details at home." · holdMs
+  assert.deepEqual(w.said, [{ where: "return", id: "returnKeepLine", text: ["I'll keep the details at home."] }]);
+  assert.deepEqual(w.timers.map((t) => t.ms), [Math.max(3000, "I'll keep the details at home.".length * 60 + 1200)]);
   w.runTimer(); assert.equal(w.calls.home, 1);
   const later = makeWorld({ scene: "return" }); later.state.resultMotionSeen = true;
   const v2 = { filed: true }; later.ctx.afterFiling(v2, () => true); later.ctx.frame();
@@ -308,7 +309,7 @@ for (const reduced of [false, true]) {
       const waves = ev.filter((e) => e.k === "wave" && e.t >= (tCue ?? Infinity) && e.t < (tIntro ?? Infinity)).map((e) => e.v);
       series[tag] = { tFiledOpen, tKeep, keepGone: leave("keep"), tHome, tCue, quietMs: tCue != null && tHome != null ? tCue - tHome : null, tIntro, tExplore, introToPaperMs: tExplore != null && tIntro != null ? tExplore - tIntro : null, cardsInQuiet, minWave: waves.length ? Math.min(...waves) : 0 };
       const s = series[tag];
-      assert.ok(s.tKeep != null && s.tFiledOpen != null && s.tKeep >= s.tFiledOpen - 20, `${tag}: "I'll keep it here." only after filing completes ${JSON.stringify(s)}`);
+      assert.ok(s.tKeep != null && s.tFiledOpen != null && s.tKeep >= s.tFiledOpen - 20, `${tag}: "I'll keep the details at home." only after filing completes ${JSON.stringify(s)}`);
       // tHome / tCue are first-rAF observations: the Home render (timer start) can precede its first observed frame by up to one frame,
       // so the observed gap may read up to 1 frame under the 8000 ms timer (coordinator run r2: 810x1080 = 7998). The bound allows that 1 frame.
       assert.ok(s.quietMs != null && s.quietMs >= 8000 - 17 && s.quietMs <= 8600, `${tag}: quiet Home ${s.quietMs} ms (≥ 8 s timer, ±1 frame observation, no card/cue)`);
@@ -316,7 +317,7 @@ for (const reduced of [false, true]) {
       if (reduced) assert.equal(s.minWave, 0, `${tag}: reduced = no wave`); else assert.ok(s.minWave <= -5, `${tag}: small wave ${s.minWave}`);
       assert.ok(s.tIntro != null && s.tExplore != null && s.tExplore > s.tIntro, `${tag}: intro line before the Paper`);
       const introText = await p.evaluate(() => [...document.querySelectorAll("#secondIntroLine .chogCheckLine__line")].map((e) => e.textContent));
-      assert.deepEqual(introText, ["I found a few things.", "wanna see a few more?"], `${tag}: intro lines kept over Chog on the Paper's first view`);
+      assert.deepEqual(introText, ["let's try more kinds of jobs!", "work's coming!"], `${tag}: intro lines kept over Chog on the Paper's first view`);
       // [A-891 same-class sweep] em tap areas (back to Home / interest rows) : local css hit >= 44, first card body <= its box, nothing past it.
       const sj = await p.evaluate(() => {
         const local = (el) => { const cs = getComputedStyle(el, "::after"); const n = (v) => parseFloat(v) || 0; return { h: el.offsetHeight - n(cs.top) - n(cs.bottom), w: el.offsetWidth - n(cs.left) - n(cs.right), inset: [cs.top, cs.right, cs.bottom, cs.left] }; };

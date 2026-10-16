@@ -160,17 +160,17 @@ for (const [label, opt] of [["authAttempt live (Check/Open)", { preAttempt: true
   await p;
   check("H7b locked after recovery: existing failure card, signer ended, 0 grant / 0 sign / 0 broadcast", failed(w.calls) && w.calls.endSession === 1 && w.calls.grant === 0 && w.calls.sign === 0 && w.calls.sendTx === 0);
 }
-// 10 live session but app locked: no recovery, no money
+// 10 live session but app locked: no money ([A-1298] every Send asks Face ID first; the lock guard still stops before any grant)
 {
   const w = world({ session: true, locked: true });
   await w.f.sendPiggyOnce();
-  check("locked with live session: guard stops before requestGrant, 0 recover, endActiveSession once", failed(w.calls) && w.calls.recover === 0 && w.calls.grant === 0 && w.calls.endSession === 1);
+  check("locked with live session: guard stops before requestGrant (after the Send's own Face ID), endActiveSession once", failed(w.calls) && w.calls.recover === 1 && w.calls.grant === 0 && w.calls.endSession === 1);
 }
-// 11 unlocked live session: unchanged path (no attempt, straight to grant)
+// 11 unlocked live session: [A-1298] the Send still asks Face ID (one bounded attempt, finished), then grant
 {
   const w = world({ session: true });
   await w.f.sendPiggyOnce();
-  check("unlocked live session: no attempt, grant reached once", w.calls.recover === 0 && w.calls.grant === 1 && w.calls.endSession === 0 && w.f.getAttempt() === null);
+  check("unlocked live session: one Face ID (attempt finished), grant reached once", w.calls.recover === 1 && w.calls.grant === 1 && w.calls.endSession === 0 && w.f.getAttempt() === null);
 }
 // 12 source order
 {

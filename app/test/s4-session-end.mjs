@@ -92,7 +92,7 @@ check("endActiveSession() clears signer state AND the app-idle timer (full teard
   assert.equal(out.addr, "");
   assert.equal(out.idleTimer, null);
   assert.equal(out.signerExpiryTimer, null);
-  assert.deepEqual(ctx.clearedTimers, ["SIGNER_TIMER", "APP_IDLE"]);
+  assert.deepEqual(ctx.clearedTimers, ["SIGNER_TIMER", "APP_IDLE", null]); // [A-1298] the 9:30 closing-soon timer is cleared with the app session too (none armed in this harness)
 });
 
 console.log(`\n${pass}/${pass} PASS`);

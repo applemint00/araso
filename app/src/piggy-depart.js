@@ -127,6 +127,12 @@ function loadImage(src) {
   });
 }
 
+// [A-1291] Sulky = design C: the whole sulky Piggy of the mock (seat_idle arms/legs + #2 lookdownR-2 ears/body/eyes/mouth) replaces the
+// work-open picture for the beat, cross-faded. It is drawn in the seat picture's 300x300 frame (the frame drawSeat maps onto SEAT_RECT),
+// placed by `place` = a similarity fit of the mock's normal Piggy onto seat-idle.png (IoU 0.968) followed by seat-idle.png onto
+// work-open.png (IoU 0.905): scale · turn (rad) · x · y, in that frame. Missing / broken svg = the face-only sulky below.
+export const SULKY_C = Object.freeze({ src: "seat-sulky-c.svg", size: [1100, 1180], place: [0.26946, 0.142907, 31.5434, -28.9077] });
+
 /** 필요한 PNG 를 한 번만 받아 둔다. */
 export async function loadDepartAssets() {
   const names = [...STATIC_PARTS, ...STATE_IMAGES, ...OVERLAYS];
@@ -140,6 +146,8 @@ export async function loadDepartAssets() {
   const pairs = await Promise.all(jobs);
   const map = new Map(pairs);
   const missing = pairs.filter(([, im]) => !im).map(([n]) => n);
+  const sulkyC = await loadImage(`${DIR}/${SULKY_C.src}`); // optional: never part of `missing`
+  if (sulkyC) map.set("seat-sulky-c", sulkyC);
   return { images: map, missing };
 }
 
@@ -244,7 +252,23 @@ export function createDepartRenderer(canvas, opts) {
     for (const p of [...sf.eyes, sf.mouth]) ctx.fill(new Path2D(p));
     ctx.restore();
   }
-  function setFace(next) { face = next || null; }
+  let faceMix = 1; // [A-1291] 0..1 cross-fade of the design C picture over work-open
+  function drawSulkyC(alpha, dy) {
+    const im = img("seat-sulky-c");
+    if (!im || alpha <= 0) return;
+    const [s, turn, x, y] = SULKY_C.place;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    enterGroup();
+    ctx.translate(SEAT_RECT.x, SEAT_RECT.y + dy);
+    ctx.scale(SEAT_RECT.w / 300, SEAT_RECT.h / 300);
+    ctx.translate(x, y);
+    ctx.rotate(turn);
+    ctx.scale(s, s);
+    ctx.drawImage(im, 0, 0, SULKY_C.size[0], SULKY_C.size[1]);
+    ctx.restore();
+  }
+  function setFace(next, mix = 1) { face = next || null; faceMix = Math.max(0, Math.min(1, mix)); }
   function drawAt(rawElapsed) {
     // [A-735] work? = 확정 cue 타임라인. 렌더러 안의 모든 `elapsed` 는 cue 시계(올려다봄 후 홀드)가 된다.
     const cue = mode === "work" ? workCueState(rawElapsed) : null;
@@ -351,7 +375,9 @@ export function createDepartRenderer(canvas, opts) {
     }
     const hop = mode === "send" && elapsed < 0.5 ? -9 * Math.sin(Math.PI * C(elapsed / 0.5)) : 0;
     const perk = mode === "work" ? -4 * Math.sin(Math.PI * C(elapsed / 0.55)) : 0;
-    drawSeat(lookName, lookingA, hop + perk);
+    const sulkyC = mode === "work" && face === "sulky" && img("seat-sulky-c");
+    if (!sulkyC || faceMix < 1) drawSeat(lookName, lookingA, hop + perk); // during the swap the old picture stays solid under the fading-in one (no see-through grey)
+    if (sulkyC) drawSulkyC(lookingA * faceMix, hop + perk);
 
     // 서 있는 몸 — rise 로 나타난다.
     // sceneTime >= 7 이면 원본처럼 entryDepthMask 로 가린다. 그 구간에서는 별도 층에
@@ -418,7 +444,7 @@ export function createDepartRenderer(canvas, opts) {
     }
 
     if (cue) {
-      if (face === "sulky" && !cue.surprised) drawSulkyFace();
+      if (face === "sulky" && !cue.surprised && !img("seat-sulky-c")) drawSulkyFace();
       if (cue.surprised) {
         const sv = WORK_SURPRISED;
         ctx.save();

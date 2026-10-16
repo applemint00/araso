@@ -45,8 +45,8 @@ const COPY_ALLOW = new Set([
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -74,7 +74,8 @@ async function scenarioGasPrice() {
 const GAS_PRICE_WEI = await scenarioGasPrice();
 console.log(`A1264_GAS ${GAS} ${Number(GAS_PRICE_WEI / 10n ** 6n) / 1000} gwei`);
 
-function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0 } = {}) {
+const FORK_USDC = "0x754704Bc059F8C67012fEd69BC8A327a5aafb603"; // funding-context.js "monad-fork" USDC
+function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0, forkEntryUsdcRaw = 0n } = {}) {
   const chain = createChain({ gasPriceWei: GAS_PRICE_WEI, fundLagMs });
   const forkChain = createChain({ chainId: 31337143, gasPriceWei: GAS_PRICE_WEI, erc20: { defaultAllowance: 5_000_000n, defaultBalance: 0n }, guard: { guard: "araso-a949-public-guard", chainId: 31337143, forkInstanceId: FORK_INSTANCE, forkStartBlock: 110874000 } });
   const granted = new Set();
@@ -123,6 +124,7 @@ function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0 }
           return json(200, { ok: true, nonce, message, expiresAt });
         }
         if (action === "enter") forkChain.fund(String(body?.piggyAddress || ""), 10n ** 19n); // the server tops up fork MON on entry
+        if (action === "enter" && forkEntryUsdcRaw > 0n) forkChain.fundToken(FORK_USDC, String(body?.piggyAddress || ""), forkEntryUsdcRaw); // and USDC, like the real entry grant (A-966: 100 USDC)
         if (action === "enter") return json(200, { ok: true, allowed: true, forkScope: "monad-fork", forkInstanceId: FORK_INSTANCE, grants: [] });
         return json(400, { ok: false, reason: "a1264_unexpected_action" });
       }
@@ -186,6 +188,18 @@ async function openPerson(browser, world, id, { storageState, invite, credential
       } catch (e) { window.__arasoTimelineError = String(e); }
     }, 100);
   });
+  // [A-1298] every real Face ID ask (WebAuthn get) is counted; the count survives reloads (sessionStorage)
+  await context.addInitScript(() => {
+    if (!navigator.credentials?.get) return;
+    const get = navigator.credentials.get.bind(navigator.credentials);
+    navigator.credentials.get = (o) => {
+      try {
+        sessionStorage.setItem("__arasoGets", String(Number(sessionStorage.getItem("__arasoGets") || 0) + 1));
+        const allow = JSON.parse(sessionStorage.getItem("__arasoGetAllow") || "[]"); allow.push((o?.publicKey?.allowCredentials || []).length); sessionStorage.setItem("__arasoGetAllow", JSON.stringify(allow));
+      } catch {}
+      return get(o);
+    };
+  });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error.message).slice(0, 160)));
@@ -228,7 +242,16 @@ async function until(person, label, predicate, timeout = 20_000) {
   while (Date.now() - start < timeout) { last = await look(person).catch(() => null); if (last && (await predicate(last))) return last; await sleep(250); }
   throw new Error(`${label}: timeout — scene=${last?.scene} text=${JSON.stringify((last?.text || []).slice(-6))}`);
 }
+// [A-1289] the first-visit entry shows Face ID after two taps (logo → "get your piggy" → "make passkey to hatch the piggy"); a person taps there first
+async function entryToFace(person) {
+  for (let i = 0; i < 4; i += 1) {
+    const step = await person.page.evaluate(() => { const b = document.querySelector(".entryChog"); return b ? Number(b.dataset.step || 0) : null; }).catch(() => null);
+    if (step === null || step >= 2) break;
+    await person.page.mouse.click(195, 420); await sleep(900);
+  }
+}
 async function click(person, selector, label) {
+  if (selector === "#inviteFaceButton") await entryToFace(person);
   await until(person, `${label} clickable`, () => live(person, selector), 20_000);
   await person.page.locator(selector).click();
 }
@@ -237,6 +260,17 @@ async function click(person, selector, label) {
 async function walkFirstJourney(person, { send = true } = {}) {
   await until(person, "envelope", (s) => s.scene === "received");
   await checkpoint(person, "envelope");
+  // [A-1289] first visit: Piggy logo → tap → Chog "get your piggy" → tap → "make passkey to hatch the piggy" + Face ID
+  const entryLook = () => person.page.evaluate(() => { const b = document.querySelector(".entryChog"); const vis = (sel) => { const e = document.querySelector(sel); if (!e) return false; const r = e.getBoundingClientRect(); const c = getComputedStyle(e); return r.width > 0 && r.height > 0 && c.visibility !== "hidden" && Number(c.opacity) > 0.5; };
+    return { entry: !!b, step: b?.dataset.step ?? null, logo: vis(".entryChog__logo svg"), envelope: vis(".invite__env"), say: [...document.querySelectorAll(".entryChog__say span")].filter((e) => getComputedStyle(e).visibility !== "hidden" && Number(getComputedStyle(e).opacity) > 0.5).map((e) => e.textContent), face: vis("#inviteFaceButton") }; });
+  person.entrySteps = [await entryLook()];
+  if (person.entrySteps[0].entry) {
+    for (let i = 0; i < 2; i += 1) {
+      await person.page.mouse.click(195, 420); await sleep(900);
+      person.entrySteps.push(await entryLook());
+      await checkpoint(person, `entry-tap${i + 1}`);
+    }
+  }
   await click(person, "#inviteFaceButton", "envelope Face ID");
   const born = await until(person, "hatch or name", (s) => ["hatch", "name"].includes(s.scene), 25_000);
   if (born.scene === "hatch") await checkpoint(person, "hatch"); // watch the hatch to its end like a person (no skip): pacing is measured on real time
@@ -254,6 +288,7 @@ async function walkFirstJourney(person, { send = true } = {}) {
     return { explain: pick(".sendCard__explain"), stamp: pick(".trialStamp--send"), chog: pick(".chogCheckLine") };
   });
   if (!send) return;
+  person.sendGetsBefore = await getsOf(person); // [A-1298] the Send's Face ID count is read at filing (never wait here: fault lanes arm right after the tap)
   await person.page.locator("#sendButton").click();
   person.sentAt = Date.now();
 }
@@ -261,9 +296,16 @@ async function walkReturnAndFile(person) {
   await until(person, "Return receipt", () => live(person, "#returnTap"), 60_000);
   person.receiptText = (await checkpoint(person, "return")).text;
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `receipt tap ${i + 1}`); await sleep(400); }
+  // [A-1297] the filed line is read before Home comes (≥ 3 s, Owner "3초정도")
+  person.filedLineAt = await until(person, "filed line", (s) => s.text.includes("I'll keep the details at home."), 8_000).then(() => Date.now(), () => null);
   await until(person, "filed → quiet Home", (s) => s.scene === "sendstay", 30_000);
+  person.filedHomeAt = Date.now();
   await checkpoint(person, "home-filed");
+  // [A-1298] after the first receipt: "tap me to find out" (once); no tap = Journey 2 by the key (no Face ID)
+  person.filedGets = await getsOf(person);
+  person.findOutCue = await until(person, "tap me to find out", (s) => s.text.includes("tap me to find out"), 6_000).then(() => true, () => false);
 }
+async function getsOf(person) { return person.page.evaluate(() => Number(sessionStorage.getItem("__arasoGets") || 0)).catch(() => -1); }
 async function readTimeline(person) {
   for (let i = 0; i < 10; i += 1) {
     try {
@@ -290,36 +332,55 @@ async function trace(person, label, ms) {
 async function waitTapMe(person, timeout) {
   try { await until(person, "tap me!", (s) => s.text.includes("tap me!"), timeout); return true; } catch { return false; }
 }
+// [A-1290] the lock asks Face ID by itself once; a person taps only if the lock is still there after that ask settles
+async function tapLockIfStill(person, waitMs = 3000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < waitMs) { if ((await look(person)).scene !== "birth") return false; await sleep(250); }
+  if ((await look(person)).scene === "birth" && (await live(person, "#loginChogButton"))) { await person.page.locator("#loginChogButton").click(); return true; }
+  return false;
+}
 async function unlockIfLocked(person) {
   const s = await until(person, "boot surface", (x) => ["birth", "sendstay", "received", "name", "hatch"].includes(x.scene), 20_000);
-  if (s.scene === "birth") { await checkpoint(person, "lock"); await click(person, "#loginChogButton", "lock Chog"); }
+  if (s.scene === "birth") { await checkpoint(person, "lock"); await tapLockIfStill(person); }
   await until(person, "Home after unlock", (x) => x.scene === "sendstay", 20_000);
 }
 async function enterSecond(person) {
   await until(person, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
-  if ((await look(person)).text.includes("tap me!")) { await checkpoint(person, "tapme"); await click(person, "#chogHomeHit", "tap me"); }
+  person.sawPlainTapMe = (await look(person)).text.includes("tap me!");
+  if (person.sawPlainTapMe) { await checkpoint(person, "tapme"); await click(person, "#chogHomeHit", "tap me"); }
   await until(person, "Explore", (s) => s.scene === "explore", 30_000);
+  person.exploreGets = await getsOf(person);
   await checkpoint(person, "explore");
 }
-async function walkSecondJob(person, round) {
+async function walkSecondJob(person, round, { tapHome = true } = {}) {
   await until(person, "Explore", (s) => s.scene === "explore", 20_000);
   if (await person.page.locator('input[data-errand-id="clean"]').count()) {
     await person.page.locator('input[data-errand-id="clean"]').check();
     await click(person, "#exploreSaveButton", "explore save");
   }
-  await click(person, ".secondJourney__pick", "job pick");
-  await checkpoint(person, `j${round}-candidate`);
-  await click(person, "#secondOkButton", "job ok");
+  // [A-1297] one Job that can go = straight to the one-line card (no pick list); two or more = pick one, then ok
+  await until(person, "pick list or the one-line card", async () => (await live(person, ".secondJourney__pick")) || (await live(person, "#secondSendButton")), 20_000);
+  if (await live(person, ".secondJourney__pick")) {
+    await click(person, ".secondJourney__pick", "job pick");
+    await checkpoint(person, `j${round}-candidate`);
+    await click(person, "#secondOkButton", "job ok");
+  }
   await until(person, "Job Send", () => live(person, "#secondSendButton"), 20_000);
   await checkpoint(person, `j${round}-job`);
+  const jobGetsBefore = await getsOf(person);
   await person.page.locator("#secondSendButton").click();
   await until(person, "Away", (s) => s.scene === "secondAway", 15_000);
+  person.jobGets = person.jobGets || {}; person.jobGets[round] = (await getsOf(person)) - jobGetsBefore; // [A-1298]
   await checkpoint(person, `j${round}-away`);
   await until(person, "Job Receipt", () => live(person, "#returnTap"), 90_000);
   await checkpoint(person, `j${round}-return`);
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `job receipt tap ${i + 1}`); await sleep(400); }
-  await click(person, "#returnOpen", "Second Receipt Home");
-  await until(person, "filed → Home", (s) => s.scene === "sendstay", 30_000);
+  person.secondDone = person.secondDone || {};
+  person.secondDone[round] = await until(person, "done!", (s) => s.text.includes("done!"), 10_000).then(async () => (await person.page.evaluate(() => [...document.querySelectorAll(".chogCheckLine")].filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.textContent.trim()))), () => null); // [A-1297] the lines Chog shows then
+  // A person may tap the folder's Home, or just wait: Home must come either way.
+  if (tapHome) await until(person, "Second Receipt Home or settled Home", async (s) => s.scene === "sendstay" || (await live(person, "#returnOpen")), 20_000);
+  if (tapHome && (await live(person, "#returnOpen"))) await person.page.locator("#returnOpen").click().catch(() => {});
+  await until(person, tapHome ? "filed → Home" : "filed → Home with no tap", (s) => s.scene === "sendstay", tapHome ? 30_000 : 20_000);
   await checkpoint(person, `j${round}-home`);
 }
 function publicInviteZero(world, who) {
@@ -387,13 +448,21 @@ async function laneMain() {
     assert.ok(i.every((x) => x >= 0) && i[0] < i[1] && i[1] < i[2], `chog lines: ${JSON.stringify(chogLines.slice(0, 8))}`);
   });
   const sitAt = at((e) => e.k === "phase" && e.v && e.v !== "walk", homeAt + 500) || homeAt;
+  await check("entry · first screen = Piggy logo (no envelope) → tap: \"get your piggy\" → tap: + \"make passkey to hatch the piggy\" and Face ID", () => {
+    const st = a.entrySteps || [];
+    assert.ok(st[0]?.entry && st[0].logo && !st[0].envelope && st[0].say.length === 0 && !st[0].face, `first screen ${JSON.stringify(st[0])}`);
+    assert.deepEqual(st[1]?.say, ["get your piggy"], `after tap 1 ${JSON.stringify(st[1])}`);
+    assert.equal(st[1]?.face, false, "Face ID waits for the second line");
+    assert.deepEqual(st[2]?.say, ["get your piggy", "make passkey to hatch the piggy"], `after tap 2 ${JSON.stringify(st[2])}`);
+    assert.equal(st[2]?.face, true, "Face ID with the second line");
+  });
   await check("pace · Piggy sits → Send card ≈ 10 s (grant asked early enough that the node is ready)", () => { const d = cardAt - sitAt; assert.ok(d >= 9_500 && d <= 12_500, `${(d / 1000).toFixed(1)} s after sitting`); });
   await check("pace · Chog's lines on the name card stay inside the screen (no cut words)", () => { const out = tl.filter((e) => e.k === "sayOut" && e.v).map((e) => e.v); assert.deepEqual(out, []); });
   await check("pace · first Chog line on Home = work's coming! before the card; the two job lines come after the card", () => {
     const first = tl.find((e) => e.k === "chog" && e.v && e.t >= homeAt);
     assert.equal(first?.v, "work's coming!", `first Home line: ${first?.v}`);
     const jobLine = tl.find((e) => e.k === "chog" && /let's send Piggy to work/.test(e.v || ""));
-    assert.ok(jobLine && jobLine.t >= cardAt + 1000, `job lines at ${jobLine?.t} · card at ${cardAt}`);
+    assert.ok(jobLine && jobLine.t >= cardAt + 1000 - 50, `job lines at ${jobLine?.t} · card at ${cardAt}`); // 50 ms = the timeline's sampling step (seen 996–999 ms on a 1000 ms breath)
   });
   await check("pace · two job lines come one at a time: the first stays, the second joins after it is read (+1 s)", () => {
     const one = tl.find((e) => e.k === "chog" && e.v === "let's send Piggy to work");
@@ -422,18 +491,42 @@ async function laneMain() {
     await until(a, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
     if ((await look(a)).scene === "explore") {
       const t2 = await readTimeline(a);
-      const intro = t2.find((e) => e.k === "chog" && /I found a few things/.test(e.v || ""));
+      const intro = t2.find((e) => e.k === "chog" && /let's try more kinds of jobs!/.test(e.v || ""));
+      a.introLines = t2.filter((e) => e.k === "chog" && /let's try more kinds of jobs!|work's coming!|I found a few things|wanna see a few more/.test(e.v || "") && (!intro || e.t >= intro.t)).map((e) => ({ t: e.t, v: e.v, scene: (t2.filter((x) => x.k === "scene" && x.t <= e.t).pop() || {}).v }));
       const exp = t2.find((e) => e.k === "scene" && e.v === "explore" && (!intro || e.t >= intro.t));
       a.introToExplore = intro && exp ? exp.t - intro.t : null;
     }
-    if ((await look(a)).text.includes("tap me!")) { await checkpoint(a, "tapme"); await click(a, "#chogHomeHit", "tap me"); }
+    a.sawPlainTapMe = (await look(a)).text.includes("tap me!");
+    if (a.sawPlainTapMe) { await checkpoint(a, "tapme"); await click(a, "#chogHomeHit", "tap me"); }
     await until(a, "Explore", (s) => s.scene === "explore", 30_000);
+    a.exploreGets = await getsOf(a); // [A-1298]
     await sleep(1500);
     await checkpoint(a, "explore");
     assert.ok(main.requests.some((r) => r.person === "a" && r.action === "enter"), "fork entry recorded");
   });
   await check("pace · second intro line → Explore paper ≥ 2.7 s (1.2 s beat + 1.5 s breath)", () => { assert.ok(a.introToExplore >= 2_600, `${a.introToExplore} ms`); });
+  await check("chog · Journey 2 starts on Home: \"let's try more kinds of jobs!\" then \"work's coming!\" one at a time (the first stays); Explore paper says nothing", () => {
+    const L = a.introLines || [];
+    const one = L.find((e) => e.v === "let's try more kinds of jobs!"), both = L.find((e) => e.v === "let's try more kinds of jobs! work's coming!");
+    assert.ok(one && both && both.t - one.t >= chogMs("let's try more kinds of jobs!") + 1000 - 300, `intro ${JSON.stringify(L.slice(0, 6))}`);
+    assert.ok(L.every((e) => e.scene === "sendstay"), `said on Home only ${JSON.stringify(L.map((e) => e.scene))}`);
+    assert.ok(!L.some((e) => /I found a few things|wanna see a few more/.test(e.v)), "the old intro lines are gone");
+  });
+  await check("chog · after the first receipt: \"I'll keep the details at home.\" and Home comes ≥ 3 s later", () => {
+    assert.ok(a.filedLineAt && a.filedHomeAt - a.filedLineAt >= 3000 - 300, `line ${a.filedLineAt} → Home ${a.filedHomeAt} (${a.filedHomeAt - a.filedLineAt} ms)`);
+  });
+  await check("first end · \"tap me to find out\" shows after the first receipt; no tap = Journey 2 starts by the key (no Face ID until the Job Send)", async () => {
+    assert.equal(a.findOutCue, true, "the cue showed");
+    assert.equal(a.exploreGets, a.filedGets, `Face ID asks between filing and Explore: ${a.exploreGets - a.filedGets}`);
+    assert.equal(a.sawPlainTapMe, false, "no plain \"tap me!\" on the way");
+  });
   await check("a · Journey 2 round 1: places → Job (tidy the wallet) → Send → Away → back → Receipt → File it → Home", () => walkSecondJob(a, 1));
+  await check("chog · after the Journey 2 receipt is filed: \"done!\" (one bubble)", () => { assert.deepEqual(a.secondDone?.[1], ["done!"]); });
+  await check("key · money Sends ask Face ID every time: first Send = 1 · Journey 2 Job Send = 1 (the 10-minute key never signs money)", () => {
+    const sendGets = a.filedGets - a.sendGetsBefore; // Face ID asks from the first Send tap to the filed Home = the Send's own
+    assert.equal(sendGets, 1, `first Send Face ID asks: ${sendGets}`);
+    assert.equal(a.jobGets?.[1], 1, `Job Send Face ID asks: ${a.jobGets?.[1]}`);
+  });
   await check("a · reopen the app → lock → Chog → Face ID → Home → bell → Explore opens again", async () => {
     await a.page.goto("about:blank"); await a.page.goto(BASE, { waitUntil: "networkidle" });
     await unlockIfLocked(a);
@@ -451,12 +544,17 @@ async function laneMain() {
   });
   // c = the same person reopening: same passkey, same storage, page opened again → lock → Chog → Face ID → Home.
   const c = a; c.id = c.tag.id = "c"; c.steps = 0;
-  await check("c · same passkey + same storage, reopened: lock → Chog → Face ID → Home (no hatch/name)", async () => {
+  await check("c · same passkey + same storage, reopened: lock (Piggy logo) → Face ID asked once by itself (no tap) → Home (no hatch/name)", async () => {
+    const getsBefore = eventsOf(main, "c").filter((e) => e.startsWith("passkey_get/")).length;
     await c.page.goto("about:blank"); await c.page.goto(BASE, { waitUntil: "networkidle" });
     await until(c, "lock surface", (s) => s.scene === "birth", 20_000);
     await checkpoint(c, "lock");
-    await click(c, "#loginChogButton", "lock Chog");
+    const lockLook = await c.page.evaluate(() => ({ logo: !!document.querySelector(".stage--lockLogo .entryChog__logo svg"), checking: [...document.querySelectorAll("h1")].some((h) => /Checking/.test(h.textContent)) }));
+    const tapped = await tapLockIfStill(c, 6000);
     await until(c, "Home", (s) => s.scene === "sendstay", 20_000);
+    assert.equal(tapped, false, "Home came without a tap on the lock");
+    assert.ok(lockLook.logo && !lockLook.checking, `lock look ${JSON.stringify(lockLook)}`);
+    assert.equal(eventsOf(main, "c").filter((e) => e.startsWith("passkey_get/")).length - getsBefore, 1, `one Face ID ask: ${eventsOf(main, "c").join(",")}`);
     await checkpoint(c, "home");
     assert.ok(eventsOf(main, "c").includes("passkey_get/ok"), eventsOf(main, "c").join(","));
   });
@@ -572,14 +670,18 @@ async function laneStuck() {
 
 // Journey 2 Job failures must not be silent: Chog says try again over the screen it happened on, Piggy looks sulky,
 // and the server learns why (job_why) — before Away (still on Explore) or after Away (back Home).
+// [A-1297] after save: a pick list only when two or more Jobs can go; one = straight to the one-line card
+async function pickJobIfListed(person) {
+  await until(person, "pick list or the one-line card", async () => (await live(person, ".secondJourney__pick")) || (await live(person, "#secondSendButton")), 20_000);
+  if (await live(person, ".secondJourney__pick")) { await person.page.locator(".secondJourney__pick").first().click(); await click(person, "#secondOkButton", "job ok"); }
+}
 async function walkToJobSend(person) {
   await walkFirstJourney(person);
   await walkReturnAndFile(person);
   await enterSecond(person);
   await person.page.locator('input[data-errand-id="clean"]').check();
   await click(person, "#exploreSaveButton", "explore save");
-  await click(person, ".secondJourney__pick", "job pick");
-  await click(person, "#secondOkButton", "job ok");
+  await pickJobIfListed(person);
   await until(person, "Job Send", () => live(person, "#secondSendButton"), 20_000);
 }
 // Unlock failures are told apart by cause (the screen copy stays): cancelled vs the app's own wait running out.
@@ -591,10 +693,9 @@ async function laneUnlockWhy() {
     const p = await openPerson(browser, w, id); people.push(p);
     await check(`unlock why · ${word}: the unlock failure is recorded with its own cause word (unlock_why/${word})`, async () => {
       await walkFirstJourney(p);
+      await arm(p); // [A-1290] before reopening: the lock asks Face ID by itself
       await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
       await until(p, "lock", (s) => s.scene === "birth", 20_000);
-      await arm(p);
-      await click(p, "#loginChogButton", "lock Chog");
       await until(p, "unlock failed card", async () => live(p, "#unlockRetryButton"), 60_000);
       assert.ok(eventsOf(w, id).includes(`unlock_why/${word}`), `events: ${eventsOf(w, id).join(",")}`);
     });
@@ -604,18 +705,21 @@ async function laneUnlockWhy() {
 
 // A-1283: after "these two?" / "all of them?" and checking…, Chog says why only one goes (or none), one line at a time; then the one card.
 const FORK_RUNNABLE_ERRANDS = ["market", "order", "clean", "grow", "lp"]; // second-job-readiness.js FORK_JOB_ROWS errand ids
+// [A-1297 · Owner 03:0x–03:4x] Journey 2 picking: save → Chog "let me see which jobs can go." → the second card shows only the Jobs
+// that can go → pick one → the one-line card with Send (one = straight to that card · none = back to the paper)
+const XW_CHECK = "let me see which jobs can go.";
 async function laneExploreWhy() {
   const cases = [
-    ["xw-two", ["market", "order"], "these two?", "both can go. sending one for now."],
-    ["xw-all", ["market", "order", "clean"], "all of them?", "all of them work. let's try one first."],
-    // the next Explore set (save with nothing picked) holds errands with no fork Job row: some / none can go
-    ["xw-some", "one-of-two", "these two?", "only this one can go today."],
-    ["xw-none", "none-of-two", "these two?", "none of these can go now. something else?"],
+    ["xw-two", ["market", "order"], "two can go. pick one?", 2],
+    ["xw-three", ["market", "order", "clean"], "pick one of these.", 3],
+    // the next Explore set (save with nothing picked) holds errands with no fork Job row: one / none can go
+    ["xw-one", "one-of-two", "only this one can go. go?", 1],
+    ["xw-none", "none-of-two", "none of these can go now. something else?", 0],
   ];
-  await Promise.all(cases.map(async ([id, picks, first, second]) => {
+  await Promise.all(cases.map(async ([id, picks, line, can]) => {
     const w = createWorld(`explorewhy-${id}`);
     const p = await openPerson(browser, w, id); people.push(p);
-    await check(`explore why · ${typeof picks === "string" ? picks : `${picks.length} picked, all can go`} → "${first}" then "${second}" one at a time, then the one-line card with Send`, async () => {
+    await check(`explore pick · ${can} can go → "${XW_CHECK}" then "${line}" · ${can >= 2 ? `only those ${can} on the card, pick one → Send` : can === 1 ? "straight to the one-line card" : "back to the paper"}`, async () => {
       await walkFirstJourney(p);
       await walkReturnAndFile(p);
       await enterSecond(p);
@@ -631,22 +735,120 @@ async function laneExploreWhy() {
         }
         assert.ok(chosen, `no Explore set for ${picks}: last ${JSON.stringify(shown)}`);
       }
-      assert.ok(chosen.every((x) => shown.includes(x)) && (chosen.length === 2 ? shown.length > 2 : shown.length === chosen.length), `Explore shows ${JSON.stringify(shown)}`);
       for (const x of chosen) await p.page.locator(`input[data-errand-id="${x}"]`).check();
+      const savedAt = Date.now();
       await click(p, "#exploreSaveButton", "explore save");
-      await until(p, "second line", (st) => st.text.includes(second), 15_000).then(() => checkpoint(p, "why-two-lines"), () => {});
-      const none = picks === "none-of-two";
-      const sendAt = await until(p, none ? "back to the Explore paper" : "one-line card Send", async () => (none ? (await p.page.locator("input[data-errand-id]").count()) > 0 : live(p, "#secondSendButton")), 25_000).then(() => Date.now(), () => null);
+      await until(p, "result line", (st) => st.text.includes(line) || (can === 0 && st.text.includes("something else?")), 15_000).then(() => checkpoint(p, "pick-line"), () => {});
+      let rows = 0;
+      if (can >= 2) {
+        await until(p, "pick list", () => live(p, ".secondJourney__pick"), 15_000);
+        rows = await p.page.locator(".secondJourney__pick").count();
+        p.listAt = Date.now();
+        await checkpoint(p, "pick-list");
+        await p.page.locator(".secondJourney__pick").first().click();
+        await click(p, "#secondOkButton", "ok");
+      }
+      const endAt = await until(p, can === 0 ? "back to the Explore paper" : "one-line card Send", async () => (can === 0 ? (await p.page.locator("input[data-errand-id]").count()) > 0 : live(p, "#secondSendButton")), 25_000).then(() => Date.now(), () => null);
       const tl = await readTimeline(p);
-      const seen = tl.filter((e) => e.k === "chog" && e.v).map((e) => e.v);
-      const one = tl.find((e) => e.k === "chog" && e.v === first);
-      const both = tl.find((e) => e.k === "chog" && e.v === `${first} ${second}`);
-      assert.ok(one && both, `Chog said ${JSON.stringify([...new Set(seen)].slice(-6))}`);
-      assert.ok(both.t - one.t >= chogMs(first) + 1000 - 300, `second line ${both.t - one.t} ms after the first`);
-      assert.ok(sendAt && sendAt - both.t >= chogMs(second) + 1000 - 400, `${none ? "paper" : "card"} ${sendAt ? sendAt - both.t : "never"} ms after both lines`);
-      assert.equal(await p.page.locator(".secondJourney__pick").count(), 0, none ? "back on the Explore paper (no pick list)" : "the card is the one-line card (no pick list)");
-      if (none) assert.equal(await live(p, "#secondSendButton"), false, "nothing to send");
-      await checkpoint(p, "why-card");
+      const said = tl.filter((e) => e.k === "chog" && e.v && e.t >= savedAt - 200).map((e) => e.v);
+      assert.ok(said.includes(XW_CHECK) && said.includes(line), `Chog said ${JSON.stringify([...new Set(said)])}`);
+      assert.ok(said.indexOf(XW_CHECK) < said.indexOf(line), "the check line comes first");
+      assert.ok(!said.some((v) => /these two\?|all of them\?|both can go|all of them work|only this one can go today/.test(v)), `old lines gone ${JSON.stringify([...new Set(said)])}`);
+      if (can >= 2) {
+        assert.equal(rows, can, `the second card lists only the ${can} that can go (saw ${rows})`);
+        assert.ok(p.listAt - savedAt >= chogMs(XW_CHECK) - 400, `the list waited for the check line (${p.listAt - savedAt} ms)`);
+      }
+      assert.ok(endAt, can === 0 ? "back to the paper" : "the one-line card with Send");
+      if (can === 0) assert.equal(await live(p, "#secondSendButton"), false, "nothing to send");
+      await checkpoint(p, "pick-end");
+    });
+  }));
+}
+// [A-1289] entry captures at 390 · 810 · 1440 (logo → "get your piggy" → "make passkey to hatch the piggy" + Face ID)
+async function laneEntryShots() {
+  await Promise.all([[390, 844], [810, 1080], [1440, 900]].map(async ([width, height]) => {
+    const w = createWorld(`entry-${width}`);
+    const p = await openPerson(browser, w, `entry${width}`, { viewport: { width, height } }); people.push(p);
+    await check(`entry shots · ${width}: logo → two lines one tap at a time → Face ID`, async () => {
+      await until(p, "entry", (s) => s.scene === "received");
+      await sleep(800); await checkpoint(p, "entry-0");
+      for (let i = 1; i <= 2; i += 1) { await p.page.mouse.click(Math.round(width / 2), Math.round(height / 2)); await sleep(1100); await checkpoint(p, `entry-${i}`); }
+      assert.equal(await live(p, "#inviteFaceButton"), true, "Face ID visible after two taps");
+    });
+  }));
+}
+// [A-1290] two passkeys for this site on the device: reopening asks Face ID once, naming only this Piggy's passkey (no chooser)
+async function laneLockMulti() {
+  const w = createWorld("lock-multi");
+  const p = await openPerson(browser, w, "lm"); people.push(p);
+  await check("lock · two passkeys on the device: reopen asks Face ID once by itself, for one passkey only (no chooser) → Home", async () => {
+    await walkFirstJourney(p);
+    const mine = await p.passkey.credential();
+    const other = { ...mine, credentialId: Buffer.from(`other-piggy-${Date.now()}`).toString("base64"), userHandle: Buffer.from("other-piggy-user").toString("base64"), signCount: 0 };
+    await p.passkey.cdp.send("WebAuthn.addCredential", { authenticatorId: p.passkey.authenticatorId, credential: other });
+    const count = (await p.passkey.cdp.send("WebAuthn.getCredentials", { authenticatorId: p.passkey.authenticatorId })).credentials.length;
+    const allowBefore = (await p.page.evaluate(() => JSON.parse(sessionStorage.getItem("__arasoGetAllow") || "[]"))).length; // [A-1298] the page-wide counter records each ask
+    await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
+    await until(p, "lock", (s) => s.scene === "birth", 20_000);
+    const tapped = await tapLockIfStill(p, 6000);
+    await until(p, "Home", (s) => s.scene === "sendstay", 20_000);
+    const gets = (await p.page.evaluate(() => JSON.parse(sessionStorage.getItem("__arasoGetAllow") || "[]"))).slice(allowBefore);
+    assert.ok(count >= 2, `passkeys on the device: ${count}`);
+    assert.equal(tapped, false, "no tap needed");
+    assert.deepEqual(gets, [1], `get() calls (allowCredentials length each): ${JSON.stringify(gets)}`);
+  });
+}
+// [A-1298] one 10-minute clock: at 9:30 Chog says it is closing (one line at a time); a tap = 10 more minutes; no tap = lock at 10:00
+async function laneKeyClock() {
+  const w = createWorld("keyclock");
+  const k = await openPerson(browser, w, "kc", { clock: true }); people.push(k);
+  await check("key clock · 9:30 idle → \"closing soon.\" then \"if you want to explore more, tap to wake me up.\" · a tap = no lock 40 s later · no tap = locked at 10:00", async () => {
+    await walkFirstJourney(k, { send: false });
+    await sleep(1000);
+    await k.page.clock.fastForward("09:25");
+    for (let i = 0; i < 16; i += 1) { await k.page.clock.runFor(500); await sleep(60); }
+    const warned = (await look(k)).text;
+    assert.ok(warned.includes("closing soon.") && warned.includes("if you want to explore more, tap to wake me up."), `9:30 lines ${JSON.stringify(warned.filter((t) => /closing|wake/.test(t)))}`);
+    await checkpoint(k, "closing-soon");
+    await k.page.mouse.click(30, 300);
+    await k.page.clock.runFor(40_000); await sleep(300);
+    assert.notEqual((await look(k)).scene, "birth", "a tap gave 10 more minutes");
+    const getsBefore = await getsOf(k);
+    await k.page.clock.fastForward("09:30"); await sleep(200);
+    const lockLook = await k.page.evaluate(() => ({ scene: document.querySelector("[data-scene]")?.dataset.scene, lock: document.querySelector("[data-app-lock]")?.dataset.appLock || null }));
+    await checkpoint(k, "locked");
+    assert.deepEqual(lockLook, { scene: "birth", lock: "waiting" }, "no tap: locked at 10:00 (the logo lock)");
+    await k.page.clock.runFor(2_000); await sleep(800);
+    assert.equal((await getsOf(k)) - getsBefore, 1, "the lock then asks Face ID once by itself (A-1290)");
+
+  });
+}
+// [A-1298 ⑤⑥] after the first receipt: a tap on "tap me to find out" opens the Home paper (Journey 2 waits); closing it starts Journey 2.
+// Reopening before Journey 2: the lock asks Face ID by itself, then Journey 2's two lines — no tap me.
+async function laneFirstEnd() {
+  const runs = [["fe-tap", "tap"], ["fe-reopen", "reopen"]];
+  await Promise.all(runs.map(async ([id, mode]) => {
+    const w = createWorld(`firstend-${id}`);
+    const p = await openPerson(browser, w, id); people.push(p);
+    await check(`first end · ${mode === "tap" ? "tap \"tap me to find out\" → the Home paper opens, Journey 2 waits; close it → Journey 2" : "reopen before Journey 2 → lock + Face ID by itself → Journey 2's two lines, no tap me"}`, async () => {
+      await walkFirstJourney(p);
+      await walkReturnAndFile(p);
+      if (mode === "tap") {
+        assert.equal(p.findOutCue, true, "the cue showed");
+        await p.page.locator("#chogHomeHit").click();
+        await sleep(6500);
+        const open = await p.page.evaluate(() => ({ scene: document.querySelector("[data-scene]")?.dataset.scene, paper: !!document.querySelector(".homePaper") && getComputedStyle(document.querySelector(".homePaper")).visibility !== "hidden" }));
+        await checkpoint(p, "home-paper");
+        assert.deepEqual(open, { scene: "sendstay", paper: true }, "the Home paper is open and Journey 2 waits (no 5 s jump)");
+        await p.page.locator("#chogHomeHit").click();
+        await until(p, "Journey 2 after closing the paper", (s) => s.scene === "explore" || s.text.includes("let's try more kinds of jobs!"), 30_000);
+      } else {
+        await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
+        await until(p, "lock", (s) => s.scene === "birth", 20_000);
+        let plain = false;
+        await until(p, "Journey 2's first line", async (s) => { if (s.text.includes("tap me!") || s.text.includes("tap me to find out")) plain = true; return s.text.includes("let's try more kinds of jobs!") || s.scene === "explore"; }, 40_000);
+        assert.equal(plain, false, "no tap me on reopen");
+      }
     });
   }));
 }
@@ -715,6 +917,224 @@ async function laneNames() {
   await r.context.close();
 }
 
+// Jar + Piggy: after each Journey 2 round, the jar must show on Home with no tap; then + Piggy must make a new Piggy.
+async function jarShown(person) {
+  return person.page.evaluate(() => { const el = document.querySelector("#a905Jar"); if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden"; });
+}
+const JAR_LINE = "the jar's sparkling. wanna tap it?";
+const BELL_LINE = "when there's a new job for piggy, the bell will ring.";
+const speakMs = (t) => t.length * 60 + 1200; // same read time as the app's Chog lines
+async function watchJarGuide(person) {
+  const t0 = Date.now();
+  await until(person, "jar", () => jarShown(person), 20_000);
+  const jarAt = Date.now();
+  await until(person, "Chog: the jar's sparkling", (s) => s.text.includes(JAR_LINE), 15_000);
+  return { homeToJar: jarAt - t0, jarToLine: Date.now() - jarAt, lineAt: Date.now() };
+}
+async function laneJarTap() {
+  const w = createWorld("jartap");
+  const q = await openPerson(browser, w, "jt"); people.push(q);
+  await check("guide · tap path: first Journey → Journey 2 round 1 → Home", async () => {
+    await walkFirstJourney(q); await walkReturnAndFile(q); await enterSecond(q); await walkSecondJob(q, 1);
+  });
+  q.helpBeforeSpeech = await q.page.evaluate(() => { const h = document.querySelector("#chogHelp"); return !!h && h.getBoundingClientRect().width > 0; }); // [A-1293] no line on this Home yet
+  await check("guide · tap the sparkling jar → Money → back → 1 s → Chog adds the bell line under the jar line", async () => {
+    await watchJarGuide(q);
+    await checkpoint(q, "guide-jar-line");
+    await q.page.locator("#a905Jar").click();
+    await until(q, "Money screen", async () => q.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000);
+    await sleep(1500);
+    assert.ok(!(await look(q)).text.includes(BELL_LINE), "bell line came while Money was open");
+    await q.page.locator('.a911-back[data-a905-act="back"]').click();
+    const back = Date.now();
+    const s = await until(q, "Chog: bell line", (x) => x.text.includes(BELL_LINE), 10_000);
+    const ms = Date.now() - back;
+    assert.ok(ms >= 900 && ms <= 3000, `back → bell line ${ms} ms`);
+    assert.ok(s.text.includes(JAR_LINE), "jar line kept above the bell line");
+    // [A-1287] the bell line stays long enough to read (the guide does not end under it)
+    const seenFrom = Date.now(); let seenUntil = seenFrom;
+    while (Date.now() - seenFrom < speakMs(BELL_LINE) + 1500) { if ((await look(q)).text.includes(BELL_LINE)) seenUntil = Date.now(); else break; await sleep(150); }
+    assert.ok(seenUntil - seenFrom >= speakMs(BELL_LINE) - 300, `bell line seen ${seenUntil - seenFrom} ms (read time ${speakMs(BELL_LINE)} ms)`);
+    await checkpoint(q, "guide-bell-line");
+  });
+  // [A-1293] the ? help sticker: under the bell's spot on the right; a tap = Chog says this screen's line again, one line at a time; no line yet = no ?
+  await check("help · ? sticker under the bell spot (right) only once Chog has spoken here; a tap = the jar line again, then the bell line", async () => {
+    assert.equal(q.helpBeforeSpeech, false, "? shown on a Home where Chog had said nothing yet");
+    const pos = await q.page.evaluate(() => { const h = document.querySelector("#chogHelp"); if (!h) return null; const r = h.getBoundingClientRect(); const st = h.closest(".stage").getBoundingClientRect(); return { w: r.width, right: st.right - r.right, top: r.top - st.top, sw: st.width, sh: st.height, src: h.querySelector("img")?.getAttribute("src") }; });
+    assert.ok(pos && pos.w >= 28 && pos.w <= 32, `? size ${JSON.stringify(pos)}`);
+    assert.ok(pos.right < pos.sw * 0.2 && pos.top > pos.sh * 0.05 + 50 && pos.top < pos.sh * 0.3, `? place ${JSON.stringify(pos)}`);
+    assert.equal(pos.src, "/card/help-sticker.svg");
+    await checkpoint(q, "help-sticker");
+    await q.page.locator("#chogHelp").click();
+    await sleep(500);
+    const first = await look(q);
+    assert.ok(first.text.includes(JAR_LINE) && !first.text.includes(BELL_LINE), `after the tap: ${JSON.stringify(first.text.slice(-4))}`);
+    await until(q, "bell line again", (x) => x.text.includes(BELL_LINE), speakMs(JAR_LINE) + 2500);
+  });
+  await q.context.close();
+}
+// [A-1285] Fork Gift for a person who came 1st testnet → 2nd fork: jar → Money → Gift a Piggy → as far as it goes, measuring what Money reads.
+async function giftMeasure(g, label) {
+  const m = await g.page.evaluate(() => {
+    const ls = {}; for (const k of Object.keys(localStorage)) if (/^araso\.(piggyRegistry|myPiggiesIndex|secondJourneyClosed|piggyAddress|piggyName)/.test(k)) ls[k] = localStorage.getItem(k);
+    const btn = [...document.querySelectorAll(".a911-screen button")].filter((b) => b.getBoundingClientRect().width > 0).map((b) => `${b.id || b.dataset.a898Act || b.dataset.a905Act || b.className.split(" ")[0]}${b.disabled ? "(off)" : ""}`);
+    return { ls, btn };
+  });
+  const addr = await g.page.evaluate(() => { for (const k of Object.keys(localStorage)) { const a = /(0x[0-9a-fA-F]{40})/.exec(k); if (a && /^araso\./.test(k)) return a[1]; } return null; });
+  m.address = addr;
+  const s = await look(g);
+  const out = { label, text: s.text.slice(-14), buttons: m.btn, storage: m.ls, forkUsdcRaw: addr ? String(g.world.forkChain.tokenBalanceOf(FORK_USDC, addr)) : "no-address", forkMonWei: addr ? String(g.world.forkChain.balanceOf(addr)) : "no-address" };
+  console.log(`GIFTMEASURE ${JSON.stringify(out)}`);
+  const file = path.join(OUT, `gr-${label}.png`); await g.page.screenshot({ path: file }); screenshots.push(file);
+  return out;
+}
+// [A-1291] the work-pose canvas Piggy as a 24x24 grid of white-outline share over its opaque box (top 8 rows = ears / head top)
+async function workPoseShot(p) {
+  return p.page.evaluate(() => {
+    const c = [...document.querySelectorAll(".departStage")].find((x) => x.getBoundingClientRect().width > 0); if (!c) return null;
+    const x = c.getContext("2d"); const { width: w, height: h } = c; const d = x.getImageData(0, 0, w, h).data;
+    let x0 = w, y0 = h, x1 = 0, y1 = 0;
+    for (let y = 0; y < h; y += 2) for (let i = 0; i < w; i += 2) if (d[(y * w + i) * 4 + 3] > 128) { if (i < x0) x0 = i; if (i > x1) x1 = i; if (y < y0) y0 = y; if (y > y1) y1 = y; }
+    if (x1 <= x0) return null;
+    const N = 24, g = [];
+    for (let gy = 0; gy < N; gy += 1) for (let gx = 0; gx < N; gx += 1) {
+      let wt = 0, n = 0;
+      for (let y = Math.floor(y0 + (gy * (y1 - y0)) / N); y < y0 + ((gy + 1) * (y1 - y0)) / N; y += 1) for (let i = Math.floor(x0 + (gx * (x1 - x0)) / N); i < x0 + ((gx + 1) * (x1 - x0)) / N; i += 1) { const k = (y * w + i) * 4; n += 1; if (d[k + 3] > 128 && d[k] > 200) wt += 1; }
+      g.push(n ? wt / n : 0);
+    }
+    return { box: [x0, y0, x1, y1], g };
+  });
+}
+function shotDiff(a, b) {
+  if (!a || !b) return { top: 0, all: 0 };
+  const N = 24; let top = 0, all = 0;
+  a.g.forEach((v, i) => { const ch = Math.abs(v - b.g[i]) > 0.15 ? 1 : 0; all += ch; if (Math.floor(i / N) < 8) top += ch; });
+  return { top: top / (8 * N), all: all / (N * N) };
+}
+async function giftSparkleState(g) {
+  return g.page.evaluate(() => {
+    const row = document.querySelector("#a905GiftPiggy"); if (!row) return null;
+    const txt = row.querySelector(".a1288Txt") || row; const after = getComputedStyle(txt, "::after");
+    const star = row.querySelector(".a1288Star"); const starStyle = star ? getComputedStyle(star, "::before") : null;
+    return { sparkle: row.getAttribute("data-gift-sparkle"), color: getComputedStyle(txt).color, stars: row.querySelectorAll(".a1288Star").length, sweep: after.animationName, sweepDur: after.animationDuration, starColor: starStyle ? starStyle.color : null };
+  });
+}
+async function laneGiftRun() {
+  const w = createWorld("giftrun", { forkEntryUsdcRaw: 100_000_000n });
+  const g = await openPerson(browser, w, "gr"); people.push(g); g.world = w;
+  await check("gift · walk: first Journey (testnet) → Journey 2 round 1 (fork) → Home", async () => { await walkFirstJourney(g); await walkReturnAndFile(g); await enterSecond(g); await walkSecondJob(g, 1); });
+  await check("gift · jar → Money: Gift a Piggy is on, and the Piggy row says its name (not a legacy id)", async () => {
+    await until(g, "jar", () => jarShown(g), 20_000); await sleep(2500);
+    await g.page.locator("#a905Jar").click();
+    await until(g, "Money", async () => g.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000); await sleep(800);
+    const m = await giftMeasure(g, "gift-1-money");
+    g.giftSparkle = await giftSparkleState(g);
+    if (process.env.ARASO_GIFT_FRAMES) for (let f = 0; f < 30; f += 1) { await g.page.screenshot({ path: path.join(process.env.ARASO_GIFT_FRAMES, `f${String(f).padStart(2, "0")}.png`) }); await sleep(100); } // 3 s at 390 for the HANDOFF
+    assert.ok(!m.text.some((t) => /^legacy-0x/.test(t)), `legacy id shown as the name: ${JSON.stringify(m.text)}`);
+    assert.ok(!(await g.page.locator("#a905GiftPiggy").isDisabled()), `Gift a Piggy is off · buttons=${m.buttons.join("|")}`);
+  });
+  // [A-1288] design D: the words keep their black, a gold light sweeps over them (2.4 s loop) and 3 stars blink, until the first Gift tap
+  await check("gift · Money's Gift a Piggy sparkles (design D): black words · gold sweep 2.4 s · 3 stars", () => {
+    const st = g.giftSparkle;
+    assert.ok(st, "no Gift a Piggy row");
+    assert.equal(st.sparkle, "1", `data-gift-sparkle ${st.sparkle}`);
+    assert.equal(st.color, "rgb(20, 18, 16)", `word colour ${st.color}`);
+    assert.equal(st.stars, 3, `stars ${st.stars}`);
+    assert.ok(/a1288Sweep/.test(st.sweep) && /2\.4s/.test(st.sweepDur), `sweep ${st.sweep} ${st.sweepDur}`);
+    assert.ok(st.starColor === "rgb(224, 177, 0)", `star colour ${st.starColor}`);
+  });
+  await check("gift · Gift a Piggy → pick a card → $20: the letter is from this Piggy (its name), amounts offered", async () => {
+    await click(g, "#a905GiftPiggy", "Gift a Piggy"); await sleep(1500);
+    await giftMeasure(g, "gift-2-fan");
+    await g.page.locator(".a911-card.is-centre .a911-cardTap").click().catch(() => {}); await sleep(1800);
+    await giftMeasure(g, "gift-3-picked");
+    const chip = g.page.locator('[data-a898-act="gift-amount"]').first(); if (await chip.count()) { await chip.click().catch(() => {}); await sleep(1200); }
+    const to = g.page.locator(".a911-letter__in--to"); if (await to.count()) await to.fill("Mina").catch(() => {});
+    await sleep(1500);
+    g.sparkleDone = await g.page.evaluate(() => localStorage.getItem("araso.giftSparkle"));
+    const m = await giftMeasure(g, "gift-4-amount");
+    assert.ok(m.text.includes("Pgr") || m.text.some((t) => t === g.name), `sender name not on the letter: ${JSON.stringify(m.text)}`);
+    assert.ok(m.text.includes("$20") && m.text.includes("$100"), `amounts: ${JSON.stringify(m.text)}`);
+  });
+  // KNOWN in this build: the fork Gift build config (VITE_ARASO_FORK_GIFT_*: sponsor · gas units · MON price) is not set for the rehearsal build,
+  // so the fee line is unknown and Send waits (fee_unknown) — the same for every fork person, not the Money row. The tx part runs in the A-1285
+  // real-fork harness (handoff harness/a1285-app-run.mjs: anvil fork + the real sponsor/entry handlers, no registry seed).
+  await knownCheck("gift · Send → Face ID → the Gift link (fork tx) — needs the fork Gift build config", async () => {
+    const send = g.page.locator('[data-a898-act="gift-faceid"]');
+    assert.ok(!(await send.isDisabled()), "Send waits: fee unknown (fork Gift build config not set in this build)");
+  });
+  await check("gift · after the first Gift tap the sparkle is gone (stored once): back to Money → plain row", async () => {
+    assert.equal(g.sparkleDone, "done", `stored ${g.sparkleDone}`);
+    for (let i = 0; i < 4 && !(await g.page.locator("#a905GiftPiggy").count()); i += 1) { await g.page.locator('.a911-back').first().click().catch(() => {}); await sleep(900); }
+    const st = await giftSparkleState(g);
+    assert.ok(st, "could not get back to Money");
+    assert.ok(st.sparkle !== "1" && st.stars === 0, `still sparkling ${JSON.stringify(st)}`);
+  });
+  await g.context.close();
+}
+async function laneJarPiggy() {
+  const w = createWorld("jarpiggy");
+  const p = await openPerson(browser, w, "jp"); people.push(p);
+  await check("jar · first Journey → filed → Journey 2 round 1 → Receipt filed → Home with no tap", async () => {
+    await walkFirstJourney(p); await walkReturnAndFile(p); await enterSecond(p); await walkSecondJob(p, 1, { tapHome: false });
+  });
+  let guide = null;
+  await check("jar · round 1 done: jar shows on Home within 20 s with no tap", async () => {
+    guide = watchJarGuide(p).catch((e) => ({ error: e }));
+    await until(p, "jar after round 1", () => jarShown(p), 20_000);
+    await checkpoint(p, "jar-r1");
+  });
+  await check("guide · first Home after Journey 2: the jar drops, sparkles, settles 1.5 s → Chog: the jar's sparkling. wanna tap it?", async () => {
+    const g = await guide;
+    if (g?.error) throw g.error;
+    assert.ok(g.jarToLine >= 1500, `jar → line ${g.jarToLine} ms`);
+    assert.equal(await p.page.evaluate(() => document.querySelector("#a905Jar")?.getAttribute("data-a904")), "twinkle", "jar sparkles while Chog says it");
+    await checkpoint(p, "guide-jar-line");
+  });
+  await check("guide · no tap: after the jar line's read time + 5 s, Chog adds the bell line (jar line kept) and no bell rang before it", async () => {
+    const g = await guide;
+    if (g?.error) throw g.error;
+    let bellEarly = false;
+    const s = await until(p, "Chog: bell line", async (x) => { if (!x.text.includes(BELL_LINE) && (await p.page.evaluate(() => !!document.querySelector("#secondHomeBell")))) bellEarly = true; return x.text.includes(BELL_LINE); }, 20_000);
+    const ms = Date.now() - g.lineAt;
+    assert.ok(ms >= speakMs(JAR_LINE) + 5000 - 400, `jar line → bell line ${ms} ms (want ≥ ${speakMs(JAR_LINE) + 5000})`);
+    assert.ok(s.text.includes(JAR_LINE), "jar line kept");
+    assert.ok(!bellEarly, "bell rang before the guide ended");
+    await checkpoint(p, "guide-bell-line");
+  });
+  await check("jar · reopen → unlock → bell → Journey 2 round 2 → Receipt filed → Home with no tap", async () => {
+    await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
+    await unlockIfLocked(p);
+    await until(p, "bell", async () => p.page.evaluate(() => !!document.querySelector("#secondHomeBell")), 60_000);
+    await walkSecondJob(p, 2, { tapHome: false });
+  });
+  await check("jar · round 2 done: jar shows on Home within 20 s with no tap, and the guide does not come again", async () => {
+    await until(p, "jar after round 2", () => jarShown(p), 20_000);
+    await sleep(6000);
+    const t = (await checkpoint(p, "jar-r2")).text;
+    assert.ok(!t.includes(JAR_LINE) && !t.includes(BELL_LINE), `guide again: ${JSON.stringify(t.slice(-6))}`);
+  });
+  // + Piggy is not open yet: the tab stays where it is, grey with "soon", and a tap starts nothing (no Face ID, no index read, no Name it).
+  await check("piggy · Chog opens the Home paper → + Piggy is grey with \"soon\" → a tap does nothing", async () => {
+    await click(p, "#chogHomeHit", "Chog");
+    await sleep(2500); // the paper has finished opening (a person reads it before tapping)
+    const tab = await p.page.evaluate(() => { const t = document.querySelector(".homePlusPiggyTab"); if (!t) return null; const cs = getComputedStyle(t); const lab = t.querySelector(".homePlusPiggyTab__label"); return { text: t.textContent.replace(/\s+/g, " ").trim(), disabled: t.getAttribute("aria-disabled"), filter: cs.filter, opacity: cs.opacity, label: lab ? getComputedStyle(lab).color : null }; });
+    assert.ok(tab, "no + Piggy tab");
+    assert.ok(/\bsoon\b/.test(tab.text), `tab text: ${tab.text}`);
+    assert.equal(tab.disabled, "true", `aria-disabled ${tab.disabled}`);
+    // [A-1286] only the words go grey, in the Home paper's own secondary colour (.homePaper__state); the tab paper is not dimmed
+    assert.equal(tab.label, "rgba(20, 18, 16, 0.55)", `label colour ${tab.label}`);
+    assert.ok(!/grayscale/.test(tab.filter), `tab paper greyed: filter ${tab.filter}`);
+    const before = eventsOf(w, "jp").filter((e) => e.startsWith("passkey_get")).length;
+    await p.page.locator(".homePlusPiggyTab").click({ force: true });
+    await sleep(3000);
+    await checkpoint(p, "plus-piggy-soon");
+    assert.equal((await look(p)).scene, "sendstay", "a tap moved the scene");
+    assert.equal(eventsOf(w, "jp").filter((e) => e.startsWith("passkey_get")).length, before, "a tap asked for Face ID");
+  });
+  await p.context.close();
+}
+
 async function laneFaults() {
   const f = await openPerson(browser, fault1, "f1"); people.push(f);
   await check("fault · first deposit -32000 once → retried → Return", async () => {
@@ -732,8 +1152,12 @@ async function laneFaults() {
   await check("fault · four refusals: walk to Send", () => walkFirstJourney(g));
   fault4.chain.faults.sendErrors.push(1, 1, 1, 1);
   await check("fault · four refusals + nonce unchanged → never-sent deposit released: \"nothing moved.\", Send pressable again", async () => {
+    let framesOn = !!process.env.ARASO_SULKY_FRAMES; const frames = []; // 390 frames around the beat for the HANDOFF (env only)
+    const frameLoop = (async () => { let i = 0; while (framesOn) { await g.page.screenshot({ path: path.join(process.env.ARASO_SULKY_FRAMES, `s${String(i).padStart(3, "0")}.png`), clip: { x: 200, y: 600, width: 190, height: 220 } }).catch(() => {}); frames.push(Date.now()); i += 1; await sleep(40); } })();
     await until(g, "nothing moved.", (s) => s.text.some((t) => t.startsWith("nothing moved.")), 40_000);
     await until(g, "try again", (s) => s.text.includes("try again"), 5_000);
+    await sleep(400); // past the 0.12 s swap
+    const beatShot = await workPoseShot(g);
     await checkpoint(g, "send-failed-sulky-now");
     if (process.env.ARASO_REHEARSAL_OUT) await g.page.screenshot({ path: path.join(OUT, `${g.id}-sulky-closeup.png`), clip: { x: 230, y: 640, width: 160, height: 170 } }).catch(() => {});
     // only the face changes (and a small dip): no second whole-body picture laid over the seated Piggy
@@ -744,6 +1168,12 @@ async function laneFaults() {
     await checkpoint(g, "send-failed-sulky");
     assert.equal(await g.page.evaluate(() => Object.keys(localStorage).filter((k) => /sendPending/i.test(k) && localStorage.getItem(k)).length), 0, "send pending record cleared");
     await until(g, "Send pressable", () => live(g, "#sendButton"), 20_000);
+    await sleep(600);
+    const afterShot = await workPoseShot(g);
+    framesOn = false; await frameLoop; if (process.env.ARASO_SULKY_FRAMES) writeFileSync(path.join(process.env.ARASO_SULKY_FRAMES, "times.json"), JSON.stringify(frames));
+    // [A-1291] design C: during the beat the ears and body are the #2 parts too (not only the face) — the head-top band changes, then comes back
+    const d = shotDiff(beatShot, afterShot);
+    assert.ok(beatShot && afterShot && d.all >= 0.08 && d.top >= 0.01, `ears/body unchanged during sulky: whole Piggy changed ${(d.all * 100).toFixed(1)}% · head-top band ${(d.top * 100).toFixed(1)}% (face-only = 1.0% · 0.0%)`);
     await checkpoint(g, "home-after-refusals");
     assert.doesNotMatch(fault4.chain.log.join(";"), /sendRaw deposit/, "no deposit landed; nonce stays 0");
     assert.ok(eventsOf(fault4, "f4").includes("send_why/broadcast"), `events: ${eventsOf(fault4, "f4").join(",")}`);
@@ -778,7 +1208,7 @@ async function laneFaults() {
 }
 
 // ── Failure atlas (ARASO_REHEARSAL_ONLY=atlas): each lane forces one failure screen on the current app and screenshots it ──
-const ATLAS_DIR = privatePath("ops", "receipts", "failure_atlas_20261015");
+const ATLAS_DIR = process.env.ARASO_ATLAS_DIR || privatePath("ops", "receipts", "failure_atlas_20261015"); // [A-1285] a side run (base / revert) writes elsewhere
 const atlasRows = [];
 async function atlasShot(person, name) {
   const seen = await look(person);
@@ -827,6 +1257,7 @@ async function retryOpen(p) {
   if (!btn) return `안 됨 (누를 버튼 없음: ${ids.join("/") || "—"})`;
   await p.page.locator(`#${btn}`).click();
   await sleep(2500);
+  if ((await look(p)).scene === "received") await entryToFace(p);
   if ((await look(p)).scene === "received" && (await live(p, "#inviteFaceButton"))) { await p.page.locator("#inviteFaceButton").click(); }
   try { await until(p, "after retry", (s) => ["hatch", "name", "sendstay"].includes(s.scene), 12_000); return `바로 풀림 (#${btn})`; } catch { return `안 됨 (#${btn} 뒤 같은 실패 · 원인 지속)`; }
 }
@@ -836,21 +1267,21 @@ async function laneAtlas() {
   const toSend = (p) => walkFirstJourney(p);
   const lanes = [
     ["open-unsupported", { world: W("at1"), setup: { initScript: () => { try { delete window.PublicKeyCredential; Object.defineProperty(navigator, "credentials", { value: undefined, configurable: true }); } catch {} } },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "This device can't use Face ID or a passkey here."], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "This device can't use Face ID or a passkey here."], retry: retryOpen }],
     ["open-not-this-site", { world: W("at2"), setup: { base: "http://127.0.0.1:5944" },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Piggy opens in the real app."], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Piggy opens in the real app."], retry: retryOpen }],
     ["find-not-this-site", { world: W("at2b"), setup: { base: "http://127.0.0.1:5944", initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); } catch {} } },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["find-unsupported", { world: W("at1b"), setup: { initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); delete window.PublicKeyCredential; Object.defineProperty(navigator, "credentials", { value: undefined, configurable: true }); } catch {} } },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["open-cancelled", { world: W("at3"), setup: { userVerified: false },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Face ID was cancelled."],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "Face ID was cancelled."],
       // A virtual authenticator keeps refusing after setUserVerified(true); a fresh one stands for "approve this time".
       retry: async (p) => { await p.passkey.cdp.send("WebAuthn.removeVirtualAuthenticator", { authenticatorId: p.passkey.authenticatorId }); p.passkey = await addPasskey(p.page); return `${await retryOpen(p)} — 이번엔 Face ID 승인(새 인증기)`; } }],
     ["find-failed", { world: W("at4"), setup: { initScript: () => { try { sessionStorage.setItem("araso.publicCreateAttempt.v1", "attempted"); } catch {} }, userVerified: false },
-      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
+      trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["unlock-failed", { world: W("at5"),
-      trigger: async (p) => { await toSend(p); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); await until(p, "lock", (s) => s.scene === "birth", 20_000); await p.passkey.cdp.send("WebAuthn.clearCredentials", { authenticatorId: p.passkey.authenticatorId }); await click(p, "#loginChogButton", "lock Chog"); },
+      trigger: async (p) => { await toSend(p); await p.passkey.cdp.send("WebAuthn.clearCredentials", { authenticatorId: p.passkey.authenticatorId }); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); await until(p, "lock", (s) => s.scene === "birth", 20_000); await tapLockIfStill(p); },
       expect: ["Couldn't open Piggy"], retry: retryOpen }],
     ["grant-down", { world: W("at6", { grantMode: "down" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["grant-not-visible", { world: W("at7", { grantMode: "nofund" }), trigger: async (p) => { await toSend(p); }, expect: ["Piggy can't go out yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
@@ -861,10 +1292,10 @@ async function laneAtlas() {
     ["deposit-reverted", { world: W("at11"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("deposit"); }, expect: ["Piggy could not get ready.", "can't tell yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["redeem-refused", { world: W("at12"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("redeem"); }, expect: ["Piggy could not get ready.", "still out."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["redeem-reverted", { world: W("at13"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("redeem"); }, expect: ["couldn't finish this one."], retry: (p) => sendAgain(p, "바로 풀림") }],
-    ["receipt-missing-reopen", { world: W("at14"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await click(p, "#loginChogButton", "lock Chog"); },
+    ["receipt-missing-reopen", { world: W("at14"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await tapLockIfStill(p); },
       expect: ["still out"], retry: (p) => retryHomeLive(p, "확인 올 때까지 Away") }],
     ["job-reverted", { world: W("at16"), trigger: async (p) => { await toSend(p); await walkReturnAndFile(p); await enterSecond(p); p.world.forkChain.faults.revert.add("approve");
-        await p.page.locator('input[data-errand-id="clean"]').check(); await click(p, "#exploreSaveButton", "explore save"); await click(p, ".secondJourney__pick", "job pick"); await click(p, "#secondOkButton", "job ok");
+        await p.page.locator('input[data-errand-id="clean"]').check(); await click(p, "#exploreSaveButton", "explore save"); await pickJobIfListed(p);
         await until(p, "Job Send", () => live(p, "#secondSendButton"), 20_000); await p.page.locator("#secondSendButton").click(); await until(p, "Away", (s) => s.scene === "secondAway", 15_000); await until(p, "back home", (s) => s.scene === "sendstay", 90_000); },
       expect: ["still in home"], retry: (p) => retryHomeLive(p, "2차 Job 실패 = 조용히 홈 · 문구 0") }],
     ["two-tabs-send", { world: W("at17"), trigger: async (p) => { await walkFirstJourney(p, { send: false });
@@ -873,7 +1304,7 @@ async function laneAtlas() {
         await p.page.locator("#sendButton").click(); },
       expect: ["Confirmation is still catching up."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["away-second-open", { world: W("at18"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000);
-        await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await click(p, "#loginChogButton", "lock Chog");
+        await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await tapLockIfStill(p);
         await until(p, "still out working.", (s) => s.text.some((t) => t.includes("still out working.")), 30_000);
         // leave the app and come back (the phone's app switcher) — the same Away opened a second time
         await p.page.evaluate(() => { const set = (v) => { Object.defineProperty(document, "visibilityState", { value: v, configurable: true }); document.dispatchEvent(new Event("visibilitychange")); }; set("hidden"); set("visible"); }); },
@@ -885,6 +1316,12 @@ async function laneAtlas() {
       expect: ["Couldn't open Piggy", "Face ID was cancelled."], retry: async (p) => { await p.passkey.cdp.send("WebAuthn.setUserVerified", { authenticatorId: p.passkey.authenticatorId, isUserVerified: true }); return `${await retryOpen(p)} — 이번엔 Face ID 승인`; } }],
     ["j2-entry-refused", { world: W("at20"), trigger: async (p) => { p.world.fork.refuseChallenge = 99; await toSend(p); await walkReturnAndFile(p); await sleep(20_000); },
       expect: ["still in home"], retry: async (p) => { const s = await look(p); return s.text.includes("tap me!") ? "tap me 있음" : `안 됨 (조용한 홈 · tap me 0 · fork 입장 요청 ${p.world.requests.filter((r) => r.person === p.id && r.action === "challenge").length}회 거절)`; } }],
+    // [A-1285] fork Gift for a 1st testnet → 2nd fork person: the Money screen after the jar. Before the fix Gift a Piggy was off and the Piggy row said legacy-0x…
+    ["fork-gift-off", { world: W("at21", { forkEntryUsdcRaw: 100_000_000n }), trigger: async (p) => { await toSend(p); await walkReturnAndFile(p); await enterSecond(p); await walkSecondJob(p, 1);
+        await until(p, "jar", () => jarShown(p), 20_000); await sleep(2500); await p.page.locator("#a905Jar").click();
+        await until(p, "Money", async () => p.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000); await sleep(1500); },
+      expect: ["Money", "> Gift a Piggy"], retry: async (p) => { const off = await p.page.locator("#a905GiftPiggy").isDisabled().catch(() => true); const legacy = (await look(p)).text.find((t) => /^legacy-0x/.test(t));
+        return off || legacy ? `안 됨 (Gift a Piggy ${off ? "꺼짐" : "켜짐"} · 이름 자리 ${legacy ? "legacy id" : "Piggy 이름"})` : "고쳐짐 — Gift a Piggy 켜짐 · 이름 = Piggy 이름 (fork 레지스트리 정체성 행)"; } }],
     ["balance-read-failed", { world: W("at15"), trigger: async (p) => { await walkFirstJourney(p, { send: false }); p.world.chain.faults.balanceError = true; await p.page.evaluate(() => document.querySelector("#stayButton")?.click()); await sleep(2000); await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); }, expect: ["couldn't read the balance."], retry: async (p) => { await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); await sleep(800); await p.page.evaluate(() => document.querySelector("#homePaperMoneyToggle")?.click()); await sleep(2500); return (await look(p)).text.some((t) => t.includes("couldn't read the balance.")) ? "안 됨 (읽기 실패 동안)" : "바로 풀림"; } }],
   ];
   // Revert proof: the same lanes without their fault must reach the Receipt (no failure screen).
@@ -916,8 +1353,8 @@ async function laneAtlas() {
 function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id); if (e.length) return e; } return []; }
 
 try {
-  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy()].filter(Boolean));
+  const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy,giftrun").split(",");
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti(), only.includes("keyclock") && laneKeyClock(), only.includes("firstend") && laneFirstEnd()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });

@@ -76,7 +76,8 @@ check("hold envelope: 1000 ≤ holdMs ≤ 1500", TAP_CUE_TIMING.holdMs >= 1000 &
 check("tapCueFrame: opacity 1 across the whole hold (1870 / 2620 / 3369), wave 0 during hold",
   [tapCueFrame(1870).labelOpacity, tapCueFrame(2620).labelOpacity, tapCueFrame(3369).labelOpacity, tapCueFrame(2620).waveDeg, tapCueFrame(3369).entering], [1, 1, 1, 0, false]);
 check("tapCueFrame(reduced) = static: wave 0, opacity 1", tapCueFrame(500, true), { waveDeg: 0, labelOpacity: 1, entering: false });
-check("copy unchanged: label text 'tap me!'", /label\.textContent = "tap me!";/.test(CHOG), true);
+// [A-1298 ⑤] the cue takes a label (the first end says "tap me to find out"); the default stays "tap me!"
+check("copy unchanged: label text 'tap me!' (the default label)", /function startTapCue\(text = "tap me!"\)/.test(CHOG) && /label\.textContent = text;/.test(CHOG), true);
 check("hold getter still = readyMs − cue clock (0 for reduced/hidden/none)",
   /get tapCueHoldRemainingMs\(\) \{\s*if \(!tapCue \|\| tapCue\.hidden \|\| reduced\) return 0;\s*return Math\.max\(0, TAP_CUE_TIMING\.readyMs - tapCue\.t\);/.test(CHOG), true);
 check("main.js revealSendCard waits on tapCueHoldRemainingMs, then closeCard() BEFORE the card renders",

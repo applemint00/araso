@@ -15,6 +15,7 @@ import { createPublicClient, createWalletClient, encodeFunctionData, formatEther
 import { chogHomeMarkup, mountChogHome, CHOG_HOME_GEOMETRY, pairConvergenceEase } from "./chog-home.js";
 import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-invite.js";
 import { WORK_CUE, createDepartPlayback, createDepartRenderer, loadDepartAssets } from "./piggy-depart.js";
+import { ENTRY_LOGO_SVG, mountEntryLogo } from "./entry-logo.js";
 import {
   assignHomeAmbient,
   buildPiggyMotionStateMap,
@@ -130,7 +131,7 @@ import { PROMOTION_TARGET_SCOPE, scopedSecondKey, selectBootProfile } from "./bo
 import { storedJourney } from "./boot-profile.js"; import { RELEASE_LEVEL, journeyFeatureOpen } from "./release-gate.js"; import { registerJourneySessionDisposer } from "./journey-switch.js"; // [A-948]
 import { mountForkVirtualMoneyBadge } from "./fork-virtual-money-badge.js";
 import { legacyTestnetPathOpen, profileScope, resolveChainProfile } from "./chain-profile.js";
-import { reconcileConfirmedFunding } from "./funding-reconcile.js";
+import { measuredHoldingRow, readErc20Balance, reconcileConfirmedFunding } from "./funding-reconcile.js";
 import {
   decodeReceiptRow,
   encodeReceiptRow,
@@ -811,13 +812,26 @@ function endActiveSession() {
   endSignerSession();
   clearTimeout(idleTimer);
   idleTimer = null;
+  if (typeof closingSoonTimer !== "undefined") { clearTimeout(closingSoonTimer); closingSoonTimer = null; } // [A-1298]
 }
 
 // [A-556] app-idle(10분)만 다시 잰다 — 서명자 5분 절대 만료(armSignerExpiry)는 여기서 늘리지
 // 않는다(카드 PHASE 1: "normal action activity may refresh app idle, but MUST NOT extend
 // signer absolute expiry"). 만료되면 여전히 서명자까지 정리하고(endActiveSession) 기존
 // resting 문구로 돌아간다 — 옛 touchSession() 콜백과 동일, 새 문구 0.
+// [A-1298 · Owner 04:2x] 30 s before the lock Chog says it is closing (one line at a time); any press = 10 more minutes (no Face ID).
+const APP_CLOSING_SOON_LINES = Object.freeze(["closing soon.", "if you want to explore more, tap to wake me up."]);
+let closingSoonTimer = null;
+function sayClosingSoon() {
+  if (typeof insertChogCueLine !== "function" || state.appLock || state.scene === "received" || state.scene === "birth") return;
+  if (typeof chogLinesRestart === "function") chogLinesRestart("closingSoonLine");
+  insertChogCueLine("closingSoonLine", [...APP_CLOSING_SOON_LINES]); // no Chog on this screen (Away) = nothing said; the lock still comes
+}
 function touchAppSession() {
+  // [A-1298] the 9:30 line rides on the same clock (self-contained: slices of this function run without the module around it)
+  if (typeof closingSoonTimer !== "undefined") clearTimeout(closingSoonTimer);
+  if (typeof document !== "undefined") document.querySelector?.("#closingSoonLine")?.remove();
+  closingSoonTimer = typeof sayClosingSoon === "function" ? setTimeout(sayClosingSoon, 10 * 60 * 1000 - 30 * 1000) : null;
   clearTimeout(idleTimer);
   idleTimer = setTimeout(() => {
     endActiveSession();
@@ -861,11 +875,12 @@ function lockAppAfterIdle() {
 // 그 사이 어떤 송금/활동도 이 타이머를 늘리지 않는다(카드 §2: "5 minutes is an absolute
 // signer-session cap from successful auth; sending another transaction does NOT extend that
 // cap"). 만료 콜백은 서명자만 끝낸다 — scene 전환·영수증·pending·history 는 그대로다.
+// [A-1298 · Owner 04:0x "10분하자 심플하게"] one clock: the key (the wallet signer) lives exactly as long as the app session — 10 minutes
+// with no press, refreshed by any press (touchAppSession). The old 5-minute absolute cap is gone; money Sends never use this key (each
+// asks Face ID itself), so the key only signs things that move no money (Journey 2 entry check, invite binding, funding proof).
 function armSignerExpiry() {
   clearTimeout(signerExpiryTimer);
-  signerExpiryTimer = setTimeout(() => {
-    endSignerSession();
-  }, 5 * 60 * 1000);
+  signerExpiryTimer = null;
 }
 
 // [A-512] `persistAddress:false` = 서명자만 세우고 한 마리 경로의 저장 scope(state.address)는 건드리지 않는다.
@@ -922,7 +937,8 @@ function handleTrustedAppActivity(event) {
   if (!event || event.isTrusted !== true) return; // 합성/스크립트 dispatch 는 무시
   if (idleTimer === null) return; // app-idle 이 지금 돌고 있지 않다(인증 전이거나 이미 잠김) — 아무것도 하지 않는다
   const now = Date.now();
-  if (now - lastTrustedAppActivityAt < TRUSTED_APP_ACTIVITY_THROTTLE_MS) return;
+  const waking = typeof document !== "undefined" && !!document.querySelector("#closingSoonLine"); // [A-1298] the wake tap is never throttled
+  if (!waking && now - lastTrustedAppActivityAt < TRUSTED_APP_ACTIVITY_THROTTLE_MS) return;
   lastTrustedAppActivityAt = now;
   touchAppSession(); // app-idle(10분)만 다시 잰다 — armSignerExpiry/activateSigningSession/인증 호출 없음
 }
@@ -1078,6 +1094,7 @@ function sendFailureCopy(scene, message, detail) {
 let awayShownAt = 0;
 function setScene(scene, message = "", detail = "") {
   ({ message, detail } = sendFailureCopy(scene, message, detail));
+  if (scene !== state.scene && typeof chogHelpForget === "function") chogHelpForget(); // [A-1293] the ? replays only what Chog said on this screen
   // Away is the only proof Piggy left: keep it on screen long enough to be seen before Return replaces it.
   if (scene === "return" && state.scene === "away" && Date.now() - awayShownAt < PACE_OUTSIDE_MIN_MS) {
     const token = awayShownAt;
@@ -3502,15 +3519,11 @@ async function sendPiggyOnce(markSettling) {
   }
   const reservation = reserved.reservation;
 
-  // [A-896 99e M-L-2 · Owner 60 s] 살아 있는 서명자라도 5분 절대 수명이 60초 미만 남았으면(벽시계 기준 — 타이머는 믿지 않는다,
-  // 스로틀·절전으로 늘어날 수 있다) "세션 없음"으로 본다 → 아래 기존 복구 경로(recoverPiggy, Face ID 한 번). 도장이 없거나 시계가
-  // 뒤로 간 경우도 닫는 쪽으로. 5분 상한·연장 없음(A-556)은 그대로.
-  const signerAge = Date.now() - signerSince;
-  // [A-896 R1] 단조 시각도 같은 한도(둘 다 통과해야). performance.now 가 없으면(찍힌 값 -1 포함) 벽시계만.
-  const signerMonoAge = typeof signerMono === "number" && signerMono >= 0 && typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() - signerMono : 0;
-  const signerMarginOk = signerSince > 0 && signerAge >= 0 && signerAge <= 5 * 60 * 1000 - 60 * 1000 && signerMonoAge >= 0 && signerMonoAge <= 5 * 60 * 1000 - 60 * 1000;
+  // [A-1298] pre-A-1298: a live signer with more than 60 s of its 5-minute life left skipped Face ID here (A-896 M-L-2); now every Send asks.
+  // [A-1298 · Owner 04:0x "샌드는 트잭이라 해야해"] a money Send asks Face ID every time, at the tap (no await before the get); the 10-minute
+  // key never signs money. The new signer from this Face ID becomes the app's key (non-money only) from here.
   // 생성 폴백 없음 — 저장된 credential 이 없으면 기존 패스키로 복구를 시도한다.
-  if (!activeAccount || !activeSession || !signerMarginOk) {
+  {
     // [A-698 M3] Send 복구는 Check/Open 과 같은 시도 칸(authAttempt)·플랫폼 요청 표(platformAuthInflight)를 나눠 쓴다 —
     // 이미 살아 있는 시도나 아직 안 끝난 플랫폼 요청이 있으면 두 번째 WebAuthn get 을 겹쳐 내지 않고 기존 실패 문구로
     // fail-closed(자동 재시도 0 · 새 문구 0). get 을 못 쓰는 기기도 시도 토큰 전에 같은 실패로(A-687).
@@ -4381,6 +4394,7 @@ async function recheckSecondCandidatesOnHome() {
 function mountSecondHomeBell() {
   const sj = state.secondJourney;
   if (!a1182HomeVisible() || a1182ConsumedOpen === a1182OpenId || !a1172BellVisit) return;
+  if (state.a904Guide) return; // Chog's jar guide speaks before the first bell; it re-arms the bell when it ends
   if (!sj.bellCandidateId && !(import.meta.env.VITE_ARASO_TEST_REPEAT_BELL === "1" && a1172BellEligible())) return;
   const stage = document.querySelector('.stage[data-scene="sendstay"]');
   if (!stage || stage.querySelector("#secondHomeBell")) return;
@@ -4649,7 +4663,8 @@ function handleExploreSave(ids) {
   // this keeps only the set the picks were made from. sj.chogSay mirrors the derived line for existing readers.
   sj.exploreOfferedIds = displayedIds;
   sj.chogSay = exploreChogConfirmLine(sj);
-  chogLinesRestart("exploreWhy"); // [A-1283] a new save says its lines again from the first
+  sj.whySavedAt = Date.now(); // [A-1297] the check line starts now
+  sj.whyResultAt = 0;
   sj.exploreWhyWent = false;
   // [A-849 UI-24] no fake "checking…": rows show immediately. The pinned render() reveal block (CANDIDATES_REVEAL_MS) is
   // only entered while candidatesRevealed is false, so it stays true here and that block never runs.
@@ -5419,6 +5434,14 @@ function mountSecondReturn() {
   // [A-421] 파일링 완료 시 알람 제거 — First 와 같은 공용 구현.
   a902WatchReturn(returnView, valid); // [A-902] bell + toss sounds
   endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid);
+  // Filed already looks like Home: settle by itself after the First's hold (no repeated teaching line), so the jar and + Piggy come without a tap.
+  runSceneFrames(() => {
+    if (!valid()) return false;
+    if (!returnView?.filed) return true;
+    a891ChogSay(document.querySelector("#returnChogHop #chogHome"), "secondDoneLine", [A1297_SECOND_DONE_LINE]); // [A-1297 · Owner 03:3x]
+    sceneTimeout(() => { if (valid() && state.scene === "secondReturn") finishSecondJourney({ persist: true }); }, A891_FILED_LINE_HOLD_MS);
+    return false;
+  });
 }
 
 // [A-466] 첫 결과를 **끝까지** 정리한 뒤에만 선다. 실패·중단·새로고침으로는 서지 않는다.
@@ -5937,6 +5960,7 @@ function wantedInviteKind() {
 function fitInvite() {
   const board = document.querySelector(".invite");
   if (!board) return;
+  if (board.classList?.contains("entryChog")) return; // [A-1289] its own responsive layout (no artboard scale)
   if (wantedInviteKind() !== inviteKind) {
     // [A-819 UI-03] crossing INVITE_WIDE_MIN swaps the artboard (a legitimate family-boundary composition change), but
     // the re-render used to rebuild the board in phase "closed" with every animation at 0 — an in-flight envelope
@@ -6133,7 +6157,7 @@ function playInviteTimelineAfterAuth(destination) {
   setScene("received", "", "");
   inviteAuthPresentation = false;
   const board = document.querySelector(".invite");
-  if (!board) {
+  if (!board || board.classList?.contains("entryChog")) { // [A-1289] no envelope on the Chog entry: straight to Hatch / Name
     setScene(destination.scene, destination.message, destination.detail);
     return Promise.resolve();
   }
@@ -6333,10 +6357,45 @@ function renderInviteOnly(used = false) {
   </section>`;
 }
 
+// [A-1289 · Owner 19:5x "get your piggy 탭 make passkey to hatch the piggy 그리고 페이스 아이디 나타나자 부화 네임"]
+// First visit without the envelope: the Piggy face logo + ARASO → tap → Chog "get your piggy" → tap → "make passkey to hatch
+// the piggy" (the first line stays) with the same Face ID button. The button is the existing #inviteFaceButton → openInvite
+// (same tap call stack, the same create / find-first branches); after auth the envelope timeline is skipped (nothing to open),
+// so it goes straight to the existing Hatch → Name. The envelope is not deleted (Owner 20:0x): false = the envelope entry exactly
+// as before. Gift Open paper keeps the envelope board.
+const ENTRY_CHOG_FIRST = (() => { try { return localStorage.getItem("araso.entryEnvelope.v1") !== "1"; } catch { return true; } })(); // the switch; "1" = the envelope entry (old browser tests keep it)
+const ENTRY_CHOG_LINES = Object.freeze(["get your piggy", "make passkey to hatch the piggy"]);
+const ENTRY_STEP_GAP_MS = 600; // a double tap does not skip a line
+let entryStepAt = 0;
+let entryStep = 0; // kept across renders (a failed Face ID comes back to the line with the button)
+function renderEntryChog() {
+  return `
+    <section class="stage stage--invite stage--entry" data-scene="received">
+      ${arasoBrandMarkup()}
+      <div class="invite entryChog" data-kind="entry" data-phase="closed" data-step="${entryStep}">
+        <div class="entryChog__logo" aria-hidden="true">${ENTRY_LOGO_SVG}<img class="entryChog__word" src="/entry/araso_logo_white.png" alt="" /></div>
+        <p class="entryChog__say" role="status">${ENTRY_CHOG_LINES.map((t, i) => `<span class="entryChog__line entryChog__line--${i + 1}">${escapeHtml(t)}</span>`).join("")}</p>
+        <div class="entryChog__chog" aria-hidden="true">${chogInviteMarkup()}</div>
+        ${inviteFace(false)}
+      </div>
+    </section>
+  `;
+}
+function advanceEntryChog(event) {
+  const board = document.querySelector(".entryChog");
+  if (!board || board.dataset.phase !== "closed" || event?.target?.closest?.("#inviteFaceButton")) return;
+  const step = Number(board.dataset.step || 0);
+  if (step >= 2 || Date.now() - entryStepAt < ENTRY_STEP_GAP_MS) return;
+  entryStepAt = Date.now();
+  entryStep = step + 1;
+  board.dataset.step = String(entryStep);
+}
+
 function renderReceived() {
   inviteKind = wantedInviteKind();
   // [A-734] Gift Open 종이 = 같은 Invite 판, 손글씨 두 줄과 버튼 첫 문구만 캐논 문구. null 이면 기존 Invite 그대로.
   const gift = giftPaperKind();
+  if (ENTRY_CHOG_FIRST && !gift) return renderEntryChog();
   return `
     <section class="stage stage--invite" data-scene="received"${gift ? ` data-gift-paper="${gift}"` : ""}>
       ${arasoBrandMarkup()}
@@ -6456,6 +6515,33 @@ function loginCheckingMarkup(phase) {
   `;
 }
 
+// [A-1290 · Owner 19:5x "페이스 아이디 열리게 하고 멀티피기일때는 여러개가 뜨면 안돼" · Cowork 20:1x (가)] Coming back: the same
+// Piggy face logo as the first visit (A-1289), and Face ID is asked once by itself right after it is drawn (like a bank app). That
+// one ask is the existing unlockApp() (state.credential only → one sheet, also with several Piggies: the root passkey). A cancel /
+// failure / time-out = the existing failure card (Try again) and no automatic retry; anywhere on the logo is the tap target meanwhile.
+// Same switch as the first-visit entry: off = the old Checking lock (loginCheckingMarkup, untouched) with no automatic ask.
+const LOCK_AUTO_FACE_ID_MS = 600; // the logo is seen first, then the sheet
+function appLockLogoMarkup(phase) {
+  return `
+    <section class="stage stage--lockLogo" data-scene="birth" data-app-lock="${phase}">
+      ${arasoBrandMarkup()}
+      <button class="lockLogo__tap" id="loginChogButton" type="button" aria-label="Face ID">
+        <span class="entryChog__logo" aria-hidden="true">${ENTRY_LOGO_SVG}<img class="entryChog__word" src="/entry/araso_logo_white.png" alt="" /></span>
+      </button>
+    </section>
+  `;
+}
+// The lock is drawn outside the scene system, so the eye roll runs on its own frames until the logo leaves the page.
+function mountLockLogo(logo) {
+  mountEntryLogo(logo, { reduced: prefersReducedMotion(), onFrame: (step) => { const tick = (now) => { if (logo.isConnected && step(now) !== false) requestAnimationFrame(tick); }; requestAnimationFrame(tick); } });
+}
+function askLockFaceIdOnce() {
+  const lock = state.appLock;
+  if (!lock || lock.phase !== "waiting" || lock.autoAsked) return;
+  lock.autoAsked = true; // once per lock: a failed ask leaves the failure card, never asks again by itself
+  setTimeout(() => { if (state.appLock === lock && lock.phase === "waiting") unlockApp(); }, LOCK_AUTO_FACE_ID_MS);
+}
+
 function renderAppLock() {
   clearInviteTimers();
   if (typeof noteAwayLocked === "function") noteAwayLocked(); // [A-893b F1] lock seen while an Away is mounted
@@ -6470,8 +6556,13 @@ function renderAppLock() {
         chogTap: !failed,
         unlockRetry: true,
       })
-    : loginCheckingMarkup(state.appLock.phase);
+    : ENTRY_CHOG_FIRST ? appLockLogoMarkup(state.appLock.phase) : loginCheckingMarkup(state.appLock.phase);
   mountInviteChog();
+  const lockLogo = !failed && ENTRY_CHOG_FIRST ? document.querySelector(".stage--lockLogo .entryChog__logo") : null;
+  if (lockLogo) { // [A-1290]
+    mountLockLogo(lockLogo);
+    askLockFaceIdOnce();
+  }
   if (failed) {
     document.querySelector("#unlockRetryButton")?.addEventListener("click", unlockApp);
   } else {
@@ -7206,6 +7297,18 @@ const SULKY_FACE_MARKUP = `<g class="sulkyFace" transform="translate(152 -94)"><
 let workPoseFace = null; // the live work-pose canvas (mountSendCardWorkPose), when Piggy is drawn there
 let workFace = null; // the face the work pose should wear; a picture mounted during the beat picks it up
 let workFaceUntil = 0; // when that face ends, even if the beat's own timer was cleared by a scene change
+const SULKY_SWAP_MS = 120; // [A-1291] design C: the sulky picture cross-fades in and out
+function workFaceFade(work, from, to, done) {
+  const t0 = performance.now();
+  const step = () => {
+    if (!work.alive() || !work.canvas.isConnected) { done?.(); return; }
+    const k = Math.min(1, (performance.now() - t0) / SULKY_SWAP_MS);
+    work.setFace("sulky", from + (to - from) * k);
+    work.redraw();
+    if (k < 1) requestAnimationFrame(step); else done?.();
+  };
+  step();
+}
 function sulkyFace() {
   const canvas = [...document.querySelectorAll(".departStage")].find((c) => c.getBoundingClientRect().width > 0 && getComputedStyle(c).visibility !== "hidden");
   const live = () => (workPoseFace?.alive() && workPoseFace.canvas.isConnected ? workPoseFace : null);
@@ -7219,12 +7322,12 @@ function sulkyFace() {
     workFace = "sulky";
     workFaceUntil = Date.now() + PACE_SULKY_MS;
     const work = live();
-    if (work) { work.setFace(workFace); work.canvas.dataset.face = workFace; work.redraw(); }
+    if (work) { work.canvas.dataset.face = workFace; workFaceFade(work, 0, 1); }
     target = canvas;
     undo = () => {
       workFace = null;
       const now = live();
-      if (now) { now.setFace(null); delete now.canvas.dataset.face; now.canvas.classList.remove("is-sulky-dip"); now.redraw(); }
+      if (now) { delete now.canvas.dataset.face; now.canvas.classList.remove("is-sulky-dip"); workFaceFade(now, 1, 0, () => { now.setFace(null); now.redraw(); }); }
     };
   } else if (face) {
     const kids = [...face.children];
@@ -10674,6 +10777,22 @@ function homePaperVisiblyOpen() {
   return typeof progress === "number" && progress >= 0.99;
 }
 
+// Owner: more Piggies are not open yet — the tab stays in its place, greyed, with "soon", and does nothing.
+const PLUS_PIGGY_SOON = true;
+function markPlusPiggySoon(paper) {
+  paper.querySelectorAll(".homePlusPiggyTab").forEach((tab) => {
+    tab.classList.add("is-soon");
+    tab.setAttribute("aria-disabled", "true");
+    const label = tab.querySelector(".homePlusPiggyTab__label");
+    if (label && !label.querySelector(".homePlusPiggyTab__soon")) {
+      const soon = document.createElement("span");
+      soon.className = "homePlusPiggyTab__soon";
+      soon.textContent = "soon";
+      label.append(" ", soon);
+    }
+  });
+}
+
 function mountHomeResidentModule({ reopen = false } = {}) {
   teardownHomeResidentModule();
   // 다음 render() 의 teardownScene() 이(=씬이 통째로 바뀔 때) 이 mount 도 함께 정리한다.
@@ -10693,6 +10812,8 @@ function mountHomeResidentModule({ reopen = false } = {}) {
       // 모든 탭(1마리 탭 · 접힘용 복제 · 창 안 탭)과 pointer/touch/keyboard 가 이 콜백 하나로 모이므로
       // 여기서 막는다 — 픽셀·위치·열린 종이 동작 변화 0.
       if (!homePaperVisiblyOpen()) return;
+      // + Piggy is not open yet (grey "soon"): a tap starts nothing — no Face ID, no index read.
+      if (PLUS_PIGGY_SOON) return;
       // [A-531] 그대로 재사용 — 새 인증/탄생 경로 0.
       beginAddPiggy().then(() => render()).catch(() => render());
     },
@@ -10739,7 +10860,7 @@ function mountHomeResidentModule({ reopen = false } = {}) {
       if (!showAddPiggyTab(state.scene, "home")) {
         paper.querySelectorAll(".homePlusPiggyTab, .homePeekBody, .homePeekHandClip").forEach((el) => el.remove());
         paper.querySelectorAll(".hasPeek").forEach((el) => el.classList.remove("hasPeek"));
-      }
+      } else if (PLUS_PIGGY_SOON) markPlusPiggySoon(paper);
       // [A-624] 폭 경계를 넘은 재mount 는 펼침 상태를 그대로 되살린다(1마리 모듈은 open() no-op).
       if (reopen) api.open();
     })
@@ -10911,7 +11032,8 @@ async function a898ProveDestination(paperPiggy) {
 }
 
 // Face ID for the payer Piggy only: derive its signer; the reducer then requires signer == payer (bindSigner).
-async function a898SignerForPayer(piggy, { allowDeviceCredential = false } = {}) {
+// [A-1298] fresh = a money Send (Job Send · Gift Send): Face ID even with a live key — the 10-minute key never signs money
+async function a898SignerForPayer(piggy, { allowDeviceCredential = false, fresh = false } = {}) {
   // [A-1183] Only the fork Job caller may recover the legacy single Piggy with
   // the device pin. An existing (even invalid) locator never falls back.
   const devicePin = allowDeviceCredential && piggy && !piggy.locator && onForkProfile(CHAIN_PROFILE)
@@ -10919,7 +11041,7 @@ async function a898SignerForPayer(piggy, { allowDeviceCredential = false } = {})
     ? state.credential : null;
   const { request, error } = authRequestForPiggy(devicePin ? { ...piggy, locator: devicePin } : piggy);
   if (error || state.appLock) { console.debug("payer_auth", "unavailable"); return { ok: false, reason: error || "locked" }; }
-  if (activeAccount && String(activeAccount.address).toLowerCase() === String(piggy.address).toLowerCase()) return { ok: true, signerAddress: activeAccount.address };
+  if (!fresh && activeAccount && String(activeAccount.address).toLowerCase() === String(piggy.address).toLowerCase()) return { ok: true, signerAddress: activeAccount.address };
   const identity = state.address;
   let result = null;
   try {
@@ -11129,7 +11251,7 @@ async function a898FaceId() {
   // From here a payer signer may be live: it ALWAYS ends (finally), even if the draft is closed or anything throws.
   let result = { ok: false, reason: "executor_unavailable" };
   try {
-    const proving = a898SignerForPayer(piggy);
+    const proving = a898SignerForPayer(piggy, { fresh: true }); // [A-1298] a Gift Send moves money: Face ID every time
     refreshHomePaperMount();
     const proved = await proving;
     // re-read after the await: the draft may have been closed / replaced while the passkey prompt was open
@@ -11826,7 +11948,7 @@ a905ObserveHome();
 // Persisted in one localStorage key ("done" after the first jar tap, else the entry count). Storage unreadable = no guide (nothing is faked).
 // Away / secondAway / Return scenes never count. Reduced motion: style.css shows a still glow only. Seam: a MutationObserver sees the jar being mounted
 // and a delegated click sees the tap, so the A-905 jar code stays as it is. Functions only (render() can run before this block is reached).
-let a904Entry = { token: -1, active: false, drop: false, lit: false, timer: null };
+let a904Entry = { token: -1, active: false, drop: false, lit: false, wait: false, timer: null };
 function a904Key() { return "araso.a904JarGuide"; }
 function a904Read() {
   try {
@@ -11841,7 +11963,8 @@ function a904Apply() {
   const btn = document.querySelector("#a905Jar");
   if (!btn) return;
   if (!a904Entry.active || state.scene !== "sendstay") { btn.removeAttribute("data-a904"); return; }
-  if (a904Entry.lit) btn.setAttribute("data-a904", "twinkle");
+  if (a904Entry.wait) btn.setAttribute("data-a904", "wait");
+  else if (a904Entry.lit) btn.setAttribute("data-a904", "twinkle");
   else if (a904Entry.drop) btn.setAttribute("data-a904", "drop");
   else btn.removeAttribute("data-a904");
 }
@@ -11856,6 +11979,7 @@ function a904Arm() {
     a904Entry.active = true;
     a904Entry.drop = g.entries === 0;
     const token = sceneToken;
+    if (a904Entry.drop && state.secondCompletedThisSession === true) { a904GuideStart(token); return; }
     a904Entry.timer = setTimeout(() => {
       if (a904Entry.token !== token || state.scene !== "sendstay") return;
       a904Entry.drop = false;
@@ -11867,6 +11991,7 @@ function a904Arm() {
 }
 function a904Done(event) {
   if (!event.target?.closest?.("#a905Jar")) return;
+  if (state.a904Guide && !state.a904Guide.tapped) a904GuideTapped(state.a904Guide);
   a904Write("done");
   clearTimeout(a904Entry.timer);
   a904Entry = { token: sceneToken, active: false, drop: false, lit: false, timer: null };
@@ -11879,6 +12004,91 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" &
   document.addEventListener("click", a904Done, true);
 }
 // ── [/A-904] ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+// [A-1288] Money's "Gift a Piggy" row sparkles (the jar is the way to Gift) until the first Gift tap; stored once, storage unreadable = no sparkle.
+// When it shows (design D, Owner 19:3x): the words keep their own colour; a gold light sweeps over them and three stars blink (CSS .a1288Txt / .a1288Star).
+// The stars are empty marks drawn by CSS, so the row's words stay exactly the same.
+function giftSparkleOn() { try { return localStorage.getItem("araso.giftSparkle") !== "done"; } catch { return false; } }
+function giftSparkleApply() {
+  const row = document.querySelector("#a905GiftPiggy");
+  if (!row) return;
+  const on = giftSparkleOn();
+  let txt = row.querySelector(".a1288Txt");
+  if (on && !txt) {
+    const words = [...row.childNodes].find((n) => n.nodeType === 3 && n.textContent.trim());
+    if (!words) return;
+    txt = document.createElement("span");
+    txt.className = "a1288Txt";
+    txt.dataset.text = words.textContent;
+    words.replaceWith(txt);
+    txt.append(words);
+    // the stars sit beside the words (not inside them), so the words stay one plain text the page and its checks can read
+    for (const k of [1, 2, 3]) { const st = document.createElement("i"); st.className = `a1288Star a1288Star--${k}`; st.setAttribute("aria-hidden", "true"); txt.after(st); }
+  } else if (!on && txt) {
+    row.querySelectorAll(".a1288Star").forEach((st) => st.remove());
+    txt.replaceWith(...txt.childNodes);
+  }
+  if (on) row.setAttribute("data-gift-sparkle", "1"); else row.removeAttribute("data-gift-sparkle");
+}
+if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" && document.body) {
+  new MutationObserver((records) => {
+    for (const r of records) for (const n of r.addedNodes) if (n.nodeType === 1 && (n.id === "a905GiftPiggy" || n.querySelector?.("#a905GiftPiggy"))) { giftSparkleApply(); return; }
+  }).observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("click", (event) => {
+    if (!event.target?.closest?.("#a905GiftPiggy")) return;
+    try { localStorage.setItem("araso.giftSparkle", "done"); } catch {}
+    giftSparkleApply();
+  }, true);
+}
+
+// Jar + bell Chog guide (Owner copy and timing): the Home right after the first Second finishes, once: a breath, the jar drops and sparkles, then Chog points at it and tells about the bell; the first bell waits for the guide.
+function a904GuideLines() { return { jar: "the jar's sparkling. wanna tap it?", bell: "when there's a new job for piggy, the bell will ring." }; }
+function a904GuideStart(token) {
+  const g = { token, tapped: false, said: false };
+  state.a904Guide = g;
+  const L = a904GuideLines();
+  const live = () => state.a904Guide === g && sceneToken === token && state.scene === "sendstay";
+  g.live = live;
+  a904Entry.wait = true;
+  a904Apply();
+  setTimeout(() => {
+    a904Entry.wait = false;
+    if (!live()) { a904GuideEnd(g); return; }
+    a904Apply(); // drop
+    setTimeout(() => {
+      if (!live()) { a904GuideEnd(g); return; }
+      if (a904Entry.active && a904Entry.token === token) { a904Entry.drop = false; a904Entry.lit = true; a904Apply(); }
+      setTimeout(() => {
+        if (g.tapped) return; // the tap path finishes the guide
+        if (!live()) { a904GuideEnd(g); return; }
+        insertChogCueLine("a904GuideLine", [L.jar]);
+        g.said = true;
+        setTimeout(() => { if (g.tapped) return; if (live()) a904GuideBell(g); else a904GuideEnd(g); }, chogSpeakMs(L.jar) + 5000);
+      }, 1500);
+    }, 500);
+  }, PACE_BREATH_MS);
+}
+function a904GuideTapped(g) {
+  g.tapped = true;
+  const waitHome = () => {
+    if (state.a904Guide !== g || sceneToken !== g.token || state.scene !== "sendstay") { a904GuideEnd(g); return; }
+    if (state.a905Money || document.querySelector(".a911-screen")) { setTimeout(waitHome, 200); return; }
+    setTimeout(() => { if (g.live()) a904GuideBell(g); else a904GuideEnd(g); }, PACE_BREATH_MS);
+  };
+  setTimeout(waitHome, 200);
+}
+function a904GuideBell(g) {
+  const L = a904GuideLines();
+  const lines = g.said ? [L.jar, L.bell] : [L.bell];
+  insertChogCueLine("a904GuideLine", lines);
+  // the guide ends once the bell line has shown (it may still wait for the jar line's read time) and been read
+  setTimeout(() => a904GuideEnd(g), chogLineWaits("a904GuideLine", lines).at(-1) + chogSpeakMs(L.bell));
+}
+function a904GuideEnd(g) {
+  if (state.a904Guide !== g) return;
+  state.a904Guide = null;
+  if (a1172BellVisit) a1172ArmBell(); // the bell held back by the guide may ring now
+}
 
 // ── [A-911] Own screens: Money tab · Gift a Piggy · Move money (wiring only; markup = a911-screens.js, logic = the A-898 / A-905 / A-646 code above) ─
 // Owner 2026-10-08 (INBOX A-911, frames approved "ㅇㅇ 고"). The Money tab, Gift a Piggy and Move money are one full-screen host (.a911-screen) on document.body,
@@ -12570,11 +12780,13 @@ function homeCharacter(name) {
 function chogHomeMarkupForExplore() {
   const markup = chogHomeMarkup({ padMarkup: homePadMarkup(state.scene) });
   const sj = state.secondJourney;
-  // [A-1283] after "these two?" / "all of them?" and the read: Chog adds why only one goes (or none), the first line stays.
-  const why = state.scene === "explore" && sj?.step === "candidates" ? exploreChogWhy(sj) : null;
-  if (why) {
-    const two = `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)">${chogLinesMarkup("exploreWhy", why.lines)}</span>`;
-    return markup.replace('<div class="chogHome__hit"', `${two}<div class="chogHome__hit"`);
+  // [A-1297] Journey 2 picking: "let me see which jobs can go." while checking, then one line for what can go (one bubble).
+  const pick = explorePickState(sj);
+  if (pick) {
+    const say = pick.lines.length > 1
+      ? `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)">${chogLinesMarkup("explorePick", pick.lines)}</span>`
+      : `<span class="chogCheckLine" id="exploreChogSay" style="transform:translateX(-50%)">${escapeHtml(pick.line)}</span>`;
+    return markup.replace('<div class="chogHome__hit"', `${say}<div class="chogHome__hit"`);
   }
   // [A-849 UI-24] WAIT state (picks exist, 0 candidates, no read in flight): Chog says the two Owner lines, stacked.
   if (state.scene === "explore" && sj?.step === "candidates" && secondLaneMode(sj) && sj.laneReading !== true
@@ -12584,7 +12796,7 @@ function chogHomeMarkupForExplore() {
   }
   chogLinesRestart("exploreWait"); // left the WAIT state: next time the two lines are said one at a time again
   // [A-893 CG-05] the line is derived from the CURRENT picks at every render, not the value set once at save.
-  const confirmLine = state.scene === "explore" && sj?.step === "candidates" ? exploreChogConfirmLine(sj) : null;
+  const confirmLine = !exploreWhyLane && state.scene === "explore" && sj?.step === "candidates" ? exploreChogConfirmLine(sj) : null; // [A-1297] not where Jobs run
   if (!confirmLine) return markup;
   // [Owner 2026-09-19 "초그 발화 위치 머리 위에" · A-429] 머리 위 좌표는 이제 .chogCheckLine
   // 한 곳(style.css)에 있다 — 귀환 알람과 같은 자리. 값 = INFERRED.
@@ -12594,46 +12806,93 @@ function chogHomeMarkupForExplore() {
   return markup.replace('<div class="chogHome__hit"', `${say}<div class="chogHome__hit"`);
 }
 
-// [A-1283 · Owner 14:3x–14:4x] After the read settles, Chog says why only one goes (or none) under the confirmation line; once both
-// lines are read (+ a breath) the existing one-line card with Send opens for one of them (none: back to the Explore paper). "Can go" is
-// what the read already decided (a fork Job row = JOB_READY); nothing new is computed. Only where Jobs can run (the fork lane).
-// Owner lines exactly; a case with no Owner line (some but more than one of "all" go) says nothing new (UNKNOWN, never invented).
+// [A-1297 · Owner 03:0x–03:4x · replaces A-1283's automatic narrowing] Journey 2 picking where Jobs run (the fork lane): after save Chog
+// says "let me see which jobs can go." and the second card waits for both that line and the read (max of the two). Then the card shows
+// only the Jobs that can go (the read's own JOB_READY rows; nothing new is computed) with one line: two → "two can go. pick one?",
+// three → "pick one of these." (the person picks one, then the existing one-line card with Send) · one → "only this one can go. go?"
+// and that card opens by itself once the line is read · none → "none of these can go now. something else?" and back to the paper.
 let exploreWhyLane = false; // turned on where fork Jobs run (A977_FORK below)
-const EXPLORE_WHY_LINES = Object.freeze({
-  both: "both can go. sending one for now.",
-  all: "all of them work. let's try one first.",
-  one: "only this one can go today.",
+const EXPLORE_CHECK_LINE = "let me see which jobs can go.";
+const EXPLORE_PICK_LINES = Object.freeze({
+  two: "two can go. pick one?",
+  many: "pick one of these.",
+  one: "only this one can go. go?",
   none: "none of these can go now. something else?",
 });
-function exploreChogWhy(sj) {
-  if (!exploreWhyLane || sj?.laneReading === true) return null;
-  const first = exploreChogConfirmLine(sj);
-  if (!first) return null;
+function explorePickState(sj) {
+  if (!exploreWhyLane || state.scene !== "explore" || sj?.step !== "candidates" || secondPickedErrandIds(sj).length === 0) return null;
+  const checkingUntil = (sj.whySavedAt || 0) + chogSpeakMs(EXPLORE_CHECK_LINE);
+  if (sj.laneReading === true || Date.now() < checkingUntil) return { kind: "checking", line: EXPLORE_CHECK_LINE, lines: [EXPLORE_CHECK_LINE], until: checkingUntil };
   const ready = secondLaneDestinations(sj).filter((d) => d.derivedStatus === "JOB_READY");
-  const picks = secondPickedErrandIds(sj).length;
-  const kind = ready.length === 0 ? "none"
-    : first === "these two?" && ready.length === 2 ? "both"
-      : first === "all of them?" && ready.length === picks ? "all"
-        : ready.length === 1 ? "one" : null;
-  return kind ? { kind, lines: [first, EXPLORE_WHY_LINES[kind]], go: ready.find((d) => d.id === sj.pickedCandidateId) || ready[0] || null } : null;
+  const kind = ready.length === 0 ? "none" : ready.length === 1 ? "one" : ready.length === 2 ? "two" : "many";
+  const line = EXPLORE_PICK_LINES[kind];
+  const lines = kind === "none" ? ["none of these can go now.", "something else?"] : [line]; // same words; two stacked lines fit on 390 (Cowork 04:5x)
+  return { kind, line, lines, go: ready.find((d) => d.id === sj.pickedCandidateId) || ready[0] || null };
 }
-// Called after each explore render: when both lines have been read, open the one card (or go back to the paper for none).
+// Called after each explore render: hide the list while checking, then show it (two / many) or move on by itself (one / none).
 function scheduleExploreWhyNext() {
   const sj = state.secondJourney;
-  const why = state.scene === "explore" && sj?.step === "candidates" ? exploreChogWhy(sj) : null;
-  if (!why || sj.exploreWhyWent) return; // once per save: Back from the card stays on the picks
-  const startedAt = chogLinesStartedAt.get("exploreWhy")?.at ?? Date.now();
+  const pick = explorePickState(sj);
+  if (!pick) return;
+  if (typeof chogHelpRemember === "function") chogHelpRemember("exploreChogSay", pick.lines); // [A-1293] the ? says it again
+  const hideList = pick.kind !== "two" && pick.kind !== "many";
+  if (hideList) document.querySelectorAll(".secondJourney__pick").forEach((btn) => { btn.hidden = true; });
+  if (pick.kind === "checking") {
+    if (sj.laneReading !== true) sceneTimeout(() => { if (state.scene === "explore" && state.secondJourney === sj && sj.step === "candidates") render(); }, Math.max(0, pick.until - Date.now()) + 30);
+    return;
+  }
+  if (!hideList || sj.exploreWhyWent) return;
+  if (!sj.whyResultAt) sj.whyResultAt = Date.now();
   sceneTimeout(() => {
-    const now = state.secondJourney;
-    if (state.scene !== "explore" || now !== sj || sj.step !== "candidates") return;
-    const again = exploreChogWhy(sj);
-    if (!again || again.kind !== why.kind) return;
+    if (state.scene !== "explore" || state.secondJourney !== sj || sj.step !== "candidates" || sj.exploreWhyWent) return;
+    const again = explorePickState(sj);
+    if (!again || again.kind !== pick.kind) return;
     sj.exploreWhyWent = true;
     if (again.kind === "none") { sj.step = "interests"; render(); return; }
     sj.pickedCandidateId = again.go.id;
     persistSecondDraft();
     handleCandidateOk();
-  }, Math.max(0, startedAt + chogLinesMs(why.lines) - Date.now()));
+  }, Math.max(0, sj.whyResultAt + chogLinesMs(pick.lines) - Date.now())); // all lines read, a breath after
+}
+
+// [A-1293] The ? help sticker (Owner 20:1x): under the bell's spot on the right, on a screen where Chog has spoken; a tap = Chog says that
+// screen's last line(s) again, one line at a time (no new copy). No line on this screen yet = no ?.
+let chogHelpSaid = null; // { scene, id, lines }
+function chogHelpRemember(id, text) {
+  const lines = (Array.isArray(text) ? text : [text]).filter((t) => typeof t === "string" && t.trim());
+  if (!lines.length || !state.scene) return;
+  chogHelpSaid = { scene: state.scene, id, lines };
+  chogHelpMount();
+}
+function chogHelpForget() {
+  chogHelpSaid = null;
+  document.querySelector("#chogHelp")?.remove();
+}
+function chogHelpMount() {
+  if (typeof document === "undefined") return;
+  const said = chogHelpSaid && chogHelpSaid.scene === state.scene ? chogHelpSaid : null;
+  const stage = document.querySelector(`.stage[data-scene="${state.scene}"]`);
+  const help = document.querySelector("#chogHelp");
+  if (!said || !stage) { help?.remove(); return; }
+  if (help && help.parentElement === stage) return;
+  help?.remove();
+  const btn = document.createElement("button");
+  btn.id = "chogHelp";
+  btn.className = "chogHelp";
+  btn.type = "button";
+  btn.setAttribute("aria-label", "?");
+  btn.innerHTML = '<img src="/card/help-sticker.svg" alt="" draggable="false" />';
+  btn.addEventListener("click", () => {
+    const now = chogHelpSaid && chogHelpSaid.scene === state.scene ? chogHelpSaid : null;
+    if (!now) return;
+    document.querySelector(`#chogHome #${now.id}`)?.remove(); // said again from the start (the one-line-at-a-time clock restarts)
+    chogLinesRestart(now.id);
+    insertChogCueLine(now.id, now.lines);
+  });
+  stage.appendChild(btn);
+}
+if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" && document.body) {
+  new MutationObserver(() => { if (chogHelpSaid && !document.querySelector("#chogHelp")) chogHelpMount(); }).observe(document.body, { childList: true, subtree: true });
 }
 
 // ── [A-893] Wave 5 Chog cues ─────────────────────────────────────────────────────────────────────────
@@ -12660,6 +12919,7 @@ function insertChogCueLine(id, text) {
   const root = document.querySelector("#chogHome");
   const hit = root?.querySelector(".chogHome__hit");
   if (!root || !hit) return false;
+  if (typeof chogHelpRemember === "function") chogHelpRemember(id, text); // [A-1293]
   let line = root.querySelector(`#${id}`);
   if (!line) {
     line = document.createElement("span");
@@ -12672,7 +12932,10 @@ function insertChogCueLine(id, text) {
   line.classList.toggle("chogCheckLine--two", Array.isArray(text) && text.length > 1);
   if (Array.isArray(text) && text.length > 1) {
     line.replaceChildren(...chogLineNodes(id, text));
-  } else line.textContent = Array.isArray(text) ? text.join(" ") : text;
+  } else {
+    line.textContent = Array.isArray(text) ? text.join(" ") : text;
+    if (Array.isArray(text)) chogLineWaits(id, text); // a single line starts this key's clock, so a line added under it later keeps it
+  }
   return true;
 }
 
@@ -14654,47 +14917,58 @@ function endReturnArrivalAlarmWhenFiled(hadAlarm, returnView, valid) {
 //   completed = quiet Home only (A-411-n §2). Reduced motion = same order (the cue is a still label, no wave). Copy = locked lines only.
 import { TAP_CUE_TIMING as A891_TAP_CUE_TIMING } from "./chog-home.js";
 const POST_FILE_QUIET_HOME_MS = 8000; // Owner 2026-10-08 ~8 s, tune on device (replaces the HOME_FIRST_JOURNEY_CARD_MS reuse on this path only)
-const A891_FILED_LINE = "I'll keep it here.";
-const A891_SECOND_INTRO_LINES = ["I found a few things.", "wanna see a few more?"];
+const A891_FILED_LINE = "I'll keep the details at home."; // [A-1297 · Owner 03:3x]
+const A1297_SECOND_DONE_LINE = "done!"; // [A-1297 · Owner 03:3x] after the Journey 2 receipt is filed
+const A891_SECOND_INTRO_LINES = ["let's try more kinds of jobs!", "work's coming!"]; // [A-1297 · Owner 03:0x/03:3x] Home only; the Explore paper says nothing
 // Reading hold for the filed line before Home settles = the existing A-725 Chog-line hold (1.5 s); not an Owner number, tune on device.
 const A891_FILED_LINE_HOLD_MS = A891_TAP_CUE_TIMING.holdMs;
+const A891_FILED_LINE_READ_MS = Math.max(3000, chogSpeakMs(A891_FILED_LINE)); // [A-1297 · Owner "3초정도"] the first filed line is read before Home (never shorter than its read time)
 // Intro line → Explore Paper = the existing short beat before a card (HOME_FIRST_JOURNEY_CARD_MS, 1.2 s); not an Owner number, tune on device.
 const A891_SECOND_INTRO_TO_PAPER_MS = Math.max(HOME_FIRST_JOURNEY_CARD_MS + 1500, chogLinesMs(A891_SECOND_INTRO_LINES)); // both intro lines read one at a time (+ a breath) before the Explore paper
 const SECOND_INTRO_SEEN_KEY = scopedSecondKey("araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
-let a891FirstArrivalHold = null; // { t } silent frame clock of the removed first-arrival cue (keeps the First Send reveal timing)
 let a1206SwitchIntroPending = false; // UI-only boot handoff; consumed once by the existing CG-05 intro
+// [A-1298 ⑤ · Owner 04:2x "tap me to find out … 탭 안 하면 바로 2차"] once, on the Home right after the first receipt (the key is live): Chog's cue
+// says "tap me to find out" · a tap = the Home paper opens as usual and Journey 2 waits until it is closed · no tap for 5 s = Journey 2 starts
+// with the key (no Face ID). Any other Home (a reopen, a later visit) goes in directly — no tap me.
+let a1298FindOutPending = false;
+let a1298FindOutChog = null;
+const A1298_FIND_OUT_MS = 5000;
+function a1298FindOut(enter) {
+  const chog = homeChog;
+  if (!chog || !chog.startTapCue?.("tap me to find out")) { enter(); return; }
+  a1298FindOutChog = chog;
+  const scene = state.scene;
+  setTimeout(() => { // not a scene timer: a redraw of Home must not lose the 5 s
+    if (a1298FindOutChog !== chog) return; // tapped: the Home paper path owns the next step
+    a1298FindOutChog = null;
+    chog.hideTapCue?.();
+    if (state.scene === scene && chog === homeChog && !state.appLock) enter();
+  }, A1298_FIND_OUT_MS);
+}
+// The tap on that cue: the Home paper opens (chog-home pins it); Journey 2 starts once the person closes it.
+function a1298FindOutTap(chog, enter) {
+  if (a1298FindOutChog !== chog) return false;
+  a1298FindOutChog = null;
+  const wait = () => {
+    if (state.scene !== "sendstay" || chog !== homeChog || state.appLock) return;
+    if (chog.state?.pinned) { setTimeout(wait, 300); return; }
+    enter();
+  };
+  setTimeout(wait, 300);
+  return true;
+}
 let a891CueChog = null;          // the Home Chog instance that is currently showing the post-file "tap me!"
 
 function a891SecondIntroSeen() {
   try { return localStorage.getItem(SECOND_INTRO_SEEN_KEY) === "1"; } catch { return false; }
 }
 
-// Same clock rule as chog-home.js tapCue.t (frame dt, capped 50 ms, 0 while hidden), so revealSendCard waits exactly what the cue
-// (delay + wave + fade + A-725 hold = TAP_CUE_TIMING.readyMs) used to give. Reduced motion = 0, as the reduced cue gave 0.
-function a891StartFirstArrivalHold() {
-  a891FirstArrivalHold = null;
-  if (prefersReducedMotion()) return;
-  const hold = { t: 0 };
-  a891FirstArrivalHold = hold;
-  let last = 0;
-  runSceneFrames((now) => {
-    if (a891FirstArrivalHold !== hold) return false;
-    const dt = last && !document.hidden ? Math.min(now - last, 50) : 0;
-    last = now;
-    hold.t += dt;
-    return hold.t < A891_TAP_CUE_TIMING.readyMs;
-  });
-  onSceneTeardown(() => { if (a891FirstArrivalHold === hold) a891FirstArrivalHold = null; });
-}
-
-function a891FirstArrivalHoldRemainingMs() {
-  const hold = a891FirstArrivalHold;
-  return hold ? Math.max(0, A891_TAP_CUE_TIMING.readyMs - hold.t) : 0;
-}
+// [A-1298 ⑦] the silent first-arrival hold (an empty clock of the removed first-arrival cue, never started) is gone.
 
 // Chog speech through the existing .chogCheckLine slot inside .chogHome (same as the Return alarm / Explore say / A-849 two lines).
 function a891ChogSay(chogRoot, id, lines) {
   if (!chogRoot || chogRoot.querySelector(`#${id}`)) return null;
+  if (typeof chogHelpRemember === "function") chogHelpRemember(id, lines); // [A-1293]
   const hit = chogRoot.querySelector(".chogHome__hit");
   const span = document.createElement("span");
   span.id = id;
@@ -14724,7 +14998,8 @@ function a891AfterFiling(returnView, valid) {
     // left set it would make the Home after filing replay the First arrival (First Send card) instead of the quiet Home.
     state.homeArrival = false;
     if (teach) a891ChogSay(document.querySelector("#returnChogHop #chogHome"), "returnKeepLine", [A891_FILED_LINE]);
-    sceneTimeout(() => { if (valid() && state.scene === "return") goHomeFromFilebox(); }, A891_FILED_LINE_HOLD_MS);
+    if (teach) a1298FindOutPending = true; // [A-1298 ⑤] the Home right after the first receipt teaches the house once
+    sceneTimeout(() => { if (valid() && state.scene === "return") goHomeFromFilebox(); }, teach ? A891_FILED_LINE_READ_MS : A891_FILED_LINE_HOLD_MS);
     return false;
   });
 }
@@ -14751,7 +15026,6 @@ function a891ArmPostFileQuietHome() {
 // CG-05 intro: the opening tap on the post-file cue. chog-home.js toggle() already hid the cue; the intro answers the tap, so the
 // Home pad is closed before it draws. A1206 Owner 2026-10-14: one-use switch boot may also start this intro automatically.
 function a891HomeChogTap() {
-  a891FirstArrivalHold = null; // a real Chog tap ended the old first-arrival cue (hideTapCue → hold 0); the silent hold does the same
   const chog = a891CueChog;
   if (!chog || chog !== homeChog || state.scene !== "sendstay") return;
   a891CueChog = null;
@@ -14764,7 +15038,6 @@ function a891HomeChogTap() {
     openSecondJourneyExplore();
     if (state.scene !== "explore") { homeSay?.remove(); return; }
     // The same two lines stay over Chog on the Paper's first view (until its next render) so they can be read.
-    a891ChogSay(document.querySelector('.stage[data-scene="explore"] #chogHome'), "secondIntroLine", A891_SECOND_INTRO_LINES);
   }, A891_SECOND_INTRO_TO_PAPER_MS);
 }
 
@@ -14910,6 +15183,7 @@ async function a956Enter({ reenter = false } = {}) {
       if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }
       if (state.appLock) return;
       if (activeAccount && String(activeAccount.address || "").toLowerCase() === String(state.address || "").toLowerCase()) {
+        if (typeof a1298FindOutPending !== "undefined" && a1298FindOutPending) { a1298FindOutPending = false; a1298FindOut(() => { void a956Enter(); }); return; } // [A-1298 ⑤]
         void a956Enter();
         return;
       }
@@ -14922,7 +15196,7 @@ async function a956Enter({ reenter = false } = {}) {
   const a956BaseTap = a891HomeChogTap;
   a891HomeChogTap = (...args) => {
     if (!entryOpen()) return a956BaseTap(...args);
-    a891FirstArrivalHold = null;
+    if (typeof a1298FindOutTap === "function" && a1298FindOutTap(homeChog, () => { void a956Enter(); })) return undefined; // [A-1298 ⑤] the Home paper stays open; Journey 2 after it closes
     const chog = a891CueChog;
     if (!chog || chog !== homeChog || state.scene !== "sendstay") return undefined;
     a891CueChog = null;
@@ -15488,6 +15762,52 @@ function a977ForkClients() {
   };
   return { chain, transport, publicClient, read };
 }
+// ── [A-1285] Fork Money: the first Piggy that came 1st testnet → 2nd fork stands in Money (name · home · pickable for Gift) ──────────────────
+// The fork registry gets rows only from createPiggy (a Piggy born on the fork) and the funding reconcile (needs a row already), so the first
+// Piggy of a person who did Journey 1 on testnet had none: Money read it as the legacy "unknown" row (id for a name, never selectable) and
+// Gift a Piggy stayed off. Once, on the fork, after Journey 2, while the fork registry is empty: seat THIS device's first Piggy (the testnet
+// index row with the same address and no sequence) as an identity row at home: id · name · address · locator from that row, assets = the
+// fork USDC it holds now (measured; none when unreadable), valuation unknown (no $1 assumption, as the funding reconcile). Not the A-897
+// mainnet promotion (no promotedAt, no stamp, mainnet path untouched). The fork Piggy index is NOT written, so no birth mark or issuance
+// right reaches the fork: + Piggy's origin check still refuses with origin_index_missing (99d:303).
+const A1285_FIRST_PIGGY_SOURCE_SCOPE = "monad-testnet";
+let a1285Seating = null;
+async function a1285SeatFirstPiggyOnFork({ client = null, storage = safeLocalStorage(), now = () => new Date().toISOString() } = {}) {
+  const scope = secondJourneyScope();
+  if (!storage || !scope.accountId || scope.chainId === A1285_FIRST_PIGGY_SOURCE_SCOPE || state.secondJourneyCompletedOnce !== true) return { seated: false, reason: "not_here" };
+  const before = loadRegistry(storage, scope);
+  if (before.error && before.error !== "absent") return { seated: false, reason: "registry_unreadable" };
+  if (before.registry.piggies.length > 0) return { seated: false, reason: "registry_has_rows" };
+  const here = String(scope.accountId).toLowerCase();
+  let row = null;
+  try { row = loadMyPiggiesIndex(storage, A1285_FIRST_PIGGY_SOURCE_SCOPE).index.piggies.find((p) => !p.sequence && String(p.address).toLowerCase() === here) || null; } catch { row = null; }
+  if (!row) return { seated: false, reason: "no_first_piggy_row" };
+  const usdc = CHAIN_PROFILE.usdc;
+  let assets = [];
+  if (client && usdc?.address) {
+    const read = await readErc20Balance({ client, tokenAddress: usdc.address, holderAddress: row.address });
+    const holding = read.error ? null : measuredHoldingRow({ raw: read.raw, decimals: usdc.decimals, tokenSymbol: "USDC", assetId: usdc.address, measuredAt: now(), blockNumber: read.blockNumber });
+    if (holding) assets = [holding];
+  }
+  const { piggy, error } = normalizePiggy({ id: row.id, name: row.name || state.piggyName || null, address: row.address, locator: row.locator || null, location: "home", assets, valuation: null, createdAt: row.createdAt || null });
+  if (error || !piggy) return { seated: false, reason: error || "row_invalid" };
+  const again = loadRegistry(storage, scope); // the read above awaited: another tab / path may have written meanwhile
+  if ((again.error && again.error !== "absent") || again.registry.piggies.length > 0 || secondJourneyScope().accountId !== scope.accountId) return { seated: false, reason: "registry_changed" };
+  const saved = saveRegistry(storage, scope, { ...again.registry, piggies: [piggy] });
+  return saved.saved ? { seated: true, reason: null, piggy } : { seated: false, reason: saved.error || "save_failed" };
+}
+if (A977_FORK) {
+  const a1285PrevOpenMoney = a905OpenMoneyTab;
+  a905OpenMoneyTab = function a905OpenMoneyTabA1285(...args) {
+    const out = a1285PrevOpenMoney(...args);
+    if (!a1285Seating) {
+      a1285Seating = a1285SeatFirstPiggyOnFork({ client: a977ForkClients().publicClient })
+        .then((r) => { if (r.seated && state.a905Money) a911Sync(); return r; }, () => ({ seated: false, reason: "threw" }))
+        .finally(() => { a1285Seating = null; });
+    }
+    return out;
+  };
+}
 if (A977_FORK) {
   exploreWhyLane = true; // [A-1283] Jobs can run here, so Chog can say why only one goes
   const fork = a977ForkClients();
@@ -15546,8 +15866,8 @@ if (A977_FORK) {
       const piggy = a898SenderPiggy();
       if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) { a977Fail("unavailable"); return; }
       // No server await or render before the pinned get: keep the click gesture.
-      if (!activeAccount || a977Lower(activeAccount.address) !== a977Lower(piggy.address)) {
-        const signer = await a898SignerForPayer(piggy, { allowDeviceCredential: true });
+      { // [A-1298] a Job Send moves money: Face ID every time (no await before the get · the key never signs money)
+        const signer = await a898SignerForPayer(piggy, { allowDeviceCredential: true, fresh: true });
         if (!signer.ok) { a977Fail("auth"); return; }
       }
       const account = activeAccount;
@@ -16383,6 +16703,11 @@ function render() {
   if (state.scene === "received") {
     fitInvite();
     mountInviteChog();
+    const entry = document.querySelector(".entryChog");
+    if (entry) { // [A-1289] (the double-tap guard counts from the last advance only, never from a redraw)
+      mountEntryLogo(entry.querySelector(".entryChog__logo"), { reduced: prefersReducedMotion(), onFrame: (step) => runSceneFrames(step) });
+      document.querySelector(".stage--entry")?.addEventListener("click", advanceEntryChog);
+    }
   }
   // [A-391 / A-391-a] 승인 인증실패 카드(birth)의 옆 Chog — Invite/Hatch 와 똑같이
   // mountInviteChog() 를 그대로 불러 [data-chog-invite] 를 붙인다. 새 mount 로직 0.

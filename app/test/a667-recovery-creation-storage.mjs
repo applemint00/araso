@@ -221,7 +221,8 @@ await check("R1e same Piggy (pinned, matching address) recovers normally; marker
   deq(await run, { ok: true });
   deq(d.calls.events.filter(([step]) => step === "piggy_find"), [["piggy_find", "ok"]]);
   deq([d.state.scene, d.state.message], ["sendstay", "Piggy is home."]);
-  deq(d.peek(), { signer: true, account: true, signerTimer: true, idleTimer: true, attempt: false }, "live signer only WITH expiry + idle");
+  // [A-1298 · one clock] the key has no separate 5-minute timer: it is bound to the app-idle window only
+  deq(d.peek(), { signer: true, account: true, signerTimer: false, idleTimer: true, attempt: false }, "live signer only WITH the app-idle window (one clock)");
   const f = device({ stored: false });
   const run2 = f.api.checkPiggy();
   resolveGet(f, 0, "FOUND", key(44));
@@ -279,7 +280,7 @@ await check("R2 checkPiggy: only the auxiliary 'received' marker failing does no
   const run = d.api.checkPiggy();
   resolveGet(d, 0, "OLD", key(11));
   deq(await run, { ok: true });
-  deq(d.peek(), { signer: true, account: true, signerTimer: true, idleTimer: true, attempt: false }, "signer only with its expiry/idle timers");
+  deq(d.peek(), { signer: true, account: true, signerTimer: false, idleTimer: true, attempt: false }, "signer only with the app-idle window (one clock)");
 });
 await check("R3 activateSigningSession: a throw after the signer exists (account derivation / address write) ends it — no timer-less signer", async () => {
   const d = device();
@@ -417,7 +418,7 @@ await check("R5d retry after timeout = a NEW attempt; the old late result neithe
   const two = e.api.checkPiggy();
   resolveGet(e, 1, "OLD", key(11));
   deq(await two, { ok: true });
-  deq(e.peek(), { signer: true, account: true, signerTimer: true, idleTimer: true, attempt: false });
+  deq(e.peek(), { signer: true, account: true, signerTimer: false, idleTimer: true, attempt: false }); // [A-1298] one clock: no separate signer timer
 });
 
 // ═══ R6 lifecycle ═══════════════════════════════════════════════════════════════════════════

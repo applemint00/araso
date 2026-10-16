@@ -67,6 +67,9 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
     activeSession: { signDigest: async () => { calls.sign += 1; return { compact: new Uint8Array([1]), recovery: 0 }; } },
     // [A-444] 진짜 setScene 은 재렌더한다 — 진행 중이면 markup(busy)이 버튼을 disabled 로 다시 그린다.
     setScene: (...a) => { calls.scenes.push(a); btn.disabled = true; btn.attrs["aria-disabled"] = "true"; },
+    // [A-1298] every money Send now asks Face ID (the recover path runs each time): the person approves; no other attempt is open
+    authAttempt: null, platformAuthInflight: null, webAuthnUnsupported: () => false, beginAuthAttempt: () => ({ live: true }),
+    boundAuthAttempt: (_a, p) => p, trackPlatformAuth: (p) => p, finishAuthAttempt: () => true, clearOwnSendPending: () => {},
     recoverPiggy: async () => {}, noteRecoverSuccess() {}, noteRecoverFailure() {}, isCancelledAuthError: () => false,
     requestGrant: async () => { calls.grant += 1; if (gate) await gate; return { txHash: "0xgrant" }; },
     simulateSend: async () => { if (simThrows) throw new Error("sim reverted"); return { depositTx: {}, before: 1n, beforeShares: 0n }; },

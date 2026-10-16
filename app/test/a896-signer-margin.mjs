@@ -211,7 +211,9 @@ function appWithSignerAged(ms, opts) {
   return app;
 }
 
-await check("A. stamp: set by activateSigningSession (wall clock), cleared by endSignerSession, endActiveSession and the 5-min timer expiry", async () => {
+// [A-1298 · Owner 04:0x "샌드는 트잭이라 해야해" · "10분하자"] supersedes the 60 s margin: every money Send asks Face ID (one recover) whatever the
+// live key's age, and the key has no 5-minute timer — it ends with the 10-minute app-idle window. The stamps stay (set / cleared as before).
+await check("A. stamp: set by activateSigningSession (wall clock), cleared by endSignerSession, endActiveSession and the app-idle (one clock) expiry", async () => {
   const app = buildApp();
   assert.equal(app.__stamp(), 0, "no signer, no stamp");
   app.activateSigningSession(app.prfOutput);
@@ -226,23 +228,25 @@ await check("A. stamp: set by activateSigningSession (wall clock), cleared by en
   assert.equal(app.__stamp(), 0, "endActiveSession (via endSignerSession) clears the stamp");
   app.activateSigningSession(app.prfOutput);
   app.clock.advance(FIVE_MIN + 1);
-  assert.equal(app.get().hasSigner, false, "5-min timer ended the signer");
+  assert.equal(app.get().hasSigner, true, "no 5-minute signer timer any more");
+  app.clock.advance(5 * 60 * SEC);
+  assert.equal(app.get().hasSigner, false, "the 10-minute app-idle window ended the key");
   assert.equal(app.__stamp(), 0, "timer-driven end clears the stamp too");
   assert.equal(vm.runInContext("signerMono", app.__ctx), -1, "R1 monotonic stamp cleared with it");
 });
 
-await check("B1. 61 s left (age 239 s): signer reused — 0 extra auth, both legs go out", async () => {
+await check("B1. live key aged 239 s: still one recover (Face ID) first — a money Send never reuses the key; both legs go out", async () => {
   const app = appWithSignerAged(FIVE_MIN - 61 * SEC);
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 0, "no recover");
-  assert.equal(app.events.includes("recover"), false);
-  assert.equal(app.calls.sendTx, 2, "deposit + redeem broadcast with the reused signer");
+  assert.equal(app.authCalls.count, 1, "one recover");
+  assert.equal(app.events[0], "recover", "recover is the very first money-path event");
+  assert.equal(app.calls.sendTx, 2, "deposit + redeem broadcast with the fresh signer");
 });
 
-await check("B2. exactly 60 s left (age 240 s): still reused (the margin is >= 60 s)", async () => {
-  const app = appWithSignerAged(FIVE_MIN - 60 * SEC);
+await check("B2. a brand-new key (age 0): still one recover — no age makes a money Send skip Face ID", async () => {
+  const app = appWithSignerAged(0);
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 0);
+  assert.equal(app.authCalls.count, 1);
   assert.equal(app.calls.sendTx, 2);
 });
 
@@ -298,7 +302,7 @@ await check("B7. R1 monotonic stamp: wall clock still looks fresh (set back / fo
   const app = appWithSignerAged(FIVE_MIN - 59 * SEC);
   app.wall.set(app.__stamp() + 30 * SEC); // wall clock pulled back to "30 s old"
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 1, "wall age 30 s alone would reuse; the monotonic age (241 s) forces recover");
+  assert.equal(app.authCalls.count, 1, "one recover (every Send asks)");
   assert.equal(app.events[0], "recover");
   assert.equal(app.calls.sendTx, 2);
 });
@@ -310,27 +314,24 @@ await check("B8. R1 clock moved backwards -> recover: monotonic clock behind its
   assert.equal(app.authCalls.count, 1);
 });
 
-await check("B9. R1 both clocks fresh (61 s left on each) -> reused; performance.now unavailable -> falls back to the wall clock only (59 s recovers, 61 s reuses)", async () => {
+await check("B9. both clocks fresh, or performance.now unavailable: one recover in every case", async () => {
   const fresh = appWithSignerAged(FIVE_MIN - 61 * SEC);
   await fresh.sendPiggy(); await tick(); await tick();
-  assert.equal(fresh.authCalls.count, 0);
+  assert.equal(fresh.authCalls.count, 1);
   const np61 = appWithSignerAged(FIVE_MIN - 61 * SEC, { noPerf: true });
   await np61.sendPiggy(); await tick(); await tick();
-  assert.equal(np61.authCalls.count, 0, "no performance: wall clock only, 61 s -> reuse");
+  assert.equal(np61.authCalls.count, 1, "no performance: still one recover");
   const np59 = appWithSignerAged(FIVE_MIN - 59 * SEC, { noPerf: true });
   await np59.sendPiggy(); await tick(); await tick();
   assert.equal(np59.authCalls.count, 1, "no performance: wall clock only, 59 s -> recover");
 });
 
-await check("C. source shape: ONE entry check inside sendPiggyOnce, before the recover branch and before any grant/sign; 5-min cap and timer untouched", async () => {
+await check("C. source shape: sendPiggyOnce has no key-reuse branch; the recover (Face ID) runs before any grant/sign; no 5-minute signer timer", async () => {
   const once = onceSrc;
-  const chk = once.indexOf("signerMarginOk");
-  assert.ok(chk > 0);
-  assert.ok(chk < once.indexOf("recoverPiggy("), "margin decided before the recover branch");
-  assert.ok(chk < once.indexOf("requestGrant("), "margin decided before any grant");
-  assert.ok(chk < once.indexOf("signSendStep("), "margin decided before any signing");
-  assert.match(once, /5 \* 60 \* 1000 - 60 \* 1000/, "60 s Owner number against the 5-min cap");
-  assert.match(SESSION_SRC, /setTimeout\(\(\) => \{\s*endSignerSession\(\);\s*\}, 5 \* 60 \* 1000\)/, "armSignerExpiry unchanged: 5 min absolute, no extension");
+  assert.equal(once.includes("signerMarginOk"), false, "no margin / reuse decision any more");
+  assert.ok(once.indexOf("recoverPiggy(") > 0 && once.indexOf("recoverPiggy(") < once.indexOf("requestGrant("), "Face ID before any grant");
+  assert.ok(once.indexOf("recoverPiggy(") < once.indexOf("signSendStep("), "Face ID before any signing");
+  assert.doesNotMatch(SESSION_SRC, /setTimeout\(\(\) => \{\s*endSignerSession\(\);\s*\}, 5 \* 60 \* 1000\)/, "no 5-minute signer timer");
   assert.equal((SESSION_SRC.match(/signerSince =/g) || []).length, 3, "declaration + stamp + clear only");
   assert.equal((SESSION_SRC.match(/signerMono =/g) || []).length, 3, "R1 monotonic: declaration + stamp + clear only");
 });
