@@ -15993,6 +15993,7 @@ if (A977_FORK) {
       started = true;
       dropSecondDraft();
       sj.awayLine = "";
+      const wentOutAt = Date.now(); // [A-1312 ④ · F1] the moment the Job's Piggy leaves — the Receipt's "went out" (as A-1277 for the first trip)
       setScene("secondAway", "", "");
       const executor = Object.freeze({
         kind: "local_fork", chainId: a974ForkChainId, forkBlock,
@@ -16010,6 +16011,7 @@ if (A977_FORK) {
       } catch { out = { status: "refused", receipt: null }; } finally { a956Signing -= 1; }
       if (state.secondJourney !== sj) { a977Current = null; return; }
       const candidate = out.receipt ? a977Candidate(out.receipt, secondJourneyScope()) : null;
+      if (candidate) candidate.wentOutAt = wentOutAt; // [A-1312 ④]
       sj.executionReceipt = candidate;
       sj.outcome = candidate && out.status === "returned" && candidate.outcome === "done" ? "done" : "failed";
       if (sj.outcome !== "done") a977Fail(out.status === "refused" ? "refused" : "failed", false);

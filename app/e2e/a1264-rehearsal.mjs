@@ -378,7 +378,7 @@ async function walkSecondJob(person, round, { tapHome = true } = {}) {
   person.jobGets = person.jobGets || {}; person.jobGets[round] = (await getsOf(person)) - jobGetsBefore; // [A-1298]
   await checkpoint(person, `j${round}-away`);
   await until(person, "Job Receipt", () => live(person, "#returnTap"), 90_000);
-  await checkpoint(person, `j${round}-return`);
+  person.jobReceiptText = person.jobReceiptText || {}; person.jobReceiptText[round] = (await checkpoint(person, `j${round}-return`)).text; // [A-1312 ④]
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `job receipt tap ${i + 1}`); await sleep(400); }
   person.secondDone = person.secondDone || {};
   person.secondDone[round] = await until(person, "done!", (s) => s.text.includes("done!"), 10_000).then(async () => (await person.page.evaluate(() => [...document.querySelectorAll(".chogCheckLine")].filter((e) => e.getBoundingClientRect().width > 0).map((e) => e.textContent.trim()))), () => null); // [A-1297] the lines Chog shows then
@@ -548,6 +548,13 @@ async function laneMain() {
   });
   await check("a · Journey 2 round 1: places → Job (tidy the wallet) → Send → Away → back → Receipt → File it → Home", () => walkSecondJob(a, 1));
   await check("chog · after the Journey 2 receipt is filed: \"done!\" (one bubble)", () => { assert.deepEqual(a.secondDone?.[1], ["done!"]); });
+  // [A-1312 ④ · F1] the Job receipt shows when Piggy left (h:mm) like the first receipt (A-1277); kept stays —
+  await check("a · Journey 2 Job receipt: went out shows the departure time (h:mm), kept stays —", () => {
+    const t = a.jobReceiptText?.[1] || [];
+    const i = t.indexOf("went out"), k = t.indexOf("kept");
+    assert.ok(i >= 0 && /^\d{1,2}:\d{2} (AM|PM)$/.test(t[i + 1] || ""), `job receipt rows: ${JSON.stringify(t)}`);
+    assert.equal(t[k + 1], "—", `kept: ${t[k + 1]}`);
+  });
   await check("key · money Sends ask Face ID every time: first Send = 1 · Journey 2 Job Send = 1 (the 10-minute key never signs money)", () => {
     const sendGets = a.filedGets - a.sendGetsBefore; // Face ID asks from the first Send tap to the filed Home = the Send's own
     assert.equal(sendGets, 1, `first Send Face ID asks: ${sendGets}`);
@@ -943,10 +950,11 @@ async function laneNames() {
     const creds = (await p.passkey.cdp.send("WebAuthn.getCredentials", { authenticatorId: p.passkey.authenticatorId })).credentials;
     made.push({ p, cred: creds[0], signal: await p.page.evaluate(() => window.__arasoSignal || null), handle: await p.page.evaluate(() => localStorage.getItem("araso.pkUserHandle.v1")) });
   }
-  await check("names · two passkeys made on this site have different names (not one constant)", () => {
+  // [A-1312 ③ RE-PIN · Owner 12:5x] pre-A-1312: each name was "Araso Piggy · YYYY-MM-DD HH:MM". Now "Araso"; the handles stay unique.
+  await check("names · passkeys made on this site are named \"Araso\" (no date), each with its own user handle", () => {
     const names = made.map((m) => m.cred?.userName);
     assert.ok(names.every(Boolean), `names: ${JSON.stringify(names)}`);
-    assert.ok(names.every((n) => /^Araso Piggy · \d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(n)), `names: ${JSON.stringify(names)}`);
+    assert.ok(names.every((n) => n === "Araso"), `names: ${JSON.stringify(names)}`);
     assert.ok(!names.includes("araso-owner"), `names: ${JSON.stringify(names)}`);
     const handles = made.map((m) => m.cred?.userHandle);
     assert.notEqual(handles[0], handles[1], "user handles stay unique");

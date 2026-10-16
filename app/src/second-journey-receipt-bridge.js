@@ -197,6 +197,8 @@ export function classifySecondReceipt(candidate, { scope = {}, context = {} } = 
   if (candidate.txExecuted === true) receipt.txExecuted = true;
   if (str(candidate.measuredDelta)) receipt.measuredDelta = str(candidate.measuredDelta);
   if (str(candidate.failureReason)) receipt.failureReason = str(candidate.failureReason);
+  // [A-1312 ④] the departure moment (ms) the Receipt shows as "went out", kept like the first trip's (A-1277)
+  if (Number.isSafeInteger(candidate.wentOutAt) && candidate.wentOutAt > 0) receipt.wentOutAt = candidate.wentOutAt;
   if (candidate.evidencePointer && typeof candidate.evidencePointer === "object") {
     receipt.evidencePointer = { ...candidate.evidencePointer };
   }
