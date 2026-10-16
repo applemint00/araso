@@ -281,6 +281,14 @@ export const HOME_UNKNOWN_LABEL = "unknown";
 export const HOME_NOT_APPLICABLE_LABEL = "—";
 const HOME_CHECKING_LABEL = "checking…";
 
+// One display rule for a held amount: 4 places (6 under 0.001), trailing zeros dropped. null when not a number.
+export function homeMoneyAmountText(quantity) {
+  const value = Number(quantity);
+  if (quantity === null || quantity === undefined || quantity === "" || !Number.isFinite(value)) return null;
+  const fixed = value.toFixed(value !== 0 && Math.abs(value) < 0.001 ? 6 : 4);
+  return fixed.includes(".") ? fixed.replace(/0+$/, "").replace(/\.$/, "") : fixed;
+}
+
 function homeMoneyValueMarkup(amount, unit) {
   if (amount === HOME_NOT_APPLICABLE_LABEL) {
     return `<span class="homePaper__amount homePaper__amount--unknown">${HOME_NOT_APPLICABLE_LABEL}</span>`;

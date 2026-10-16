@@ -120,7 +120,7 @@ import { fundingRowsMarkup, nextPlanLeg, planLegsInit, planLegsReduce, MONEY_SWI
 // ── [A-911] imports (own screens: markup + geometry live in a911-screens.js) ──
 import { a911Fit, a911FitList, a911GiftMarkup, a911GiftReceiveMarkup, a911MoneyMarkup, a911MoveMarkup, a911Share } from "./a911-screens.js";
 import { fundingPaperAdapters, fundingPaperRows } from "./funding-paper.js";
-import { HOME_UNKNOWN_LABEL } from "./home-paper.js";
+import { HOME_UNKNOWN_LABEL, homeMoneyAmountText } from "./home-paper.js";
 // ── [A-911] end imports ──
 // ── [A-915] imports (Gift create on Monad mainnet: exact-shape step helpers + the create-step runner) ──
 import { GIFT_CREATE_CHAIN_ID, buildGiftCreateStepCalls, confirmGiftCreateStep, giftCreateConfigProblem, needsGasRegistration, registerGasDeposit } from "./gift-create-plan.js";
@@ -7590,10 +7590,7 @@ function formatHomeMoneyAmount(wei) {
   } catch {
     return null;
   }
-  if (!Number.isFinite(value)) return null;
-  const decimals = value !== 0 && Math.abs(value) < 0.001 ? 6 : 4;
-  const fixed = value.toFixed(decimals);
-  return fixed.includes(".") ? fixed.replace(/0+$/, "").replace(/\.$/, "") : fixed;
+  return homeMoneyAmountText(value);
 }
 
 // 지금 이 기기의 하나뿐인 Piggy가 실제로 밖에 나가 있는 중인가 — home-paper.js

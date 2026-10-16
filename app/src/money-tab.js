@@ -13,7 +13,7 @@
 // existing repo line (MY MONEY, ok, back, unknown, still out working., Confirm with Face ID, the Funding row labels).
 // Class contract = receipts/A905_money_tab_jar/design/CLASS_CONTRACT.md. Actions = data-a905-act / data-a905-arg.
 
-import { HOME_UNKNOWN_LABEL, amountChoiceMarkup, amountChoices } from "./home-paper.js";
+import { HOME_UNKNOWN_LABEL, amountChoiceMarkup, amountChoices, homeMoneyAmountText } from "./home-paper.js";
 import { quantityToUnits, unitsToQuantity } from "./piggy-registry.js";
 import { ADDRESS_STATUS, buildSendPreview, canSendTo, checkDestination, freeBalance, resolveAmount } from "./send-money.js";
 import { FUNDING_ROW_LABEL, FUNDING_ROW_ORDER } from "./funding-paper.js";
@@ -46,7 +46,7 @@ export function selectablePiggies(piggies) {
 
 // ── the tab ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 const SCALE = 36;
-/** "20 USDC · 4.1 MON": real holdings summed per symbol, exact (BigInt). Zero / unreadable quantities add nothing. */
+/** "20 USDC · 4.1 MON": real holdings summed per symbol exactly (BigInt), shown with the Home amount rule. Zero / unreadable quantities add nothing. */
 export function realAssetsLine(piggies) {
   const sums = new Map();
   for (const p of Array.isArray(piggies) ? piggies : []) {
@@ -57,7 +57,7 @@ export function realAssetsLine(piggies) {
       sums.set(a.symbol, (sums.get(a.symbol) ?? 0n) + u);
     }
   }
-  return [...sums.entries()].map(([symbol, u]) => `${unitsToQuantity(u, SCALE)} ${symbol}`).join(" · ");
+  return [...sums.entries()].map(([symbol, u]) => `${homeMoneyAmountText(unitsToQuantity(u, SCALE))} ${symbol}`).join(" · ");
 }
 
 /** View-model of the tab. total = the registry sum only when every Piggy has a valuation (never invented). */
