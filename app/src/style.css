@@ -5121,7 +5121,8 @@ html .nameCard__weekday { font-size: var(--tsWeekday); }
    a927 all 366 × 7 labels: worst −1.56 send / −2.15 name local px). The extra gap is in em of the weekday line, so it scales with the card text.
    pre-A-927 baseline: margin-top 4px (base rules .sendCard__weekday / .nameCard__weekday) */
 html .sendCard__weekday,
-html .nameCard__weekday { margin-top: calc(4px + 0.32em); } /* 0.32em = the smallest round value giving >= 1 on-screen px on both cards (a927) */
+html .nameCard__weekday,
+html .secondJourneyCard .secondJourney__date small { margin-top: calc(4px + 0.32em); } /* [A-1346 ①] the Journey 2 paper's head joins the same rule */ /* 0.32em = the smallest round value giving >= 1 on-screen px on both cards (a927) */
 /* Chog out-of-card text (speech, "tap me!", "… is coming home", away line) = Choice, scaled with the character stage: one local
    px at every width (replaces the 24 / 28 / 33 / 49 / 141 px per-breakpoint values and the fixed-screen-px tap cue). The line's
    bottom edge stays on the base anchor (top 236 + 1.2 x 24 = 264.8 local px) so bigger text grows upward; the <=640 away line
