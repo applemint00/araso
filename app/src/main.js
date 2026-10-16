@@ -1654,10 +1654,10 @@ function a1214ClearPendingBirth() {
 
 // A1202/A1212: observe creation independently; never let Mera start an automatic
 // fallback assertion. Pending metadata also survives reload in this tab (A1214).
-// A per-create passkey name so a person with several passkeys can tell them apart in the system picker (no locale words).
-function passkeyCreateName(now = new Date()) {
-  const p = (n) => String(n).padStart(2, "0");
-  return `Araso Piggy · ${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}:${p(now.getMinutes())}`;
+// [A-1312 ③ · Owner 12:5x "날짜 빼고 한 줄"] a new passkey is named "Araso" (it is what you sign in with); after naming, the Piggy's
+// name replaces it where the browser allows (renamePasskeyForPiggy, A-1278). pre-A-1312: "Araso Piggy · YYYY-MM-DD HH:MM".
+function passkeyCreateName() {
+  return "Araso";
 }
 // Passkey ids this device already knows for this site: another create here would only duplicate it in the picker.
 function knownLocalPasskeyIds() {

@@ -18,10 +18,12 @@ function fnBody(name) {
   throw new Error(`function end missing: ${name}`);
 }
 
-check("create name: unique per create, English, minute precision; the constant name is gone", () => {
+// [A-1312 ③ RE-PIN · Owner 12:5x "날짜 빼고 한 줄"] pre-A-1312: "Araso Piggy · 2026-10-15 09:05", different per minute.
+// Now every new passkey is "Araso"; the Piggy name replaces it after naming (rename check below), the old "araso-owner" stays gone.
+check("create name: \"Araso\" (no date); the old constant name is gone", () => {
   const ctx = {}; vm.runInNewContext(`${fnBody("passkeyCreateName")}\nthis.f = passkeyCreateName;`, ctx);
-  assert.equal(ctx.f(new Date(2026, 9, 15, 9, 5)), "Araso Piggy · 2026-10-15 09:05");
-  assert.notEqual(ctx.f(new Date(2026, 9, 15, 9, 5)), ctx.f(new Date(2026, 9, 15, 9, 6)));
+  assert.equal(ctx.f(new Date(2026, 9, 15, 9, 5)), "Araso");
+  assert.equal(ctx.f(new Date(2026, 9, 15, 9, 6)), "Araso");
   assert.doesNotMatch(MAIN, /name: "araso-owner"/);
   assert.match(MAIN, /user: \{ name: passkeyName, displayName: passkeyName \}/);
 });
