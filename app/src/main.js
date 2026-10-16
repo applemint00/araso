@@ -3603,7 +3603,11 @@ async function sendPiggyOnce(markSettling) {
   setScene("sendstay", "Piggy is asking to go out.", "Checking with home base.");
 
   let grant;
-  try {
+  // [A-1299] the grant this Piggy already received at Home arrival is not asked again (the card waited for it to settle, so no second
+  // visibility wait either) — asking again only reads "already funded". A missing or failed early grant is still asked here.
+  const earlyGrant = typeof firstGrantReceived !== "undefined" && firstGrantReceived && String(firstGrantReceived.address).toLowerCase() === String(state.address).toLowerCase() ? firstGrantReceived : null;
+  if (earlyGrant) grant = { granted: false, txHash: earlyGrant.txHash };
+  else try {
     grant = await requestGrant(state.address);
   } catch (error) {
     // fail-closed — relayer 가 안 떠 있거나 그 밖의 이유로 거절하면 여기서 멈춘다. 추측 진행 금지.
@@ -7308,13 +7312,17 @@ function chogLineNodes(key, lines) {
 // Grant asked once, as early as the Piggy exists (hatch start; Home arrival if not yet), so the node can spend it by the card.
 let firstGrantReadyAt = null;
 let firstGrantAskedFor = "";
+let firstGrantReceived = null; // [A-1299] { address, txHash } once the early grant was actually sent to this Piggy
 function prefetchFirstGrant() {
   if (state.address && firstGrantAskedFor === state.address) return;
   firstGrantAskedFor = state.address || "";
   firstGrantReadyAt = null;
   if (!LEGACY_TESTNET_PATH || !state.address || state.tripClosed) { firstGrantReadyAt = 0; return; }
   requestGrant(state.address).then(
-    (grant) => { firstGrantReadyAt = grant?.granted ? Date.now() + PACE_GRANT_SETTLE_MS : 0; },
+    (grant) => {
+      firstGrantReadyAt = grant?.granted ? Date.now() + PACE_GRANT_SETTLE_MS : 0;
+      if (grant?.granted) firstGrantReceived = { address: grant.address || state.address, txHash: grant.txHash || null };
+    },
     () => { firstGrantReadyAt = 0; }, // the Send tap asks again and shows its own failure
   );
 }

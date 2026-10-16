@@ -487,6 +487,13 @@ async function laneMain() {
   });
   await check("pace · no dash in anything Chog says", () => { const d = tl.filter((e) => e.k === "chog" && /—/.test(e.v || "")).map((e) => e.v); assert.deepEqual([...new Set(d)], []); });
   await check("pace · Send can be pressed only after the job lines end (+1 s), not as the card appears", () => { assert.ok(sendAt - cardAt >= 4_000, `${((sendAt - cardAt) / 1000).toFixed(1)} s`); });
+  // [A-1299] the grant received at Home arrival is not asked again at Send (no already_funded noise); a failed early grant is still asked at Send (fault lanes)
+  await check("grant · received at Home arrival → Send does not ask again: one /api/grant · no grant/already_funded event", () => {
+    const asks = main.requests.filter((r) => r.person === "a" && r.path === "/api/grant").length;
+    const ev = eventsOf(main, "a");
+    assert.equal(asks, 1, `/api/grant asked ${asks} times · events ${ev.filter((e) => e.startsWith("grant")).join(",")}`);
+    assert.ok(!ev.includes("grant/already_funded"), `events ${ev.filter((e) => e.startsWith("grant")).join(",")}`);
+  });
   await check("pace · Away → Return ≥ 8 s outside", () => { assert.ok(returnAt - awayAt >= 7_900, `${((returnAt - awayAt) / 1000).toFixed(1)} s`); });
   await check("pace · Return → Receipt has a breath (≥ base + 1.5 s)", () => { assert.ok(receiptAt - returnAt >= Number(process.env.ARASO_PACE_RECEIPT_MS || 8500), `${((receiptAt - returnAt) / 1000).toFixed(1)} s`); });
   await check("pace · yellow text = our gold #E0B100, drawn bold (card lines + Chog speech)", async () => {
