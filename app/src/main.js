@@ -15441,7 +15441,8 @@ function a1223FinishEntry() {
 }
 function a1223LoadingMarkup() {
   // Same approved loading art/classes. Static hold; existing motion/timing rules stay unchanged.
-  return `<div class="a995bLoading" data-a1223-loading="1" aria-busy="true" style="--a995b-loading-splash:url('/splash/splash-1170x2532.png')"><div class="a995bLoading__face"><object type="image/svg+xml" data="/motion/a995b-loading-piggy.svg" tabindex="-1"></object></div></div>`;
+  // [A-1312 ①] an <img> of the same file: the shipped CSP (object-src 'none') blocked the <object>, leaving an empty square.
+  return `<div class="a995bLoading" data-a1223-loading="1" aria-busy="true" style="--a995b-loading-splash:url('/splash/splash-1170x2532.png')"><div class="a995bLoading__face"><img src="/motion/a995b-loading-piggy.svg" alt="" draggable="false" /></div></div>`;
 }
 let a1158UnboundInvite = null;
 function a1158AttemptKey(invite) {

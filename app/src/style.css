@@ -4732,6 +4732,7 @@ html .secondJourneyCard .secondJourney__picked { margin: 0.6439em 0 0.0920em; li
   transform: translate(-50%, -50%);
 }
 .a995bLoading__face object { display: block; width: 100%; height: 100%; pointer-events: none; }
+.a995bLoading__face img { display: block; width: 100%; height: 100%; pointer-events: none; } /* [A-1312 ①] the static wait face (same file, same box) */
 @media (prefers-reduced-motion: reduce) {
   .a995bLoading__face object { visibility: hidden; }
 }
