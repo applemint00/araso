@@ -12492,7 +12492,11 @@ function a911OnClick(event) {
     return;
   }
   const card = t.closest(".a911-card");
-  if (card && root.dataset.a911 === "gift") { a911GiftCardTap(card, t); return; }
+  if (card && root.dataset.a911 === "gift") {
+    if (Date.now() - (a911S().swipedAt || 0) < 400) return; // [A-1319] the click a swipe leaves behind
+    a911GiftCardTap(card, t);
+    return;
+  }
   const a898El = t.closest("[data-a898-act]");
   if (a898El) {
     if (a898El.hasAttribute("disabled")) return;
@@ -12537,8 +12541,31 @@ function a911OnInput(event) {
   if (el.id && (el.id === "homeAddMoneyTotal" || el.id.startsWith("homeAddMoneyAmount--"))) handleAddMoneyInput(event); // the A-646 split (amounts only, no %)
 }
 
+// [A-1319 · canon gift_card README:192 v3 "넘겨 보기"] in the fan (before a card is picked) a sideways swipe brings the next / previous
+// card to the centre, the same move as tapping that side card. The click that follows the swipe is not a tap (it would pick).
+const A1319_SWIPE_PX = 40;
+let a1319Swipe = null;
+function a1319SwipeStart(event) {
+  const d = state.giftSend;
+  a1319Swipe = d && d.stage === "compose" && !d.front && event.target?.closest?.(".a911-cards") ? { x: event.clientX, y: event.clientY, id: event.pointerId } : null;
+}
+function a1319SwipeEnd(event) {
+  const sw = a1319Swipe;
+  a1319Swipe = null;
+  if (!sw || sw.id !== event.pointerId) return;
+  const dx = event.clientX - sw.x, dy = event.clientY - sw.y;
+  if (Math.abs(dx) < A1319_SWIPE_PX || Math.abs(dx) <= Math.abs(dy)) return;
+  const s = a911S();
+  const n = document.querySelectorAll(".a911-screen .a911-card").length || 3;
+  s.ci = (((Number(s.ci) || 0) + (dx < 0 ? 1 : -1)) % n + n) % n; // finger to the left = the card on the right comes in
+  s.swipedAt = Date.now();
+  a911Sync();
+}
 function a911Bind(root) {
   root.addEventListener("click", a911OnClick);
+  root.addEventListener("pointerdown", a1319SwipeStart);
+  root.addEventListener("pointerup", a1319SwipeEnd);
+  root.addEventListener("pointercancel", () => { a1319Swipe = null; });
 }
 
 function a911FocusChange() {

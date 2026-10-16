@@ -6554,6 +6554,7 @@ html .a979-forkBadge {
 html .a911-giftGroup { width: 100%; display: flex; flex-direction: column; align-items: center; gap: calc(20px * var(--a911-z)); flex: none; }
 html .a911-cards { transform: translateY(var(--a911-lift, 0px)); position: relative; width: 100%; flex: none; height: calc(342px * var(--a911-fanC)); }
 html .a911-cards[data-a911-cards="pick"], html .a911-cards[data-a911-cards="done"] { height: calc(342px * var(--a911-s)); }
+html .a911-cards { touch-action: pan-y; } /* [A-1319] a sideways swipe on the fan reaches the app (vertical scroll stays the page's) */
 html .a911-card {
   position: absolute; left: 50%; top: 0;
   width: 216px; height: 342px; margin-left: -108px;

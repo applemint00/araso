@@ -1105,6 +1105,20 @@ async function laneGiftRun() {
   await check("gift · Gift a Piggy → pick a card → $20: the letter is from this Piggy (its name), amounts offered", async () => {
     await click(g, "#a905GiftPiggy", "Gift a Piggy"); await sleep(1500);
     await giftMeasure(g, "gift-2-fan");
+    // [A-1319 · canon gift_card README:192 v3] browse the three cards: swipe left/right and tap a side card, both ways; then back to the start card
+    const centre = () => g.page.evaluate(() => document.querySelector(".a911-card.is-centre")?.dataset.a898Front ?? null);
+    const swipe = async (dx) => { const r = await g.page.locator(".a911-card.is-centre").boundingBox(); const x = r.x + r.width / 2, y = r.y + r.height / 2; await g.page.mouse.move(x, y); await g.page.mouse.down(); await g.page.mouse.move(x + dx, y + 4, { steps: 6 }); await g.page.mouse.up(); await sleep(900); };
+    const start = await centre();
+    await swipe(-140); const afterLeft = await centre();
+    await swipe(140); const afterRight = await centre();
+    await swipe(140); const afterRight2 = await centre();
+    await swipe(-140); const back = await centre();
+    g.fanBrowse = { start, afterLeft, afterRight, afterRight2, back };
+    const side = await g.page.evaluate(() => { const c = document.querySelector('.a911-card.is-side[style*="--d:1"]') || document.querySelector(".a911-card.is-side"); return c ? c.dataset.a898Front : null; });
+    await g.page.locator(`.a911-card[data-a898-front="${side}"] .a911-cardTap`).click({ position: { x: 20, y: 120 }, force: true }).catch(() => {}); await sleep(900);
+    g.fanBrowse.sideTap = { side, centre: await centre() };
+    if ((await centre()) !== start) await swipe(140); // back to the start card (the tapped side card was on the right)
+    g.fanBrowse.restored = await centre();
     await g.page.locator(".a911-card.is-centre .a911-cardTap").click().catch(() => {}); await sleep(1800);
     await giftMeasure(g, "gift-3-picked");
     await g.page.locator(".a911-card.is-picked .a911-face--front").click(); await sleep(1200);
@@ -1138,6 +1152,15 @@ async function laneGiftRun() {
     g.giftRecord = last;
     assert.ok(last, "no sender Gift record");
     for (const label of ["approve", "create", "gas_deposit"]) assert.match(last.steps?.[label] || "", /^0x[0-9a-fA-F]{64}$/, `missing ${label} tx hash`);
+  });
+  await check("gift · fan: swipe left = the next card comes to the centre · swipe right = back · a side card tap brings it to the centre (canon v3)", () => {
+    const f = g.fanBrowse || {};
+    assert.ok(f.start && f.afterLeft && f.afterLeft !== f.start, `swipe left did not move the cards ${JSON.stringify(f)}`);
+    assert.ok(f.afterRight === f.start, `swipe right did not come back ${JSON.stringify(f)}`);
+    assert.ok(f.afterRight2 && f.afterRight2 !== f.start && f.afterRight2 !== f.afterLeft, `swipe right again ${JSON.stringify(f)}`);
+    assert.ok(f.back === f.start, `swipe left back ${JSON.stringify(f)}`);
+    assert.ok(f.sideTap?.centre === f.sideTap?.side, `side tap ${JSON.stringify(f)}`);
+    assert.ok(f.restored === f.start, `restore ${JSON.stringify(f)}`);
   });
   await check("gift · link step → link · copy · share", async () => {
     // [A-1305 RE-PIN · A-1296 ⑫-5 token-only link] pre-A-1296: /j2#g=<giftId>… — now /gift#t=<token>&v=1 (giftId = sha256(token))
