@@ -2351,7 +2351,11 @@ async function checkPiggy() {
 // pinned credential 한 번만 요청하며 생성/복구 폴백·주소 저장·돈 실행은 없다.
 // [A-667] 한 탭 = 한 시도(attempt 토큰). requestPrf 를 **부른 뒤에만** 화면 대기 상한 타이머를 걸고 확인 중 모습을
 // 그린다(render) — WebAuthn 호출 앞 동기 체인은 그대로다. 시도는 성공 또는 재시도 가능한 실패 카드로 반드시 끝난다.
+// [A-1313 · Owner 13:5x] set only by the automatic ask on reopen (askLockFaceIdOnce) right before it calls unlockApp(); read once.
+let unlockAutoNext = false;
 function unlockApp() {
+  const auto = typeof unlockAutoNext !== "undefined" && unlockAutoNext === true; // (slices of this function run without the module around it)
+  if (auto) unlockAutoNext = false;
   if (typeof a1305HoldGate === "function" && a1305HoldGate()) return; // [A-1305 ⑥] behind the hold gate: no Face ID
   const lock = state.appLock;
   if (!lock || lock.phase === "checking") return;
@@ -2368,7 +2372,7 @@ function unlockApp() {
     settleUnlock(null, unsupported, pinned);
     return;
   }
-  const attempt = { timer: null, address: state.address };
+  const attempt = { timer: null, address: state.address, auto };
   lock.phase = "checking";
   lock.cancelled = false;
   lock.attempt = attempt;
@@ -2409,6 +2413,14 @@ function settleUnlock(result, error, pinned, attempt = null) {
         same = false;
         endActiveSession();
       }
+    }
+    // [A-1313] iOS Safari turns down a Face ID that no tap started (observed: passkey_get cancel + flow_error unlock on each
+    // reopen). That refusal of the automatic ask is not a failure: the logo stays and its tap asks Face ID (no failure card).
+    if (!same && attempt?.auto && !result && error && isCancelledAuthError(error)) {
+      lock.phase = "waiting";
+      lock.cancelled = false;
+      render();
+      return;
     }
     if (!same) {
       console.debug("unlock", "identity_failed");
@@ -6575,7 +6587,7 @@ function askLockFaceIdOnce() {
   if (!lock || lock.phase !== "waiting" || lock.autoAsked) return;
   lock.autoAsked = true; // once per lock: a failed ask leaves the failure card, never asks again by itself
   // [A-1305 ⑥] the automatic ask also waits for the boot public read (≤ 5 s), so a hold answer can close the door before any Face ID
-  setTimeout(() => { void a1265AwaitPublicState().then(() => { if (state.appLock === lock && lock.phase === "waiting" && !a1305HoldGate()) unlockApp(); }); }, LOCK_AUTO_FACE_ID_MS);
+  setTimeout(() => { void a1265AwaitPublicState().then(() => { if (state.appLock === lock && lock.phase === "waiting" && !a1305HoldGate()) { unlockAutoNext = true; unlockApp(); } }); }, LOCK_AUTO_FACE_ID_MS);
 }
 
 function renderAppLock() {
