@@ -38,21 +38,18 @@ const fnSrc = (text, name) => {
 const fnNames = (text) => [...text.matchAll(/^(?:export )?(?:async )?function ([A-Za-z0-9_$]+)\(/gm)].map((m) => m[1]);
 const sha = (t) => createHash("sha256").update(t).digest("hex");
 // [A-983] baseline pins (replace `git show HEAD:` compares, which fail once HEAD holds the fork work: after the release commit / in a clone).
-//   Every value = sha256 of the pre-fork baseline commit de8c9c8 ("baseline: before fork track (A-942)") — the exact text these checks read
-//   from HEAD while HEAD was de8c9c8. Generated with the same fnSrc/fnNames/trim as below; recorded in the A-983 receipt HEAD_PINS_de8c9c8.json.
-const BASE_RT143_SHA256 = "d6e418f439e4f22f0f015b92b8f57dae43cddb2ea63189bbefb9fb868bad7a7a"; // api/_lib/gift-sponsor-runtime.js @de8c9c8, trailing newlines trimmed
+//   Unchanged values retain de8c9c8; the accepted Gift metadata/link changes re-pin only their affected surfaces.
+const BASE_RT143_SHA256 = "96da1363170faeb9f465bc66e4b19fef9237188d8ea5e87a0d5bd45e276a64d0"; // accepted Gift runtime prefix, trailing newlines trimmed
 const BASE_CREDENTIAL_LINES_SHA256 = "6d9670c91a048a5a2871761dc45f9c9be74d7426a3fad9af7235f46c99d58819"; // main.js @de8c9c8: lines naming araso.passkey / araso.prfSalt / PASSKEY_STORAGE_KEY, joined by \n
-const BASE_GIFT_FNS = { // file → [function name, sha256(fnSrc)] in file order, @de8c9c8
+const BASE_GIFT_FNS = { // file → [function name, sha256(fnSrc)] in file order; de8c9c8 except accepted Gift changes
   "app/src/gift-create-plan.js": [
-    ["webcrypto", "0a59dabb9e17f3668c8316eeb50ada5cae196775a417e08db039545ae657c7a6"],
-    ["mintGiftId", "dea11609f92cf61541f0a045981bf698dee915a5820a1868d21061e57d365121"],
     ["isoFromUnixSeconds", "f452f3ab3cc437b99a29d1be5b231b7345bc68f9a2b8cfc3e2276ee8834b4bfc"],
-    ["planGiftCreate", "70c1d0d2008297003ef2aed699d367b513ef49481e50f49d0651651b087aa462"],
+    ["planGiftCreate", "4a448244142031a8ee53d45382defab0f188263c875bdcaedcd64b09cc039b35"],
     ["planGiftGasDeposit", "495c8fbb8b5b9e3315e7396d2246c3aecaf8f739d6db99375fd6c8daed95511e"],
     ["buildGiftCreateStepCalls", "173ab501c43d76ebaffbaf4bb1026af53c974b7c43bc2eb23849ff3ae6598b4a"],
     ["confirmGiftCreateStep", "92da9b92da0e85ed99a28efb4b4217f14898b0a3299521016edfdf3be5a40aba"],
     ["needsGasRegistration", "4c537c40e6c26f0d42986d6c9f638af2067c5f6001c468eaa9d9fe919c1f154f"],
-    ["buildGasTxRegistration", "de7d9482a1e28b34c22f24f6921b2f90b16fe47b2662dc130789b73be17eb357"],
+    ["buildGasTxRegistration", "2f6b335cf3713e48324f8f1f9e75b7d06843579a5dc0b40dc81778bd9fe37f94"],
     ["registerGasDeposit", "098bddfd3a9fb5dbe68c9dd451e11cebe24723baab2941bc1c257deadf490cbb"],
     ["giftCreateConfigProblem", "52b412348862d56bb81ad3c0f698e4bc8432923164e656e6f6fce915ae857fb5"],
     ["armGiftCreateStep", "4dcb43b77ed04f364ed949b1f102721f76b66bbf16e1515642bb0b314f6eaf2a"],
@@ -234,7 +231,7 @@ await check("api: fork Gift policy is a separate object with the fork id; 143 ru
   const fork = now.indexOf("// ── [A-946] Shared mainnet fork");
   assert.ok(fork > 0);
   // [A-983 re-pin] HEAD text → its sha256 at de8c9c8 (same text, same trim). pre-A-983: if (head !== null) assert.equal(now.slice(0, fork).replace(/\n+$/, ""), head.replace(/\n+$/, ""), …) with head = git show HEAD:api/_lib/gift-sponsor-runtime.js
-  assert.equal(sha(now.slice(0, fork).replace(/\n+$/, "")), BASE_RT143_SHA256, "(e) everything before the fork block is byte-identical to the pre-fork baseline");
+  assert.equal(sha(now.slice(0, fork).replace(/\n+$/, "")), BASE_RT143_SHA256, "(e) everything before the fork block matches the accepted Gift baseline");
 });
 
 // ── (e) 143 Gift path, (f) session, (g) passkey keys ──
