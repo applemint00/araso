@@ -14,10 +14,12 @@
 export const SOUND_STORAGE_KEY = "araso.sound.off.v1"; // present ("1") = muted; absent = ON (default)
 export const SOUND_BASE = "/sound";
 export const MASTER_GAIN = 0.5;
+// [A-1305 ⑦ · Owner] the Home paper unfold at half its old level (1.4 → 0.7). One place, so the phone check can set it again.
+export const UNFOLD_TRIM = 0.7;
 
 // moment -> file(s) + trim (linear). Chog has two files that alternate per bubble.
 export const SOUND_MOMENTS = {
-  unfold: { files: [`${SOUND_BASE}/sound_home_paper_unfold.wav`], trims: [1.4] },
+  unfold: { files: [`${SOUND_BASE}/sound_home_paper_unfold.wav`], trims: [UNFOLD_TRIM] },
   toss: { files: [`${SOUND_BASE}/sound_receipt_toss.wav`], trims: [1.23] },
   bell: { files: [`${SOUND_BASE}/sound_return_bell_dmsd_glass.wav`], trims: [0.53] },
   chog: { files: [`${SOUND_BASE}/chog/sound_chog_babble_radio_A.wav`, `${SOUND_BASE}/chog/sound_chog_babble_radio_B.wav`], trims: [0.52, 0.63] },
