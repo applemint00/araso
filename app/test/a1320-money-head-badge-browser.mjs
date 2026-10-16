@@ -77,10 +77,10 @@ try {
     await p.screenshot({ path: shot });
     evidence.push({ size, ...f, shot });
     const tag = `${size.w}`;
-    check(f.total !== "unknown", `${tag} F2 head has no big "unknown" (total=${JSON.stringify(f.total)})`);
+    check(f.total === "$99.89", `${tag} F2 head = dollars, USDC 1:1 (total=${JSON.stringify(f.total)})`);
     check(typeof f.assets === "string" && !/\.\d{5,}\b/.test(f.assets), `${tag} F2 USDC line not raw 6-place (assets=${JSON.stringify(f.assets)})`);
     check(/USDC/.test(f.assets || ""), `${tag} F2 USDC line stays (assets=${JSON.stringify(f.assets)})`);
-    check(f.rows.length === 1 && /unknown/.test(f.rows[0]), `${tag} F2 the Piggy row alone says unknown (rows=${JSON.stringify(f.rows)})`);
+    check(f.rows.length === 1 && /\$99\.89$/.test(f.rows[0]), `${tag} F2 the Piggy row in dollars (rows=${JSON.stringify(f.rows)})`);
     check(!!f.badge, `${tag} F10 badge shown on Money`);
     const covered = Object.entries(f.overlaps).filter(([, v]) => v).map(([k]) => k);
     check(covered.length === 0, `${tag} F10 badge covers nothing (covers=${JSON.stringify(covered)} badge=${JSON.stringify(f.badge && { y: f.badge.y, h: f.badge.h })} title=${JSON.stringify(f.parts.title && { y: f.parts.title.y, h: f.parts.title.h })} paper=${JSON.stringify(f.parts.paper && { y: f.parts.paper.y })})`);

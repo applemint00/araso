@@ -26,7 +26,7 @@ await check("T1 tab rows: total, real assets, Move money, Gift a Piggy, per-Pigg
   assert.equal(T.moneyTabMarkup(v, { withTitle: false }).includes("a905-money__title"), false);
 });
 await check("T2 no fake total (unknown valuation -> unknown), no Piggy-tap actions, no buttons inside the plain Piggy list", () => {
-  const v = T.moneyTabView({ piggies: [{ ...home, valuation: null }], totals: { totalUsd: null } });
+  const v = T.moneyTabView({ piggies: [{ ...away, valuation: null }], totals: { totalUsd: null } }); // MON without a value; USDC shows as $ 1:1 (README:202)
   assert.equal(v.total, "unknown");
   const h = T.moneyTabMarkup(T.moneyTabView({ piggies: [home, away], totals: { totalUsd: "32.40" } }));
   const list = h.slice(h.indexOf('class="a905-money__piggies"'));

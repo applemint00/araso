@@ -14,5 +14,5 @@ assert.equal(homeMoneyAmountText(""), null);
 assert.equal(homeMoneyAmountText("x"), null);
 const v = moneyTabView({ piggies: [piggy("99.886735")], totals: { totalUsd: null } });
 assert.equal(v.assets, "99.8867 USDC");
-assert.equal(v.piggies[0].amount, "unknown");
+assert.equal(v.piggies[0].amount, "$99.89");
 console.log("PASS  a1320 Money amount line: 9/9");

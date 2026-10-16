@@ -15913,7 +15913,8 @@ function a977ForkClients() {
 // Piggy of a person who did Journey 1 on testnet had none: Money read it as the legacy "unknown" row (id for a name, never selectable) and
 // Gift a Piggy stayed off. Once, on the fork, after Journey 2, while the fork registry is empty: seat THIS device's first Piggy (the testnet
 // index row with the same address and no sequence) as an identity row at home: id · name · address · locator from that row, assets = the
-// fork USDC it holds now (measured; none when unreadable), valuation unknown (no $1 assumption, as the funding reconcile). Not the A-897
+// fork USDC it holds now (measured; none when unreadable), stored valuation left unknown (the ledger keeps measured USDC; the screen shows
+// it as $ 1:1, Owner 10-16, in money-tab.js). Not the A-897
 // mainnet promotion (no promotedAt, no stamp, mainnet path untouched). The fork Piggy index is NOT written, so no birth mark or issuance
 // right reaches the fork: + Piggy's origin check still refuses with origin_index_missing (99d:303).
 const A1285_FIRST_PIGGY_SOURCE_SCOPE = "monad-testnet";

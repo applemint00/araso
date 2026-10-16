@@ -88,13 +88,15 @@ await check("U1 fork · Journey 2 done · empty fork registry · this device's f
   assert.deepEqual([p.assets[0].symbol, p.assets[0].quantity, p.assets[0].assetId, p.assets[0].source, p.assets[0].blockNumber], ["USDC", "100", USDC, "measured", "110874123"]);
   for (const k of ["provenance", "promotedAt", "sequence", "issuedThrough"]) assert.equal(p[k] ?? null, null, `${k} not carried`);
 });
-await check("U2 the Money tab model reads it: Gift is pickable, the name is the Piggy's name (not legacy-0x…), the amount stays unknown", async () => {
+await check("U2 the Money tab model reads it: Gift is pickable, the name is the Piggy's name (not legacy-0x…), the screen shows the USDC as $ 1:1 while the stored valuation stays null", async () => {
   const w = world(); await w.seat({ client: client() });
-  const v = moneyTabView({ piggies: forkRows(w.storage), canAct: true });
+  const rows = forkRows(w.storage);
+  assert.equal(rows[0].valuation ?? null, null, "ledger: no valuation written");
+  const v = moneyTabView({ piggies: rows, canAct: true });
   assert.equal(v.canGift, true);
   assert.equal(v.piggies[0].name, "Pgr");
   assert.equal(v.assets, "100 USDC");
-  assert.equal(v.piggies[0].amount, "unknown", "no real valuation → unknown (main.js:10025 contract)");
+  assert.equal(v.piggies[0].amount, "$100.00", "screen = dollars, USDC 1:1 (README:202 · Owner 10-16)");
 });
 await check("U2b before the seat (= RED): the legacy migration row is unknown, so Gift is off and the name is the id", () => {
   const { piggy } = PR.migrateSinglePiggy({ address: ADDR, name: "" });

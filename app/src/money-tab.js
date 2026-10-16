@@ -60,19 +60,36 @@ export function realAssetsLine(piggies) {
   return [...sums.entries()].map(([symbol, u]) => `${homeMoneyAmountText(unitsToQuantity(u, SCALE))} ${symbol}`).join(" · ");
 }
 
-/** View-model of the tab. total = the registry sum only when every Piggy has a valuation (never invented). */
+/** Screen dollars of one Piggy: its valuation, else USDC shown 1:1 when USDC is all it holds; null = unknown. The ledger row is only read. */
+function screenUsd(p) {
+  if (p?.valuation && typeof p.valuation.usd === "string" && p.valuation.usd !== "") return Number(p.valuation.usd);
+  const assets = Array.isArray(p?.assets) ? p.assets : [];
+  if (assets.length === 0 || !assets.every((a) => a && a.symbol === OUT_ASSET)) return null;
+  let u = 0n;
+  for (const a of assets) {
+    const q = quantityToUnits(String(a.quantity), SCALE);
+    if (q === null) return null;
+    u += q;
+  }
+  return Number(unitsToQuantity(u, SCALE));
+}
+const usdText = (n) => `$${n.toFixed(2)}`;
+
+/** View-model of the tab. Screen = dollars (Owner 10-16: 1 USDC shows as $1, the ledger stays USDC); total only when every Piggy has screen dollars. */
 export function moneyTabView({ piggies = [], totals = null, canAct = true, canMove = canAct } = {}) {
   const list = Array.isArray(piggies) ? piggies : [];
+  const usd = list.map(screenUsd);
+  const sum = usd.length > 0 && usd.every((n) => n !== null && Number.isFinite(n)) ? usd.reduce((a, n) => a + n, 0) : null;
   return {
-    total: totals && typeof totals.totalUsd === "string" && totals.totalUsd !== "" ? `$${totals.totalUsd}` : HOME_UNKNOWN_LABEL,
+    total: totals && typeof totals.totalUsd === "string" && totals.totalUsd !== "" ? `$${totals.totalUsd}` : sum !== null ? usdText(sum) : HOME_UNKNOWN_LABEL,
     assets: realAssetsLine(list),
     canMove: canMove === true, // `in` is allowed while every Piggy is Away; `out` then shows them greyed and unpickable
     canGift: canAct === true && selectablePiggies(list).length > 0,
     allAway: list.length > 0 && list.every((p) => p && p.location === "away"),
-    piggies: list.map((p) => ({
+    piggies: list.map((p, i) => ({
       id: p.id,
       name: p.name || p.id,
-      amount: p.valuation && typeof p.valuation.usd === "string" ? `$${p.valuation.usd}` : HOME_UNKNOWN_LABEL,
+      amount: p.valuation && typeof p.valuation.usd === "string" ? `$${p.valuation.usd}` : usd[i] !== null ? usdText(usd[i]) : HOME_UNKNOWN_LABEL,
       away: p.location === "away",
     })),
   };
