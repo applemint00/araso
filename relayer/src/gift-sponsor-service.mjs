@@ -168,7 +168,7 @@ export function applySponsorTransition(e, state) {
 }
 
 export function openGiftSponsorLedger(file = null) {
-  let data = { version: 3, entries: {}, archived: [], gasTxs: {} };
+  let data = { version: 3, entries: {}, archived: [], gasTxs: {}, letters: {} };
   let lockPath = null;
   if (file) {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -180,7 +180,7 @@ export function openGiftSponsorLedger(file = null) {
         const parsed = JSON.parse(readFileSync(file, "utf8"));
         if (parsed?.version !== 3 || typeof parsed.entries !== "object" || parsed.entries === null || !Array.isArray(parsed.archived)) throw new Error("LEDGER_SCHEMA");
         for (const [k, e] of Object.entries(parsed.entries)) if (!B32.test(k) || e?.giftId !== k || !SPONSOR_LEDGER_STATES.includes(e.state)) throw new Error("LEDGER_SCHEMA");
-        data = { gasTxs: {}, ...parsed };
+        data = { gasTxs: {}, letters: {}, ...parsed };
       }
     } catch (e) { try { unlinkSync(lockPath); } catch { /* ignore */ } throw new Error(e?.message === "LEDGER_SCHEMA" ? "LEDGER_SCHEMA" : "LEDGER_CORRUPT"); }
   }
@@ -219,6 +219,11 @@ export function openGiftSponsorLedger(file = null) {
       if (Object.hasOwn(data.gasTxs, giftId)) return data.gasTxs[giftId] === hash ? "same" : "conflict";
       if (Object.values(data.gasTxs).includes(hash) || Object.values(data.entries).some((e) => e.plan?.depositTx === hash && e.giftId !== giftId)) return "reused";
       data.gasTxs[giftId] = hash; save(); return "created";
+    },
+    letterOf: (giftId) => (Object.hasOwn(data.letters, giftId) ? data.letters[giftId] : null),
+    registerLetter(giftId, letter) {
+      if (Object.hasOwn(data.letters, giftId)) return JSON.stringify(data.letters[giftId]) === JSON.stringify(letter) ? "same" : "conflict";
+      data.letters[giftId] = letter; save(); return "created";
     },
     depositUsedBy: (txHash) => Object.values(data.entries).find((e) => e.plan?.depositTx === txHash)?.giftId ?? data.archived.find((e) => e.plan?.depositTx === txHash)?.giftId ?? null,
     close() { if (lockPath) { try { unlinkSync(lockPath); } catch { /* already gone */ } lockPath = null; } },
@@ -559,21 +564,44 @@ export function createGiftSponsorService({ ledger, policy, chain, sponsor, prefl
   /** [A-913 G10 (c)] Registration: the sender's app records giftId -> gasTx right after create. Record-and-read only (no new relayer authority, no send, no signing).
    *  Same giftId + same hash = no-op (200 already); a different hash for the giftId, or a hash already registered for another giftId = 409. */
   async function register(body) {
-    if (!(hasOnly(body, ["action", "giftId", "gasTx"]) && body.action === "register_gas_tx" && typeof body.giftId === "string" && B32.test(body.giftId) && typeof body.gasTx === "string" && B32.test(lc(body.gasTx)))) return BAD();
-    if (!ready || typeof ledger.registerGasTx !== "function") return UNAVAIL_NOT_SENT();
+    const withLetter = hasOnly(body, ["action", "giftId", "gasTx", "note", "letterHash"]);
+    if (!((withLetter || hasOnly(body, ["action", "giftId", "gasTx"])) && body.action === "register_gas_tx" && typeof body.giftId === "string" && B32.test(body.giftId) && typeof body.gasTx === "string" && B32.test(lc(body.gasTx)))) return BAD();
+    if (withLetter) {
+      if (typeof body.note !== "string" || body.note.length > 140 || typeof body.letterHash !== "string" || !/^[0-9a-f]{64}$/.test(body.letterHash) || createHash("sha256").update(body.note).digest("hex") !== body.letterHash) return BAD();
+      const parts = body.note.split("\n");
+      if (parts.length !== 4 || !["01", "02", "04"].includes(parts[0]) || parts[1].length > 80 || parts[2].length > 140 || parts[3].length > 40 || body.note.includes("\r") || /[\u0000-\u0009\u000b-\u001f\u007f]/.test(body.note)) return BAD();
+    }
+    if (!ready || typeof ledger.registerGasTx !== "function" || (withLetter && typeof ledger.registerLetter !== "function")) return UNAVAIL_NOT_SENT();
     const giftId = body.giftId; const hash = lc(body.gasTx);
     let g;
     try { g = await chain.getGift(giftId); } catch { return UNAVAIL_NOT_SENT(); }
     const sender = g && typeof g.sender === "string" && ADDR.test(g.sender) ? lc(g.sender) : null;
     if (!g || g.exists !== true || g.claimed !== false || sender === null) { say("register_refused(gift)", giftId); return NA(); }
     let prior; try { prior = await ledger.gasTxOf(giftId); } catch { return UNAVAIL_NOT_SENT(); }
-    if (prior && prior === hash) { say("register_noop", giftId); return { status: 200, body: { ok: true, registered: true, already: true, giftId } }; }
+    const letter = withLetter ? { note: body.note, letterHash: body.letterHash } : null;
+    if (prior && prior === hash) {
+      if (letter) { let lr; try { lr = await ledger.registerLetter(giftId, letter); } catch { return UNAVAIL_NOT_SENT(); } if (lr === "conflict") return NA(); }
+      say("register_noop", giftId); return { status: 200, body: { ok: true, registered: true, already: true, giftId } };
+    }
     if (prior) { say("register_refused(different_hash)", giftId); return NA(); }
     const dep = await checkDeposit({ giftId, sender, hash });
     if (!dep.ok) { say(`register_refused(${dep.code})`, giftId); return dep.unavailable ? UNAVAIL_NOT_SENT() : NA(); }
     let res; try { res = await ledger.registerGasTx(giftId, hash); } catch { return UNAVAIL_NOT_SENT(); }
-    if (res === "created" || res === "same") { say("register_ok", giftId); return { status: 200, body: { ok: true, registered: true, already: res === "same", giftId } }; }
+    if (res === "created" || res === "same") {
+      if (letter) { let lr; try { lr = await ledger.registerLetter(giftId, letter); } catch { return UNAVAIL_NOT_SENT(); } if (lr === "conflict") return NA(); }
+      say("register_ok", giftId); return { status: 200, body: { ok: true, registered: true, already: res === "same", giftId } };
+    }
     say(`register_refused(${res})`, giftId); return NA();
+  }
+
+  async function readLetter(body) {
+    if (!(hasOnly(body, ["action", "token"]) && body.action === "read_letter" && typeof body.token === "string" && /^[A-Za-z0-9_-]{22}$/.test(body.token))) return BAD();
+    if (!ready || typeof ledger.letterOf !== "function") return UNAVAIL_NOT_SENT();
+    const giftId = `0x${createHash("sha256").update(body.token).digest("hex")}`;
+    let g; let letter;
+    try { g = await chain.getGift(giftId); letter = await ledger.letterOf(giftId); } catch { return UNAVAIL_NOT_SENT(); }
+    if (!g || g.exists !== true || !letter || typeof g.amount !== "bigint" || g.amount <= 0n) return NA();
+    return { status: 200, body: { ok: true, giftId, note: letter.note, letterHash: letter.letterHash, amountAtomic: g.amount.toString(), decimals: 6 } };
   }
 
   async function processRequest(v) {
@@ -627,6 +655,7 @@ export function createGiftSponsorService({ ledger, policy, chain, sponsor, prefl
     steps,
     ready,
     register: (body) => (pending >= cap ? Promise.resolve(UNAVAIL_NOT_SENT()) : enqueue(async () => { try { return await register(body); } catch { return UNAVAIL_NOT_SENT(); } })),
+    readLetter: (body) => (pending >= cap ? Promise.resolve(UNAVAIL_NOT_SENT()) : enqueue(async () => { try { return await readLetter(body); } catch { return UNAVAIL_NOT_SENT(); } })),
     /** Run `fn` inside this instance's queue AND the cross-instance lease (the reconciler uses it so a pass never interleaves with a live claim). */
     runExclusive: (fn) => enqueue(() => withLease(fn)),
   };

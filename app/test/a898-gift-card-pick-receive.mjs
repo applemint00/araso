@@ -80,9 +80,15 @@ await check("P7 main.js: pick / flip / re-pick patch the existing card nodes (no
   const act = MAIN.slice(MAIN.indexOf("async function a898Act("), MAIN.indexOf("// ── [A-898] end ──"));
   assert.ok(act.includes("a898PatchGiftStage()") && act.includes('"gift-repick"') && act.includes("if (!patched) refreshHomePaperMount()"));
 });
-await check("P8 receive side recorded as NOT built: no card-first-screen branch, no front id in the link record", () => {
+await check("P8 receive side fetches server-bound letter metadata and renders card-first", () => {
   const link = SRC("gift-piggy-claim-link.js");
-  assert.equal(/\bfront\b/.test(link), false, "createClaimLink has no front channel (UNKNOWN + ask)");
+  const plan = SRC("gift-create-plan.js");
+  const screen = SRC("a911-screens.js");
+  const main = SRC("main.js");
+  assert.ok(link.includes("hashGiftLetter") && link.includes("verifyGiftLetter"));
+  assert.ok(plan.includes("letterHash = note ? await hashGiftLetter(note) : null") && plan.includes("buildClaimUrl(origin, { token: created.token })") && plan.includes("giftId = `0x${await hashClaimToken(claimToken)}`"));
+  assert.ok(screen.includes("export function a911GiftReceiveMarkup") && screen.includes('data-gift-receive="open"'));
+  assert.ok(main.includes("loadPendingGiftDisplay") && main.includes("verifyGiftLetter") && main.includes("giftReceiveFlipped") && main.includes("handleGiftOpenActivate"));
 });
 
 console.log(`\n${pass}/${pass + fail} PASS`);

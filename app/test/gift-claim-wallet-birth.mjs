@@ -124,7 +124,7 @@ out.checks.tokenOnlyInFragment = url.slice(0, url.indexOf("#")).indexOf(made.tok
 
 // ── 3. 받는 사람이 링크를 연다 ─────────────────────────────────────────────────
 const parsed = parseClaimUrl(url);
-out.checks.recipientCanParseLink = parsed.ok && parsed.giftId === record.giftId;
+out.checks.recipientCanParseLink = parsed.ok && parsed.token === made.token;
 const opened = await openClaimLink(record, parsed.token, { now: "2026-09-21T10:00:00Z" });
 out.checks.linkOpens = opened.result === CLAIM_RESULT.OK;
 out.checks.openSaysNoMoneyMovedYet = opened.transfer?.status === TRANSFER_STATUS.NOT_ATTEMPTED;

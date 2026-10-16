@@ -20,6 +20,8 @@ const MAIN = readFileSync(path.join(REPO, "app/src/main.js"), "utf8");
 const BASE = "http://localhost:5944";
 const FORK_HOST = "fork-rpc.a1264.invalid";
 const FORK_INSTANCE = "a1264-local";
+const FORK_GIFT_ESCROW = `0x${"12".repeat(20)}`;
+const FORK_GIFT_SPONSOR = `0x${"34".repeat(20)}`;
 const OUT = path.resolve(process.env.ARASO_REHEARSAL_OUT || path.join(tmpdir(), `araso-a1264-${process.pid}`));
 const BUILD = process.env.ARASO_REHEARSAL_PREBUILT ? path.resolve(process.env.ARASO_REHEARSAL_PREBUILT) : path.join(OUT, "build");
 const T0 = Date.now();
@@ -157,7 +159,7 @@ async function addPasskey(page, credential = null) {
 async function openPerson(browser, world, id, { storageState, invite, credential, viewport, initScript, base, userVerified, clock } = {}) {
   const phone = Number(process.env.ARASO_REHEARSAL_WIDTH) > 0 ? { width: Number(process.env.ARASO_REHEARSAL_WIDTH), height: 932 } : { width: 390, height: 844 };
   const video = process.env.ARASO_REHEARSAL_VIDEO && id === "a" ? { recordVideo: { dir: process.env.ARASO_REHEARSAL_VIDEO, size: viewport || phone } } : {};
-  const context = await browser.newContext({ ...video, viewport: viewport || phone, ...(storageState ? { storageState } : {}) });
+  const context = await browser.newContext({ ...video, viewport: viewport || phone, permissions: ["clipboard-read", "clipboard-write"], ...(storageState ? { storageState } : {}) });
   const tag = { id };
   await context.route("**/*", (route) => world.route(route, tag.id));
   if (invite) await context.addInitScript((token) => { try { if (!localStorage.getItem("araso.forkInvite.v1")) localStorage.setItem("araso.forkInvite.v1", token); } catch {} }, invite);
@@ -396,7 +398,21 @@ function eventsOf(world, id) { return world.events.filter((e) => e.person === id
 // ── build ────────────────────────────────────────────────────────────────────────────────────────────
 const built = process.env.ARASO_REHEARSAL_PREBUILT ? { status: 0 } : spawnSync(path.join(REPO, "node_modules/.bin/vite"), ["build", "app", "--mode", "a172-local", "--outDir", BUILD, "--emptyOutDir"], {
   cwd: REPO, encoding: "utf8",
-  env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", VITE_ARASO_RELEASE_LEVEL: "2", VITE_ARASO_TEST_REPEAT_BELL: "1", VITE_ARASO_FORK_RPC_URL: `https://${FORK_HOST}/`, VITE_ARASO_FORK_INSTANCE_ID: FORK_INSTANCE },
+  env: {
+    ...process.env,
+    VITE_ARASO_LOCAL_DEV_ENTRY: "1",
+    VITE_ARASO_LOCAL_DEV_RP_ID: "localhost",
+    VITE_ARASO_RELEASE_LEVEL: "2",
+    VITE_ARASO_TEST_REPEAT_BELL: "1",
+    VITE_ARASO_FORK_RPC_URL: `https://${FORK_HOST}/`,
+    VITE_ARASO_FORK_INSTANCE_ID: FORK_INSTANCE,
+    VITE_ARASO_FORK_GIFT_SPONSOR_URL: `https://${FORK_HOST}/gift-sponsor`,
+    VITE_ARASO_FORK_GIFT_ESCROW: FORK_GIFT_ESCROW,
+    VITE_ARASO_FORK_GIFT_SPONSOR: FORK_GIFT_SPONSOR,
+    VITE_ARASO_FORK_GIFT_GAS_UNITS: "100000,200000,100000,200000",
+    VITE_ARASO_FORK_GIFT_GAS_BUFFER_BPS: "1000",
+    VITE_ARASO_FORK_MON_USD: "1",
+  },
 });
 if (built.status !== 0) { console.log(`FAIL a172-local build — ${(built.stderr || built.stdout || "").slice(-600)}`); process.exit(1); }
 record("a172-local build", true);
@@ -1048,20 +1064,45 @@ async function laneGiftRun() {
     await giftMeasure(g, "gift-2-fan");
     await g.page.locator(".a911-card.is-centre .a911-cardTap").click().catch(() => {}); await sleep(1800);
     await giftMeasure(g, "gift-3-picked");
+    await g.page.locator(".a911-card.is-picked .a911-face--front").click(); await sleep(1200);
+    await g.page.locator('[data-a898-field="to"]').fill("Mina");
+    await g.page.locator('[data-a898-field="message"]').fill("For your next adventure");
+    await g.page.locator('[data-a898-field="from"]').fill("Pgr");
     const chip = g.page.locator('[data-a898-act="gift-amount"]').first(); if (await chip.count()) { await chip.click().catch(() => {}); await sleep(1200); }
-    const to = g.page.locator(".a911-letter__in--to"); if (await to.count()) await to.fill("Mina").catch(() => {});
     await sleep(1500);
     g.sparkleDone = await g.page.evaluate(() => localStorage.getItem("araso.giftSparkle"));
     const m = await giftMeasure(g, "gift-4-amount");
+    assert.equal(await g.page.locator(".a911-card.is-picked.is-flipped").count(), 1, "picked card did not flip to the letter");
+    assert.equal(await g.page.locator('[data-a898-field="to"]').inputValue(), "Mina", "TO was not written");
+    assert.equal(await g.page.locator('[data-a898-field="message"]').inputValue(), "For your next adventure", "one-line message was not written");
+    assert.equal(await g.page.locator('[data-a898-field="from"]').inputValue(), "Pgr", "FROM is not the current Piggy name");
     assert.ok(m.text.includes("Pgr") || m.text.some((t) => t === g.name), `sender name not on the letter: ${JSON.stringify(m.text)}`);
     assert.ok(m.text.includes("$20") && m.text.includes("$100"), `amounts: ${JSON.stringify(m.text)}`);
   });
-  // KNOWN in this build: the fork Gift build config (VITE_ARASO_FORK_GIFT_*: sponsor · gas units · MON price) is not set for the rehearsal build,
-  // so the fee line is unknown and Send waits (fee_unknown) — the same for every fork person, not the Money row. The tx part runs in the A-1285
-  // real-fork harness (handoff harness/a1285-app-run.mjs: anvil fork + the real sponsor/entry handlers, no registry seed).
-  await knownCheck("gift · Send → Face ID → the Gift link (fork tx) — needs the fork Gift build config", async () => {
+  await check("gift · amount → fee lines are numeric (unknown 0)", async () => {
+    const fee = await g.page.locator(".a911-fee").innerText();
+    assert.match(fee, /Gift gas cost\s+\$\d/, `fee line is not numeric: ${fee}`);
+    assert.match(fee, /Araso fee\s+\$0(?:\D|$)/, `Araso fee is not numeric zero: ${fee}`);
+  });
+  await check("gift · Send → Face ID once → approve/create/gas tx hashes", async () => {
     const send = g.page.locator('[data-a898-act="gift-faceid"]');
-    assert.ok(!(await send.isDisabled()), "Send waits: fee unknown (fork Gift build config not set in this build)");
+    assert.ok(!(await send.isDisabled()), "Send waits");
+    await send.click();
+    await g.page.locator(".a911-link__url").waitFor({ state: "visible", timeout: 30_000 });
+    g.giftLink = await g.page.locator(".a911-link__url").innerText();
+    const store = await g.page.evaluate(() => JSON.parse(localStorage.getItem("araso.a915.giftCreate.v1") || "[]"));
+    const last = store.at(-1);
+    g.giftRecord = last;
+    assert.ok(last, "no sender Gift record");
+    for (const label of ["approve", "create", "gas_deposit"]) assert.match(last.steps?.[label] || "", /^0x[0-9a-fA-F]{64}$/, `missing ${label} tx hash`);
+  });
+  await check("gift · link step → link · copy · share", async () => {
+    assert.match(g.giftLink || "", /\/j2#g=/, `bad fork Gift link: ${g.giftLink}`);
+    assert.equal(await g.page.locator('[data-a911-act="link-copy"]').count(), 1, "copy icon missing");
+    assert.equal(await g.page.locator('[data-a911-act="link-share"]').count(), 1, "share icon missing");
+    await g.page.locator('[data-a911-act="link-copy"]').click();
+    await g.page.waitForFunction(() => document.querySelector('[data-a911-act="link-copy"]')?.getAttribute("aria-label") === "copied", null, { timeout: 3000 });
+    assert.equal(await g.page.locator('[data-a911-act="link-copy"]').getAttribute("aria-label"), "copied", "copy was not activated");
   });
   await check("gift · after the first Gift tap the sparkle is gone (stored once): back to Money → plain row", async () => {
     assert.equal(g.sparkleDone, "done", `stored ${g.sparkleDone}`);

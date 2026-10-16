@@ -15,7 +15,7 @@ import { hashClaimToken, parseClaimUrl } from "../src/gift-piggy-claim-link.js";
 import {
   FORK_GIFT_LINK_PATH, FORK_GIFT_SCOPE, GIFT_CREATE_CHAIN_ID, armGiftCreateStep, buildGiftCreateStepCalls, disarmAllGiftCreateSteps, giftCreateStepMatch, planGiftCreate,
 } from "../src/gift-create-plan.js";
-import { FORK_BOOT_PATH, selectBootProfile } from "../src/boot-profile.js";
+import { GIFT_BOOT_PATH, selectBootProfile } from "../src/boot-profile.js";
 import { FORK_CHAIN_ID, FUNDING_CONTEXT_TOKEN_ALLOWLIST } from "../src/funding-context.js";
 import { GIFT_ESCROW_COMMITTED_TOPIC0, receiptHasGiftCommit } from "../src/gift-claim-entry.js";
 import { readGiftSponsorForkEnv } from "../../api/_lib/gift-sponsor-runtime.js";
@@ -178,20 +178,20 @@ await check("create arm refuses a mixed pair (fork id + mainnet scope · mainnet
 });
 
 // ── app place 4: the link boots the profile it was made on ──
-await check("link: a fork Gift link is <origin>/j2#g=…&t=…&v=1 (boot-profile FORK_BOOT_PATH); every other scope keeps /claim; the fragment parses the same", async () => {
-  assert.equal(FORK_GIFT_LINK_PATH, FORK_BOOT_PATH);
+await check("link: every Gift link is <origin>/gift#t=…&v=1 and /gift selects the fork profile when available", async () => {
+  assert.equal(FORK_GIFT_LINK_PATH, GIFT_BOOT_PATH);
   const f = await plan(FORK_GIFT_SCOPE, FORK_CHAIN_ID);
   const m = await plan("monad-mainnet", GIFT_CREATE_CHAIN_ID);
   const t = await planGiftCreate({ chainScope: "monad-testnet", presetLabel: 20, senderAddress: piggy.address, expiry: NOW + 86400, origin: "http://localhost:5173" });
-  assert.match(f.claimUrl, /^http:\/\/localhost:5173\/j2#g=0x[0-9a-f]{64}&t=[^&]+&v=1$/);
-  assert.match(m.claimUrl, /^http:\/\/localhost:5173\/claim#g=/);
-  assert.match(t.claimUrl, /^http:\/\/localhost:5173\/claim#g=/);
+  assert.match(f.claimUrl, /^http:\/\/localhost:5173\/gift#t=[^&]+&v=1$/);
+  assert.match(m.claimUrl, /^http:\/\/localhost:5173\/gift#t=/);
+  assert.match(t.claimUrl, /^http:\/\/localhost:5173\/gift#t=/);
   const pf = parseClaimUrl(f.claimUrl);
-  assert.deepEqual([pf.ok, pf.giftId, pf.token], [true, f.fragment.giftId, f.fragment.token]);
+  assert.deepEqual([pf.ok, pf.token], [true, f.fragment.token]);
   const env = { VITE_ARASO_FORK_RPC_URL: "https://fork-public.invalid/rpc", VITE_ARASO_FORK_INSTANCE_ID: "fork-1" };
   assert.equal(selectBootProfile({ pathname: new URL(f.claimUrl).pathname, env, releaseLevel: 2 }).id, "monad-fork");
   assert.equal(selectBootProfile({ pathname: new URL(f.claimUrl).pathname, env, releaseLevel: 1 }).id, "monad-testnet"); // level 1: never the fork
-  assert.equal(selectBootProfile({ pathname: new URL(m.claimUrl).pathname, env, releaseLevel: 2 }).id, "monad-testnet"); // "/claim" = the build profile, unchanged
+  assert.equal(selectBootProfile({ pathname: new URL(m.claimUrl).pathname, env: {}, releaseLevel: 2 }).status, "blocked");
 });
 
 // ── the fork record-source seam ──

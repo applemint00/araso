@@ -67,7 +67,7 @@ import {
   loadLastSplit, saveLastSplit, prefillFromLastSplit,
 } from "./add-money.js";
 import { CONTROL_MODE_OPTIONS, isControlMode, loadControlMode, saveControlMode } from "./piggy-control-mode.js";
-import { CLAIM_RESULT, claimStatement } from "./gift-piggy-claim-link.js";
+import { CLAIM_RESULT, claimStatement, verifyGiftLetter } from "./gift-piggy-claim-link.js";
 import {
   beginGiftClaim,
   bindGiftToNewPiggy,
@@ -118,7 +118,7 @@ import { JAR_BUMP_FALLBACK_MS, JAR_MIN_TAP_PX, bumpJarElement, createJarArrivals
 import { fundingRowsMarkup, nextPlanLeg, planLegsInit, planLegsReduce, MONEY_SWITCH, MONEY_TAB_CONFIG, MONEY_TAB_TITLE, giftPayStepMarkup, giftPayStepView, isSelectablePiggy, moneyTabMarkup, moneyTabOpen, moneyTabReduce, moneyTabView, moveMoneyMarkup, outMarkup, outReduce, outView, selectablePiggies } from "./money-tab.js";
 // ── [A-905] end imports ──
 // ── [A-911] imports (own screens: markup + geometry live in a911-screens.js) ──
-import { a911Fit, a911FitList, a911GiftMarkup, a911MoneyMarkup, a911MoveMarkup, a911Share } from "./a911-screens.js";
+import { a911Fit, a911FitList, a911GiftMarkup, a911GiftReceiveMarkup, a911MoneyMarkup, a911MoveMarkup, a911Share } from "./a911-screens.js";
 import { fundingPaperAdapters, fundingPaperRows } from "./funding-paper.js";
 import { HOME_UNKNOWN_LABEL } from "./home-paper.js";
 // ── [A-911] end imports ──
@@ -2002,8 +2002,27 @@ let pendingGiftClaim = null;
 // (offerGiftPaperAtBoot) · 새 기기 find-first 되찾기 직후(startGiftOpen). 토큰·giftId 는 여기 담지 않는다 —
 // 종이가 실제로 보이는 것은 pendingGiftClaim 이 아직 메모리에 있을 때뿐이다(giftPaperKind).
 let giftPaperOffered = false;
+let giftReceiveFlipped = false;
 // 테스트 관찰용(렌더되지 않는다) — settleBoundGiftClaim() 이 마지막으로 낸 결과.
 let lastGiftClaimSettlement = null;
+
+async function loadPendingGiftDisplay(claim) {
+  if (!claim || claim !== pendingGiftClaim || !claim.token) return false;
+  try {
+    const res = await fetch("/api/gift-sponsor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "read_letter", token: claim.token }) });
+    const body = await res.json();
+    if (!res.ok || body?.ok !== true || typeof body.giftId !== "string" || !/^0x[0-9a-f]{64}$/.test(body.giftId)) return false;
+    const letter = await verifyGiftLetter({ note: body.note, letterHash: body.letterHash });
+    const raw = typeof body.amountAtomic === "string" && /^\d+$/.test(body.amountAtomic) ? BigInt(body.amountAtomic) : 0n;
+    const decimals = body.decimals === 6 ? 6 : null;
+    const amountUsd = decimals === 6 && raw % 1000000n === 0n ? Number(raw / 1000000n) : null;
+    if (!letter || ![20, 50, 100].includes(amountUsd) || claim !== pendingGiftClaim) return false;
+    claim.giftId = body.giftId;
+    claim.display = { ...letter, amountUsd };
+    render();
+    return true;
+  } catch { return false; }
+}
 
 // [A-579 Lane G] Gift intent 는 **새 Piggy 를 만드는 흐름의 시작**에서 꺼낸다(메모리만 — 저장 0). 흐름이
 // 끝까지 가서 그 새 Piggy 에 묶이면 소비되고, 못 가면 restorePendingGiftClaim 으로 되돌린다.
@@ -6200,6 +6219,12 @@ async function openInvite() {
 // [A-734 + Owner live finding 2026-10-12] Gift도 같은 선행 5.9초를 제거한다. Open 탭의 같은
 // call stack에서 startGiftOpen을 시작하고, 각 Gift 갈래의 기존 인증/복구/생성 판정은 그대로 둔다.
 async function openGiftInvite() {
+  if (document.querySelector(".stage--giftReceive")) {
+    if (!giftReceiveFlipped) { giftReceiveFlipped = true; render(); return { started: false, reason: "card_flipped" }; }
+    const out = await startGiftOpen();
+    if (!pendingGiftClaim) giftReceiveFlipped = false;
+    return out;
+  }
   const board = document.querySelector(".invite");
   if (!board || (board.dataset.phase || "closed") !== "closed") return;
   clearInviteTimers();
@@ -6396,6 +6421,8 @@ function renderReceived() {
   // [A-734] Gift Open 종이 = 같은 Invite 판, 손글씨 두 줄과 버튼 첫 문구만 캐논 문구. null 이면 기존 Invite 그대로.
   const gift = giftPaperKind();
   if (ENTRY_CHOG_FIRST && !gift) return renderEntryChog();
+  const received = gift && pendingGiftClaim ? pendingGiftClaim.display : null;
+  if (received) return `<section class="stage stage--giftReceive" data-scene="received" data-gift-card="${received.front}">${a911GiftReceiveMarkup({ front: received.front, fields: received, amountUsd: received.amountUsd, flipped: giftReceiveFlipped })}</section>`;
   return `
     <section class="stage stage--invite" data-scene="received"${gift ? ` data-gift-paper="${gift}"` : ""}>
       ${arasoBrandMarkup()}
@@ -11440,7 +11467,7 @@ function a915PlanExtras() {
   return { expiry: Number(c.giftExpiryUnix()), gas, sponsor: { sponsorAddress: c.sponsorAddress, chainId: c.chainId } };
 }
 
-// sender's record store: non-secret projection only (giftId · chain · gasDeposit · step hashes). Never the claim token, never the note.
+// Sender retry record. The capability token stays out; the non-secret letter and its hash remain until sponsor registration succeeds.
 function a915StoreRead() {
   try {
     const v = JSON.parse(localStorage.getItem(A915_STORE_KEY) || "[]");
@@ -11460,6 +11487,29 @@ function a915StoreGet(giftId) {
   return a915StoreRead().find((r) => r.giftId.toLowerCase() === String(giftId).toLowerCase()) || null;
 }
 
+const A915_ERC20_BALANCE_ABI = [{ type: "function", name: "balanceOf", stateMutability: "view", inputs: [{ name: "account", type: "address" }], outputs: [{ name: "balance", type: "uint256" }] }];
+
+async function a915RefreshPayerUsdc(payer, plan, clients) {
+  const token = plan?.escrowCreateArgs?.token;
+  const client = clients?.publicClient;
+  if (!payer?.id || !payer?.address || !token || typeof client?.readContract !== "function") return false;
+  try {
+    const raw = await client.readContract({ address: token, abi: A915_ERC20_BALANCE_ABI, functionName: "balanceOf", args: [payer.address] });
+    const blockNumber = typeof client.getBlockNumber === "function" ? await client.getBlockNumber() : null;
+    const holding = measuredHoldingRow({ raw, decimals: 6, tokenSymbol: "USDC", assetId: token, measuredAt: new Date().toISOString(), blockNumber });
+    const scope = secondJourneyScope();
+    const { registry } = loadRegistry(safeLocalStorage(), scope);
+    if (!holding || !registry.piggies.some((piggy) => piggy.id === payer.id && String(piggy.address).toLowerCase() === String(payer.address).toLowerCase())) return false;
+    const piggies = registry.piggies.map((piggy) => piggy.id === payer.id
+      ? { ...piggy, assets: [...(piggy.assets || []).filter((asset) => asset.symbol !== "USDC"), holding] }
+      : piggy);
+    // The next Gift decision must use the measured post-create balance, not the pre-send projection.
+    return saveRegistry(safeLocalStorage(), scope, { ...registry, piggies }).saved === true;
+  } catch {
+    return false;
+  }
+}
+
 // same-origin registration client: { register(body) } -> { status, body } exactly as the relayer answers (never throws).
 function a915RegisterClient() {
   return {
@@ -11473,7 +11523,7 @@ function a915RegisterClient() {
 }
 
 async function a915Register(entry, cfg) {
-  const out = await registerGasDeposit({ record: { giftId: entry.giftId, gasDeposit: entry.gasDeposit }, client: cfg.client || a915RegisterClient() });
+  const out = await registerGasDeposit({ record: { giftId: entry.giftId, gasDeposit: entry.gasDeposit, note: entry.note, letterHash: entry.letterHash }, client: cfg.client || a915RegisterClient() });
   if (out.record && out.record.gasDeposit) a915StorePut({ ...entry, gasDeposit: out.record.gasDeposit });
   return out;
 }
@@ -11498,7 +11548,7 @@ function a915GiftCreateExecutor() {
     if (!plan || plan.ok !== true || !plan.claimUrl || String(plan.record?.senderAddress || "").toLowerCase() !== String(account.address).toLowerCase()) return { ok: false, reason: "executor_unavailable" };
     const built = buildGiftCreateStepCalls(plan, { escrowAddress: cfg.escrowAddress });
     if (!built.ok) return { ok: false, reason: built.reason };
-    const entry = { giftId: plan.giftId, chainId: plan.record.chainId, createdAt: plan.record.createdAt, gasDeposit: plan.record.gasDeposit, steps: {} };
+    const entry = { giftId: plan.giftId, chainId: plan.record.chainId, createdAt: plan.record.createdAt, note: plan.record.note, letterHash: plan.record.letterHash, gasDeposit: plan.record.gasDeposit, steps: {} };
     let clients;
     try { clients = cfg.makeClients(account); } catch { clients = null; }
     const ran = await runGiftCreateCalls({
@@ -11516,6 +11566,7 @@ function a915GiftCreateExecutor() {
     const stored = { ...entry, gasDeposit: done.record.gasDeposit };
     a915StorePut(stored);
     try { await a915Register(stored, cfg); } catch { stored.retry = true; } // retried on the next open (the record stays as stored)
+    await a915RefreshPayerUsdc(payer, plan, clients);
     return { ok: true, link: plan.claimUrl };
   };
 }
@@ -12324,6 +12375,8 @@ function a911Paint(root, html) {
 
 function a911Sync() {
   if (typeof document === "undefined" || !document.body) return;
+  const receiveRoot = document.querySelector('.a911-screen[data-a911="gift-receive"]');
+  if (receiveRoot && state.scene === "received" && pendingGiftClaim) { a911Fit(receiveRoot, { kb: 0 }); return; }
   const m = state.a905Money;
   const locked = Boolean(document.querySelector("[data-app-lock]"));
   if (!m || m.scene !== state.scene || !a905Gate() || locked) { a911Remove(); return; }
@@ -16701,12 +16754,17 @@ function render() {
 
   document.querySelector("#inviteFaceButton")?.addEventListener("click", openInvite);
   if (state.scene === "received") {
-    fitInvite();
-    mountInviteChog();
-    const entry = document.querySelector(".entryChog");
-    if (entry) { // [A-1289] (the double-tap guard counts from the last advance only, never from a redraw)
-      mountEntryLogo(entry.querySelector(".entryChog__logo"), { reduced: prefersReducedMotion(), onFrame: (step) => runSceneFrames(step) });
-      document.querySelector(".stage--entry")?.addEventListener("click", advanceEntryChog);
+    if (document.querySelector(".stage--giftReceive")) {
+      const receiveRoot = document.querySelector('.a911-screen[data-a911="gift-receive"]');
+      if (receiveRoot) { a911Fit(receiveRoot, { kb: 0 }); requestAnimationFrame(() => a911Fit(receiveRoot, { kb: 0 })); }
+    } else {
+      fitInvite();
+      mountInviteChog();
+      const entry = document.querySelector(".entryChog");
+      if (entry) { // [A-1289] (the double-tap guard counts from the last advance only, never from a redraw)
+        mountEntryLogo(entry.querySelector(".entryChog__logo"), { reduced: prefersReducedMotion(), onFrame: (step) => runSceneFrames(step) });
+        document.querySelector(".stage--entry")?.addEventListener("click", advanceEntryChog);
+      }
     }
   }
   // [A-391 / A-391-a] 승인 인증실패 카드(birth)의 옆 Chog — Invite/Hatch 와 똑같이
@@ -17182,8 +17240,9 @@ if (!a1206SwitchUnlocked && state.credential && (state.scene === "name" || state
 if (typeof location !== "undefined") {
   const pendingRead = readClaimFragment(location.href);
   if (pendingRead.status === GIFT_ENTRY_STATUS.READY) {
-    pendingGiftClaim = { giftId: pendingRead.giftId, token: pendingRead.token };
+    pendingGiftClaim = { giftId: null, token: pendingRead.token, display: null };
     stripClaimFragmentFromUrl();
+    void loadPendingGiftDisplay(pendingGiftClaim);
   }
 }
 
@@ -17221,7 +17280,7 @@ function readTesterInviteParam() {
   }
 }
 
-// `i` 만 지우고 나머지 query(debug 등)와 fragment(#g=…)는 그대로 둔다.
+// `i` 만 지우고 나머지 query(debug 등)와 Gift fragment는 그대로 둔다.
 function stripTesterInviteFromUrl() {
   try {
     if (typeof history === "undefined" || typeof location === "undefined") return;

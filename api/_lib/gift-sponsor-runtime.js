@@ -32,8 +32,8 @@ export function createViemGiftSponsorChain({ publicClient, policy }) {
   };
   return {
     async getGift(giftId) {
-      const [senderAddr, , , expiry, claimed, claimTokenHash] = await publicClient.readContract({ address: escrow, abi: ESCROW_READ_ABI, functionName: "gifts", args: [giftId] });
-      return { exists: senderAddr.toLowerCase() !== ZERO_ADDR, claimed, sender: senderAddr, expiry: BigInt(expiry), claimTokenHash };
+      const [senderAddr, token, amount, expiry, claimed, claimTokenHash] = await publicClient.readContract({ address: escrow, abi: ESCROW_READ_ABI, functionName: "gifts", args: [giftId] });
+      return { exists: senderAddr.toLowerCase() !== ZERO_ADDR, claimed, sender: senderAddr, token, amount: BigInt(amount), expiry: BigInt(expiry), claimTokenHash };
     },
     getCode: async (address) => (await publicClient.getCode({ address })) ?? "0x",
     getNonce: (address) => publicClient.getTransactionCount({ address, blockTag: "latest" }).then(BigInt),

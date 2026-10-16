@@ -12,6 +12,7 @@ import { CHAIN_PROFILE_ID, blockedChainProfile, resolveChainProfile } from "./ch
 import { RELEASE_LEVEL, releaseAllows } from "./release-gate.js";
 
 export const FORK_BOOT_PATH = "/j2";
+export const GIFT_BOOT_PATH = "/gift";
 // The Release-2 promotion (main.js A-897 block) targets Monad mainnet only; main.js names no mainnet literal itself.
 export const PROMOTION_TARGET_SCOPE = CHAIN_PROFILE_ID.MAINNET;
 
@@ -36,7 +37,8 @@ function configuredProfile(env) {
 
 /**
  * The chain profile for this page load (first match wins). env = import.meta.env (or a plain object in tests).
- *   1. "/claim"                                    → the build config, exactly as before (the stored journey is ignored; Gift entry rules first)
+ *   1. "/claim"                                    → the build config, exactly as before (legacy Gift entry; stored journey ignored)
+ *   2. "/gift" at level 2                         → the shared fork profile (dedicated Gift entry)
  *   2. journey "2" + release level ≥ 2 + fork env  → the shared-fork profile
  *   3. "/j2" + release level ≥ 2                   → the shared-fork profile (A-946 path kept)
  *   4. otherwise                                   → the build config (unset = testnet). Level 1 = Journey 1 even when "2" is stored.
@@ -45,7 +47,7 @@ export function selectBootProfile({ pathname, env, releaseLevel = RELEASE_LEVEL,
   if (pathname === CLAIM_PATH) return configuredProfile(env);
   const level2 = releaseAllows("second", releaseLevel);
   if (journey === "2" && level2 && hasForkEnv(env)) return resolveChainProfile(CHAIN_PROFILE_ID.FORK, forkConfig(env));
-  if (pathname === FORK_BOOT_PATH && level2) return resolveChainProfile(CHAIN_PROFILE_ID.FORK, forkConfig(env));
+  if ((pathname === FORK_BOOT_PATH || pathname === GIFT_BOOT_PATH) && level2) return resolveChainProfile(CHAIN_PROFILE_ID.FORK, forkConfig(env));
   return configuredProfile(env);
 }
 

@@ -23,6 +23,10 @@
   ],
   "rewrites": [
     {
+      "source": "/gift",
+      "destination": "/gift.html"
+    },
+    {
       "source": "/claim",
       "destination": "/index.html"
     },

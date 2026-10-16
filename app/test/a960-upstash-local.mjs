@@ -408,10 +408,9 @@ await check("7 defaults (Owner 확정 대기): invites 20 · 7 days · grant cap
   assert.equal(I.INVITE_DEFAULTS.maxInvites, 20); assert.equal(I.INVITE_DEFAULTS.ttlMs, 7 * 86400000);
   assert.equal(R.UPSTASH_GRANT_DEFAULTS.globalCap, 20); assert.equal(GRANT_WEI, 100_000_000_000_000_000n);
 });
-await check("Gift KV store untouched (byte-equal to the pre-fork baseline de8c9c8, sha256)", () => {
-  // [A-983 re-pin] HEAD text → its sha256 at de8c9c8 ("baseline: before fork track (A-942)"; A-983 receipt HEAD_PINS_de8c9c8.json), so the check
-  // holds after a commit and in a clone. pre-A-983: head = git show HEAD:api/_lib/gift-sponsor-kv-store.js (skip when no git); assert.equal(file, head)
-  const BASE_KV_STORE_SHA256 = "6c372aed4094981c3dadd2410e41cd28e9bfff4e4af2d52b5b6d9815e5216346";
+await check("Gift KV store matches the accepted metadata baseline (sha256)", () => {
+  // The fixed digest keeps the intentional letter metadata and rejects later byte drift in a clone.
+  const BASE_KV_STORE_SHA256 = "057537840c9fd716e0cf64196527ab2d7e2c5e5da4d9cb45d9cbfc5872aff4dd";
   assert.equal(createHash("sha256").update(readFileSync(path.join(REPO, "api/_lib/gift-sponsor-kv-store.js"), "utf8")).digest("hex"), BASE_KV_STORE_SHA256);
 });
 // A1160: real grant handler and real durable adapter, fake RPC/Redis only.
