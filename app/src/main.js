@@ -12114,7 +12114,8 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" &
   document.addEventListener("click", (event) => {
     if (!event.target?.closest?.("#a905GiftPiggy")) return;
     try { localStorage.setItem("araso.giftSparkle", "done"); } catch {}
-    giftSparkleApply();
+    // unwrap after this click is delivered: removing the tapped words now detaches the target and the Gift handler drops the tap
+    setTimeout(giftSparkleApply, 0);
   }, true);
 }
 
