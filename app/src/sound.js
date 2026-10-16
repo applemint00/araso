@@ -15,11 +15,13 @@ export const SOUND_STORAGE_KEY = "araso.sound.off.v1"; // present ("1") = muted;
 export const SOUND_BASE = "/sound";
 export const MASTER_GAIN = 0.5;
 // [A-1305 ⑦ · Owner] the Home paper unfold at half its old level (1.4 → 0.7). One place, so the phone check can set it again.
-export const UNFOLD_TRIM = 0.7;
+// [A-1326 · Owner 19:0x "F"] the Home paper now opens with glass-thin minor F; its trim gives the same ear level as the old
+// unfold at 0.7 (active-part RMS 0.0653 → 0.033). pre-A-1326: sound_home_paper_unfold.wav at 0.7.
+export const UNFOLD_TRIM = 0.51;
 
 // moment -> file(s) + trim (linear). Chog has two files that alternate per bubble.
 export const SOUND_MOMENTS = {
-  unfold: { files: [`${SOUND_BASE}/sound_home_paper_unfold.wav`], trims: [UNFOLD_TRIM] },
+  unfold: { files: [`${SOUND_BASE}/sound_home_glassthin_minor_1016_f.wav`], trims: [UNFOLD_TRIM] },
   toss: { files: [`${SOUND_BASE}/sound_receipt_toss.wav`], trims: [1.23] },
   bell: { files: [`${SOUND_BASE}/sound_return_bell_dmsd_glass.wav`], trims: [0.53] },
   chog: { files: [`${SOUND_BASE}/chog/sound_chog_babble_radio_A.wav`, `${SOUND_BASE}/chog/sound_chog_babble_radio_B.wav`], trims: [0.52, 0.63] },
@@ -119,20 +121,26 @@ export function createSoundPlayer({ win = typeof window !== "undefined" ? window
   }
 
   // Plays one moment. Returns true only when a sound was handed to the audio graph.
-  async function play(moment) {
+  // [A-1326] chog may come with the day's voice already chosen (main.js · chog-mood.js): { file, trim } under /sound/chog/.
+  async function play(moment, voice) {
     try {
       const def = SOUND_MOMENTS[moment];
       if (!def) return false;
       if (!isOn()) return false; // flag off -> never plays
       if (!unlocked || !ctx) return false; // no autoplay before a gesture
       let idx = 0;
-      if (def.files.length > 1) { idx = chogNext % def.files.length; chogNext += 1; } // A, B, A, B ...
-      const buf = await loadBuffer(def.files[idx]);
+      let file, trim;
+      if (moment === "chog" && voice && typeof voice.file === "string" && voice.file.startsWith(`${SOUND_BASE}/chog/`) && Number.isFinite(voice.trim)) ({ file, trim } = voice);
+      else {
+        if (def.files.length > 1) { idx = chogNext % def.files.length; chogNext += 1; } // A, B, A, B ...
+        file = def.files[idx]; trim = def.trims[idx];
+      }
+      const buf = await loadBuffer(file);
       if (!buf || !isOn() || !ctx) return false;
       const src = ctx.createBufferSource();
       const gain = ctx.createGain();
       src.buffer = buf;
-      gain.gain.value = MASTER_GAIN * def.trims[idx];
+      gain.gain.value = MASTER_GAIN * trim;
       src.connect(gain);
       gain.connect(ctx.destination);
       src.start(0);
@@ -157,5 +165,5 @@ if (typeof window !== "undefined") player.installGestureUnlock();
 
 export const soundIsOn = () => player.isOn();
 export const setSoundOn = (on) => player.setOn(on);
-export const playSound = (moment) => player.play(moment);
+export const playSound = (moment, voice) => player.play(moment, voice);
 export const playSoundOnce = (moment, key) => player.playOnce(moment, key);

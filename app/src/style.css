@@ -1260,6 +1260,10 @@ h1 {
    .sendCard__footer 만 넓어진 폭만큼 커지는데 — 이것도 이 요소 전체에 걸리는 단일
    scale(.65) 하나를 그대로 받으니 비균등 찌그러짐은 아니다(상자 자체가 커진 것뿐).
    --cardShrink 는 main.js fitCardAnchor() 가 아주 좁은 화면에서만 1 미만으로 준다. */
+/* [A-1326 · Owner 19:0x "카드안에 들어가는 모든글자들이 약간 도톰하게 1로가자 · 1.5는 과한듯"] every letter on the Send card sits 1 px heavier
+   underneath: ink in its own colour, the gold lines in a deeper gold. Strokes, weights, colours and places are unchanged. */
+.sendCard, .sendCard * { text-shadow: 0 1px 0 currentColor; }
+.sendCard__explain, .trialStamp--send { text-shadow: 0 1px 0 #8a6a00; }
 .sendCard {
   position: absolute;
   left: 50%;

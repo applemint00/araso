@@ -826,7 +826,7 @@ let closingSoonTimer = null;
 function sayClosingSoon() {
   if (typeof insertChogCueLine !== "function" || state.appLock || state.scene === "received" || state.scene === "birth") return;
   if (typeof chogLinesRestart === "function") chogLinesRestart("closingSoonLine");
-  insertChogCueLine("closingSoonLine", [...APP_CLOSING_SOON_LINES]); // no Chog on this screen (Away) = nothing said; the lock still comes
+  insertChogCueLine("closingSoonLine", chogMoodLines(APP_CLOSING_SOON_LINES)); // no Chog on this screen (Away) = nothing said; the lock still comes
 }
 function touchAppSession() {
   // [A-1298] the 9:30 line rides on the same clock (self-contained: slices of this function run without the module around it)
@@ -6424,7 +6424,7 @@ function renderEntryChog() {
       ${arasoBrandMarkup()}
       <div class="invite entryChog" data-kind="entry" data-phase="closed" data-step="${entryStep}">
         <div class="entryChog__logo" aria-hidden="true">${ENTRY_LOGO_SVG}<img class="entryChog__word" src="/entry/araso_logo_white.png" alt="" /></div>
-        <p class="entryChog__say" role="status">${ENTRY_CHOG_LINES.map((t, i) => `<span class="entryChog__line entryChog__line--${i + 1}">${escapeHtml(t)}</span>`).join("")}</p>
+        <p class="entryChog__say" role="status">${chogMoodLines(ENTRY_CHOG_LINES).map((t, i) => `<span class="entryChog__line entryChog__line--${i + 1}">${escapeHtml(t)}</span>`).join("")}</p>
         <div class="entryChog__chog" aria-hidden="true">${chogInviteMarkup()}</div>
         ${inviteFace(false)}
       </div>
@@ -10680,6 +10680,7 @@ function teardownHomeResidentModule() {
 //   chog   : a Chog cue .chogCheckLine bubble is added (or un-hidden); #awayRestoreLine and #returnArrivalAlarm (money-truth lines) are silent;
 //            one per element, same line within 12 s = re-render.
 import { playSound, setSoundOn, soundIsOn } from "./sound.js";
+import { chogMoodLine, chogMoodLines, createChogVoice } from "./chog-mood.js"; // [A-1326] the day's wording and voice
 const A902_NO_SOUND_IDS = new Set(["awayRestoreLine", "returnArrivalAlarm"]); // money-truth lines: never a babble
 const a902 ={ installed: false, unfoldBusy: false, unfoldAt: 0, chogKey: "", chogAt: 0, seen: new WeakSet() };
 
@@ -10696,20 +10697,22 @@ function a902ChogBubbleSeen(el) {
   return true;
 }
 
+const a1326Voice = createChogVoice(); // [A-1326] short / long / first-meeting voice of the day, A/B alternating
 function a902OnMutations(records) {
   let hit = false;
+  let said = ""; // [A-1326] the bubble's words choose the voice (short / long / first meeting)
   for (const r of records) {
     if (r.type === "attributes") {
-      if (r.target.classList?.contains("chogCheckLine") && r.oldValue !== null && a902ChogBubbleSeen(r.target)) hit = true;
+      if (r.target.classList?.contains("chogCheckLine") && r.oldValue !== null && a902ChogBubbleSeen(r.target)) { hit = true; said ||= (r.target.textContent || "").trim(); }
       continue;
     }
     for (const n of r.addedNodes) {
       if (n.nodeType !== 1) continue;
       const list = n.classList?.contains("chogCheckLine") ? [n] : [...(n.querySelectorAll?.(".chogCheckLine") || [])];
-      for (const el of list) if (a902ChogBubbleSeen(el)) hit = true;
+      for (const el of list) if (a902ChogBubbleSeen(el)) { hit = true; said ||= (el.textContent || "").trim(); }
     }
   }
-  if (hit) playSound("chog");
+  if (hit) playSound("chog", a1326Voice.pick(said));
 }
 
 function a902Dbg(row) {
@@ -13060,7 +13063,7 @@ const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work\nyour money
 const FIRST_SEND_CUE_PARTS = FIRST_SEND_CUE_LINE.split(/(?<=!) (?=let's)|\n/);
 function sayFirstSendCue(stage = "job") {
   if (state.appLock || state.scene !== "sendstay" || sendBusy()) return false;
-  const inserted = insertChogCueLine("firstSendChogCue", stage === "coming" ? FIRST_SEND_CUE_PARTS.slice(0, 1) : FIRST_SEND_CUE_PARTS.slice(1));
+  const inserted = insertChogCueLine("firstSendChogCue", chogMoodLines(FIRST_SEND_CUE_PARTS.slice(stage === "coming" ? 0 : 1, stage === "coming" ? 1 : undefined))); // [A-1326]
   if (inserted && state.sendCardVisible) {
     document.querySelector("#sendButton")?.addEventListener("click", () => {
       document.querySelector("#firstSendChogCue")?.remove();
@@ -14304,7 +14307,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         render();
         sceneTimeout(() => {
           sayFirstSendCue("job");
-          sceneTimeout(armSend, chogLinesMs(FIRST_SEND_CUE_PARTS.slice(1)) - PACE_BREATH_MS + PACE_SEND_ARM_MS);
+          sceneTimeout(armSend, chogLinesMs(chogMoodLines(FIRST_SEND_CUE_PARTS.slice(1))) - PACE_BREATH_MS + PACE_SEND_ARM_MS);
         }, PACE_BREATH_MS);
       };
       const announceFirstSend = () => {
@@ -14313,7 +14316,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
           return;
         }
         sayFirstSendCue("coming");
-        sceneTimeout(revealSendCard, chogSpeakMs(FIRST_SEND_CUE_PARTS[0]) + PACE_BREATH_MS);
+        sceneTimeout(revealSendCard, chogSpeakMs(chogMoodLine(FIRST_SEND_CUE_PARTS[0])) + PACE_BREATH_MS);
       };
       sceneTimeout(announceFirstSend, PACE_SEAT_BREATH_MS);
     }
@@ -15036,9 +15039,9 @@ const A1297_SECOND_DONE_LINE = "done!"; // [A-1297 · Owner 03:3x] after the Jou
 const A891_SECOND_INTRO_LINES = ["let's try more kinds of jobs!", "work's coming!"]; // [A-1297 · Owner 03:0x/03:3x] Home only; the Explore paper says nothing
 // Reading hold for the filed line before Home settles = the existing A-725 Chog-line hold (1.5 s); not an Owner number, tune on device.
 const A891_FILED_LINE_HOLD_MS = A891_TAP_CUE_TIMING.holdMs;
-const A891_FILED_LINE_READ_MS = Math.max(3000, chogSpeakMs(A891_FILED_LINE)); // [A-1297 · Owner "3초정도"] the first filed line is read before Home (never shorter than its read time)
+const A891_FILED_LINE_READ_MS = Math.max(3000, chogSpeakMs(chogMoodLine(A891_FILED_LINE))); // [A-1297 · Owner "3초정도"] the first filed line is read before Home (never shorter than its read time)
 // Intro line → Explore Paper = the existing short beat before a card (HOME_FIRST_JOURNEY_CARD_MS, 1.2 s); not an Owner number, tune on device.
-const A891_SECOND_INTRO_TO_PAPER_MS = Math.max(HOME_FIRST_JOURNEY_CARD_MS + 1500, chogLinesMs(A891_SECOND_INTRO_LINES)); // both intro lines read one at a time (+ a breath) before the Explore paper
+const A891_SECOND_INTRO_TO_PAPER_MS = Math.max(HOME_FIRST_JOURNEY_CARD_MS + 1500, chogLinesMs(chogMoodLines(A891_SECOND_INTRO_LINES))); // both intro lines read one at a time (+ a breath) before the Explore paper
 const SECOND_INTRO_SEEN_KEY = scopedSecondKey("araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
 let a1206SwitchIntroPending = false; // UI-only boot handoff; consumed once by the existing CG-05 intro
 // [A-1298 ⑤ · Owner 04:2x "tap me to find out … 탭 안 하면 바로 2차"] once, on the Home right after the first receipt (the key is live): Chog's cue
@@ -15049,7 +15052,7 @@ let a1298FindOutChog = null;
 const A1298_FIND_OUT_MS = 5000;
 function a1298FindOut(enter) {
   const chog = homeChog;
-  if (!chog || !chog.startTapCue?.("tap me to find out")) { enter(); return; }
+  if (!chog || !chog.startTapCue?.(chogMoodLine("tap me to find out"))) { enter(); return; }
   a1298FindOutChog = chog;
   const scene = state.scene;
   setTimeout(() => { // not a scene timer: a redraw of Home must not lose the 5 s
@@ -15111,7 +15114,7 @@ function a891AfterFiling(returnView, valid) {
     // A Return is never a First Home arrival. Only saveName() sets homeArrival in the product; the DEV scene jump sets it too, and
     // left set it would make the Home after filing replay the First arrival (First Send card) instead of the quiet Home.
     state.homeArrival = false;
-    if (teach) a891ChogSay(document.querySelector("#returnChogHop #chogHome"), "returnKeepLine", [A891_FILED_LINE]);
+    if (teach) a891ChogSay(document.querySelector("#returnChogHop #chogHome"), "returnKeepLine", [chogMoodLine(A891_FILED_LINE)]);
     if (teach) a1298FindOutPending = true; // [A-1298 ⑤] the Home right after the first receipt teaches the house once
     sceneTimeout(() => { if (valid() && state.scene === "return") goHomeFromFilebox(); }, teach ? A891_FILED_LINE_READ_MS : A891_FILED_LINE_HOLD_MS);
     return false;
@@ -15146,7 +15149,7 @@ function a891HomeChogTap() {
   // Storage failure: the intro may show once more; nothing is faked.
   try { localStorage.setItem(SECOND_INTRO_SEEN_KEY, "1"); } catch { }
   chog.closeCard?.();
-  const homeSay = a891ChogSay(document.querySelector('.stage[data-scene="sendstay"] #chogHome'), "secondIntroLine", A891_SECOND_INTRO_LINES);
+  const homeSay = a891ChogSay(document.querySelector('.stage[data-scene="sendstay"] #chogHome'), "secondIntroLine", chogMoodLines(A891_SECOND_INTRO_LINES));
   sceneTimeout(() => {
     if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce) return;
     openSecondJourneyExplore();

@@ -48,6 +48,7 @@ function make(opts = {}) {
 await check("S1 five WAVs copied byte-identical to the Owner set, only under app/public/sound", () => {
   const pairs = [
     [privatePath("design/sound_home_paper_unfold.wav"), "app/public/sound/sound_home_paper_unfold.wav"],
+    [privatePath("design/sound_home_glassthin_minor_1016_f.wav"), "app/public/sound/sound_home_glassthin_minor_1016_f.wav"], // [A-1326] Home F
     [privatePath("design/sound_receipt_toss.wav"), "app/public/sound/sound_receipt_toss.wav"],
     [privatePath("design/sound_return_bell_dmsd_glass.wav"), "app/public/sound/sound_return_bell_dmsd_glass.wav"],
     [privatePath("design/chog/sound_chog_babble_radio_A.wav"), "app/public/sound/chog/sound_chog_babble_radio_A.wav"],
@@ -63,7 +64,8 @@ await check("S1 five WAVs copied byte-identical to the Owner set, only under app
 // ---- trigger mapping -------------------------------------------------------------------------------------------------
 await check("S2 exactly four moments mapped to the card's files; no File-it sound", () => {
   assert.deepEqual(Object.keys(SOUND_MOMENTS).sort(), ["bell", "chog", "toss", "unfold"]);
-  assert.deepEqual(SOUND_MOMENTS.unfold.files, ["/sound/sound_home_paper_unfold.wav"]);
+  // [A-1326 RE-PIN · Owner 19:0x "F" · FIRST_JOURNEY_PACING_20261015.md:32] pre-A-1326: the paper unfold wav
+  assert.deepEqual(SOUND_MOMENTS.unfold.files, ["/sound/sound_home_glassthin_minor_1016_f.wav"]);
   assert.deepEqual(SOUND_MOMENTS.toss.files, ["/sound/sound_receipt_toss.wav"]);
   assert.deepEqual(SOUND_MOMENTS.bell.files, ["/sound/sound_return_bell_dmsd_glass.wav"]);
   assert.deepEqual(SOUND_MOMENTS.chog.files, ["/sound/chog/sound_chog_babble_radio_A.wav", "/sound/chog/sound_chog_babble_radio_B.wav"]);
@@ -142,7 +144,8 @@ await check("S9 main.js [A-902] block is delimited, comments only for prose, obs
   const block = MAIN.slice(a, b);
   assert.ok(!/\/\*/.test(block), "line comments only");
   assert.ok(!/\brender\(/.test(block.replace(/\/\/.*$/gm, "")), "no render() call");
-  for (const m of ["unfold", "toss", "bell", "chog"]) assert.match(block, new RegExp(`playSound\\("${m}"\\)`));
+  // [A-1326 RE-PIN] chog also passes the bubble's words (the day voice picks short / long) · pre-A-1326: playSound("chog") only
+  for (const m of ["unfold", "toss", "bell", "chog"]) assert.match(block, new RegExp(`playSound\\("${m}"(\\)|, a1326Voice\\.pick\\(said\\)\\))`));
   assert.ok(!/playSound\("(?!unfold|toss|bell|chog)/.test(block), "no other moment");
   assert.match(block, /chogCheckLine/);
   assert.match(block, /prevT < 6\.3 && t >= 6\.3/); assert.match(block, /prevT < 0\.7 && t >= 0\.7/);

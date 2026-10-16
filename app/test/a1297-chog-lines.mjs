@@ -64,7 +64,8 @@ check("one / none move on by themselves once the line is read (+ a breath), once
 });
 check("receipts: the first line is read before Home (max 3 s, read time); the Journey 2 receipt ends with done!", () => {
   assert.match(MAIN, /const A891_FILED_LINE = "I'll keep the details at home\.";/);
-  assert.match(MAIN, /const A891_FILED_LINE_READ_MS = Math\.max\(3000, chogSpeakMs\(A891_FILED_LINE\)\);/);
+  // [A-1326 RE-PIN · FIRST_JOURNEY_PACING_20261015.md:33–41 day wording] pre-A-1326: chogSpeakMs(A891_FILED_LINE) — now the day's line is read
+  assert.match(MAIN, /const A891_FILED_LINE_READ_MS = Math\.max\(3000, chogSpeakMs\(chogMoodLine\(A891_FILED_LINE\)\)\);/);
   assert.match(fn("a891AfterFiling"), /teach \? A891_FILED_LINE_READ_MS : A891_FILED_LINE_HOLD_MS/);
   assert.match(MAIN, /const A1297_SECOND_DONE_LINE = "done!";/);
   assert.match(MAIN, /a891ChogSay\(document\.querySelector\("#returnChogHop #chogHome"\), "secondDoneLine", \[A1297_SECOND_DONE_LINE\]\)/);

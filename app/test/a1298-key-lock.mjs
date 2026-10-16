@@ -30,7 +30,8 @@ check("closing soon: the two Owner lines, one at a time, on the screen's Chog; n
   assert.match(MAIN, /const APP_CLOSING_SOON_LINES = Object\.freeze\(\["closing soon\.", "if you want to explore more, tap to wake me up\."\]\);/);
   const say = fn("sayClosingSoon");
   assert.match(say, /state\.appLock \|\| state\.scene === "received" \|\| state\.scene === "birth"\) return;/);
-  assert.match(say, /insertChogCueLine\("closingSoonLine", \[\.\.\.APP_CLOSING_SOON_LINES\]\)/);
+  // [A-1326 RE-PIN · FIRST_JOURNEY_PACING_20261015.md:41 "closing soon." day wording] pre-A-1326: [...APP_CLOSING_SOON_LINES]
+  assert.match(say, /insertChogCueLine\("closingSoonLine", chogMoodLines\(APP_CLOSING_SOON_LINES\)\)/);
 });
 check("a tap during the warning always counts (the 15 s throttle never swallows the wake tap)", () => {
   const h = fn("handleTrustedAppActivity");
@@ -71,7 +72,7 @@ check("first end: once after the first receipt (live key) Chog says \"tap me to 
   assert.match(fn("a891AfterFiling"), /if \(teach\) a1298FindOutPending = true;/);
   assert.match(MAIN, /a1298FindOutPending\) \{ a1298FindOutPending = false; a1298FindOut\(\(\) => \{ void a956Enter\(\); \}\); return; \}/);
   const out = fn("a1298FindOut");
-  assert.match(out, /startTapCue\?\.\("tap me to find out"\)/);
+  assert.match(out, /startTapCue\?\.\(chogMoodLine\("tap me to find out"\)\)/ /* [A-1326 RE-PIN · PACING :39 day wording] pre-A-1326: startTapCue?.("tap me to find out") */);
   assert.match(out, /setTimeout\(\(\) => \{[\s\S]*enter\(\);\s*\}, A1298_FIND_OUT_MS\);/);
   assert.match(MAIN, /const A1298_FIND_OUT_MS = 5000;/);
   const tap = fn("a1298FindOutTap");
