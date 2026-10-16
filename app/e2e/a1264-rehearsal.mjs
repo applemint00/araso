@@ -13,6 +13,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { privatePath } from "../test/helpers/private-base.mjs";
 import { createChain } from "./a1264-chain.mjs";
+// [A-1326 · FIRST_JOURNEY_PACING_20261015.md:31–41 newest-wins] Chog's eight table lines read the day's mood (device date ÷ 3): the
+// rehearsal expects the day's wording (the run's own date) and allows all three moods' words on screen.
+import { CHOG_MOODS, chogMoodLine } from "../src/chog-mood.js";
+const C = (line) => chogMoodLine(line);
+const MOOD_COPY = ["get your piggy", "make passkey to hatch the piggy", "let's send Piggy to work", "your money does the job.", "I'll keep the details at home.", "tap me to find out", "let's try more kinds of jobs!", "closing soon."].flatMap((l) => CHOG_MOODS.map((m) => chogMoodLine(l, m)));
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(process.env.ARASO_REHEARSAL_REPO || path.resolve(HERE, "../.."));
@@ -41,7 +46,7 @@ async function knownCheck(label, fn) {
 }
 
 // Visible copy allowed on the walked screens. Dynamic parts (time, date, name, counts) are normalised first.
-const COPY_ALLOW = new Set([
+const COPY_ALLOW = new Set([...MOOD_COPY,
   "Araso", "your money,", "as a little Piggy", "checking...", "Face ID", "trial phase · free", "skip", "<DATE>", "<DAY>",
   "you've got", "the one piggy !", "ok", "name it?", "Piggy name", "save", "HOME", "<STATUS>", "<TIME>", "<N>", "<NAME>",
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
@@ -304,13 +309,13 @@ async function walkReturnAndFile(person) {
   person.receiptText = (await checkpoint(person, "return")).text;
   for (let i = 0; i < 2; i += 1) { await click(person, "#returnTap", `receipt tap ${i + 1}`); await sleep(400); }
   // [A-1297] the filed line is read before Home comes (≥ 3 s, Owner "3초정도")
-  person.filedLineAt = await until(person, "filed line", (s) => s.text.includes("I'll keep the details at home."), 8_000).then(() => Date.now(), () => null);
+  person.filedLineAt = await until(person, "filed line", (s) => s.text.includes(C("I'll keep the details at home.")), 8_000).then(() => Date.now(), () => null);
   await until(person, "filed → quiet Home", (s) => s.scene === "sendstay", 30_000);
   person.filedHomeAt = Date.now();
   await checkpoint(person, "home-filed");
   // [A-1298] after the first receipt: "tap me to find out" (once); no tap = Journey 2 by the key (no Face ID)
   person.filedGets = await getsOf(person);
-  person.findOutCue = await until(person, "tap me to find out", (s) => s.text.includes("tap me to find out"), 6_000).then(() => true, () => false);
+  person.findOutCue = await until(person, "tap me to find out", (s) => s.text.includes(C("tap me to find out")), 6_000).then(() => true, () => false);
 }
 async function getsOf(person) { return person.page.evaluate(() => Number(sessionStorage.getItem("__arasoGets") || 0)).catch(() => -1); }
 async function readTimeline(person) {
@@ -472,9 +477,9 @@ async function laneMain() {
   await check("entry · first screen = Piggy logo (no envelope) → tap: \"get your piggy\" → tap: + \"make passkey to hatch the piggy\" and Face ID", () => {
     const st = a.entrySteps || [];
     assert.ok(st[0]?.entry && st[0].logo && !st[0].envelope && st[0].say.length === 0 && !st[0].face, `first screen ${JSON.stringify(st[0])}`);
-    assert.deepEqual(st[1]?.say, ["get your piggy"], `after tap 1 ${JSON.stringify(st[1])}`);
+    assert.deepEqual(st[1]?.say, [C("get your piggy")], `after tap 1 ${JSON.stringify(st[1])}`);
     assert.equal(st[1]?.face, false, "Face ID waits for the second line");
-    assert.deepEqual(st[2]?.say, ["get your piggy", "make passkey to hatch the piggy"], `after tap 2 ${JSON.stringify(st[2])}`);
+    assert.deepEqual(st[2]?.say, [C("get your piggy"), C("make passkey to hatch the piggy")], `after tap 2 ${JSON.stringify(st[2])}`);
     assert.equal(st[2]?.face, true, "Face ID with the second line");
   });
   await check("pace · Piggy sits → Send card ≈ 10 s (grant asked early enough that the node is ready)", () => { const d = cardAt - sitAt; assert.ok(d >= 9_500 && d <= 12_500, `${(d / 1000).toFixed(1)} s after sitting`); });
@@ -482,13 +487,13 @@ async function laneMain() {
   await check("pace · first Chog line on Home = work's coming! before the card; the two job lines come after the card", () => {
     const first = tl.find((e) => e.k === "chog" && e.v && e.t >= homeAt);
     assert.equal(first?.v, "work's coming!", `first Home line: ${first?.v}`);
-    const jobLine = tl.find((e) => e.k === "chog" && /let's send Piggy to work/.test(e.v || ""));
+    const jobLine = tl.find((e) => e.k === "chog" && (e.v || "").includes(C("let's send Piggy to work")));
     assert.ok(jobLine && jobLine.t >= cardAt + 1000 - 50, `job lines at ${jobLine?.t} · card at ${cardAt}`); // 50 ms = the timeline's sampling step (seen 996–999 ms on a 1000 ms breath)
   });
   await check("pace · two job lines come one at a time: the first stays, the second joins after it is read (+1 s)", () => {
-    const one = tl.find((e) => e.k === "chog" && e.v === "let's send Piggy to work");
-    const both = tl.find((e) => e.k === "chog" && e.v === "let's send Piggy to work your money does the job.");
-    assert.ok(one && both && both.t - one.t >= chogMs("let's send Piggy to work") + 1000 - 300, `first ${one?.t} · both ${both?.t} · seen ${JSON.stringify(tl.filter((e) => e.k === "chog" && /Piggy to work/.test(e.v || "")).map((e) => e.v).slice(0, 4))}`);
+    const one = tl.find((e) => e.k === "chog" && e.v === C("let's send Piggy to work"));
+    const both = tl.find((e) => e.k === "chog" && e.v === `${C("let's send Piggy to work")} ${C("your money does the job.")}`);
+    assert.ok(one && both && both.t - one.t >= chogMs(C("let's send Piggy to work")) + 1000 - 300, `first ${one?.t} · both ${both?.t} · seen ${JSON.stringify(tl.filter((e) => e.k === "chog" && /Piggy to work/.test(e.v || "")).map((e) => e.v).slice(0, 4))}`);
   });
   await check("pace · no dash in anything Chog says", () => { const d = tl.filter((e) => e.k === "chog" && /—/.test(e.v || "")).map((e) => e.v); assert.deepEqual([...new Set(d)], []); });
   await check("pace · Send can be pressed only after the job lines end (+1 s), not as the card appears", () => { assert.ok(sendAt - cardAt >= 4_000, `${((sendAt - cardAt) / 1000).toFixed(1)} s`); });
@@ -519,8 +524,8 @@ async function laneMain() {
     await until(a, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
     if ((await look(a)).scene === "explore") {
       const t2 = await readTimeline(a);
-      const intro = t2.find((e) => e.k === "chog" && /let's try more kinds of jobs!/.test(e.v || ""));
-      a.introLines = t2.filter((e) => e.k === "chog" && /let's try more kinds of jobs!|work's coming!|I found a few things|wanna see a few more/.test(e.v || "") && (!intro || e.t >= intro.t)).map((e) => ({ t: e.t, v: e.v, scene: (t2.filter((x) => x.k === "scene" && x.t <= e.t).pop() || {}).v }));
+      const intro = t2.find((e) => e.k === "chog" && (e.v || "").includes(C("let's try more kinds of jobs!")));
+      a.introLines = t2.filter((e) => e.k === "chog" && ((e.v || "").includes(C("let's try more kinds of jobs!")) || /work's coming!|I found a few things|wanna see a few more/.test(e.v || "")) && (!intro || e.t >= intro.t)).map((e) => ({ t: e.t, v: e.v, scene: (t2.filter((x) => x.k === "scene" && x.t <= e.t).pop() || {}).v }));
       const exp = t2.find((e) => e.k === "scene" && e.v === "explore" && (!intro || e.t >= intro.t));
       a.introToExplore = intro && exp ? exp.t - intro.t : null;
     }
@@ -535,8 +540,8 @@ async function laneMain() {
   await check("pace · second intro line → Explore paper ≥ 2.7 s (1.2 s beat + 1.5 s breath)", () => { assert.ok(a.introToExplore >= 2_600, `${a.introToExplore} ms`); });
   await check("chog · Journey 2 starts on Home: \"let's try more kinds of jobs!\" then \"work's coming!\" one at a time (the first stays); Explore paper says nothing", () => {
     const L = a.introLines || [];
-    const one = L.find((e) => e.v === "let's try more kinds of jobs!"), both = L.find((e) => e.v === "let's try more kinds of jobs! work's coming!");
-    assert.ok(one && both && both.t - one.t >= chogMs("let's try more kinds of jobs!") + 1000 - 300, `intro ${JSON.stringify(L.slice(0, 6))}`);
+    const one = L.find((e) => e.v === C("let's try more kinds of jobs!")), both = L.find((e) => e.v === `${C("let's try more kinds of jobs!")} work's coming!`);
+    assert.ok(one && both && both.t - one.t >= chogMs(C("let's try more kinds of jobs!")) + 1000 - 300, `intro ${JSON.stringify(L.slice(0, 6))}`);
     assert.ok(L.every((e) => e.scene === "sendstay"), `said on Home only ${JSON.stringify(L.map((e) => e.scene))}`);
     assert.ok(!L.some((e) => /I found a few things|wanna see a few more/.test(e.v)), "the old intro lines are gone");
   });
@@ -868,7 +873,7 @@ async function laneKeyClock() {
     await k.page.clock.fastForward("09:25");
     for (let i = 0; i < 16; i += 1) { await k.page.clock.runFor(500); await sleep(60); }
     const warned = (await look(k)).text;
-    assert.ok(warned.includes("closing soon.") && warned.includes("if you want to explore more, tap to wake me up."), `9:30 lines ${JSON.stringify(warned.filter((t) => /closing|wake/.test(t)))}`);
+    assert.ok(warned.includes(C("closing soon.")) && warned.includes("if you want to explore more, tap to wake me up."), `9:30 lines ${JSON.stringify(warned.filter((t) => /closing|wake/.test(t)))}`);
     await checkpoint(k, "closing-soon");
     await k.page.mouse.click(30, 300);
     await k.page.clock.runFor(40_000); await sleep(300);
@@ -901,12 +906,12 @@ async function laneFirstEnd() {
         await checkpoint(p, "home-paper");
         assert.deepEqual(open, { scene: "sendstay", paper: true }, "the Home paper is open and Journey 2 waits (no 5 s jump)");
         await p.page.locator("#chogHomeHit").click();
-        await until(p, "Journey 2 after closing the paper", (s) => s.scene === "explore" || s.text.includes("let's try more kinds of jobs!"), 30_000);
+        await until(p, "Journey 2 after closing the paper", (s) => s.scene === "explore" || s.text.includes(C("let's try more kinds of jobs!")), 30_000);
       } else {
         await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
         await until(p, "lock", (s) => s.scene === "birth", 20_000);
         let plain = false;
-        await until(p, "Journey 2's first line", async (s) => { if (s.text.includes("tap me!") || s.text.includes("tap me to find out")) plain = true; return s.text.includes("let's try more kinds of jobs!") || s.scene === "explore"; }, 40_000);
+        await until(p, "Journey 2's first line", async (s) => { if (s.text.includes("tap me!") || s.text.includes(C("tap me to find out"))) plain = true; return s.text.includes(C("let's try more kinds of jobs!")) || s.scene === "explore"; }, 40_000);
         assert.equal(plain, false, "no tap me on reopen");
       }
     });
