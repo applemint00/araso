@@ -6585,6 +6585,10 @@ html .a911-face {
   font-style: italic;
 }
 html .a911-face--front { background: #121110; color: var(--a911-cream); }
+/* [A-1312 ② · F4] WebKit flattens a face (overflow: hidden), so a positioned child with its own z-index (the amount box) ignores
+   the backface rule and shows through, mirrored, on the turned card. The side that faces away is simply not drawn
+   (switched halfway through the 450 ms turn below, so the turn looks the same). */
+html .a911-card.is-flipped .a911-face--front, html .a911-card:not(.is-flipped) .a911-face--back { visibility: hidden; }
 html .a911-face--back {
   background: #ebe3d5 var(--a911-tex) center / 290px auto;
   color: var(--a911-ink);
@@ -6761,6 +6765,7 @@ html .a911-link__url { user-select: all; }
 /* motion only when the user has not asked for less (no reduce block here: a735 A6 keeps the A-735 invite guard as the last `reduce` block) */
 @media (prefers-reduced-motion: no-preference) {
   html .a911-card { transition: transform 450ms cubic-bezier(0.2, 0.8, 0.2, 1), opacity 350ms, filter 350ms; }
+  html .a911-face { transition: visibility 0s linear 225ms; } /* [A-1312 ②] the hidden side switches at the turn's midpoint */
   html .a911-back__chip { transition: transform 100ms ease-out; }
   html .a911-act, html .a911-ctrl { transition: opacity 300ms; }
   html .a911-screen[data-typing="1"] .a911-body > * { animation: a911-rise 200ms ease-out; }
