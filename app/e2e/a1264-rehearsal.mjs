@@ -768,6 +768,9 @@ async function laneExploreWhy() {
         rows = await p.page.locator(".secondJourney__pick").count();
         p.listAt = Date.now();
         await checkpoint(p, "pick-list");
+        // [A-1303 → A-1305 ⑤ · Owner 06:2x] with the pick list up, the small name line above it is gone (no name shown twice)
+        const top = await p.page.evaluate(() => ({ line: document.querySelector("#secondPickedLine")?.textContent ?? null, rows: [...document.querySelectorAll(".secondJourney__pick")].map((e) => e.textContent.trim()) }));
+        assert.equal(top.line, null, `pick list up: name line above the list ${JSON.stringify(top.line)} · rows ${JSON.stringify(top.rows)}`);
         await p.page.locator(".secondJourney__pick").first().click();
         await click(p, "#secondOkButton", "ok");
       }

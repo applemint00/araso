@@ -571,11 +571,12 @@ async function browserRun(browser, BASE, shots, W, H, reduced, fork) {
         assert.ok(done, "interests form present for the save");
         let picked = null;
         for (let t0 = Date.now(); Date.now() - t0 < 6000;) {
-          picked = await p.evaluate(() => (document.querySelector("#secondOkButton") ? document.querySelector("#secondPickedLine")?.textContent ?? "" : null)).catch(() => null);
-          if (picked !== null && picked.split(" · ").filter(Boolean).length === ids.length) break;
+          // [A-1305 ⑤ RE-PIN] pre-A-1305: the picked line always listed the saved picks. Now it shows only with 0 rows; with rows up the card is ready.
+          picked = await p.evaluate(() => (document.querySelector("#secondOkButton") ? (document.querySelector(".secondJourney__pick") ? "ROWS" : document.querySelector("#secondPickedLine")?.textContent ?? "") : null)).catch(() => null);
+          if (picked === "ROWS" || (picked !== null && picked.split(" · ").filter(Boolean).length === ids.length)) break;
           await sleep(150);
         }
-        assert.ok(picked !== null && picked.split(" · ").filter(Boolean).length === ids.length, `candidates card shows the ${ids.length} saved picks (got ${JSON.stringify(picked)})`);
+        assert.ok(picked === "ROWS" || (picked !== null && picked.split(" · ").filter(Boolean).length === ids.length), `candidates card shows the ${ids.length} saved picks (got ${JSON.stringify(picked)})`);
         await sleep(400);
       };
       const pickSet = async (kind) => {

@@ -49,10 +49,13 @@ await check("N1 candidates markup: heading follows the read state; wait. only wi
   assert.match(reading, /secondJourney__exploreText">checking…</);
   const idle = secondJourneyCardMarkup({ step: "candidates", destinations: d3, selectedIds: ["asset-piece", "grow"], errandLabelById: LABELS });
   assert.equal(/checking…|wait\.|nah\./.test(idle), false, "idle with rows: no checking…/wait./nah.");
-  assert.match(idle, /id="secondPickedLine">pick up a piece of an asset · put some money to work</);
-  assert.ok(idle.indexOf("secondCandidatesHeading") < idle.indexOf("secondPickedLine") && idle.indexOf("secondPickedLine") < idle.indexOf('class="job secondJourney__pick'), "picked line sits between the title and the rows");
+  // [A-1305 ⑤ RE-PIN · Owner 06:2x] pre-A-1305: the picked line sat between the title and the rows. Now with rows up the names are on
+  // the rows only (no small line above); with 0 rows ("wait.") the picked line stays under the title (asserted on `wait` below).
+  assert.equal(/id="secondPickedLine"/.test(idle), false, "rows up: no picked line above them");
   const wait = secondJourneyCardMarkup({ step: "candidates", destinations: [], selectedIds: ["market"], errandLabelById: LABELS });
   assert.match(wait, /secondJourney__exploreText">wait\.</);
+  assert.match(wait, /id="secondPickedLine">go to the market</);
+  assert.ok(wait.indexOf("secondCandidatesHeading") < wait.indexOf("secondPickedLine"), "0 rows: picked line under the title");
   assert.equal(/nah\./.test(wait), false, "no-match is wait., never nah.");
   assert.match(wait, /secondJourneyCard--candidates/);
   assert.match(wait, /id="stayButton"[^>]*>Home</);
@@ -347,7 +350,9 @@ async function browserRun(browser, BASE, shots) {
           assert.equal(/checking…/.test(g.text), false, `${name}: no checking… with no read in flight`);
           assert.equal(/nah\./.test(g.text) || /nah\./.test(g.chogRaw || ""), false, `${name}: never nah.`);
           assert.ok(g.bodySh <= g.bodyCh, `${name}: body does not overflow ${g.bodySh}>${g.bodyCh}`);
-          assert.ok(g.picked && g.picked.split(" · ").length === hits.length && g.picked.split(" · ").every((x) => Object.values(LABELS).includes(x) || x.length > 2), `${name}: picked line ${g.picked}`);
+          // [A-1305 ⑤ RE-PIN] pre-A-1305: the picked line showed with every row count. Now only with 0 rows.
+          if (rows === 0) assert.ok(g.picked && g.picked.split(" · ").length === hits.length && g.picked.split(" · ").every((x) => Object.values(LABELS).includes(x) || x.length > 2), `${name}: picked line ${g.picked}`);
+          else assert.equal(g.picked, null, `${name}: rows up, no picked line above them (${g.picked})`);
           if (rows === 0) {
             assert.equal(g.heading, "wait."); assert.equal(g.state, "wait");
             assert.deepEqual(g.chog, ["oh… no jobs to go.", "wait for the next bell?"]);

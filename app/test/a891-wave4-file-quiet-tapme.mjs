@@ -350,7 +350,10 @@ for (const reduced of [false, true]) {
         return { title, picked, gap: title && picked ? picked.top - title.bottom : null, sh: body?.scrollHeight, ch: body?.clientHeight };
       });
       series[tag].pickedOverlap = ov;
-      assert.ok(ov.gap != null && ov.gap >= 0, `${tag}: title x picked-line ink overlap 0 (gap ${ov.gap})`);
+      // [A-1305 ⑤ RE-PIN] pre-A-1305: the picked line was always drawn here. Now it is drawn only with 0 rows; when drawn, ink overlap stays 0.
+      const rowsUp = await p.evaluate(() => document.querySelectorAll(".secondJourney__pick").length);
+      if (rowsUp > 0) assert.equal(ov.picked, null, `${tag}: rows up, no picked line`);
+      else assert.ok(ov.gap != null && ov.gap >= 0, `${tag}: title x picked-line ink overlap 0 (gap ${ov.gap})`);
       // reload: no repeat (intro seen), no auto-Explore
       await p.reload({ waitUntil: "networkidle" }); await sleep(600); await B.unlock();
       await sleep(10500);

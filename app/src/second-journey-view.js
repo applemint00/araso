@@ -196,8 +196,9 @@ function candidatesStepMarkup({ destinations = [], errandLabelById = {}, pickedC
   const pickedLabels = (Array.isArray(pickedErrandIds) ? pickedErrandIds : Array.isArray(selectedIds) ? selectedIds : []).map((id) => errandLabelById?.[id]).filter(Boolean);
   const waiting = !reading && destinations.length === 0 && pickedLabels.length > 0;
   const heading = reading ? paperStatusCopy() : waiting ? "wait." : "places to explore?";
-  const pickedLine = pickedLabels.length
-    ? `<p class="secondJourney__picked" id="secondPickedLine">${escapeHtml(pickedLabels.join(" · "))}</p>`
+  // [A-1303 → A-1305 ⑤ · Owner 06:2x] with the pick list up the names are on the rows: the small line above shows only with 0 rows.
+  const pickedLine = pickedLabels.length && destinations.length === 0
+    ?`<p class="secondJourney__picked" id="secondPickedLine">${escapeHtml(pickedLabels.join(" · "))}</p>`
     : "";
   return `
     <h2 class="secondJourney__heading secondJourney__heading--interests" id="secondCandidatesHeading" data-state="${reading ? "reading" : waiting ? "wait" : "ready"}"><span class="secondJourney__exploreText">${escapeHtml(heading)}</span></h2>
