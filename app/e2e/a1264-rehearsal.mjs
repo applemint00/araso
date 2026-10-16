@@ -133,9 +133,12 @@ function createWorld(label, { fundLagMs = 0, grantMode = "ok", grantHangMs = 0, 
       return json(404, { ok: false });
     }
     const rel = url.pathname === "/" ? "index.html" : url.pathname.replace(/^\/+/, "");
-    const file = path.resolve(BUILD, rel);
-    if (!file.startsWith(`${BUILD}${path.sep}`)) return route.abort();
-    const actual = existsSync(file) ? file : path.join(BUILD, "index.html");
+    const root = world.build || BUILD; // [A-1305 ⑧] the old-tab lane swaps the served build under an open tab
+    const file = path.resolve(root, rel);
+    if (!file.startsWith(`${root}${path.sep}`)) return route.abort();
+    // [A-1305 ⑧] like a new Vercel deploy: a hashed file the new build does not have is a 404, not the page
+    if (world.build && !existsSync(file) && /^assets\//.test(rel)) { world.missing = (world.missing || []).concat(rel); return route.fulfill({ status: 404, body: "" }); }
+    const actual = existsSync(file) ? file : path.join(root, "index.html");
     const contentType = ({ ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".webp": "image/webp", ".svg": "image/svg+xml", ".json": "application/json", ".woff2": "font/woff2" })[path.extname(actual)] || "application/octet-stream";
     return route.fulfill({ status: 200, contentType, body: readFileSync(actual) });
   }
@@ -790,6 +793,28 @@ async function laneExploreWhy() {
     });
   }));
 }
+// [A-1305 ⑧ · OPERATING_RULES 10-16 07:5x] old tab: a tab opened on the old build (ARASO_REHEARSAL_OLD_BUILD) goes through the first
+// journey; then the new build is "deployed" under it (its old hashed files are gone) and, without a reload, that tab still does
+// Journey 2 Explore → Job Send → Receipt → Home.
+async function laneOldTab() {
+  const old = process.env.ARASO_REHEARSAL_OLD_BUILD ? path.resolve(process.env.ARASO_REHEARSAL_OLD_BUILD) : null;
+  if (!old || !existsSync(path.join(old, "index.html"))) { record("old tab · ARASO_REHEARSAL_OLD_BUILD not given", true); return; }
+  const w = createWorld("oldtab");
+  w.build = old;
+  const p = await openPerson(browser, w, "ot"); people.push(p);
+  await check("old tab · first journey on the old build → new build deployed under the open tab → same tab: Explore → Job Send → Receipt → Home", async () => {
+    await walkFirstJourney(p);
+    await walkReturnAndFile(p);
+    const before = await p.page.evaluate(() => [...document.scripts].map((s) => s.src).filter(Boolean));
+    w.build = BUILD; // deploy
+    await enterSecond(p);
+    await walkSecondJob(p, 1);
+    const after = await p.page.evaluate(() => [...document.scripts].map((s) => s.src).filter(Boolean));
+    assert.deepEqual(after, before, "the tab kept its old bundle (no reload)");
+    p.oldTabMissing = w.missing || [];
+  });
+  await check("old tab · no page errors", () => assert.deepEqual(p.errors || [], [], `errors ${JSON.stringify(p.errors)} · 404 after deploy ${JSON.stringify(p.oldTabMissing)}`));
+}
 // [A-1289] entry captures at 390 · 810 · 1440 (logo → "get your piggy" → "make passkey to hatch the piggy" + Face ID)
 async function laneEntryShots() {
   await Promise.all([[390, 844], [810, 1080], [1440, 900]].map(async ([width, height]) => {
@@ -1107,7 +1132,8 @@ async function laneGiftRun() {
     for (const label of ["approve", "create", "gas_deposit"]) assert.match(last.steps?.[label] || "", /^0x[0-9a-fA-F]{64}$/, `missing ${label} tx hash`);
   });
   await check("gift · link step → link · copy · share", async () => {
-    assert.match(g.giftLink || "", /\/j2#g=/, `bad fork Gift link: ${g.giftLink}`);
+    // [A-1305 RE-PIN · A-1296 ⑫-5 token-only link] pre-A-1296: /j2#g=<giftId>… — now /gift#t=<token>&v=1 (giftId = sha256(token))
+    assert.match(g.giftLink || "", /\/gift#t=[A-Za-z0-9_-]{16,}&v=1$/, `bad fork Gift link: ${g.giftLink}`);
     assert.equal(await g.page.locator('[data-a911-act="link-copy"]').count(), 1, "copy icon missing");
     assert.equal(await g.page.locator('[data-a911-act="link-share"]').count(), 1, "share icon missing");
     await g.page.locator('[data-a911-act="link-copy"]').click();
@@ -1405,7 +1431,7 @@ function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id
 
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy,giftrun").split(",");
-  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti(), only.includes("keyclock") && laneKeyClock(), only.includes("firstend") && laneFirstEnd()].filter(Boolean));
+  await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti(), only.includes("keyclock") && laneKeyClock(), only.includes("firstend") && laneFirstEnd(), only.includes("oldtab") && laneOldTab()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });
   await check("no uncaught page errors", () => { const all = people.flatMap((p) => p.errors.map((e) => `${p.id}: ${e}`)); assert.equal(all.length, 0, JSON.stringify(all.slice(0, 6))); });
