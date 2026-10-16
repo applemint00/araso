@@ -15043,8 +15043,11 @@ function a1223InviteFingerprint() {
 function a1223UsedInvite() {
   return !!a1223BoundInvite && a1223BoundInvite === a1223InviteFingerprint();
 }
+// [A-1304] Until the boot public_state read settles, no visitor without a Piggy is told "invite-only": the loading art
+// holds (≤ 5 s abort), then OFF/timeout falls closed as before. Level < 2 never opens, so it does not wait.
 function a1223EntryWaiting() {
-  return !a1223HasPiggy() && (state.a1223InvitePending === true || (a1223UsedInvite() && state.a1223PublicPending === true));
+  return !a1223HasPiggy() && (state.a1223InvitePending === true
+    || ((RELEASE_LEVEL >= 2 || a1223UsedInvite()) && state.a1223PublicPending === true));
 }
 function a1223UsedInviteBlocked() {
   return !a1223HasPiggy() && a1223UsedInvite()
