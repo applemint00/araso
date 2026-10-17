@@ -325,7 +325,7 @@ async function allowSend(person, kind, wait = 12_000) {
   const t0 = Date.now();
   while (Date.now() - t0 < wait) {
     const seen = await person.page.evaluate(() => { const s = document.querySelector("#sendAllowSheet"); if (!s) return null; const b = s.getBoundingClientRect(); return b.height > 0 ? s.innerText.replace(/\s+/g, " ").trim() : null; }).catch(() => null);
-    if (seen) { (person.allowSheets ||= {})[kind] = seen; await checkpoint(person, `allow-${kind}`); await person.page.locator("#sendAllowYes").click(); return true; }
+    if (seen) { (person.allowSheets ||= {})[kind] = seen; await sleep(700); /* the sheet has finished rising */ await checkpoint(person, `allow-${kind}`); await person.page.locator("#sendAllowYes").click(); return true; }
     await sleep(200);
   }
   (person.allowSheets ||= {})[kind] = null;
