@@ -6483,15 +6483,13 @@ function renderAuthCard(view = state) {
   const blocked = !isAllowedPiggyRpId();
   const checking = !blocked && view.authPhase === "checking";
   const heading = checking ? view.message || "Checking…" : "Couldn't open Piggy";
-  // [A-667] 실패 카드의 행동은 문맥마다 **하나**다(Owner: 두 버튼을 같은 문맥에 함께 두지 않는다).
+  // 실패 카드의 행동은 문맥이 정한다.
   //  · 잠금 해제 실패/취소/시간초과(view.unlockRetry, renderAppLock 만 켬) → Try again 하나(#unlockRetryButton,
   //    renderAppLock 이 unlockApp 에 직결). Check Piggy 0.
   //  · 이 기기에 Piggy 표식(credential·받음·주소 — startPiggyOpen 과 같은 판정)이 있는 복구 문맥 → Check Piggy 하나.
   //    여기서 옛 Try again(→ Invite → startPiggyOpen)은 결국 같은 checkPiggy 라 같은 의도의 중복이었다.
-  //  · 표식 없는 새 기기(find-first 되찾기 실패·취소 뒤, 또는 새 Piggy 만들기 실패 뒤) → Make new 하나
-  //    (Owner 결정 2026-10-02 "같은 포맷으로 버튼은 하나인데 make new"). id 는 기존 #authTryAgainButton 그대로 —
-  //    render() 의 기존 배선(→ setScene("received") = Invite)을 byte 동일하게 재사용한다. 거기서 사용자가 Open 을
-  //    **다시 눌러야** startPiggyOpen → openPiggy(A-533 의 명시적 새 Piggy 경로)가 돈다. 자동 생성·credential 삭제 0.
+  //  · 표식 없는 기기(개인정보 보호 탭·복구한 폰도 패스키엔 Piggy 가 있을 수 있다) → Check Piggy(찾기만) + Make new.
+  //    Make new = 기존 #authTryAgainButton → Invite, 사용자가 Open 을 다시 눌러야 만든다. 어느 쪽도 자동 생성·credential 삭제 0.
   const recoveryOnly = !view.unlockRetry && !!(readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential) || (typeof a1214ReadPendingBirth === "function" && a1214ReadPendingBirth()));
   const body = checking
     ? view.detail || "Face ID may appear once."
@@ -6517,6 +6515,7 @@ function renderAuthCard(view = state) {
       `
         : `
         <div class="authCard__actions">
+          ${sendCardButtonMarkup({ id: "checkButton", label: "Check Piggy", disabled: blocked })}
           ${sendCardButtonMarkup({ id: "authTryAgainButton", label: "Make new", disabled: false })}
         </div>
       `;
@@ -15356,6 +15355,12 @@ async function a956Enter({ reenter = false } = {}) {
   });
   proveFundingTargetControl = counted(proveFundingTargetControl);
   settleBoundGiftClaim = counted(settleBoundGiftClaim);
+  // A recovered device holds no Journey 1 hashes, so it cannot enter; a Piggy the server already admitted only needs the status check.
+  function a1270ReenterByStatus() {
+    if (!state.address || state.appLock) return;
+    checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: state.address, forkInstanceId: import.meta.env.VITE_ARASO_FORK_INSTANCE_ID })
+      .then((r) => { if (r?.allowed === true && state.scene === "sendstay" && !state.appLock && !state.secondJourneyCompletedOnce) a956SwitchJourney(2); }, () => {});
+  }
   const a956BaseArm = a891ArmPostFileQuietHome;
   a891ArmPostFileQuietHome = (...args) => {
     if (!entryOpen()) return a956BaseArm(...args);
@@ -15364,7 +15369,8 @@ async function a956Enter({ reenter = false } = {}) {
       a1265AwaitPublicState().then(() => { if (a1160PublicEntryOpen() && state.scene === "sendstay") a891ArmPostFileQuietHome(...args); });
       return undefined;
     }
-    if (state.secondJourneyCompletedOnce || (!readForkInvite() && !a1160PublicEntryOpen()) || !journey1Pointers(readReceipts())) return undefined;
+    if (state.secondJourneyCompletedOnce || (!readForkInvite() && !a1160PublicEntryOpen())) return undefined;
+    if (!journey1Pointers(readReceipts())) { a1270ReenterByStatus(); return undefined; }
     const arm = () => {
       if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || !homeChog) return;
       if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }

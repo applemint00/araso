@@ -380,22 +380,24 @@ await check("C4 recovery card with an empty detail does not show copy that names
   assert.equal(html.includes("Try again"), false);
 });
 
-// [Owner decision 2026-10-02 "OWNER DECISION — A-667 FRESH-DEVICE FAILURE: ONE MAKE NEW ACTION"] replaces the
-// interim two-button PREMISE_CONFLICT pin: markerless fresh device → same failure card, ONE "Make new".
-await check("C5 markerless fresh device, find-first lookup FAILED or CANCELLED (and new-Piggy open failure) → same couldn't-find card format, exactly ONE action \"Make new\"", () => {
+// [Owner 2026-10-17 "ㅇㅇ 좋아"] a device without a marker (a private tab, a recovered phone) can still hold a Piggy:
+// its failure card offers "Check Piggy" (find only) beside "Make new". Same card, same words, no creation on either tap.
+await check("C5 markerless device, find-first lookup FAILED or CANCELLED, new-Piggy open failed or CANCELLED → same couldn't-find card format, \"Check Piggy\" + \"Make new\"", () => {
   const cases = [
     { name: "lookup failed", s: { message: "Chog could not find Piggy here.", detail: "Couldn't find your Piggy.", authCancelled: false }, body: "Couldn't find your Piggy." },
     { name: "lookup cancelled", s: { message: "Chog could not find Piggy here.", detail: "Couldn't find your Piggy.", authCancelled: true }, body: "Face ID was cancelled." },
     { name: "open failed", s: { message: "Piggy could not open here.", detail: "", authCancelled: false }, body: "" },
+    { name: "create cancelled", s: { message: "Piggy could not open here.", detail: "", authCancelled: true }, body: "Face ID was cancelled." },
   ];
   for (const c of cases) {
     const h = buildHarness({ markers: {} });
     h.state.appLock = null;
     Object.assign(h.state, { scene: "birth", authPhase: "idle", ...c.s });
     const html = h.ctx.renderAuthCard();
-    assert.equal((html.match(/<button class="pkbtn"/g) || []).length, 1, `${c.name}: one action`);
+    assert.equal((html.match(/<button class="pkbtn"/g) || []).length, 2, `${c.name}: two actions`);
+    assert.ok(html.includes('<button class="pkbtn" id="checkButton">Check Piggy</button>'), `${c.name}: Check Piggy on the existing find id`);
     assert.ok(html.includes('<button class="pkbtn" id="authTryAgainButton">Make new</button>'), `${c.name}: Make new on the existing Invite-navigation id`);
-    for (const bad of ["Try again", "Check Piggy", "checkButton", "unlockRetryButton"]) assert.equal(html.includes(bad), false, `${c.name}: ${bad}`);
+    for (const bad of ["Try again", "unlockRetryButton"]) assert.equal(html.includes(bad), false, `${c.name}: ${bad}`);
     assert.ok(html.includes('<h1 class="authCard__title">Couldn\'t open Piggy</h1>'), `${c.name}: existing heading`);
     assert.ok(html.includes(`<p class="authCard__body">${c.body}</p>`), `${c.name}: existing body copy`);
     assert.ok(html.includes('class="authCard"') && html.includes('class="authCard__paper"'), `${c.name}: same card format`);
@@ -455,11 +457,11 @@ await check("C8 nothing on load/render/timeout: Make new/Invite never start crea
   assert.ok(/setInvitePhase\("checking"\);\s*return withInviteAuthPresentation\(async \(\) => \{\s*const out = await startPiggyOpen\(\);/.test(stripComments(fnBody("openInvite"))), "Invite tap starts the passkey branch immediately");
 });
 
-await check("C9 separation: marker → Check Piggy only · markerless → Make new only · reentry lock → Try again only; three distinct ids, one each", async () => {
+await check("C9 separation: marker → Check Piggy only · markerless → Check Piggy + Make new · reentry lock → Try again only; three distinct ids, one each", async () => {
   const card = (markers) => { const h = buildHarness({ markers }); h.state.appLock = null; Object.assign(h.state, { scene: "birth", authPhase: "idle", authCancelled: false, message: "Chog could not find Piggy here.", detail: "Couldn't find your Piggy." }); return h.ctx.renderAuthCard(); };
   const ids = (html) => [...html.matchAll(/<button class="pkbtn" id="(\w+)"[^>]*>([^<]+)</g)].map((m) => `${m[1]}:${m[2]}`);
   deq(ids(card({ received: true })), ["checkButton:Check Piggy"]);
-  deq(ids(card({})), ["authTryAgainButton:Make new"]);
+  deq(ids(card({})), ["checkButton:Check Piggy", "authTryAgainButton:Make new"]);
   const h = buildHarness({ markers: {} });
   h.tap("loginChogButton");
   h.calls.requestPrf[0].reject(NOT_ALLOWED);
@@ -677,7 +679,7 @@ async function desktopWidths(browser, BASE, shots) {
     const context = await browser.newContext({ viewport: { width: w, height: h } });
     await context.addInitScript(INIT);
     const p = await context.newPage();
-    await check(`B5 [${w}] fresh device: couldn't-find card shows ONE "Make new" → Invite, no create/get before an explicit Open, storage untouched; with a Piggy marker ONLY "Check Piggy"${w >= 700 ? "; desktop Invite stage unchanged, no lock" : ""}`, async () => {
+    await check(`B5 [${w}] fresh device: couldn't-find card shows "Check Piggy" + "Make new"; Make new → Invite, no create/get before an explicit Open, storage untouched; with a Piggy marker ONLY "Check Piggy"${w >= 700 ? "; desktop Invite stage unchanged, no lock" : ""}`, async () => {
       await p.goto(BASE, { waitUntil: "networkidle" });
       await p.waitForSelector(".stage--invite", { timeout: 15000 });
       if (w >= 700) {
@@ -689,11 +691,11 @@ async function desktopWidths(browser, BASE, shots) {
       const btns = () => p.evaluate(() => [...document.querySelectorAll(".authCard__actions button")].map((b) => `${b.id}:${b.textContent.trim()}`));
       await p.evaluate(() => window.__arasoScene("authfail", { reason: "notfound" }));
       await sleep(400);
-      deq(await btns(), ["authTryAgainButton:Make new"], "markerless fresh device: Make new only");
+      deq(await btns(), ["checkButton:Check Piggy", "authTryAgainButton:Make new"], "markerless device: Check Piggy + Make new");
       if (shots) await p.screenshot({ path: path.join(shots, `a667_w${w}_fresh_make_new.png`) });
       await p.evaluate(() => window.__arasoScene("authfail", { reason: "cancelled" }));
       await sleep(400);
-      deq(await btns(), ["authTryAgainButton:Make new"], "markerless fresh device, cancelled: Make new only");
+      deq(await btns(), ["checkButton:Check Piggy", "authTryAgainButton:Make new"], "markerless device, cancelled: Check Piggy + Make new");
       const keysBefore = await p.evaluate(() => Object.keys(localStorage).sort());
       const waBefore = await p.evaluate(() => ({ create: window.__wa.create, get: window.__wa.get }));
       await p.locator("#authTryAgainButton").click();

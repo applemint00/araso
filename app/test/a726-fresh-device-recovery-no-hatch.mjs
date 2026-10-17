@@ -517,7 +517,7 @@ async function freshDeviceFailure(browser, BASE, mode) {
     const wa = await waOf(d.p);
     assert.equal(landed, "birth", `trace ${wa.scenes.join(">")}`);
     deq({ get: wa.get, create: wa.create }, { get: 1, create: 0 }, "same tap: one recovery attempt, zero creation");
-    deq(await d.p.evaluate(() => [...document.querySelectorAll(".authCard__actions button")].map((b) => b.id)), ["authTryAgainButton"], "only the explicit Make new (→ Invite)");
+    deq(await d.p.evaluate(() => [...document.querySelectorAll(".authCard__actions button")].map((b) => b.id)), ["checkButton", "authTryAgainButton"], "Check Piggy (find only) + the explicit Make new (→ Invite)");
     deq(await markersOf(d.p), NONE, "no marker written");
     assert.equal(wa.scenes.includes("hatch"), false);
     deq(d.errors, [], "pageerror 0");

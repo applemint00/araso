@@ -341,7 +341,10 @@ await check("A-1165 selected Piggy changes during Face ID: stale result cannot e
 });
 await check("4 the cue is not armed without an invite or a Journey 1 receipt, nor after Second; level 1 / no fork env → the existing (A-943) path", async () => {
   const j1 = { depositTxHash: h(1), redeemTxHash: h(2) };
-  for (const over of [{ invite: null, receipts: [j1] }, { receipts: [] }]) { const T = harness(over); T.B.get("a891ArmPostFileQuietHome")(); runTimers(); assert.equal(T.calls.cue, 0); }
+  { const T = harness({ invite: null, receipts: [j1] }); T.B.get("a891ArmPostFileQuietHome")(); runTimers(); assert.equal(T.calls.cue, 0); }
+  // no Journey 1 receipt (a recovered device): no cue; only the server's status is asked, never an entry, and no switch for a Piggy it never admitted
+  const S = server();
+  { const T = harness({ receipts: [], fetchImpl: S.fetchImpl }); T.B.get("a891ArmPostFileQuietHome")(); runTimers(); await settle(); assert.equal(T.calls.cue, 0); assert.equal(T.calls.switched, 0); assert.deepEqual(S.seen.map((r) => r.body.action), ["status"]); }
   const T = harness({ receipts: [j1] }); T.state.secondJourneyCompletedOnce = true; T.B.get("a891ArmPostFileQuietHome")(); runTimers(); assert.equal(T.calls.cue, 0);
   for (const over of [{ level: 1, receipts: [j1] }, { profile: FORK, receipts: [j1] }]) {
     const U = harness(over); U.B.get("a891ArmPostFileQuietHome")(); U.B.get("a891HomeChogTap")();

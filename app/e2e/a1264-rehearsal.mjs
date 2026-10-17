@@ -48,7 +48,7 @@ async function knownCheck(label, fn) {
 // Visible copy allowed on the walked screens. Dynamic parts (time, date, name, counts) are normalised first.
 const COPY_ALLOW = new Set([...MOOD_COPY,
   "Araso", "your money,", "as a little Piggy", "checking...", "Face ID", "trial phase · free", "skip", "<DATE>", "<DAY>",
-  "you've got", "the one piggy !", "ok", "name it?", "Piggy name", "save", "HOME", "<STATUS>", "<TIME>", "<N>", "<NAME>",
+  "you've got", "the one piggy !", "ok", "Check Piggy", "name it?", "Piggy name", "save", "HOME", "<STATUS>", "<TIME>", "<N>", "<NAME>",
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
