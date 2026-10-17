@@ -734,8 +734,19 @@ async function laneUnlockWhy() {
     await check(`unlock why · ${word}: the unlock failure is recorded with its own cause word (unlock_why/${word})`, async () => {
       await walkFirstJourney(p);
       await arm(p); // [A-1290] before reopening: the lock asks Face ID by itself
+      const cancels = () => eventsOf(w, id).filter((e) => e === "passkey_get/cancel").length;
+      const cancelsBefore = cancels();
       await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
       await until(p, "lock", (s) => s.scene === "birth", 20_000);
+      if (word === "cancelled") {
+        // [A-1313] a cancelled automatic ask is not a failure: the logo stays (no failure card, no unlock_why); its tap asks again
+        await until(p, "the automatic Face ID ask turned down", () => cancels() > cancelsBefore, 20_000);
+        await sleep(1500);
+        assert.ok(!(await live(p, "#unlockRetryButton")), "a cancelled automatic ask must not show the failure card");
+        assert.ok(await live(p, "#loginChogButton"), "the logo stays to be tapped");
+        assert.ok(!eventsOf(w, id).some((e) => e.startsWith("unlock_why/")), `events: ${eventsOf(w, id).join(",")}`);
+        await p.page.locator("#loginChogButton").click();
+      }
       await until(p, "unlock failed card", async () => live(p, "#unlockRetryButton"), 60_000);
       assert.ok(eventsOf(w, id).includes(`unlock_why/${word}`), `events: ${eventsOf(w, id).join(",")}`);
     });
