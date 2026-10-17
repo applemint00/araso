@@ -6993,12 +6993,12 @@ html .a911-screen[data-a911="feedback"] .fb-thanks { position: static; transform
 
 /* [A-1360 · Owner 15:4x · 16:0x · Design canvas "Send 로그인 설명 시안" 판 E (390 base)] the money Send approval sheet: rises from the
    bottom over a dimmed screen · ivory paper #efe7d6 · 28 px top corners · grip · Piggy face 52 · title 34 · two lines 24 · amount
-   (Playfair 700 24) + "piggy goes with this." 20 · "not now" 24 · "allow" pill 26. No Face ID mark. Wider screens: the same sheet, centred,
+   (Playfair 700 24) alone (A-1364: "piggy goes with this." gone · every sheet 332 high) · "not now" 24 · "allow" pill 26. No Face ID mark. Wider screens: the same sheet, centred,
    no wider than a phone. */
 .sendAllow { position: fixed; inset: 0; z-index: 60; }
 .sendAllow__veil { position: absolute; inset: 0; background: rgba(0, 0, 0, 0.5); }
 .sendAllow__sheet {
-  position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); width: min(100%, 430px); min-height: 332px; box-sizing: border-box;
+  position: absolute; left: 50%; bottom: 0; transform: translateX(-50%); width: min(100%, 430px); height: 332px; box-sizing: border-box; /* [A-1364 · Owner 18:2x "다 같아야 해"] every sheet 332 */
   padding: 14px 24px calc(30px + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 10px;
   background: #efe7d6; color: #141210; border-radius: 28px 28px 0 0; box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.45);
   animation: sendAllowUp 280ms ease-out;
@@ -7012,7 +7012,6 @@ html .a911-screen[data-a911="feedback"] .fb-thanks { position: static; transform
 .sendAllow__lines { display: flex; flex-direction: column; font: 24px/1.25 var(--font-cj); color: #2a2621; margin-top: 2px; }
 .sendAllow__amount { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; }
 .sendAllow__sum { font: 700 24px "Playfair Display", Georgia, serif; }
-.sendAllow__goes { font: 20px var(--font-cj); color: #6f6b64; }
 .sendAllow__row { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
 .sendAllow__no { height: 46px; padding: 0 14px; border: none; background: transparent; font: 24px var(--font-cj); color: #6f6b64; cursor: pointer; }
 .sendAllow__yes { height: 46px; padding: 0 30px; border-radius: 23px; border: 2px solid #141210; background: #f7f1e4; font: 26px var(--font-cj); color: #141210; cursor: pointer; }

@@ -53,7 +53,7 @@ const COPY_ALLOW = new Set([...MOOD_COPY,
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
   "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "piggy goes with this.", "not now", "allow", "want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?", /* [A-1360] the approval sheet */ "+ Piggy soon", "soon",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "piggy goes to its first job", "with your $5.", /* [A-1364 · Owner 18:2x the first sheet's two lines · "piggy goes with this." gone] */ "not now", "allow", "want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?", /* [A-1360] the approval sheet */ "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -301,7 +301,18 @@ async function walkFirstJourney(person, { send = true } = {}) {
   });
   if (!send) return;
   person.sendGetsBefore = await getsOf(person); // [A-1298] the Send's Face ID count is read at filing (never wait here: fault lanes arm right after the tap)
-  await person.page.locator("#sendButton").click();
+  // [A-1364] a finger's tap: wait for the armed bounce to end, then press its centre. (locator.click() scrolled the overflow-hidden stage
+  // into view while the button was still bouncing — the card looked pushed left under the sheet; a finger never scrolls it.)
+  const fingerTap = async () => { await person.page.waitForFunction(() => !document.querySelector("#sendButton")?.classList.contains("is-armed"), null, { timeout: 5000 }).catch(() => {}); const b = await person.page.locator("#sendButton").boundingBox(); await person.page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); };
+  person.firstCardBefore = await cardBox(person); // [A-1364] where the Send card sits before the tap
+  await fingerTap();
+  // not now: nothing moves, nothing is drawn again (the same card node, the same place), then Send again
+  if (await until(person, "first sheet (not now)", () => live(person, "#sendAllowNo"), 12_000).then(() => true, () => false)) {
+    await sleep(700); await person.page.locator("#sendAllowNo").click(); await sleep(600);
+    person.firstCardAfterNo = await cardBox(person);
+    await checkpoint(person, "allow-first-notnow");
+    await fingerTap();
+  }
   person.sentAt = Date.now();
   await allowSend(person, "first"); // [A-1360]
 }
@@ -321,11 +332,14 @@ async function walkReturnAndFile(person) {
 async function getsOf(person) { return person.page.evaluate(() => Number(sessionStorage.getItem("__arasoGets") || 0)).catch(() => -1); }
 // [A-1360 · Owner 15:4x "열린 동안 보내기 승인만" · 81_ENTRY_FLOW 끝 [15:4x] · Design canvas 판 E] a money Send with the key open shows our
 // approval sheet; "allow" sends. The sheet's words are kept per Send kind for the checks; no sheet within the wait = recorded as none.
+// [A-1364] the Send card's box (null = no card) · the open sheet's height
+const cardBox = (person) => person.page.evaluate(() => { const c = document.querySelector("#sendCard"); if (!c) return null; const r = c.getBoundingClientRect(); window.__a1364Card ||= c; return { l: Math.round(r.left), t: Math.round(r.top), same: window.__a1364Card === c }; }).catch(() => null);
+const sheetHeight = (person) => person.page.evaluate(() => Math.round(document.querySelector("#sendAllowSheet .sendAllow__sheet")?.getBoundingClientRect().height || 0)).catch(() => 0);
 async function allowSend(person, kind, wait = 12_000) {
   const t0 = Date.now();
   while (Date.now() - t0 < wait) {
     const seen = await person.page.evaluate(() => { const s = document.querySelector("#sendAllowSheet"); if (!s) return null; const b = s.getBoundingClientRect(); return b.height > 0 ? s.innerText.replace(/\s+/g, " ").trim() : null; }).catch(() => null);
-    if (seen) { (person.allowSheets ||= {})[kind] = seen; await sleep(700); /* the sheet has finished rising */ if (kind === "gift") await person.page.screenshot({ path: path.join(OUT, `${person.id}-allow-gift.png`) }); /* the Gift screen under it keeps its own copy rules */ else await checkpoint(person, `allow-${kind}`); await person.page.locator("#sendAllowYes").click(); return true; }
+    if (seen) { (person.allowSheets ||= {})[kind] = seen; await sleep(700); /* the sheet has finished rising */ (person.allowHeights ||= {})[kind] = await sheetHeight(person); if (kind === "first") person.firstCardUnderSheet = await cardBox(person); if (kind === "gift") await person.page.screenshot({ path: path.join(OUT, `${person.id}-allow-gift.png`) }); /* the Gift screen under it keeps its own copy rules */ else await checkpoint(person, `allow-${kind}`); await person.page.locator("#sendAllowYes").click(); return true; }
     await sleep(200);
   }
   (person.allowSheets ||= {})[kind] = null;
@@ -583,9 +597,20 @@ async function laneMain() {
     const sendGets = a.filedGets - a.sendGetsBefore; // Face ID asks from the first Send tap to the filed Home = the Send's own
     assert.equal(sendGets, 0, `first Send Face ID asks: ${sendGets}`);
     assert.equal(a.jobGets?.[1], 1, `Job Send Face ID asks: ${a.jobGets?.[1]}`);
-    assert.ok(a.allowSheets?.first && /allow/.test(a.allowSheets.first) && /not now/.test(a.allowSheets.first) && /piggy goes with this\./.test(a.allowSheets.first), `first Send sheet: ${JSON.stringify(a.allowSheets?.first)}`);
+    assert.ok(a.allowSheets?.first && /allow/.test(a.allowSheets.first) && /not now/.test(a.allowSheets.first) && /piggy goes to its first job/.test(a.allowSheets.first), `first Send sheet: ${JSON.stringify(a.allowSheets?.first)}`);
     assert.ok(a.allowSheets?.job1 && /tidy the wallet/.test(a.allowSheets.job1) && /want me to sweep the crumbs into MON\?/.test(a.allowSheets.job1), `Job Send sheet: ${JSON.stringify(a.allowSheets?.job1)}`);
     assert.equal(/Face ID|authenticat|sign in/i.test(`${a.allowSheets.first} ${a.allowSheets.job1}`), false, "the sheet reads as an allow, not a Face ID");
+  });
+  // [A-1364 · Owner 10-17 18:2x "ㅇㅇ 좋아 제안대로 할게" · "다 같아야 해" · the first sheet's two lines chosen] while the first Send's sheet is
+  // open the Send card stays where it was (it leaves only after allow); the sheet says the Owner's two lines and the amount alone (no
+  // "piggy goes with this."); every sheet is the same height.
+  await check("first Send sheet · the card stays under it · not now = nothing moves or redraws · Owner lines · the amount alone · same height as the Job sheet", () => {
+    const b0 = a.firstCardBefore, b1 = a.firstCardUnderSheet, b2 = a.firstCardAfterNo;
+    assert.ok(b0 && b1 && Math.abs(b1.l - b0.l) <= 1 && Math.abs(b1.t - b0.t) <= 1, `card before ${JSON.stringify(b0)} · under the sheet ${JSON.stringify(b1)}`);
+    assert.ok(b2 && b2.same === true && Math.abs(b2.l - b0.l) <= 1 && Math.abs(b2.t - b0.t) <= 1, `after not now ${JSON.stringify(b2)} (same node, same place)`);
+    assert.ok(/piggy goes to its first job/.test(a.allowSheets?.first || "") && /with your \$5\./.test(a.allowSheets?.first || ""), `first sheet: ${a.allowSheets?.first}`);
+    assert.equal(/piggy goes with this/.test(`${a.allowSheets?.first} ${a.allowSheets?.job1}`), false, "the \"piggy goes with this.\" line is gone");
+    assert.ok(a.allowHeights?.first === 332 && a.allowHeights.job1 === 332, `sheet heights (판 E 332 · all the same) ${JSON.stringify(a.allowHeights)}`);
   });
   await check("a · reopen the app → lock → Chog → Face ID → Home → bell → Explore opens again", async () => {
     await a.page.goto("about:blank"); await a.page.goto(BASE, { waitUntil: "networkidle" });
@@ -1246,6 +1271,10 @@ async function laneGiftRun() {
     await send.click();
     assert.equal(await allowSend(g, "gift", 20_000), true, "the Gift Send asked our approval sheet");
     assert.match(g.allowSheets?.gift || "", /Gift a Piggy/, `gift sheet: ${g.allowSheets?.gift}`);
+    // [A-1364 · Owner 18:2x the Gift sheet's two lines] "send $<amount> to <TO>" / "as a piggy gift." · no "piggy goes with this." · same height
+    assert.match(g.allowSheets?.gift || "", /send \$\d[\d.,]{0,12} to \S.{0,40}as a piggy gift\./, `gift sheet lines: ${g.allowSheets?.gift}`);
+    assert.equal(/piggy goes with this/.test(g.allowSheets?.gift || ""), false, `gift sheet: ${g.allowSheets?.gift}`);
+    assert.equal(g.allowHeights?.gift, 332, `gift sheet height ${JSON.stringify(g.allowHeights)}`);
     await g.page.locator(".a911-link__url").waitFor({ state: "visible", timeout: 30_000 });
     g.giftLink = await g.page.locator(".a911-link__url").innerText();
     const store = await g.page.evaluate(() => JSON.parse(localStorage.getItem("araso.a915.giftCreate.v1") || "[]"));

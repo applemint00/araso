@@ -3614,7 +3614,8 @@ async function sendPiggyOnce(markSettling) {
   // [A-1360] every money Send is allowed on our sheet; "not now" = nothing moves, the card stays
   if (typeof askSendAllow === "function" && !(await askSendAllow(firstSendAllowContent()))) { // (slices of this function run without the module)
     clearOwnSendPending(reservation);
-    if (state.scene === "sendstay") setScene("sendstay", sendBefore.message, sendBefore.detail);
+    // [A-1364] nothing moved (key open) = nothing is drawn again; after a Face ID the Home words go back as they were
+    if (state.scene === "sendstay" && (state.message !== sendBefore.message || state.detail !== sendBefore.detail)) setScene("sendstay", sendBefore.message, sendBefore.detail);
     return;
   }
 
@@ -11133,11 +11134,11 @@ function askSendAllow(content) {
     el.querySelector("#sendAllowNo")?.addEventListener("click", () => entry.done(false));
   });
 }
-// first Send: the words the Send card already shows (its question · its amount) — the sheet's own title / two lines wait for the Owner
+// first Send: the card's question as the title · the Owner's two lines (A-1364 · Owner 18:2x) with the card's amount · that amount
 function firstSendAllowContent() {
   const card = typeof document !== "undefined" ? document.querySelector("#sendCard") : null;
   const amount = (card?.querySelector(".sendCard__terms")?.textContent || "").match(/\$\d[\d.,]{0,20}/)?.[0] || "";
-  return { title: card?.querySelector(".sendCard__message")?.textContent.trim() || "", lines: [], amount };
+  return { title: card?.querySelector(".sendCard__message")?.textContent.trim() || "", lines: ["piggy goes to its first job", amount ? `with your ${amount}.` : ""], amount };
 }
 // Journey 2 Job Send: the job's title and the Owner's two lines for it (JOB_HELP_LINES · the ? set) · the amount typed on the card
 function jobSendAllowContent(sj, jobKey) {
@@ -11375,7 +11376,9 @@ async function a898FaceId() {
     let cur = state.giftSend;
     if (!cur || cur.draftId !== d0.draftId || cur.stage !== "faceid") return;
     if (proved.ok === true && typeof askSendAllow === "function") { // [A-1360] our approval sheet; "not now" = back to the card as it was, nothing moves
-      const allowed = await askSendAllow({ title: "Gift a Piggy", lines: [], amount: d0.preset ? `$${d0.preset}` : "" });
+      const giftAmount = d0.preset ? `$${d0.preset}` : "";
+      // [A-1364 · Owner 18:2x] "send $20 to Mina" / "as a piggy gift." — the picked amount, the TO written on the card's back
+      const allowed = await askSendAllow({ title: "Gift a Piggy", lines: [giftAmount && String(d0.to || "").trim() ? `send ${giftAmount} to ${String(d0.to).trim()}` : "", "as a piggy gift."], amount: giftAmount });
       cur = state.giftSend;
       if (!cur || cur.draftId !== d0.draftId || cur.stage !== "faceid") return;
       if (!allowed) { state.giftSend = d0; return; }
