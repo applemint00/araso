@@ -12983,9 +12983,10 @@ function chogHomeMarkupForExplore() {
   const sj = state.secondJourney;
   // [A-1297] Journey 2 picking: "let me see which jobs can go." while checking, then one line for what can go (one bubble).
   const pick = explorePickState(sj);
+  if (pick && pick.kind === "explain" && !pick.lines.length) return markup; // [A-1361] no Owner set for this job = nothing said
   if (pick) {
     const say = pick.lines.length > 1
-      ? `<span class="chogCheckLine chogCheckLine--two" id="exploreChogSay" style="transform:translateX(-50%)">${chogLinesMarkup("explorePick", pick.lines)}</span>`
+      ? `<span class="chogCheckLine chogCheckLine--two${pick.kind === "explain" ? " is-explain" : ""}" id="exploreChogSay" style="transform:translateX(-50%)">${chogLinesMarkup(pick.clock || "explorePick", pick.lines)}</span>`
       : `<span class="chogCheckLine" id="exploreChogSay" style="transform:translateX(-50%)">${escapeHtml(pick.line)}</span>`;
     return markup.replace('<div class="chogHome__hit"', `${say}<div class="chogHome__hit"`);
   }
@@ -13028,6 +13029,15 @@ function explorePickState(sj) {
   const kind = ready.length === 0 ? "none" : ready.length === 1 ? "one" : ready.length === 2 ? "two" : "many";
   const line = EXPLORE_PICK_LINES[kind];
   const lines = kind === "none" ? ["none of these can go now.", "something else?"] : [line]; // same words; two stacked lines fit on 390 (Cowork 04:5x)
+  // [A-1361 · Owner 16:0x "익스플로어일 때 표시를 해보자" · "줄 누르면 초그가 말함"] a job row tapped (two / many) = Chog explains that job in its
+  // two Owner lines (JOB_HELP_LINES, one at a time); another row = that job's lines. A job with no Owner set = nothing said.
+  const tapped = (kind === "two" || kind === "many") && sj.pickedCandidateId
+    ? (secondLaneMode(sj) ? ready : sj.flow?.destinations || []).find((d) => d.id === sj.pickedCandidateId) // the rows the pick buttons were drawn from (dev preview = the flow)
+    : null;
+  if (tapped) {
+    const explain = JOB_HELP_LINES[tapped.errandIds?.[0]] || [];
+    return { kind: "explain", line: explain[0] || "", lines: explain, clock: `explorePick:${tapped.id}`, go: tapped };
+  }
   return { kind, line, lines, go: ready.find((d) => d.id === sj.pickedCandidateId) || ready[0] || null };
 }
 // Called after each explore render: hide the list while checking, then show it (two / many) or move on by itself (one / none).
@@ -13036,7 +13046,7 @@ function scheduleExploreWhyNext() {
   const pick = explorePickState(sj);
   if (!pick) return;
   if (typeof chogHelpRemember === "function") chogHelpRemember("exploreChogSay", pick.lines); // [A-1293] the ? says it again
-  const hideList = pick.kind !== "two" && pick.kind !== "many";
+  const hideList = pick.kind !== "two" && pick.kind !== "many" && pick.kind !== "explain"; // [A-1361] explaining a tapped row keeps the list
   if (hideList) document.querySelectorAll(".secondJourney__pick").forEach((btn) => { btn.hidden = true; });
   if (pick.kind === "checking") {
     if (sj.laneReading !== true) sceneTimeout(() => { if (state.scene === "explore" && state.secondJourney === sj && sj.step === "candidates") render(); }, Math.max(0, pick.until - Date.now()) + 30);

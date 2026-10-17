@@ -21,9 +21,9 @@ const chogSpeakMs = (t) => Math.round(String(t).length * 60 + 1200);
 function pick({ picks = ["a", "b"], ready = 2, reading = false, savedAgoMs = 10_000, lane = true, scene = "explore", step = "candidates", picked = null }) {
   const sj = { selectedIds: picks, laneReading: reading, whySavedAt: Date.now() - savedAgoMs, step, pickedCandidateId: picked };
   const dests = Array.from({ length: ready }, (_, i) => ({ id: `job-${i}`, derivedStatus: "JOB_READY" }));
-  return new Function("state", "secondPickedErrandIds", "secondLaneDestinations", "chogSpeakMs",
+  return new Function("state", "secondPickedErrandIds", "secondLaneDestinations", "chogSpeakMs", "secondLaneMode", "JOB_HELP_LINES",
     `let exploreWhyLane = ${lane};\n${decl("EXPLORE_CHECK_LINE")}\n${MAIN.slice(MAIN.indexOf("const EXPLORE_PICK_LINES"), MAIN.indexOf("});", MAIN.indexOf("const EXPLORE_PICK_LINES")) + 3)}\n${fn("explorePickState")}\nreturn explorePickState;`)(
-    { scene }, (s) => s.selectedIds, () => dests, chogSpeakMs)(sj);
+    { scene }, (s) => s.selectedIds, () => dests, chogSpeakMs, () => true, { market: ["l1", "l2"] })(sj);
 }
 
 let pass = 0;
@@ -44,6 +44,8 @@ check("picking: checking while the read runs or the check line is still being re
   assert.equal(pick({ ready: 0 }).line, "none of these can go now. something else?");
   assert.deepEqual(pick({ ready: 0 }).lines, ["none of these can go now.", "something else?"], "same words, two stacked lines (fits 390)");
   assert.equal(pick({ ready: 2, picked: "job-1" }).go.id, "job-1", "a row the person picked is the one that goes");
+  // [A-1361 · Owner 10-17 16:0x "줄 누르면 초그가 말함" · test reset] a picked row (two / many) = Chog explains that job (its Owner lines)
+  assert.equal(pick({ ready: 2, picked: "job-1" }).kind, "explain");
 });
 check("picking only where Jobs run, on the candidates step, with picks", () => {
   assert.equal(pick({ lane: false }), null);
@@ -56,7 +58,7 @@ check("old lines are not shown where Jobs run (these two? / all of them? / the A
 });
 check("one / none move on by themselves once the line is read (+ a breath), once per save; two / many wait for the person", () => {
   const f = fn("scheduleExploreWhyNext");
-  assert.match(f, /const hideList = pick\.kind !== "two" && pick\.kind !== "many";/);
+  assert.match(f, /const hideList = pick\.kind !== "two" && pick\.kind !== "many" && pick\.kind !== "explain";/); // [A-1361] explaining keeps the list
   assert.match(f, /sj\.whyResultAt \+ chogLinesMs\(pick\.lines\) - Date\.now\(\)/);
   assert.match(f, /if \(again\.kind === "none"\) \{ sj\.step = "interests"; render\(\); return; \}/);
   assert.match(f, /chogHelpRemember\("exploreChogSay", pick\.lines\)/, "the ? can say it again");
