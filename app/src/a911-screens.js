@@ -145,7 +145,9 @@ export function a911GiftMarkup(view = {}) {
   const body = view.stage === "done"
     ? `<div class="a911-giftGroup">${giftCards(view)}${linkStep(view)}</div>`
     : `<div class="a911-giftGroup">${giftCards(view)}${view.stage === "pick" ? giftCtrl(view) : ""}</div>`;
-  const act = view.stage === "pick" ? actButton({ label: A911_COPY.send, attrs: 'data-a898-act="gift-faceid"', disabled: !view.canSend }) : "";
+  // [A-1353 ③] a dimmed Send carries why (data-blocked); the words that tell it are the Owner's (asked) — the label stays Send
+  const why = !view.canSend && view.blockedWhy ? ` data-blocked="${esc(view.blockedWhy)}"` : "";
+  const act = view.stage === "pick" ? actButton({ label: A911_COPY.send, attrs: `data-a898-act="gift-faceid"${why}`, disabled: !view.canSend }) : "";
   return shell({ kind: "gift", title: A911_COPY.gift, stage: view.stage, typing, back: { attr: "data-a898-act", act: view.stage === "fan" || view.stage === "done" || view.notReady ? "gift-back" : "gift-repick" }, body, act });
 }
 

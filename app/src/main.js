@@ -12293,6 +12293,8 @@ function a911GiftView(snap) {
     notReady: gv.stage === "unavailable",
     notice: gv.notice,
     canSend: gv.canFaceId === true && String(d.to || "").trim() !== "", // amount + front + exact line come from the A-898 evaluation; TO must be filled (Owner card B)
+    // [A-1353 ③ · Owner 13:4x "뒤에 글을 써야 했어 알려줘야 해"] why Send is dimmed: the evaluation's reason first, else an empty TO
+    blockedWhy: gv.canFaceId !== true ? gv.blockedReason || null : String(d.to || "").trim() === "" ? "to_required" : null,
     link: gv.link,
     copied: s.copied,
   };
