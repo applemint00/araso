@@ -53,7 +53,7 @@ const COPY_ALLOW = new Set([...MOOD_COPY,
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
   "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "+ Piggy soon", "soon",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -954,6 +954,15 @@ async function laneNames() {
   for (const id of ["n1", "n2"]) {
     const p = await openPerson(browser, w, id, { initScript: signalStub }); people.push(p);
     await check(`names · ${id}: create a Piggy and name it`, () => walkFirstJourney(p, { send: false }));
+    if (id === "n1") await check("cue · first Home: Chog's job line sits left of Chog (its right end before Chog's head) · clear of Piggy and the Send card · 390 · 810 · 1440", async () => { // [A-1353 ① · Owner 13:4x "글자가 초그 왼쪽으로"]
+      await until(p, "job cue, every line showing", async () => p.page.evaluate(() => { const c = document.querySelector("#firstSendChogCue"); const l = c ? [...c.querySelectorAll(".chogCheckLine__line")] : []; return l.length >= 2 && l.every((e) => getComputedStyle(e).visibility !== "hidden"); }), 40_000);
+      const phoneLines = await p.page.evaluate(() => [...document.querySelectorAll("#firstSendChogCue .chogCheckLine__line")].map((e) => e.textContent.trim()));
+      assert.deepEqual(phoneLines, ["off to work,", "little piggy~", "your money's", "doing the job ♪"], `phone (390) = four lines at the Owner's breaks (14:0x): ${JSON.stringify(phoneLines)}`);
+      const seen = [];
+      for (const [width, height] of [[390, 844], [810, 1080], [1440, 900]]) { await p.page.setViewportSize({ width, height }); await sleep(400); seen.push(await guideClearOfPiggy(p, { sel: "#firstSendChogCue", leftOfChog: true, also: ["#sendCard"] })); await p.page.screenshot({ path: path.join(OUT, `first-cue-${width}.png`) }); }
+      await p.page.setViewportSize({ width: 390, height: 844 });
+      assert.ok(seen.every((x) => x.ok), `first Home cue: ${JSON.stringify(seen.filter((x) => !x.ok))}`);
+    });
     const creds = (await p.passkey.cdp.send("WebAuthn.getCredentials", { authenticatorId: p.passkey.authenticatorId })).credentials;
     made.push({ p, cred: creds[0], signal: await p.page.evaluate(() => window.__arasoSignal || null), handle: await p.page.evaluate(() => localStorage.getItem("araso.pkUserHandle.v1")) });
   }
@@ -995,21 +1004,23 @@ const anyBell = (text) => BELL_PARTS.some((t) => text.some((x) => x.includes(t))
 const speakMs = (t) => t.length * 60 + 1200; // same read time as the app's Chog lines
 // [A-1346 ② · A-1348] every guide line Chog says stays clear of Piggy and of Chog: the words' own box (not the full-width line box) vs
 // Piggy's drawn image (#homeSeat · #homeWalk · living-Home svg body) and Chog's drawn outline (white pixels in a shot with the speech hidden)
-async function guideClearOfPiggy(person) {
+async function guideClearOfPiggy(person, { sel = "#a904GuideLine", leftOfChog = false, also = [] } = {}) {
   const page = person.page;
-  const m = await page.evaluate(() => {
+  const m = await page.evaluate(({ sel, also }) => {
     const box = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom }; };
     const shown = (e) => { const b = e.getBoundingClientRect(); const cs = getComputedStyle(e); return b.width > 0 && cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity) > 0.05; };
-    const guide = document.querySelector("#a904GuideLine");
+    const guide = document.querySelector(sel);
+    const others = also.map((q) => document.querySelector(q)).filter((e) => e && shown(e)).map((e) => ({ q: e.id || e.className, ...box(e) }));
     const pigs = [...document.querySelectorAll("#homeSeat, #homeWalk"), ...[...document.querySelectorAll(".homeLiving")].map((e) => [...e.querySelectorAll("svg > g")].find((g) => g.getBoundingClientRect().width > 0)).filter(Boolean)]
       .filter(shown).map(box);
     const parts = [...document.querySelectorAll("#chogHome .chogHome__part")].filter(shown).map(box);
     const area = parts.length ? { l: Math.min(...parts.map((x) => x.l)), t: Math.min(...parts.map((x) => x.t)), r: Math.max(...parts.map((x) => x.r)), b: Math.max(...parts.map((x) => x.b)) } : null;
-    if (!guide) return { guide: false, pigs, area, lines: [] };
+    if (!guide) return { guide: false, pigs, area, others, lines: [] };
+    if (!pigs.length) { const H = innerHeight; window.__a1353near = [...document.querySelectorAll("body *")].filter((e) => { const b = e.getBoundingClientRect(); return b.top > H * 0.6 && b.width > 40 && b.height > 40; }).slice(0, 25).map((e) => `${e.tagName}.${String(e.className?.baseVal ?? e.className).split(" ").slice(0, 2).join(".")}#${e.id}[${Math.round(e.getBoundingClientRect().left)},${Math.round(e.getBoundingClientRect().top)}] vis=${getComputedStyle(e).visibility} op=${getComputedStyle(e).opacity}`); }
     const ink = (e) => { const r = document.createRange(); r.selectNodeContents(e); return box(r); };
     const els = guide.querySelectorAll(".chogCheckLine__line").length ? [...guide.querySelectorAll(".chogCheckLine__line")] : [guide];
-    return { guide: true, pigs, area, lines: els.filter(shown).map((e) => ({ text: e.textContent.trim(), ...ink(e) })) };
-  });
+    return { guide: true, pigs, area, others, lines: els.filter(shown).map((e) => ({ text: e.textContent.trim(), ...ink(e) })) };
+  }, { sel, also });
   let chog = null;
   if (m.area) { // Chog's outline: bright pixels inside its image area, with every Chog line hidden for the shot
     await page.evaluate(() => document.querySelectorAll("#chogHome .chogCheckLine").forEach((e) => { e.dataset.a1348Vis = e.style.visibility; e.style.visibility = "hidden"; }));
@@ -1027,9 +1038,13 @@ async function guideClearOfPiggy(person) {
   }
   const over = (x, o) => !!o && x.l < o.r && x.r > o.l && x.t < o.b && x.b > o.t;
   const R = (o) => o && [o.l, o.t, o.r, o.b].map(Math.round);
-  const hits = m.lines.filter((x) => m.pigs.some((pig) => over(x, pig))).map((x) => `Piggy × ${x.text}`).concat(m.lines.filter((x) => over(x, chog)).map((x) => `Chog × ${x.text}`));
-  const ok = m.guide && m.pigs.length > 0 && !!chog && hits.length === 0;
-  return { ok, w: await page.evaluate(() => innerWidth), hits, lines: m.lines.map((x) => `${x.text} ${JSON.stringify(R(x))}`), pigs: m.pigs.map(R), chog: R(chog) };
+  const hits = m.lines.filter((x) => m.pigs.some((pig) => over(x, pig))).map((x) => `Piggy × ${x.text}`).concat(m.lines.filter((x) => over(x, chog)).map((x) => `Chog × ${x.text}`))
+    .concat(m.lines.flatMap((x) => m.others.filter((o) => over(x, o)).map((o) => `${o.q} × ${x.text}`)))
+    .concat(leftOfChog && chog ? m.lines.filter((x) => x.r > chog.l).map((x) => `right of Chog's left edge × ${x.text}`) : [])
+    .concat(leftOfChog ? m.lines.filter((x) => x.l < 8).map((x) => `past the screen's left edge × ${x.text}`) : []);
+  // left-of-Chog lines end before Chog's head, so they are also clear of Piggy (who sits right of Chog) even when Piggy is not drawn yet
+  const ok = m.guide && (m.pigs.length > 0 || leftOfChog) && !!chog && hits.length === 0;
+  return { ok, w: await page.evaluate(() => innerWidth), near: m.pigs.length ? undefined : await page.evaluate(() => window.__a1353near), hits, lines: m.lines.map((x) => `${x.text} ${JSON.stringify(R(x))}`), pigs: m.pigs.map(R), chog: R(chog), others: m.others.map((o) => `${o.q} ${JSON.stringify(R(o))}`) };
 }
 async function watchJarGuide(person) {
   const t0 = Date.now();

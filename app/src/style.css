@@ -5144,6 +5144,10 @@ html .chogHome__tapCue { font-size: var(--tsChog); }
    longer takes), so the three lines clear Piggy and Chog at every width (390 · 810 · 1440 measured; 115 = the least that clears).
    Every other Chog line keeps its place. */
 html #a904GuideLine { margin-left: -132px; }
+/* [A-1353 ① · Owner 13:4x "글자가 초그 왼쪽으로" · 14:0x] the first Home job line sits LEFT of Chog at every width: the box's right edge
+   (translate −50 % on top of the inline −50 %) at Chog's head-top anchor less 100 local px — Chog's head starts 78 local px left of the
+   anchor (measured 390 · 810 · 1440), so the words end before it. Phone = four lines (main.js a1353PhoneLines). Other Chog lines unchanged. */
+html #firstSendChogCue { translate: -50% 0; margin-left: -100px; }
 /* Receipt paper: the current phone local px at every width (pre-A-845 baseline: 12 / 15 / 13 / 13 above 640). */
 html .receiptPaper__date { font-size: 14px; }
 html .receiptPaper__name { font-size: 17px; }

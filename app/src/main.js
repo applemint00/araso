@@ -13074,7 +13074,15 @@ function exploreChogConfirmLine(sj) {
 
 // One Chog line into the live #chogHome (same spot chogHomeMarkup* use: just before .chogHome__hit). DOM-only, so the
 // next render() drops it by itself — a cue lives until the scene is drawn again, never on a clock.
+// [A-1353 ① · Owner 14:0x "폰(390)만 네 줄"] the first Home job line on a phone: each line in two at the Owner's break (words unchanged);
+// 810 / 1440 keep two lines. style.css #firstSendChogCue puts the speech left of Chog at every width.
+const A1353_PHONE_BREAKS = Object.freeze({ "off to work, little piggy~": ["off to work,", "little piggy~"], "your money's doing the job ♪": ["your money's", "doing the job ♪"] });
+function a1353PhoneLines(lines) {
+  const phone = typeof matchMedia === "function" && matchMedia("(max-width: 640px)").matches;
+  return phone ? lines.flatMap((t) => A1353_PHONE_BREAKS[t] || [t]) : lines;
+}
 function insertChogCueLine(id, text) {
+  if (id === "firstSendChogCue" && Array.isArray(text) && typeof a1353PhoneLines === "function") text = a1353PhoneLines(text); // [A-1353 ①]
   const root = document.querySelector("#chogHome");
   const hit = root?.querySelector(".chogHome__hit");
   if (!root || !hit) return false;
@@ -14349,7 +14357,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         render();
         sceneTimeout(() => {
           sayFirstSendCue("job");
-          sceneTimeout(armSend, chogLinesMs(chogMoodLines(FIRST_SEND_CUE_PARTS.slice(1))) - PACE_BREATH_MS + PACE_SEND_ARM_MS);
+          sceneTimeout(armSend, chogLinesMs(a1353PhoneLines(chogMoodLines(FIRST_SEND_CUE_PARTS.slice(1)))) - PACE_BREATH_MS + PACE_SEND_ARM_MS); // [A-1353 ①] four lines on a phone
         }, PACE_BREATH_MS);
       };
       const announceFirstSend = () => {
