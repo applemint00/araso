@@ -63,10 +63,10 @@ try {
       }, [lines]);
       const hit = (B, R) => R && B[0] < R[2] && B[2] > R[0] && B[1] < R[3] && B[3] > R[1];
       const inside = r.boxes.every((B) => B[0] >= 0 && B[2] <= w);
-      const clear = r.boxes.every((B) => !hit(B, ink.chog) && !hit(B, ink.pig)) && (!r.left || r.boxes.every((B) => B[2] <= ink.chog[0] - 7.5)); // left = ends ≥ 8 px before Chog
+      const clear = r.boxes.every((B) => !hit(B, ink.chog) && !hit(B, ink.pig)) && r.boxes.every((B) => B[2] <= ink.chog[0] - 7.5); // [A-1366 RE-PIN · Owner 22:1x] every line ends ≥ 8 px before Chog (one start line · a1366 test); pre-A-1366: only the left-placed ones
       const same = r.said.join(" ") === lines.join(" ");
       const xs = r.boxes.map((B) => `[${Math.round(B[0])},${Math.round(B[2])}]`).join("");
-      check(inside && clear && same, `${w} ${name}: inside the screen · clear of Chog / Piggy · same words (${r.left ? "left" : "over head"} ${xs} chog ${ink.chog.map(Math.round)} piggy ${ink.pig?.map(Math.round)} · ${JSON.stringify(r.said)})`);
+      check(inside && clear && same, `${w} ${name}: inside the screen · clear of Chog / Piggy · same words (${xs} chog ${ink.chog.map(Math.round)} piggy ${ink.pig?.map(Math.round)} · ${JSON.stringify(r.said)})`);
       if (name.startsWith("job:") || name === "closingSoon" || name === "exploreCheck") await p.screenshot({ path: path.join(OUT, `${w}-${name.replace(":", "-")}.png`) });
     }
   }

@@ -7344,10 +7344,8 @@ function chogVoiceMsFor(lines) {
   try { return a1326Voice.peek(lines.join("")).ms || 0; } catch { return 0; }
 }
 // [A-1359 · Owner 15:0x "긴 것들은 폰에서 문제라 · 나눠 넣는 걸로" · 16:1x "긴 건 옆으로 뺀 거 아닌가" · 18:0x "이 규칙으로 바로"]
-// A long Chog line (wider than Chog, so centred it would run over Piggy) is said LEFT of Chog — the #firstSendChogCue rule, as the class
-// .chogCheckLine--left. Where even that runs off the screen (a phone), the line is said in pieces at the Owner's break: after a comma /
-// full stop, else between its two meaning chunks — the words never change. The pieces are known before the beat clock starts.
-// Lines with their own Owner placement (#firstSendChogCue · #a904GuideLine · #returnArrivalAlarm) are not touched.
+// A long Chog line is said in pieces at the Owner's break: after a comma / full stop, else between its meaning chunks — the words never
+// change. The pieces are known before the beat clock starts. (pre-A-1366: a long line sat left of Chog as .chogCheckLine--left.)
 const CHOG_LINE_BREAKS = Object.freeze({
   "if you want to explore more, tap to wake me up.": ["if you want to", "explore more,", "tap to wake me up."],
   "let me see which jobs can go.": ["let me see", "which jobs can go."],
@@ -7362,39 +7360,47 @@ const CHOG_LINE_BREAKS = Object.freeze({
   "piggy leaves a price and waits.": ["piggy leaves a price", "and waits."],
   "buy only if the price comes.": ["buy only", "if the price comes."],
   "want me to sweep the crumbs into MON?": ["want me to sweep", "the crumbs into MON?"],
-  "little bits everywhere. make them one MON pile?": ["little bits everywhere.", "make them one MON pile?"],
+  "little bits everywhere. make them one MON pile?": ["little bits everywhere.", "make them", "one MON pile?"], // [A-1366] "make them one MON pile?" ran past the start-line room
   "earn a little when people swap": ["earn a little", "when people swap"],
   "piggy helps others trade.": ["piggy helps", "others trade."],
   "piggy picks up what's yours.": ["piggy picks up", "what's yours."],
   "something's waiting for you.": ["something's waiting", "for you."],
-  "piggy parks money where it earns a little.": ["piggy parks money", "where it earns a little."],
+  "piggy parks money where it earns a little.": ["piggy parks money", "where it earns", "a little."], // [A-1366] same
   "let money sit and grow.": ["let money sit", "and grow."],
   "piggy brings back a small piece of something.": ["piggy brings back", "a small piece", "of something."],
   "piggy moves to a spot that pays better.": ["piggy moves to a spot", "that pays better."],
-  "piggy stays home today. nothing moves.": ["piggy stays home today.", "nothing moves."],
+  "piggy stays home today. nothing moves.": ["piggy stays home", "today.", "nothing moves."], // [A-1366] "piggy stays home today." ran past the room
+  // [A-1366 · Owner 22:1x every line from one start line] lines that used to have their own place, now in the same room
+  "the jar's sparkling. wanna tap it?": ["the jar's sparkling.", "wanna tap it?"],
+  "when there's a new job for piggy,": ["when there's", "a new job", "for piggy,"],
+  "off to work, little piggy~": ["off to work,", "little piggy~"], // the A-1353 ① Owner breaks (14:0x), now at every width
+  "your money's doing the job ♪": ["your money's", "doing the job ♪"],
 });
-const CHOG_OWN_PLACE = new Set(["firstSendChogCue", "a904GuideLine", "returnArrivalAlarm"]);
-const chogLongFit = new Map(); // "<w>x<h>|<line>" → the line runs off the screen when said left of Chog
-function chogLong(id, lines) { return !CHOG_OWN_PLACE.has(id) && lines.some((t) => CHOG_LINE_BREAKS[t]); }
-// the lines as said: a long line that would leave the screen on the left of Chog → its pieces (measured once per screen size, in the live slot)
+// [A-1366 · Owner 22:1x "말하는 설명칸은 다 시작점이 같은 거 아니야?"] every speech box over Chog's head starts on one left line
+// (style.css #chogHome .chogCheckLine, local −36 px = 17 screen px at 390 · 8 px clear of the first Send card at 1440). From there a line
+// may run 365 local px: to Chog's ink (chog-home.js INK 351) less 8 screen px at 390 (22 local) — the same local room at every width,
+// as Chog and the words scale together.
+// A line longer than that is said in its Owner pieces (CHOG_LINE_BREAKS); the words never change. Measured in local px once per line.
+const CHOG_SAY_ROOM = 365;
+const chogSayWidth = new Map(); // line → its local width in the speech slot
+function chogLineTooLong(t) {
+  if (typeof document === "undefined") return false;
+  if (!chogSayWidth.has(t)) {
+    const root = document.querySelector("#chogHome");
+    if (!root) return false;
+    const probe = document.createElement("span");
+    probe.className = "chogCheckLine";
+    probe.style.visibility = "hidden";
+    probe.textContent = t;
+    root.append(probe);
+    chogSayWidth.set(t, probe.offsetWidth);
+    probe.remove();
+  }
+  return chogSayWidth.get(t) > CHOG_SAY_ROOM;
+}
+// the lines as said: a line too long for the room → its Owner pieces (known before the beat clock starts)
 function chogSaidLines(id, lines) {
-  if (!chogLong(id, lines) || typeof document === "undefined") return lines;
-  const root = document.querySelector("#chogHome");
-  return lines.flatMap((t) => {
-    if (!CHOG_LINE_BREAKS[t]) return [t];
-    const k = `${innerWidth}x${innerHeight}|${t}`;
-    if (!chogLongFit.has(k)) {
-      if (!root) return typeof matchMedia === "function" && matchMedia("(max-width: 640px)").matches ? CHOG_LINE_BREAKS[t] : [t];
-      const probe = document.createElement("span");
-      probe.className = "chogCheckLine chogCheckLine--left";
-      probe.style.cssText = "transform:translateX(-50%);visibility:hidden";
-      probe.textContent = t;
-      root.append(probe);
-      chogLongFit.set(k, probe.getBoundingClientRect().left < 0);
-      probe.remove();
-    }
-    return chogLongFit.get(k) ? CHOG_LINE_BREAKS[t] : [t];
-  });
+  return lines.flatMap((t) => (CHOG_LINE_BREAKS[t] && chogLineTooLong(t) ? CHOG_LINE_BREAKS[t] : [t]));
 }
 function chogLinesMarkup(key, lines) {
   const waits = chogLineWaits(key, lines);
@@ -13031,11 +13037,10 @@ function homeCharacter(name) {
 
 // [Owner 2026-09-19 "선택에 따라 초그 발화해야"] Explore 선택 반응은 카드가 아니라 Chog
 // 발화 — 귀환 알람과 같은 .chogCheckLine 자리·글꼴을 재사용한다(새 CSS 0).
-// [A-1359] the Explore speech: two lines stacked (one at a time) · a long one left of Chog, in pieces where it would leave the screen
+// [A-1359 → A-1366] the Explore speech: two lines stacked (one at a time) · from the one start line, in pieces where a line is too long
 function exploreSayMarkup(key, lines, extra = "") {
-  const long = chogLong("exploreChogSay", lines);
-  const said = long ? chogSaidLines("exploreChogSay", lines) : lines;
-  const cls = `chogCheckLine${said.length > 1 ? " chogCheckLine--two" : ""}${long ? " chogCheckLine--left" : ""}${extra}`;
+  const said = chogSaidLines("exploreChogSay", lines);
+  const cls = `chogCheckLine${said.length > 1 ? " chogCheckLine--two" : ""}${extra}`;
   return `<span class="${cls}" id="exploreChogSay" style="transform:translateX(-50%)">${said.length > 1 ? chogLinesMarkup(key, said) : escapeHtml(said[0] || "")}</span>`;
 }
 function chogHomeMarkupForExplore() {
@@ -13218,17 +13223,10 @@ function exploreChogConfirmLine(sj) {
 
 // One Chog line into the live #chogHome (same spot chogHomeMarkup* use: just before .chogHome__hit). DOM-only, so the
 // next render() drops it by itself — a cue lives until the scene is drawn again, never on a clock.
-// [A-1353 ① · Owner 14:0x "폰(390)만 네 줄"] the first Home job line on a phone: each line in two at the Owner's break (words unchanged);
-// 810 / 1440 keep two lines. style.css #firstSendChogCue puts the speech left of Chog at every width.
-const A1353_PHONE_BREAKS = Object.freeze({ "off to work, little piggy~": ["off to work,", "little piggy~"], "your money's doing the job ♪": ["your money's", "doing the job ♪"] });
-function a1353PhoneLines(lines) {
-  const phone = typeof matchMedia === "function" && matchMedia("(max-width: 640px)").matches;
-  return phone ? lines.flatMap((t) => A1353_PHONE_BREAKS[t] || [t]) : lines;
-}
+// [A-1353 ① · Owner 14:0x] the first Home job line's breaks live in CHOG_LINE_BREAKS (A-1366: said wherever the line is too long for the
+// one start line's room, so at every width now; pre-A-1366: a phone only, left of Chog by its own #firstSendChogCue rule).
 function insertChogCueLine(id, text) {
-  if (id === "firstSendChogCue" && Array.isArray(text) && typeof a1353PhoneLines === "function") text = a1353PhoneLines(text); // [A-1353 ①]
-  const long = Array.isArray(text) && typeof chogLong === "function" && chogLong(id, text); // [A-1359]
-  if (long) text = chogSaidLines(id, text);
+  if (Array.isArray(text) && typeof chogSaidLines === "function") text = chogSaidLines(id, text); // [A-1366] pieces where a line is too long (A-1353 ① phone breaks included)
   const root = document.querySelector("#chogHome");
   const hit = root?.querySelector(".chogHome__hit");
   if (!root || !hit) return false;
@@ -13243,7 +13241,6 @@ function insertChogCueLine(id, text) {
   }
   // Two given lines use the existing two-line speech layout, so a long line is never cut on a narrow phone.
   line.classList.toggle("chogCheckLine--two", Array.isArray(text) && text.length > 1);
-  line.classList.toggle("chogCheckLine--left", Boolean(long)); // [A-1359]
   if (Array.isArray(text) && text.length > 1) {
     line.replaceChildren(...chogLineNodes(id, text));
   } else {
@@ -14504,7 +14501,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         render();
         sceneTimeout(() => {
           sayFirstSendCue("job");
-          sceneTimeout(armSend, chogLinesMs(a1353PhoneLines(chogMoodLines(FIRST_SEND_CUE_PARTS.slice(1)))) - PACE_BREATH_MS + PACE_SEND_ARM_MS);
+          sceneTimeout(armSend, chogLinesMs(chogSaidLines("firstSendChogCue", chogMoodLines(FIRST_SEND_CUE_PARTS.slice(1)))) - PACE_BREATH_MS + PACE_SEND_ARM_MS);
         }, PACE_BREATH_MS);
       };
       const announceFirstSend = () => {
@@ -15168,7 +15165,11 @@ function returnReceiptRows() {
 function chogHomeMarkupForReturn(scene) {
   let markup = chogHomeMarkup({ padMarkup: homePadMarkup(scene) });
   if (state.returnArrivalAlarm) {
-    const alarm = `<span class="chogCheckLine" id="returnArrivalAlarm" hidden>${escapeHtml(displayPiggyName())} is coming home</span>`;
+    // [A-1366] too long for the one start line's room → two stacked lines at its meaning break (the name / "is coming home"), shown together
+    const alarmWords = `${displayPiggyName()} is coming home`;
+    const alarm = typeof chogLineTooLong === "function" && chogLineTooLong(alarmWords)
+      ? `<span class="chogCheckLine chogCheckLine--two" id="returnArrivalAlarm" hidden><span class="chogCheckLine__line">${escapeHtml(displayPiggyName())}</span><span class="chogCheckLine__line">is coming home</span></span>`
+      : `<span class="chogCheckLine" id="returnArrivalAlarm" hidden>${escapeHtml(alarmWords)}</span>`;
     markup = markup.replace('<div class="chogHome__hit"', `${alarm}<div class="chogHome__hit"`);
   }
   return markup;
@@ -15283,8 +15284,7 @@ function a891SecondIntroSeen() {
 function a891ChogSay(chogRoot, id, lines) {
   if (!chogRoot || chogRoot.querySelector(`#${id}`)) return null;
   if (typeof chogHelpRemember === "function") chogHelpRemember(id, lines); // [A-1293]
-  const long = typeof chogLong === "function" && chogLong(id, lines); // [A-1359] left of Chog · pieces where needed
-  if (long) lines = chogSaidLines(id, lines);
+  if (typeof chogSaidLines === "function") lines = chogSaidLines(id, lines); // [A-1366] pieces where a line is too long
   const hit = chogRoot.querySelector(".chogHome__hit");
   const span = document.createElement("span");
   span.id = id;
@@ -15297,7 +15297,6 @@ function a891ChogSay(chogRoot, id, lines) {
     span.className = "chogCheckLine";
     span.textContent = lines[0];
   }
-  if (long) span.classList.add("chogCheckLine--left");
   chogRoot.insertBefore(span, hit || null);
   return span;
 }

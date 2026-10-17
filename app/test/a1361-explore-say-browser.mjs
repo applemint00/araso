@@ -1,6 +1,6 @@
 // [A-1361 · Owner 10-17 16:0x "익스플로어일 때 표시를 해보자" · "줄 누르면 초그가 말함"] On the Journey 2 pick paper (candidates), a tap on
 // a job row = Chog says that job's two Owner lines (JOB_HELP_LINES) over its head, one at a time; another row = that job's lines. Also
-// measured, 390 · 810 · 1440: [A-1359 RE-PIN · Owner 16:1x / 18:0x] the lines sit left of Chog (.chogCheckLine--left), on a phone in the
+// measured, 390 · 810 · 1440: [A-1366 RE-PIN · Owner 22:1x] the lines start on the one Chog start line, left-aligned (pre-A-1366: A-1359 left of Chog as .chogCheckLine--left), in the
 // Owner's pieces (same words, one at a time) — pre-A-1359: the default spot centred over Chog (Cowork 18:0x).
 // (base: A-1353 ② "잡 관련 일들 설명을 다 정했는데 안 나와" · FIRST_JOURNEY_PACING_20261015.md:161–167 "2차 잡 설명 = ? 탭 때 초그"]
 // On the Journey 2 job card (the picked job with Home / Send), a tap on ? = Chog says that job's explanation, the job's two lines in turn
@@ -66,7 +66,7 @@ try {
     check(b.join(" ") === SET[titles[first]].join(" "), `${w}: then the second line, the first kept (said ${JSON.stringify(b)})`);
     const g = await geo();
     const spot = await p.evaluate(() => { const s = document.querySelector("#exploreChogSay"); const cs = getComputedStyle(s); return { cls: s.className, marginLeft: cs.marginLeft, translate: cs.translate, inline: s.getAttribute("style") }; });
-    check(/chogCheckLine--left/.test(spot.cls) && /is-explain/.test(spot.cls) && g.minL >= 0 && g.maxR < g.w, `${w}: left of Chog (its ink clearance = a1359 test), inside the screen ${JSON.stringify(spot)} · measured ${JSON.stringify(g)}`);
+    check(/is-explain/.test(spot.cls) && g.minL >= 7.5 && g.lines.every(([, l]) => Math.abs(l - g.lines[0][1]) <= 1) && g.maxR < g.w, `${w}: from the one start line, left-aligned, ≥ 8 px from the edge (its Chog clearance = a1366 test) ${JSON.stringify(spot)} · measured ${JSON.stringify(g)}`);
     const other = titles.findIndex((t, i) => i !== first && SET[t]);
     if (other >= 0) {
       await picks.nth(other).click(); await sleep(700);

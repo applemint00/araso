@@ -5139,18 +5139,14 @@ html #returnArrivalAlarm {
 }
 html #awayRestoreLine { font-size: var(--tsChog); }
 html .chogHome__tapCue { font-size: var(--tsChog); }
-/* [A-1348 · Owner 09:3x "말시작칸은 왼쪽으로 살짝"] the Journey 2 jar/bell guide only (main.js a904GuideBell says the bell line in two):
-   its start column moves left by 132 local px — back to where the two-line speech started (half the width the long bell line no
-   longer takes), so the three lines clear Piggy and Chog at every width (390 · 810 · 1440 measured; 115 = the least that clears).
-   Every other Chog line keeps its place. */
-html #a904GuideLine { margin-left: -132px; }
-/* [A-1353 ① · Owner 13:4x "글자가 초그 왼쪽으로" · 14:0x] the first Home job line sits LEFT of Chog at every width: the box's right edge
-   (translate −50 % on top of the inline −50 %) at Chog's head-top anchor less 100 local px — Chog's head starts 78 local px left of the
-   anchor (measured 390 · 810 · 1440), so the words end before it. Phone = four lines (main.js a1353PhoneLines). Other Chog lines unchanged. */
-html #firstSendChogCue { translate: -50% 0; margin-left: -100px; }
-/* [A-1359 · Owner 16:1x "긴 건 옆으로 뺀 거 아닌가" · card: right edge = Chog's left − 8] every long Chog line (main.js CHOG_LINE_BREAKS): the same
-   left-of-Chog rule, its right edge 8 screen px before Chog's ink at 390 (−100 left 1 px; −122 = 8 px at 390, measured · it scales with Chog). */
-html .chogCheckLine--left { translate: -50% 0; margin-left: -122px; }
+/* [A-1366 · Owner 10-17 22:1x "말하는 설명칸은 다 시작점이 같은 거 아니야?"] every Chog speech box over Chog's head starts on ONE left line,
+   its words left-aligned: local −36 px (17 screen px at 390 · 8 px clear of the first Send card's right edge at 1440, measured; Chog and the
+   words scale together, so the same local line at every width).
+   translate +50 % cancels the −50 % centring (the base transform or the inline one), so the box's left edge sits on that line. A line
+   longer than the room to Chog (main.js CHOG_SAY_ROOM) is said in its Owner pieces. Replaces (newest-wins) A-1348 #a904GuideLine
+   margin-left −132 · A-1353 #firstSendChogCue translate −50 % + margin-left −100 · A-1359 .chogCheckLine--left −122 — each moved the
+   box's centre or right edge, so the start differed line by line. */
+html #chogHome .chogCheckLine { left: -36px; margin-left: 0; translate: 50% 0; text-align: left; }
 /* Receipt paper: the current phone local px at every width (pre-A-845 baseline: 12 / 15 / 13 / 13 above 640). */
 html .receiptPaper__date { font-size: 14px; }
 html .receiptPaper__name { font-size: 17px; }

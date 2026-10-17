@@ -50,7 +50,7 @@ const COPY_ALLOW = new Set([...MOOD_COPY,
   "Araso", "your money,", "as a little Piggy", "checking...", "Face ID", "trial phase · free", "skip", "<DATE>", "<DAY>",
   "you've got", "the one piggy !", "ok", "Check Piggy", "name it?", "Piggy name", "save", "HOME", "<STATUS>", "<TIME>", "<N>", "<NAME>",
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
-  "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
+  "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "is coming home", "when there's", "a new job", "for piggy,", "the jar's sparkling.", "wanna tap it?", /* [A-1366] pieces */ "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
   "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "piggy goes to its first job", "with your $5.", /* [A-1364 · Owner 18:2x the first sheet's two lines · "piggy goes with this." gone] */ "not now", "allow", "want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?", /* [A-1360] the approval sheet */ "+ Piggy soon", "soon",
@@ -1056,9 +1056,16 @@ async function jarShown(person) {
 const JAR_LINE = "the jar's sparkling. wanna tap it?";
 const BELL_LINE = "when there's a new job for piggy, the bell will ring.";
 const BELL_PARTS = BELL_LINE.split(/(?<=,) /); // [A-1346 ②] Chog says it in two at its comma (same words)
-const hasBell = (text) => BELL_PARTS.every((t) => text.some((x) => x.includes(t))); // the whole bell line is showing (one line or its two parts)
-const anyBell = (text) => BELL_PARTS.some((t) => text.some((x) => x.includes(t)));
+// [A-1366 RE-PIN · Owner 22:1x one start line · 18:0x break rule] Chog may say a line in its pieces (same words, one at a time): a line
+// counts as said when the visible lines, joined, carry it; its start = its first piece showing. pre-A-1366: whole-line matches.
+const saidAll = (text, line) => text.join(" ").includes(line);
+const saidStart = (text, line) => text.some((x) => x.length >= 4 && line.startsWith(x));
+const hasBell = (text) => BELL_PARTS.every((t) => saidAll(text, t)); // the whole bell line is showing (one line, its two parts or their pieces)
+const anyBell = (text) => ["when there's", "the bell will ring."].some((t) => text.some((x) => x.includes(t)));
 const speakMs = (t) => t.length * 60 + 1200; // same read time as the app's Chog lines
+// [A-1366] a line said in pieces: each piece is read, then a breath (+ its voice may hold the next) — the wait grows with the pieces
+const PIECES = { [JAR_LINE]: ["the jar's sparkling.", "wanna tap it?"], [BELL_PARTS[0]]: ["when there's", "a new job", "for piggy,"] };
+const piecesMs = (line) => (PIECES[line] || [line]).reduce((ms, t) => ms + speakMs(t) + 2000, 0);
 // [A-1346 ② · A-1348] every guide line Chog says stays clear of Piggy and of Chog: the words' own box (not the full-width line box) vs
 // Piggy's drawn image (#homeSeat · #homeWalk · living-Home svg body) and Chog's drawn outline (white pixels in a shot with the speech hidden)
 async function guideClearOfPiggy(person, { sel = "#a904GuideLine", leftOfChog = false, also = [] } = {}) {
@@ -1107,7 +1114,7 @@ async function watchJarGuide(person) {
   const t0 = Date.now();
   await until(person, "jar", () => jarShown(person), 20_000);
   const jarAt = Date.now();
-  await until(person, "Chog: the jar's sparkling", (s) => s.text.includes(JAR_LINE), 15_000);
+  await until(person, "Chog: the jar's sparkling", (s) => saidAll(s.text, JAR_LINE), 15_000);
   return { homeToJar: jarAt - t0, jarToLine: Date.now() - jarAt, lineAt: Date.now() };
 }
 async function laneJarTap() {
@@ -1129,8 +1136,8 @@ async function laneJarTap() {
     await until(q, "Chog: bell line starts", (x) => anyBell(x.text), 10_000);
     const ms = Date.now() - back;
     assert.ok(ms >= 900 && ms <= 3000, `back → bell line ${ms} ms`);
-    const s = await until(q, "Chog: bell line, both parts", (x) => hasBell(x.text), speakMs(BELL_PARTS[0]) + 4000); // [A-1346 ②] one part at a time
-    assert.ok(s.text.includes(JAR_LINE), "jar line kept above the bell line");
+    const s = await until(q, "Chog: bell line, both parts", (x) => hasBell(x.text), piecesMs(BELL_PARTS[0]) + 4000); // [A-1346 ②] one part at a time (A-1366: pieces)
+    assert.ok(saidAll(s.text, JAR_LINE), "jar line kept above the bell line");
     // [A-1287] the bell line stays long enough to read (the guide does not end under it)
     const seenFrom = Date.now(); let seenUntil = seenFrom;
     while (Date.now() - seenFrom < speakMs(BELL_PARTS.at(-1)) + 1500) { if (hasBell((await look(q)).text)) seenUntil = Date.now(); else break; await sleep(150); }
@@ -1150,8 +1157,8 @@ async function laneJarTap() {
     await q.page.locator("#chogHelp").click();
     await sleep(500);
     const first = await look(q);
-    assert.ok(first.text.includes(JAR_LINE) && !anyBell(first.text), `after the tap: ${JSON.stringify(first.text.slice(-4))}`);
-    await until(q, "bell line again", (x) => hasBell(x.text), speakMs(JAR_LINE) + speakMs(BELL_PARTS[0]) + 2500 + 2500);
+    assert.ok(saidStart(first.text, JAR_LINE) && !anyBell(first.text), `after the tap: ${JSON.stringify(first.text.slice(-4))}`);
+    await until(q, "bell line again", (x) => hasBell(x.text), piecesMs(JAR_LINE) + piecesMs(BELL_PARTS[0]) + 2500 + 2500);
   });
   await q.context.close();
 }
@@ -1336,7 +1343,7 @@ async function laneJarPiggy() {
     const s = await until(p, "Chog: bell line", async (x) => { if (!hasBell(x.text) && (await p.page.evaluate(() => !!document.querySelector("#secondHomeBell")))) bellEarly = true; return hasBell(x.text); }, 20_000);
     const ms = Date.now() - g.lineAt;
     assert.ok(ms >= speakMs(JAR_LINE) + 5000 - 400, `jar line → bell line ${ms} ms (want ≥ ${speakMs(JAR_LINE) + 5000})`);
-    assert.ok(s.text.includes(JAR_LINE), "jar line kept");
+    assert.ok(saidAll(s.text, JAR_LINE), "jar line kept");
     assert.ok(!bellEarly, "bell rang before the guide ended");
     await checkpoint(p, "guide-bell-line");
     const seen = []; // [A-1346 ② · A-1348] the three widths, while the lines are up
@@ -1354,7 +1361,7 @@ async function laneJarPiggy() {
     await until(p, "jar after round 2", () => jarShown(p), 20_000);
     await sleep(6000);
     const t = (await checkpoint(p, "jar-r2")).text;
-    assert.ok(!t.includes(JAR_LINE) && !anyBell(t), `guide again: ${JSON.stringify(t.slice(-6))}`);
+    assert.ok(!saidStart(t, JAR_LINE) && !anyBell(t), `guide again: ${JSON.stringify(t.slice(-6))}`);
   });
   // + Piggy is not open yet: the tab stays where it is, grey with "soon", and a tap starts nothing (no Face ID, no index read, no Name it).
   await check("piggy · Chog opens the Home paper → + Piggy is grey with \"soon\" → a tap does nothing", async () => {
