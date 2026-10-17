@@ -15267,7 +15267,15 @@ if (typeof document !== "undefined") {
 // switchJourney refuses while a signature is in progress or a tx is unconfirmed (journey-switch.js + the probe registered here).
 import { checkForkPermission, forkEntryOpen, forkEntryUrl, journey1Pointers, onForkProfile, readForkInvite, requestForkEntry } from "./fork-entry-client.js";
 import { consumeJourneySwitchUnlock, registerJourneySwitchBusyProbe, switchJourney as a956SwitchJourney } from "./journey-switch.js";
+import { findJourney1Pointers } from "./journey1-chain-search.js";
 let a956Signing = 0;
+// Journey 1 hashes found on chain for a Piggy whose device has no receipts: this page only, never stored (the server verifies them on entry).
+let journey1Found = null;
+function a1363Journey1() {
+  const fromReceipts = journey1Pointers(readReceipts());
+  if (fromReceipts) return fromReceipts;
+  return journey1Found && journey1Found.address === String(state.address || "").toLowerCase() ? journey1Pointers([journey1Found]) : null;
+}
 let a956EntryBusy = false;
 async function a956ForkMoneyAllowed() {
   if (!onForkProfile(CHAIN_PROFILE)) return false;
@@ -15326,7 +15334,7 @@ async function a956Enter({ reenter = false } = {}) {
         return await account.signMessage({ message });
       } finally { a956Signing -= 1; }
     };
-    const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: piggy, journey1: journey1Pointers(readReceipts()), signMessage });
+    const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: piggy, journey1: a1363Journey1(), signMessage });
     if (r.allowed === true && !state.appLock && activeAccount === account && (reentering || state.scene === "sendstay")) {
       if (!reentering && !a956SwitchJourney(2)) { console.debug("fork_entry", "switch_busy"); return false; } // [A-1357] a refused switch is not an entry: the Home cue comes back
       return true;
@@ -15356,10 +15364,36 @@ async function a956Enter({ reenter = false } = {}) {
   proveFundingTargetControl = counted(proveFundingTargetControl);
   settleBoundGiftClaim = counted(settleBoundGiftClaim);
   // A recovered device holds no Journey 1 hashes, so it cannot enter; a Piggy the server already admitted only needs the status check.
-  function a1270ReenterByStatus() {
+  // Otherwise the hashes are looked up on chain in the background, and once found the Home arms the usual entry with them.
+  const journey1Searched = new Set();
+  function a1270ReenterByStatus(...armArgs) {
     if (!state.address || state.appLock) return;
+    const piggy = String(state.address).toLowerCase();
     checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: state.address, forkInstanceId: import.meta.env.VITE_ARASO_FORK_INSTANCE_ID })
-      .then((r) => { if (r?.allowed === true && state.scene === "sendstay" && !state.appLock && !state.secondJourneyCompletedOnce) a956SwitchJourney(2); }, () => {});
+      .then((r) => {
+        if (r?.allowed === true) { if (state.scene === "sendstay" && !state.appLock && !state.secondJourneyCompletedOnce) a956SwitchJourney(2); return; }
+        if (r?.reason === "status_failed" || journey1Searched.has(piggy)) return; // the server did not answer: the next Home asks again
+        journey1Searched.add(piggy);
+        return findJourney1Pointers({ rpc: a1363TestnetRead, address: piggy, target: SHMON_ADDRESS, chainId: MONAD_TESTNET.id }).then((found) => {
+          if (!found.ok) { console.debug("journey1_find", found.reason); return; }
+          if (String(state.address || "").toLowerCase() !== piggy) return;
+          journey1Found = { address: piggy, depositTxHash: found.depositTxHash, redeemTxHash: found.redeemTxHash };
+          console.debug("journey1_find", "ok", found.depositTxHash.slice(0, 10), found.redeemTxHash.slice(0, 10));
+          if (state.scene === "sendstay" && !state.appLock && !state.secondJourneyCompletedOnce && a1363Journey1()) a891ArmPostFileQuietHome(...armArgs);
+        });
+      })
+      .catch(() => {});
+  }
+  async function a1363TestnetRead(method, params) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    try {
+      const response = await fetch(MONAD_TESTNET_RPC, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }), signal: controller.signal });
+      const body = await response.json();
+      if (response.ok && body.error) throw Object.assign(new Error("testnet_read_refused"), { answered: true }); // e.g. state this node no longer holds
+      if (!response.ok) throw new Error("testnet_read_failed");
+      return body.result;
+    } finally { clearTimeout(timer); }
   }
   const a956BaseArm = a891ArmPostFileQuietHome;
   a891ArmPostFileQuietHome = (...args) => {
@@ -15370,7 +15404,7 @@ async function a956Enter({ reenter = false } = {}) {
       return undefined;
     }
     if (state.secondJourneyCompletedOnce || (!readForkInvite() && !a1160PublicEntryOpen())) return undefined;
-    if (!journey1Pointers(readReceipts())) { a1270ReenterByStatus(); return undefined; }
+    if (!a1363Journey1()) { a1270ReenterByStatus(...args); return undefined; }
     const arm = () => {
       if (state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || !homeChog) return;
       if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }
