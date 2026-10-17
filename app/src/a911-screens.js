@@ -19,6 +19,7 @@ export const A911_COPY = Object.freeze({
   send: "Send",
   ok: "ok",
   turn: "tap to turn it over",
+  turnWrite: "tap to turn it over to write then send", // [A-1354 · Owner 14:0x] the Gift pick stage hint (the receive side keeps `turn`)
   forYou: "for you",
   back: "back",
   notReady: "Not ready yet",
@@ -122,14 +123,24 @@ function giftCtrl(view) {
   const extra = (view.requote ? `<button class="a911-textBtn" type="button" data-a898-act="gift-requote">Try again</button>` : "")
     + (view.notReady ? `<div class="a911-faceLine" role="status">${A911_COPY.notReady}</div>` : "")
     + (view.notice ? `<div class="a911-faceLine" role="status" data-a898-notice="1">${esc(view.notice)}</div>` : "");
-  const face = view.faceIdLine && view.faceIdLine.exact ? `<div class="a911-faceLine" data-a898-exact="1">${esc(view.faceIdLine.text)}${explainBtn}${undo}</div>${explainBody}` : undo ? `<div class="a911-faceLine">${undo}</div>` : "";
+  // [A-1354] the plain exact line (no buttons) moves to the Send row with the fee line (giftSendInfo); a line with buttons stays here
+  const face = view.faceIdLine && view.faceIdLine.exact && (explainBtn || undo) ? `<div class="a911-faceLine" data-a898-exact="1">${esc(view.faceIdLine.text)}${explainBtn}${undo}</div>${explainBody}` : undo ? `<div class="a911-faceLine">${undo}</div>` : "";
+  // [A-1354 · Owner 13:5x–14:0x · Design canvas A.dc.html] amount · from · then the hint (room above it), all larger; the fee lines sit by Send
   return `<div class="a911-ctrl" data-a911-ctrl="1">
     <div class="a911-chips" role="group" aria-label="$">${chips}</div>
-    <div class="a911-hint">${A911_COPY.turn}</div>
     <div class="a911-pay">from ${view.payerSwitch ? `<button class="a911-payBtn" type="button" data-a911-act="payer-next"><u>${esc(view.payerName)}</u></button>` : `<u>${esc(view.payerName)}</u>`} · ${money$(view.balanceUsd)}</div>
+    <div class="a911-hint">${A911_COPY.turnWrite}</div>
     ${short}${mon}${face}${extra}
-    <div class="a911-fee"><span>Gift gas cost</span> ${gas} · <span>Araso fee</span> ${araso}</div>
   </div>`;
+}
+// [A-1354] the fee lines on the Send row, left of Send: the exact "for this Gift" line (when it has no buttons) and the gas / Araso fee line
+function giftSendInfo(view) {
+  const fees = view.fees || {};
+  const gas = fees.giftGasCost && fees.giftGasCost.known ? money$(fees.giftGasCost.usd) : "";
+  const araso = money$(fees.arasoFee ? fees.arasoFee.usd : "0");
+  const buttons = view.faceIdLine && view.faceIdLine.exact && ((view.faceIdLine.assetChange) || view.payWith === "mon");
+  const exact = view.faceIdLine && view.faceIdLine.exact && !buttons ? `<div class="a911-sendInfo__line" data-a898-exact="1">${esc(view.faceIdLine.text)}</div>` : "";
+  return `<div class="a911-sendInfo" data-a1354-send-info="1">${exact}<div class="a911-sendInfo__line a911-fee"><span>Gift gas cost</span> ${gas} · <span>Araso fee</span> ${araso}</div></div>`;
 }
 
 function linkStep(view) {
@@ -147,7 +158,7 @@ export function a911GiftMarkup(view = {}) {
     : `<div class="a911-giftGroup">${giftCards(view)}${view.stage === "pick" ? giftCtrl(view) : ""}</div>`;
   // [A-1353 ③] a dimmed Send carries why (data-blocked); the words that tell it are the Owner's (asked) — the label stays Send
   const why = !view.canSend && view.blockedWhy ? ` data-blocked="${esc(view.blockedWhy)}"` : "";
-  const act = view.stage === "pick" ? actButton({ label: A911_COPY.send, attrs: `data-a898-act="gift-faceid"${why}`, disabled: !view.canSend }) : "";
+  const act = view.stage === "pick" ? giftSendInfo(view) + actButton({ label: A911_COPY.send, attrs: `data-a898-act="gift-faceid"${why}`, disabled: !view.canSend }) : "";
   return shell({ kind: "gift", title: A911_COPY.gift, stage: view.stage, typing, back: { attr: "data-a898-act", act: view.stage === "fan" || view.stage === "done" || view.notReady ? "gift-back" : "gift-repick" }, body, act });
 }
 

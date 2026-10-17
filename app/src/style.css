@@ -6652,6 +6652,31 @@ html .a911-fee { font-size: var(--a911-detail); line-height: 1.4; color: rgba(23
 html .a911-short { display: flex; gap: 12px; align-items: baseline; justify-content: center; font-size: var(--a911-label); color: rgba(237, 232, 220, 0.75); }
 html .a911-textBtn { min-height: 44px; padding: 0 6px; font-size: var(--a911-label); text-decoration: underline; text-decoration-color: var(--a911-yel); text-decoration-thickness: 2px; text-underline-offset: 3px; color: var(--a911-cream); }
 html .a911-faceLine { font-size: var(--a911-detail); color: rgba(237, 232, 220, 0.6); }
+/* [A-1354 · Owner 13:5x–14:0x · Design canvas "Gift 글자 · 뒷면 안내 시안" A.dc.html, 390 base] Gift pick stage: amount 24 · from 17 · the hint
+   17 gold under the from line with 26 above it · the fee lines 14 on the Send row, left of Send (main.js a1354FitSendInfo takes them down
+   to 12 when a narrow width would cut them). Every size = the screen's own token × the canvas ratio, so 390 · 810 · 1440 move together. */
+html .a911-screen[data-a911="gift"] .a911-chip { font-size: calc(var(--a911-choice) * 24 / 18); }
+html .a911-screen[data-a911="gift"] .a911-pay { font-size: calc(var(--a911-label) * 17 / 13); }
+html .a911-screen[data-a911="gift"] .a911-hint { font-size: calc(var(--a911-body) * 17 / 14); color: var(--a911-yel); margin-top: calc(26px * var(--a911-z) - 8px); }
+html .a911-sendInfo {
+  position: absolute;
+  z-index: 8;
+  left: var(--a911-m);
+  right: calc(var(--a911-m) + var(--a911-actFont) * var(--a911-z) * 6.8 + 4px + 12px * var(--a911-z));
+  bottom: calc(var(--a911-sb) + var(--a911-bm, 7.1vh));
+  height: calc(var(--a911-actFont) * var(--a911-z) * 3.2);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: calc(4px * var(--a911-z));
+  font-size: calc(var(--a911-detail) * 14 / 12);
+  line-height: 1.25;
+  text-align: left;
+  color: rgba(237, 232, 220, 0.6);
+}
+html .a911-sendInfo__line { display: block; white-space: nowrap; overflow: hidden; }
+html .a911-sendInfo .a911-fee { font-size: inherit; line-height: inherit; color: rgba(237, 232, 220, 0.45); }
+html .a911-screen[data-typing="1"] .a911-sendInfo { opacity: 0; pointer-events: none; }
 /* link step: small card + link + copy (-> yellow check) + share */
 html .a911-link {
   /* [A-920 item 7 · A-924] link pill back to the mock (gift_screen_mock.html:56: padding 10 / 14, gap 10, 22 px icons; A-919 390: mock ~210 x 43 vs 245 x 58), scaled with --a911-z

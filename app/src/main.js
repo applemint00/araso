@@ -12256,6 +12256,18 @@ function a911Layout() {
   if (!root) return;
   a911Fit(root, { kb: a911Kb() });
   a911FitList(root);
+  a1354FitSendInfo(root);
+}
+// [A-1354 · Owner 14:0x "옆 고정 · 글자만 살짝 작게"] the Gift fee lines stay on the Send row; when a narrow width would cut one, only those
+// two lines get smaller, half a px at a time, never under 12 × z (the canvas's 14 → 12 at 390).
+function a1354FitSendInfo(root) {
+  const info = root.querySelector(".a911-sendInfo");
+  if (!info) return;
+  info.style.fontSize = "";
+  const z = parseFloat(getComputedStyle(root).getPropertyValue("--a911-z")) || 1;
+  let size = parseFloat(getComputedStyle(info).fontSize);
+  const cut = () => [...info.children].some((e) => e.scrollWidth > e.clientWidth + 0.5);
+  while (cut() && size - 0.5 >= 12 * z) { size -= 0.5; info.style.fontSize = `${size}px`; }
 }
 
 function a911IsField(el) {
@@ -12366,8 +12378,8 @@ function a911FocusKey(el) {
 function a911SwapHeader(root, next) {
   root.querySelector(".a911-title").textContent = next.querySelector(".a911-title").textContent;
   a911Attrs(root.querySelector(".a911-back"), next.querySelector(".a911-back"));
-  root.querySelectorAll(":scope > .a911-act").forEach((n) => n.remove());
-  for (const n of [...next.querySelectorAll(":scope > .a911-act")]) root.append(n);
+  root.querySelectorAll(":scope > .a911-act, :scope > .a911-sendInfo").forEach((n) => n.remove()); // [A-1354] the Send-row fee lines travel with Send
+  for (const n of [...next.querySelectorAll(":scope > .a911-sendInfo, :scope > .a911-act")]) root.append(n);
 }
 
 function a911Paint(root, html) {
