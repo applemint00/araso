@@ -5135,6 +5135,11 @@ html #returnArrivalAlarm {
 }
 html #awayRestoreLine { font-size: var(--tsChog); }
 html .chogHome__tapCue { font-size: var(--tsChog); }
+/* [A-1348 · Owner 09:3x "말시작칸은 왼쪽으로 살짝"] the Journey 2 jar/bell guide only (main.js a904GuideBell says the bell line in two):
+   its start column moves left by 132 local px — back to where the two-line speech started (half the width the long bell line no
+   longer takes), so the three lines clear Piggy and Chog at every width (390 · 810 · 1440 measured; 115 = the least that clears).
+   Every other Chog line keeps its place. */
+html #a904GuideLine { margin-left: -132px; }
 /* Receipt paper: the current phone local px at every width (pre-A-845 baseline: 12 / 15 / 13 / 13 above 640). */
 html .receiptPaper__date { font-size: 14px; }
 html .receiptPaper__name { font-size: 17px; }

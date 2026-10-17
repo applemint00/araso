@@ -12163,10 +12163,11 @@ function a904GuideTapped(g) {
 }
 function a904GuideBell(g) {
   const L = a904GuideLines();
-  const lines = g.said ? [L.jar, L.bell] : [L.bell];
+  const bell = L.bell.split(/(?<=,) /); // [A-1348 · Owner 09:3x "세줄"] the long bell line is said in two at its comma (same words); style.css #a904GuideLine
+  const lines = g.said ? [L.jar, ...bell] : bell;
   insertChogCueLine("a904GuideLine", lines);
-  // the guide ends once the bell line has shown (it may still wait for the jar line's read time) and been read
-  setTimeout(() => a904GuideEnd(g), chogLineWaits("a904GuideLine", lines).at(-1) + chogSpeakMs(L.bell));
+  // the guide ends once the bell line has shown (it may still wait for the lines above it) and been read
+  setTimeout(() => a904GuideEnd(g), chogLineWaits("a904GuideLine", lines).at(-1) + chogSpeakMs(bell.at(-1)));
 }
 function a904GuideEnd(g) {
   if (state.a904Guide !== g) return;

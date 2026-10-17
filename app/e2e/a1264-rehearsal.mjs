@@ -48,7 +48,7 @@ const COPY_ALLOW = new Set([
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
   "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "+ Piggy soon", "soon",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -984,7 +984,48 @@ async function jarShown(person) {
 }
 const JAR_LINE = "the jar's sparkling. wanna tap it?";
 const BELL_LINE = "when there's a new job for piggy, the bell will ring.";
+const BELL_PARTS = BELL_LINE.split(/(?<=,) /); // [A-1346 ②] Chog says it in two at its comma (same words)
+const hasBell = (text) => BELL_PARTS.every((t) => text.some((x) => x.includes(t))); // the whole bell line is showing (one line or its two parts)
+const anyBell = (text) => BELL_PARTS.some((t) => text.some((x) => x.includes(t)));
 const speakMs = (t) => t.length * 60 + 1200; // same read time as the app's Chog lines
+// [A-1346 ② · A-1348] every guide line Chog says stays clear of Piggy and of Chog: the words' own box (not the full-width line box) vs
+// Piggy's drawn image (#homeSeat · #homeWalk · living-Home svg body) and Chog's drawn outline (white pixels in a shot with the speech hidden)
+async function guideClearOfPiggy(person) {
+  const page = person.page;
+  const m = await page.evaluate(() => {
+    const box = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, t: b.top, r: b.right, b: b.bottom }; };
+    const shown = (e) => { const b = e.getBoundingClientRect(); const cs = getComputedStyle(e); return b.width > 0 && cs.visibility !== "hidden" && cs.display !== "none" && Number(cs.opacity) > 0.05; };
+    const guide = document.querySelector("#a904GuideLine");
+    const pigs = [...document.querySelectorAll("#homeSeat, #homeWalk"), ...[...document.querySelectorAll(".homeLiving")].map((e) => [...e.querySelectorAll("svg > g")].find((g) => g.getBoundingClientRect().width > 0)).filter(Boolean)]
+      .filter(shown).map(box);
+    const parts = [...document.querySelectorAll("#chogHome .chogHome__part")].filter(shown).map(box);
+    const area = parts.length ? { l: Math.min(...parts.map((x) => x.l)), t: Math.min(...parts.map((x) => x.t)), r: Math.max(...parts.map((x) => x.r)), b: Math.max(...parts.map((x) => x.b)) } : null;
+    if (!guide) return { guide: false, pigs, area, lines: [] };
+    const ink = (e) => { const r = document.createRange(); r.selectNodeContents(e); return box(r); };
+    const els = guide.querySelectorAll(".chogCheckLine__line").length ? [...guide.querySelectorAll(".chogCheckLine__line")] : [guide];
+    return { guide: true, pigs, area, lines: els.filter(shown).map((e) => ({ text: e.textContent.trim(), ...ink(e) })) };
+  });
+  let chog = null;
+  if (m.area) { // Chog's outline: bright pixels inside its image area, with every Chog line hidden for the shot
+    await page.evaluate(() => document.querySelectorAll("#chogHome .chogCheckLine").forEach((e) => { e.dataset.a1348Vis = e.style.visibility; e.style.visibility = "hidden"; }));
+    const clip = { x: Math.max(0, m.area.l), y: Math.max(0, m.area.t), width: m.area.r - Math.max(0, m.area.l), height: m.area.b - Math.max(0, m.area.t) };
+    const png = await page.screenshot({ clip });
+    await page.evaluate(() => document.querySelectorAll("#chogHome .chogCheckLine").forEach((e) => { e.style.visibility = e.dataset.a1348Vis || ""; delete e.dataset.a1348Vis; }));
+    const bb = await page.evaluate(async ({ b64, w, h }) => {
+      const img = new Image(); img.src = `data:image/png;base64,${b64}`; await img.decode();
+      const c = document.createElement("canvas"); c.width = img.width; c.height = img.height; const g = c.getContext("2d"); g.drawImage(img, 0, 0);
+      const d = g.getImageData(0, 0, c.width, c.height).data; let l = c.width, t = c.height, r = -1, b = -1;
+      for (let y = 0; y < c.height; y += 1) for (let x = 0; x < c.width; x += 1) { const i = (y * c.width + x) * 4; if (d[i] > 160 && d[i + 1] > 160 && d[i + 2] > 160) { if (x < l) l = x; if (x > r) r = x; if (y < t) t = y; if (y > b) b = y; } }
+      const k = c.width / w; return r < 0 ? null : { l: l / k, t: t / k, r: (r + 1) / k, b: (b + 1) / k };
+    }, { b64: png.toString("base64"), w: clip.width, h: clip.height });
+    if (bb) chog = { l: clip.x + bb.l, t: clip.y + bb.t, r: clip.x + bb.r, b: clip.y + bb.b };
+  }
+  const over = (x, o) => !!o && x.l < o.r && x.r > o.l && x.t < o.b && x.b > o.t;
+  const R = (o) => o && [o.l, o.t, o.r, o.b].map(Math.round);
+  const hits = m.lines.filter((x) => m.pigs.some((pig) => over(x, pig))).map((x) => `Piggy × ${x.text}`).concat(m.lines.filter((x) => over(x, chog)).map((x) => `Chog × ${x.text}`));
+  const ok = m.guide && m.pigs.length > 0 && !!chog && hits.length === 0;
+  return { ok, w: await page.evaluate(() => innerWidth), hits, lines: m.lines.map((x) => `${x.text} ${JSON.stringify(R(x))}`), pigs: m.pigs.map(R), chog: R(chog) };
+}
 async function watchJarGuide(person) {
   const t0 = Date.now();
   await until(person, "jar", () => jarShown(person), 20_000);
@@ -1005,18 +1046,21 @@ async function laneJarTap() {
     await q.page.locator("#a905Jar").click();
     await until(q, "Money screen", async () => q.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000);
     await sleep(1500);
-    assert.ok(!(await look(q)).text.includes(BELL_LINE), "bell line came while Money was open");
+    assert.ok(!anyBell((await look(q)).text), "bell line came while Money was open");
     await q.page.locator('.a911-back[data-a905-act="back"]').click();
     const back = Date.now();
-    const s = await until(q, "Chog: bell line", (x) => x.text.includes(BELL_LINE), 10_000);
+    await until(q, "Chog: bell line starts", (x) => anyBell(x.text), 10_000);
     const ms = Date.now() - back;
     assert.ok(ms >= 900 && ms <= 3000, `back → bell line ${ms} ms`);
+    const s = await until(q, "Chog: bell line, both parts", (x) => hasBell(x.text), speakMs(BELL_PARTS[0]) + 4000); // [A-1346 ②] one part at a time
     assert.ok(s.text.includes(JAR_LINE), "jar line kept above the bell line");
     // [A-1287] the bell line stays long enough to read (the guide does not end under it)
     const seenFrom = Date.now(); let seenUntil = seenFrom;
-    while (Date.now() - seenFrom < speakMs(BELL_LINE) + 1500) { if ((await look(q)).text.includes(BELL_LINE)) seenUntil = Date.now(); else break; await sleep(150); }
-    assert.ok(seenUntil - seenFrom >= speakMs(BELL_LINE) - 300, `bell line seen ${seenUntil - seenFrom} ms (read time ${speakMs(BELL_LINE)} ms)`);
+    while (Date.now() - seenFrom < speakMs(BELL_PARTS.at(-1)) + 1500) { if (hasBell((await look(q)).text)) seenUntil = Date.now(); else break; await sleep(150); }
+    assert.ok(seenUntil - seenFrom >= speakMs(BELL_PARTS.at(-1)) - 300, `bell line seen ${seenUntil - seenFrom} ms (read time ${speakMs(BELL_PARTS.at(-1))} ms)`);
     await checkpoint(q, "guide-bell-line");
+    const clear = await guideClearOfPiggy(q); // [A-1346 ②]
+    assert.ok(clear.ok, `guide line over Piggy / Chog: ${JSON.stringify(clear)}`);
   });
   // [A-1293] the ? help sticker: under the bell's spot on the right; a tap = Chog says this screen's line again, one line at a time; no line yet = no ?
   await check("help · ? sticker under the bell spot (right) only once Chog has spoken here; a tap = the jar line again, then the bell line", async () => {
@@ -1029,8 +1073,8 @@ async function laneJarTap() {
     await q.page.locator("#chogHelp").click();
     await sleep(500);
     const first = await look(q);
-    assert.ok(first.text.includes(JAR_LINE) && !first.text.includes(BELL_LINE), `after the tap: ${JSON.stringify(first.text.slice(-4))}`);
-    await until(q, "bell line again", (x) => x.text.includes(BELL_LINE), speakMs(JAR_LINE) + 2500);
+    assert.ok(first.text.includes(JAR_LINE) && !anyBell(first.text), `after the tap: ${JSON.stringify(first.text.slice(-4))}`);
+    await until(q, "bell line again", (x) => hasBell(x.text), speakMs(JAR_LINE) + speakMs(BELL_PARTS[0]) + 2500 + 2500);
   });
   await q.context.close();
 }
@@ -1205,12 +1249,16 @@ async function laneJarPiggy() {
     const g = await guide;
     if (g?.error) throw g.error;
     let bellEarly = false;
-    const s = await until(p, "Chog: bell line", async (x) => { if (!x.text.includes(BELL_LINE) && (await p.page.evaluate(() => !!document.querySelector("#secondHomeBell")))) bellEarly = true; return x.text.includes(BELL_LINE); }, 20_000);
+    const s = await until(p, "Chog: bell line", async (x) => { if (!hasBell(x.text) && (await p.page.evaluate(() => !!document.querySelector("#secondHomeBell")))) bellEarly = true; return hasBell(x.text); }, 20_000);
     const ms = Date.now() - g.lineAt;
     assert.ok(ms >= speakMs(JAR_LINE) + 5000 - 400, `jar line → bell line ${ms} ms (want ≥ ${speakMs(JAR_LINE) + 5000})`);
     assert.ok(s.text.includes(JAR_LINE), "jar line kept");
     assert.ok(!bellEarly, "bell rang before the guide ended");
     await checkpoint(p, "guide-bell-line");
+    const seen = []; // [A-1346 ② · A-1348] the three widths, while the lines are up
+    for (const [width, height] of [[390, 844], [810, 1080], [1440, 900]]) { await p.page.setViewportSize({ width, height }); await sleep(400); seen.push(await guideClearOfPiggy(p)); await p.page.screenshot({ path: path.join(OUT, `guide-lines-${width}.png`) }); }
+    await p.page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(seen.every((x) => x.ok), `guide line over Piggy / Chog: ${JSON.stringify(seen.filter((x) => !x.ok))}`);
   });
   await check("jar · reopen → unlock → bell → Journey 2 round 2 → Receipt filed → Home with no tap", async () => {
     await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" });
@@ -1222,7 +1270,7 @@ async function laneJarPiggy() {
     await until(p, "jar after round 2", () => jarShown(p), 20_000);
     await sleep(6000);
     const t = (await checkpoint(p, "jar-r2")).text;
-    assert.ok(!t.includes(JAR_LINE) && !t.includes(BELL_LINE), `guide again: ${JSON.stringify(t.slice(-6))}`);
+    assert.ok(!t.includes(JAR_LINE) && !anyBell(t), `guide again: ${JSON.stringify(t.slice(-6))}`);
   });
   // + Piggy is not open yet: the tab stays where it is, grey with "soon", and a tap starts nothing (no Face ID, no index read, no Name it).
   await check("piggy · Chog opens the Home paper → + Piggy is grey with \"soon\" → a tap does nothing", async () => {
