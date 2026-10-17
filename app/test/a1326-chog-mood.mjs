@@ -19,12 +19,13 @@ const TABLE = [
 let mood;
 try { mood = await import("../src/chog-mood.js"); } catch (e) { mood = null; }
 const days = [new Date(2026, 9, 16, 9), new Date(2026, 9, 17, 9), new Date(2026, 9, 18, 9)];
-await check("① mood table: three days in a row → three moods, the device's local date (same all day)", () => {
+// [A-1350 RE-PIN · Owner 12:5x "우선은 … 말투도"] the day's mood stays as chogDayMood (unused for now); Chog speaks cute every day (a1350). pre-A-1350: chogMood(d)
+await check("① day mood table (kept, unused for now): three days in a row → three moods, the device's local date (same all day)", () => {
   assert.ok(mood, "chog-mood.js missing");
-  const m = days.map((d) => mood.chogMood(d));
+  const m = days.map((d) => mood.chogDayMood(d));
   assert.deepEqual([...new Set(m)].sort(), ["cute", "down", "dream"]);
-  assert.equal(mood.chogMood(new Date(2026, 9, 16, 0, 1)), mood.chogMood(new Date(2026, 9, 16, 23, 59)));
-  const n = Math.floor(Date.UTC(2026, 9, 16) / 864e5) % 3; assert.equal(mood.chogMood(days[0]), ["down", "dream", "cute"][n]);
+  assert.equal(mood.chogDayMood(new Date(2026, 9, 16, 0, 1)), mood.chogDayMood(new Date(2026, 9, 16, 23, 59)));
+  const n = Math.floor(Date.UTC(2026, 9, 16) / 864e5) % 3; assert.equal(mood.chogDayMood(days[0]), ["down", "dream", "cute"][n]);
 });
 await check("① eight lines × three moods = the table word for word · lines outside the table unchanged", () => {
   assert.ok(mood, "chog-mood.js missing");

@@ -16,10 +16,14 @@ const LINES = Object.freeze({
 });
 const FIRST_MEETING = "get your piggy";
 
-export function chogMood(now = new Date()) {
+// [A-1350 · Owner 10-17 12:5x "우선은 청록만으로 업데이트하자 말투도"] for now Chog speaks the cute column every day: the one switch is here.
+// The day's mood (chogDayMood) and the down / dream columns stay for later, unused.
+const CHOG_MOOD_NOW = "cute";
+export function chogDayMood(now = new Date()) {
   const day = Math.floor(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) / 864e5);
   return CHOG_MOODS[((day % 3) + 3) % 3];
 }
+export function chogMood() { return CHOG_MOOD_NOW; }
 export function chogMoodLine(text, mood = chogMood()) {
   const row = LINES[text];
   const i = CHOG_MOODS.indexOf(mood);
@@ -30,16 +34,13 @@ export function chogMoodLines(lines, mood = chogMood()) {
 }
 
 // [A-1349 · Owner 10-17 12:2x "청록 90 주황도 킵" · PACING:117–118 · 07:0x · 07:1x] Chog's voice = cute (everyday), slow, 90 % pace:
-// teal c09 = A · orange s09 = B (app/public/sound/chog/sound_chog_cute90_<set>_<n>_1017.wav · the design originals, byte for byte).
-// Every mood day speaks with this one voice (the down / dream voices are not chosen yet). A line read in <= 2 s → a short one (1 · 6);
-// longer → 2 · 4 · 5 · 7 · 8 in turn; 3 (6.6 s) = the first-meeting line only. The same slot taken again = the other set (A ↔ B).
-// All 16 files are −28 LUFS: one trim brings them to the old cute A at the app (−15.1 LUFS × 0.62 = −19.25) — +8.75 dB, peak −12 dBTP.
+// [A-1350 · Owner 12:5x "청록만"] teal c09 only (app/public/sound/chog/sound_chog_cute90_c09_<n>_1017.wav · the design originals, byte for byte).
+// A line read in <= 2 s → a short one (1 · 6); longer → 2 · 4 · 5 · 7 · 8 in turn; 3 (6.6 s) = the first-meeting line only.
+// All 8 files are −28 LUFS: one trim brings them to the old cute A at the app (−15.1 LUFS × 0.62 = −19.25) — +8.75 dB, peak −12 dBTP.
+// pre-A-1350 (A-1349): orange s09 = B took a slot's second turn.
 const BASE = "/sound/chog";
 const VOICE_TRIM = 2.74;
-const VOICE_MS = Object.freeze({ // file length, ms (ffprobe)
-  c09: [2451, 3074, 6650, 3712, 2898, 2373, 3547, 3421],
-  s09: [2715, 3430, 7039, 4169, 3026, 2666, 3633, 3774],
-});
+const VOICE_MS = Object.freeze([2451, 3074, 6650, 3712, 2898, 2373, 3547, 3421]); // c09 file length, ms (ffprobe)
 const SLOTS = Object.freeze({ short: [1, 6], long: [2, 4, 5, 7, 8], first: [3] });
 const LONG_MS = 2000; // the same read time as chogSpeakMs (characters × 60 + 1200 ms)
 const FIRST_MEETING_LINES = new Set([FIRST_MEETING, ...LINES[FIRST_MEETING]]);
@@ -52,8 +53,7 @@ export function createChogVoice() {
     const list = SLOTS[kind];
     const i = next.get(kind) || 0;
     const n = list[i % list.length];
-    const set = Math.floor(i / list.length) % 2 ? "s09" : "c09";
-    return { kind, i, voice: { file: `${BASE}/sound_chog_cute90_${set}_${n}_1017.wav`, trim: VOICE_TRIM, ms: VOICE_MS[set][n - 1] } };
+    return { kind, i, voice: { file: `${BASE}/sound_chog_cute90_c09_${n}_1017.wav`, trim: VOICE_TRIM, ms: VOICE_MS[n - 1] } };
   };
   return {
     // the voice the next line with these words would get, without taking it (C: the line clock needs its length first)
