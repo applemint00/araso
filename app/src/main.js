@@ -7310,11 +7310,17 @@ function chogLinesRestart(key) { chogLinesStartedAt.delete(key); }
 function chogLineWaits(key, lines) { // ms each line still waits before it shows (0 = showing)
   const sig = lines.join("\n");
   const was = chogLinesStartedAt.get(key);
-  if (!was || (was.sig !== sig && !sig.startsWith(`${was.sig}\n`))) chogLinesStartedAt.set(key, { sig, at: Date.now() }); // added lines keep the clock
+  if (!was || (was.sig !== sig && !sig.startsWith(`${was.sig}\n`))) chogLinesStartedAt.set(key, { sig, at: Date.now(), voiceMs: chogVoiceMsFor(lines) }); // added lines keep the clock (and the voice)
   else if (was.sig !== sig) was.sig = sig;
-  const elapsed = Date.now() - chogLinesStartedAt.get(key).at;
+  const clock = chogLinesStartedAt.get(key);
+  const elapsed = Date.now() - clock.at;
   let at = 0;
-  return lines.map((t) => { const wait = Math.max(0, at - elapsed); at += chogSpeakMs(t) + PACE_BREATH_MS; return wait; });
+  const waits = lines.map((t) => { const wait = Math.max(0, at - elapsed); at += chogSpeakMs(t) + PACE_BREATH_MS; return wait; });
+  return chogVoiceWaits(waits, clock.voiceMs, elapsed); // [A-1349 · PACING:117 C] a voice longer than the bubble holds the next line until it ends
+}
+// [A-1349] the length of the voice this speech's bubble will get (the bubble's words, as the sound observer reads them); 0 = no voice known yet
+function chogVoiceMsFor(lines) {
+  try { return a1326Voice.peek(lines.join("")).ms || 0; } catch { return 0; }
 }
 function chogLinesMarkup(key, lines) {
   const waits = chogLineWaits(key, lines);
@@ -10680,7 +10686,7 @@ function teardownHomeResidentModule() {
 //   chog   : a Chog cue .chogCheckLine bubble is added (or un-hidden); #awayRestoreLine and #returnArrivalAlarm (money-truth lines) are silent;
 //            one per element, same line within 12 s = re-render.
 import { playSound, setSoundOn, soundIsOn } from "./sound.js";
-import { chogMoodLine, chogMoodLines, createChogVoice } from "./chog-mood.js"; // [A-1326] the day's wording and voice
+import { chogMoodLine, chogMoodLines, createChogVoice, chogVoiceWaits } from "./chog-mood.js"; // [A-1326] the day's wording and voice
 const A902_NO_SOUND_IDS = new Set(["awayRestoreLine", "returnArrivalAlarm"]); // money-truth lines: never a babble
 const a902 ={ installed: false, unfoldBusy: false, unfoldAt: 0, chogKey: "", chogAt: 0, seen: new WeakSet() };
 

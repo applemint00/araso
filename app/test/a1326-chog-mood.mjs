@@ -33,24 +33,17 @@ await check("① eight lines × three moods = the table word for word · lines o
   assert.equal(mood.chogMoodLine("if you want to explore more, tap to wake me up.", "dream"), "if you want to explore more, tap to wake me up.");
   assert.deepEqual(mood.chogMoodLines(["closing soon.", "x"], "down"), ["getting sleepy…", "x"]);
 });
-await check("② voice: cute/dream files · down = dream × 0.8 · long when the line takes > 2 s · first meeting = both · short/long alternate", () => {
+// [A-1349 RE-PIN · Owner 10-17 12:2x "청록 90 주황도 킵" · PACING:118 12:2x newest-wins] one cute voice every day (slow 90 %, teal c09 / orange s09);
+// the 10-16 cute/dream files and the down × 0.8 rule are retired. The full voice rules live in a1349-chog-voice.mjs. pre-A-1349: cute/dream 1016 files.
+await check("② voice: every mood day = the cute 90 % voice · long when the line takes > 2 s · first meeting = slot 3", () => {
   assert.ok(mood, "chog-mood.js missing");
   const v = mood.createChogVoice();
-  const s1 = v.pick("hi", "cute"), s2 = v.pick("hi", "cute");
-  assert.deepEqual([s1.file, s2.file].map((f) => f.split("/").pop()), ["sound_chog_fast6_cuteA_1016.wav", "sound_chog_fast6_cuteB_1016.wav"]);
   const long = "i'll keep it safe at home…"; assert.ok(long.length * 60 + 1200 > 2000);
-  assert.match(v.pick(long, "dream").file, /sound_chog_long_dream6_1_1016\.wav$/);
-  assert.match(v.pick(long, "dream").file, /sound_chog_long_dream6_2_1016\.wav$/);
-  assert.match(v.pick("ok", "dream").file, /sound_chog_fast6_dreamB_1016\.wav$/);
-  const d = v.pick("ok", "down"), dr = mood.createChogVoice().pick("ok", "dream");
-  assert.equal(d.file, dr.file); assert.ok(Math.abs(d.trim - dr.trim * 0.8) < 1e-9, `down trim ${d.trim} vs dream ${dr.trim}`);
-  assert.match(v.pick(mood.chogMoodLine("get your piggy", "cute"), "cute").file, /sound_chog_long_cute6_both_1016\.wav$/);
-  assert.match(v.pick(mood.chogMoodLine("get your piggy", "down"), "down").file, /sound_chog_long_dream6_both_1016\.wav$/);
+  for (const m of ["down", "dream", "cute"]) assert.match(mood.createChogVoice().pick(long, m).file, /sound_chog_cute90_c09_2_1017\.wav$/, m);
+  assert.match(v.pick("ok", "dream").file, /sound_chog_cute90_c09_1_1017\.wav$/);
+  assert.match(v.pick(mood.chogMoodLine("get your piggy", "down"), "down").file, /sound_chog_cute90_c09_3_1017\.wav$/);
 });
-await check("② sound files are in the app (same bytes as the design originals)", () => {
-  for (const n of ["fast6_cuteA_1016", "fast6_cuteB_1016", "fast6_dreamB_1016", "long_cute6_1_1016", "long_cute6_2_1016", "long_cute6_both_1016", "long_dream6_1_1016", "long_dream6_2_1016", "long_dream6_both_1016"]) {
-    readFileSync(new URL(`../public/sound/chog/sound_chog_${n}.wav`, import.meta.url));
-  }
+await check("② sound files are in the app (Home paper glass F)", () => {
   readFileSync(new URL("../public/sound/sound_home_glassthin_minor_1016_f.wav", import.meta.url));
 });
 await check("③ the Home paper opens with glass-thin minor F (UNFOLD_TRIM matched by ear-level RMS)", async () => {
