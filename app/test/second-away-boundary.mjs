@@ -49,7 +49,7 @@ ok("Send 게이트 통과 직후 pending 을 세운다", /sj\.outcome = "pending
 
 // ── 3. 실패에서 완료가 영속되지 않는다 ────────────────────────────────────────
 ok("persist 는 outcome done 과 AND", /const persistNow = persist && confirmed;/.test(SRC));
-ok("  저장도 persistNow 로 잠긴다", /if \(persistNow\) \{[\s\S]{0,120}SECOND_JOURNEY_CLOSED_KEY, "1"/.test(SRC));
+ok("  저장도 persistNow 로 잠긴다", /if \(persistNow\) \{[\s\S]{0,120}writeSecondFlag\(localStorage, "araso\.secondJourneyClosed"/.test(SRC)); // [A-1357 RE-PIN] pre: SECOND_JOURNEY_CLOSED_KEY, "1"
 ok("  reset 이 outcome 을 되돌린다", /state\.secondJourney\.outcome = null;/.test(SRC));
 
 // ── 4. First 회귀 방지 — Second 가 First 표를 오염시키지 않는다 ───────────────

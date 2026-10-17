@@ -59,13 +59,14 @@ check("credential 없이 이름만 있어도 birth 우선", scene(false, false, 
   // [A-946 RE-PIN] the key is now per chain scope; on testnet scopedSecondKey returns exactly "araso.secondJourneyClosed" (a946 test). pre-A-946: /const SECOND_JOURNEY_CLOSED_KEY = "araso\.secondJourneyClosed";/
   checkTrue("완료 사실을 담는 저장 키가 있다", /const SECOND_JOURNEY_CLOSED_KEY = scopedSecondKey\("araso\.secondJourneyClosed", RUNTIME_CHAIN_SCOPE\);/.test(SRC));
   checkTrue("state 가 저장 키에서 읽어 초기화된다(재방문에 살아남는다)",
-    /secondJourneyCompletedOnce: localStorage\.getItem\(SECOND_JOURNEY_CLOSED_KEY\) === "1",/.test(SRC));
+    // [A-1357 RE-PIN] per chain + Piggy (second-done.js); pre-A-1357: /secondJourneyCompletedOnce: localStorage\.getItem\(SECOND_JOURNEY_CLOSED_KEY\) === "1",/
+    /secondJourneyCompletedOnce: a1357SecondDone\(localStorage\.getItem\("araso\.address"\) \|\| ""\),/.test(SRC) && /function a1357SecondDone\(address\) \{ return readSecondFlag\(localStorage, "araso\.secondJourneyClosed", RUNTIME_CHAIN_SCOPE, address\); \}/.test(SRC));
   checkTrue("재방문 자동 전개는 Second 미완일 때만",
     SRC.includes('state.homeQuietForExplore = state.scene === "sendstay" && state.tripClosed && !state.secondJourneyCompletedOnce;'));
-  checkTrue("완료 시점에 저장한다", /localStorage\.setItem\(SECOND_JOURNEY_CLOSED_KEY, "1"\);/.test(SRC));
+  checkTrue("완료 시점에 저장한다", /writeSecondFlag\(localStorage, "araso\.secondJourneyClosed", RUNTIME_CHAIN_SCOPE, state\.address\);/.test(SRC)); // [A-1357 RE-PIN] pre: localStorage.setItem(SECOND_JOURNEY_CLOSED_KEY, "1")
 
   // 저장하는 것은 **완료 사실 하나뿐** — 선택/권한/금액 같은 일시 상태는 저장하지 않는다.
-  const writes = (SRC.match(/localStorage\.setItem\(SECOND_JOURNEY_CLOSED_KEY[^)]*\)/g) || []).length;
+  const writes = (SRC.match(/localStorage\.setItem\(SECOND_JOURNEY_CLOSED_KEY[^)]*\)|writeSecondFlag\(localStorage, "araso\.secondJourneyClosed"/g) || []).length; // [A-1357 RE-PIN] the per-Piggy write counts too
   check("  저장하는 자리는 정확히 1곳", writes, 1);
 
   // onError 는 **자산 로딩 실패**(return-view.js: asset-missing/asset-error)이지 완료가 아니다.

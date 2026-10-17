@@ -175,7 +175,7 @@ await check("N9 main.js: selector only when secondJourneyCompletedOnce === true 
   const once = [...MAIN.matchAll(/state\.secondJourneyCompletedOnce = true/g)].length;
   assert.equal(once, 1);
   assert.ok(MAIN.includes("if (persistNow) state.secondJourneyCompletedOnce = true;"), "only a confirmed (outcome done) Second unlocks");
-  assert.ok(MAIN.includes('secondJourneyCompletedOnce: localStorage.getItem(SECOND_JOURNEY_CLOSED_KEY) === "1"'), "reload reads the same persisted gate");
+  assert.ok(MAIN.includes('secondJourneyCompletedOnce: a1357SecondDone(localStorage.getItem("araso.address") || "")'), "reload reads the same persisted gate"); // [A-1357 RE-PIN] per chain + Piggy
 });
 
 await check("N10 main.js settings click writes only the preference store (signer 0 / permission 0 / tx 0 / funding 0 / Job 0)", () => {

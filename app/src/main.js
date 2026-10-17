@@ -129,6 +129,7 @@ import { runGiftCreateCalls } from "./gift-send-paper.js";
 // ── [A-915] end imports ──
 import { releaseAllows } from "./release-gate.js"; // [A-943] used only in the two [A-943] blocks (boot · Second entries)
 import { PROMOTION_TARGET_SCOPE, scopedSecondKey, selectBootProfile } from "./boot-profile.js"; // [A-946] boot path → chain profile · chain-scoped Second keys
+import { readSecondFlag, secondFlagKey, writeSecondFlag } from "./second-done.js"; // [A-1357] Journey 2 done / intro seen = per chain AND Piggy
 import { storedJourney } from "./boot-profile.js"; import { RELEASE_LEVEL, journeyFeatureOpen } from "./release-gate.js"; import { registerJourneySessionDisposer } from "./journey-switch.js"; // [A-948]
 import { mountForkVirtualMoneyBadge } from "./fork-virtual-money-badge.js";
 import { legacyTestnetPathOpen, profileScope, resolveChainProfile } from "./chain-profile.js";
@@ -298,7 +299,10 @@ const PIGGY_NAME_KEY = "araso.piggyName"; // 이름 저장 완료 (빈 문자열
 // [A-462 Owner] Second 까지 끝낸 사실은 **영속한다** — 재방문/새로고침이면 조용한 Home 으로
 // 돌아오고 Explore 자동재실행 0. 저장하는 것은 **완료 사실 boolean 하나뿐**이다: 선택/권한/금액
 // 같은 Second 의 일시 상태는 저장하지 않는다(A-411-p 의 "세션 메모리" 결정은 이 판정으로 대체).
-const SECOND_JOURNEY_CLOSED_KEY = scopedSecondKey("araso.secondJourneyClosed", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before)
+const SECOND_JOURNEY_CLOSED_KEY = scopedSecondKey("araso.secondJourneyClosed", RUNTIME_CHAIN_SCOPE); // [A-946] per chain scope (testnet = the same key as before) · [A-1357] old one-per-chain flag, read once by second-done.js
+// [A-1357] "this Piggy finished Journey 2" (per chain + Piggy); re-read whenever the Home Piggy changes
+function a1357SecondDone(address) { return readSecondFlag(localStorage, "araso.secondJourneyClosed", RUNTIME_CHAIN_SCOPE, address); }
+function a1357SyncSecondDone() { state.secondJourneyCompletedOnce = a1357SecondDone(state.address); }
 // [A-466 Owner] 결과(귀환/영수증) 모션은 **첫 한 번만 전체 재생**하고, 그 뒤부터 skip 을 보여준다.
 // 단위는 Owner 문구 "결과 모션은 첫 번째만"의 최소 해석 — Journey 종류를 가리지 않고 이 저장소에서
 // **첫 성공 결과 1회**다(First/Second 를 각각 1회로 늘리지 않는다). 저장은 boolean 하나뿐이고,
@@ -503,7 +507,7 @@ const state = {
   // 에서만 선다). 저장소에 새 스키마를 만들지 않는다(§금지) — 세션 메모리 표 하나뿐이다.
   // openSecondJourneyExplore() 의 candidates 직행 여부, settle() 의 자동 quiet→Paper
   // 억제(Owner "Second 완료: Explore 자동재실행 0")에 쓴다.
-  secondJourneyCompletedOnce: localStorage.getItem(SECOND_JOURNEY_CLOSED_KEY) === "1",
+  secondJourneyCompletedOnce: a1357SecondDone(localStorage.getItem("araso.address") || ""),
   // [A-462] 위 값은 저장에서 복원되지만, **이번 세션에서 실제로 끝냈는가**는 따로 센다 —
   // 화면의 Journey 번호(buildSecondJourneyViewModel)가 새로고침으로 달라지지 않게 하려는 것뿐이다.
   secondCompletedThisSession: false,
@@ -902,6 +906,7 @@ function activateSigningSession(prfOutput, { persistAddress = true } = {}) {
     if (persistAddress) {
       localStorage.setItem("araso.address", address);
       state.address = address;
+      if (typeof a1357SyncSecondDone === "function") a1357SyncSecondDone(); // cut-out tests run these functions without it
     }
     signerSince = Date.now(); // [A-896]
     signerMono = typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : -1; // [A-896 R1]
@@ -1415,6 +1420,7 @@ function restoreIdentity(snapshot) {
   }
   state.credential = snapshot.credential;
   state.address = snapshot.address;
+  if (typeof a1357SyncSecondDone === "function") a1357SyncSecondDone(); // cut-out tests run these functions without it
 }
 // [R2/R3] 신원 저장은 한 덩어리로만 성공한다. 실패하면 이전 신원으로 되돌리고, 이번 인증이 막 연 서명자를 즉시
 // 끝낸 뒤(endActiveSession) 재시도 가능한 실패로 던진다.
@@ -1432,6 +1438,7 @@ function commitIdentity({ credential, address, prfSaltHex = null, received = fal
   }
   state.credential = credential;
   state.address = address;
+  if (typeof a1357SyncSecondDone === "function") a1357SyncSecondDone(); // cut-out tests run these functions without it
   // [A-695 SEQ-5=A] `received: true` 는 생성 경로만 넘긴다(추가 탭의 pendingBirth 포함; 기존 Piggy 복구는 false) → 생성 직후 표식 후보를 메모리에만 둔다.
   if (received) bornPiggyPending = String(address).toLowerCase();
 }
@@ -5402,7 +5409,7 @@ function mountSecondReturn() {
     dropSecondDraft();   // [A-475] 끝난 바퀴의 draft 는 남기지 않는다 // Second: 사용자가 Home 을 눌러 실제로 끝낸 자리
     if (persistNow) {
       try {
-        localStorage.setItem(SECOND_JOURNEY_CLOSED_KEY, "1");
+        writeSecondFlag(localStorage, "araso.secondJourneyClosed", RUNTIME_CHAIN_SCOPE, state.address); // [A-1357] this Piggy only
       } catch {
         // 저장 실패는 조용히 넘긴다 — 완료 자체를 되돌리지 않는다(다음 재방문에 Explore 가
         // 다시 열릴 뿐, 가짜 완료를 만들지는 않는다).
@@ -5760,6 +5767,7 @@ function resetLocalTest() {
   localStorage.removeItem(RECEIPTS_KEY);
   // [A-462] Second 완료 사실도 리셋에서만 지운다 — 일반 Home 이동·기록 열기·새로고침에서는 0.
   localStorage.removeItem(SECOND_JOURNEY_CLOSED_KEY);
+  for (const base of ["araso.secondJourneyClosed", "araso.secondIntroSeen"]) { const k = secondFlagKey(base, RUNTIME_CHAIN_SCOPE, state.address); if (k) localStorage.removeItem(k); } // [A-1357]
   localStorage.removeItem(RESULT_MOTION_SEEN_KEY);
   localStorage.removeItem(SECOND_INTRO_SEEN_KEY); // [A-891] once-per-user Second intro fact, reset-only like the two above
   // 탄생 한 바퀴의 세 가지 사실도 함께 지운다 — 안 지우면 리셋 뒤에도 Open 이 숨고
@@ -15139,7 +15147,7 @@ function a1298FindOutTap(chog, enter) {
 let a891CueChog = null;          // the Home Chog instance that is currently showing the post-file "tap me!"
 
 function a891SecondIntroSeen() {
-  try { return localStorage.getItem(SECOND_INTRO_SEEN_KEY) === "1"; } catch { return false; }
+  return readSecondFlag(localStorage, "araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE, state.address); // [A-1357] per Piggy
 }
 
 // [A-1298 ⑦] the silent first-arrival hold (an empty clock of the removed first-arrival cue, never started) is gone.
@@ -15209,7 +15217,7 @@ function a891HomeChogTap() {
   if (!chog || chog !== homeChog || state.scene !== "sendstay") return;
   a891CueChog = null;
   // Storage failure: the intro may show once more; nothing is faked.
-  try { localStorage.setItem(SECOND_INTRO_SEEN_KEY, "1"); } catch { }
+  writeSecondFlag(localStorage, "araso.secondIntroSeen", RUNTIME_CHAIN_SCOPE, state.address); // [A-1357] per Piggy
   chog.closeCard?.();
   const homeSay = a891ChogSay(document.querySelector('.stage[data-scene="sendstay"] #chogHome'), "secondIntroLine", chogMoodLines(A891_SECOND_INTRO_LINES));
   sceneTimeout(() => {
@@ -15321,7 +15329,7 @@ async function a956Enter({ reenter = false } = {}) {
     };
     const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: piggy, journey1: journey1Pointers(readReceipts()), signMessage });
     if (r.allowed === true && !state.appLock && activeAccount === account && (reentering || state.scene === "sendstay")) {
-      if (!reentering) a956SwitchJourney(2);
+      if (!reentering && !a956SwitchJourney(2)) { console.debug("fork_entry", "switch_busy"); return false; } // [A-1357] a refused switch is not an entry: the Home cue comes back
       return true;
     }
     console.debug("fork_entry", typeof r.reason === "string" && /^[a-z_]+$/.test(r.reason) ? r.reason : "refused");
@@ -15362,8 +15370,8 @@ async function a956Enter({ reenter = false } = {}) {
       if (state.recordsCardVisible || homeChog.state?.pinned) { sceneTimeout(arm, HOME_FIRST_JOURNEY_CARD_MS); return; }
       if (state.appLock) return;
       if (activeAccount && String(activeAccount.address || "").toLowerCase() === String(state.address || "").toLowerCase()) {
-        if (typeof a1298FindOutPending !== "undefined" && a1298FindOutPending) { a1298FindOutPending = false; a1298FindOut(() => { void a956Enter(); }); return; } // [A-1298 ⑤]
-        void a956Enter();
+        if (typeof a1298FindOutPending !== "undefined" && a1298FindOutPending) { a1298FindOutPending = false; a1298FindOut(a1357EnterOrCue); return; } // [A-1298 ⑤]
+        a1357EnterOrCue();
         return;
       }
       if (homeChog.startTapCue?.()) a891CueChog = homeChog;
@@ -15372,6 +15380,13 @@ async function a956Enter({ reenter = false } = {}) {
     else sceneTimeout(arm, POST_FILE_QUIET_HOME_MS);
     return undefined;
   };
+  // [A-1357] an entry that did not happen (refused, busy, cancelled) leaves the existing "tap me!" cue, as the Chog-tap path already does
+  function a1357EnterOrCue() {
+    void a956Enter().then((entered) => {
+      if (entered === true || state.scene !== "sendstay" || state.secondJourneyCompletedOnce || state.sendCardVisible || state.appLock || !homeChog) return;
+      if (homeChog.startTapCue?.()) a891CueChog = homeChog;
+    });
+  }
   const a956BaseTap = a891HomeChogTap;
   a891HomeChogTap = (...args) => {
     if (!entryOpen()) return a956BaseTap(...args);

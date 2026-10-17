@@ -70,7 +70,7 @@ check("a898SignerForPayer(fresh) runs the passkey even when the live key is this
 });
 check("first end: once after the first receipt (live key) Chog says \"tap me to find out\"; no tap 5 s = Journey 2 by the key; a tap = the Home paper, Journey 2 after it closes", () => {
   assert.match(fn("a891AfterFiling"), /if \(teach\) a1298FindOutPending = true;/);
-  assert.match(MAIN, /a1298FindOutPending\) \{ a1298FindOutPending = false; a1298FindOut\(\(\) => \{ void a956Enter\(\); \}\); return; \}/);
+  assert.match(MAIN, /a1298FindOutPending\) \{ a1298FindOutPending = false; a1298FindOut\(a1357EnterOrCue\); return; \}/); // [A-1357] enter, or the existing cue again when the entry did not happen
   const out = fn("a1298FindOut");
   assert.match(out, /startTapCue\?\.\(chogMoodLine\("tap me to find out"\)\)/ /* [A-1326 RE-PIN · PACING :39 day wording] pre-A-1326: startTapCue?.("tap me to find out") */);
   assert.match(out, /setTimeout\(\(\) => \{[\s\S]*enter\(\);\s*\}, A1298_FIND_OUT_MS\);/);
