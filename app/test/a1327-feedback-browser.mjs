@@ -40,6 +40,9 @@ try {
     await sleep(4000);
     if (await p.locator("#stayButton").count()) { await p.evaluate(() => document.querySelector("#stayButton")?.click()); await sleep(1300); }
     await H.closeRecords();
+    // [A-1347 · Owner 08:4x "종이아래만"] the folded notepad (Chog's hand, also under Explore) keeps the Home paper in the page: its ♡ is hidden there
+    const folded = await p.evaluate(() => { const pad = document.querySelector("#chogHomePad"); const w = document.querySelector("#homeFeedback .homeFeedback__word"); return { inert: !!pad?.inert, vis: w ? getComputedStyle(w).visibility : null }; });
+    check(folded.inert === true && folded.vis === "hidden", `${size.w} A5 folded notepad: feedback hidden (${JSON.stringify(folded)})`);
     assert.equal(await H.openHomePaper(), true, "Home paper open");
     await sleep(900);
     rects[size.w] = await homeRects();
@@ -74,7 +77,8 @@ try {
     await p.locator("#feedbackText").fill("the bell rang twice");
     check((await p.evaluate(() => document.querySelector("#feedbackSend")?.disabled)) === false, "C Send on with words");
     await p.screenshot({ path: path.join(OUT, "form-typed-390.png") });
-    check((await p.evaluate(() => document.querySelector('.a911-screen[data-a911="feedback"]')?.dataset.typing)) === "1", "C typing: the paper is in keyboard mode (Send waits, as Gift)");
+    const typing = await p.evaluate(() => ({ typing: document.querySelector('.a911-screen[data-a911="feedback"]')?.dataset.typing || null, ae: document.activeElement?.id || document.activeElement?.tagName }));
+    check(typing.typing === "1", `C typing: the paper is in keyboard mode (Send waits, as Gift) (${JSON.stringify(typing)})`);
     await p.evaluate(() => document.activeElement?.blur());
     await sleep(300);
     await H.mustTap("#feedbackSend", "Send");

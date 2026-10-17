@@ -6934,6 +6934,7 @@ html .a911-row#a905GiftPiggy .a1288Star--3 { left: 7.9em; top: 0.74em; font-size
   color: #141210; font: 400 19px / 1 var(--font-cj); cursor: pointer; pointer-events: auto; -webkit-tap-highlight-color: transparent;
 }
 .homePaper .homeFeedback__heart { width: 17px; height: 16px; flex: none; }
+#chogHomePad[inert] .homePaper .homeFeedback { visibility: hidden; } /* folded notepad (Chog's hand, also under Explore): the entry belongs to the open Home paper only */
 .homePaper .homeFeedback:active { transform: translateX(-50%) translateY(1px); }
 .homePaper .homeFeedback:focus-visible { outline: 2px solid var(--gold); outline-offset: -6px; border-radius: 10px; }
 /* the form = one a911 paper: Gift letter grammar (underlined handwriting, 16 px+ input), Send at the a911 act spot, keyboard lifts the paper */

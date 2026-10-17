@@ -238,7 +238,9 @@ async function checkpoint(person, step) {
   const seen = await look(person);
   const file = path.join(OUT, `${person.id}-${String(++person.steps).padStart(2, "0")}-${step}-${seen.scene || "none"}.png`);
   await person.page.screenshot({ path: file }); screenshots.push(file);
-  for (const line of seen.text) { const n = normaliseLine(line, person.name); if (!COPY_ALLOW.has(n)) person.copy.set(n, `${person.id}@${step}`); }
+  // [A-1347] "feedback" (A-1327 · Owner A5) belongs to the open Home paper only: allowed while that paper is open, flagged anywhere else
+  const homeOpen = seen.text.includes("feedback") && await person.page.evaluate(() => { const r = document.querySelector("#homePaper")?.getBoundingClientRect(); return !!r && r.width > 100 && !document.querySelector("#chogHomePad")?.inert; });
+  for (const line of seen.text) { const n = normaliseLine(line, person.name); if (!COPY_ALLOW.has(n) && !(homeOpen && n === "feedback")) person.copy.set(n, `${person.id}@${step}`); }
   return seen;
 }
 async function until(person, label, predicate, timeout = 20_000) {
