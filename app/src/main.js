@@ -13006,6 +13006,7 @@ function chogHelpMount() {
   btn.setAttribute("aria-label", "?");
   btn.innerHTML = '<img src="/card/help-sticker.svg" alt="" draggable="false" />';
   btn.addEventListener("click", () => {
+    if (jobHelpSay()) return; // [A-1353 ②] on the Journey 2 job card, ? = that job's explanation
     const now = chogHelpSaid && chogHelpSaid.scene === state.scene ? chogHelpSaid : null;
     if (!now) return;
     document.querySelector(`#chogHome #${now.id}`)?.remove(); // said again from the start (the one-line-at-a-time clock restarts)
@@ -13016,6 +13017,37 @@ function chogHelpMount() {
 }
 if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" && document.body) {
   new MutationObserver(() => { if (chogHelpSaid && !document.querySelector("#chogHelp")) chogHelpMount(); }).observe(document.body, { childList: true, subtree: true });
+}
+// [A-1353 ② · Owner 10-16 02:4x "2차 잡 설명 = ? 탭 때 초그" (FIRST_JOURNEY_PACING:166) · 10-17 13:4x "잡 관련 일들 설명을 다 정했는데 안 나와"]
+// The Owner set, word for word: each job's two lines, said in turn on each ? tap while that job's card (Home / Send) is up.
+// Not here: tidy the wallet (the set's lines say "old doors", the Owner's 02:4x meaning is gathering change → MON — asked) · help with
+// trades (the set line carries a ★ mark) — those keep the last line again, as before.
+const JOB_HELP_LINES = Object.freeze({
+  market: ["piggy trades one coin for another.", "a quick swap at the market."],
+  order: ["piggy leaves a price and waits.", "buy only if the price comes."],
+  claim: ["piggy picks up what's yours.", "something's waiting for you."],
+  grow: ["piggy parks money where it earns a little.", "let money sit and grow."],
+  "asset-piece": ["piggy brings back a small piece of something."],
+  move: ["piggy moves to a spot that pays better."],
+  stay: ["piggy stays home today. nothing moves."],
+});
+const jobHelpTurns = new Map();
+function jobHelpErrandId() {
+  const sj = state.secondJourney;
+  if (!sj || sj.step !== "readiness" || !sj.chosenDestinationId || !document.querySelector("#secondSendButton")) return null;
+  const dests = secondLaneMode(sj) ? secondLaneDestinations(sj) : sj.flow?.destinations || [];
+  return dests.find((d) => d.id === sj.chosenDestinationId)?.errandIds?.[0] || null;
+}
+function jobHelpSay() {
+  const id = jobHelpErrandId();
+  const lines = id && JOB_HELP_LINES[id];
+  if (!lines) return false;
+  const turn = jobHelpTurns.get(id) || 0;
+  jobHelpTurns.set(id, turn + 1);
+  document.querySelector("#chogHome #jobHelpLine")?.remove();
+  chogLinesRestart("jobHelpLine");
+  insertChogCueLine("jobHelpLine", [lines[turn % lines.length]]);
+  return true;
 }
 
 // ── [A-893] Wave 5 Chog cues ─────────────────────────────────────────────────────────────────────────
