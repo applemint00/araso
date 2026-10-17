@@ -1,7 +1,7 @@
 // [A-1361 · Owner 10-17 16:0x "익스플로어일 때 표시를 해보자" · "줄 누르면 초그가 말함"] On the Journey 2 pick paper (candidates), a tap on
 // a job row = Chog says that job's two Owner lines (JOB_HELP_LINES) over its head, one at a time; another row = that job's lines. Also
-// measured, 390 · 810 · 1440: the lines keep the default Chog-line spot (the same spot as the live readiness ? job lines: centred over Chog,
-// no new place); where they go on a phone (left of Chog · split) = A-1359 (Cowork 18:0x answer to the A-1361 question).
+// measured, 390 · 810 · 1440: [A-1359 RE-PIN · Owner 16:1x / 18:0x] the lines sit left of Chog (.chogCheckLine--left), on a phone in the
+// Owner's pieces (same words, one at a time) — pre-A-1359: the default spot centred over Chog (Cowork 18:0x).
 // (base: A-1353 ② "잡 관련 일들 설명을 다 정했는데 안 나와" · FIRST_JOURNEY_PACING_20261015.md:161–167 "2차 잡 설명 = ? 탭 때 초그"]
 // On the Journey 2 job card (the picked job with Home / Send), a tap on ? = Chog says that job's explanation, the job's two lines in turn
 // (Owner set, word for word). Not the last line again.
@@ -59,19 +59,19 @@ try {
     await picks.nth(first).click(); await sleep(700);
     const a = await say();
     await p.screenshot({ path: path.join(OUT, `pick-${w}-line1.png`) });
-    check(a.includes(SET[titles[first]][0]), `${w}: tap "${titles[first]}" → Chog: "${SET[titles[first]][0]}" (said ${JSON.stringify(a)})`);
-    await sleep(4500);
-    const b = await say();
+    check(a.length > 0 && SET[titles[first]][0].startsWith(a.join(" ")), `${w}: tap "${titles[first]}" → Chog: "${SET[titles[first]][0]}" (said ${JSON.stringify(a)})`);
+    let b = await say();
+    for (let t = 0; t < 30 && !b.join(" ").includes(SET[titles[first]][1]); t += 1) { await sleep(500); b = await say(); } // pieces come one at a time
     await p.screenshot({ path: path.join(OUT, `pick-${w}-line2.png`) });
-    check(b.includes(SET[titles[first]][1]), `${w}: then the second line, the first kept (said ${JSON.stringify(b)})`);
+    check(b.join(" ") === SET[titles[first]].join(" "), `${w}: then the second line, the first kept (said ${JSON.stringify(b)})`);
     const g = await geo();
     const spot = await p.evaluate(() => { const s = document.querySelector("#exploreChogSay"); const cs = getComputedStyle(s); return { cls: s.className, marginLeft: cs.marginLeft, translate: cs.translate, inline: s.getAttribute("style") }; });
-    check(spot.cls === "chogCheckLine chogCheckLine--two is-explain" && spot.marginLeft === "0px" && (spot.translate === "none" || spot.translate === "") && spot.inline === "transform:translateX(-50%)", `${w}: the default Chog-line spot (no new place) ${JSON.stringify(spot)} · measured ${JSON.stringify(g)}`);
+    check(/chogCheckLine--left/.test(spot.cls) && /is-explain/.test(spot.cls) && g.minL >= 0 && g.maxR < g.w, `${w}: left of Chog (its ink clearance = a1359 test), inside the screen ${JSON.stringify(spot)} · measured ${JSON.stringify(g)}`);
     const other = titles.findIndex((t, i) => i !== first && SET[t]);
     if (other >= 0) {
       await picks.nth(other).click(); await sleep(700);
       const c = await say();
-      check(c.includes(SET[titles[other]][0]) && !c.includes(SET[titles[first]][0]), `${w}: another row "${titles[other]}" → its first line (said ${JSON.stringify(c)})`);
+      check(c.length > 0 && SET[titles[other]][0].startsWith(c.join(" ")), `${w}: another row "${titles[other]}" → its first line (said ${JSON.stringify(c)})`);
     }
   }
 } finally {

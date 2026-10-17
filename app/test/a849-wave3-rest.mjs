@@ -79,9 +79,12 @@ await check("N2b heading and Chog wait lines share one picks helper; nothing ass
 await check("N3 two Chog lines exactly, stacked spans, in the existing exploreChogSay mechanism", () => {
   const f = fnBody("chogHomeMarkupForExplore");
   // [A-1281] the same two lines, stacked, said one at a time (the second joins after the first is read); pre-A-1281: both literal spans at once
-  assert.ok(f.includes('${chogLinesMarkup("exploreWait", ["oh… no jobs to go.", "wait for the next bell?"])}'));
+  // [A-1359 RE-PIN · Owner 16:1x / 18:0x] the same two lines go through exploreSayMarkup (stacked · one at a time · a long one left of Chog,
+  // in the Owner's pieces on a phone); pre-A-1359: chogLinesMarkup("exploreWait", …) written inline here
+  assert.ok(f.includes('exploreSayMarkup("exploreWait", ["oh… no jobs to go.", "wait for the next bell?"])'));
+  assert.match(fnBody("exploreSayMarkup"), /chogLinesMarkup\(key, said\)/);
   assert.match(MAIN, /function chogLinesMarkup\(key, lines\) \{[\s\S]*?class="chogCheckLine__line\$\{/);
-  assert.ok(f.includes('id="exploreChogSay"'));
+  assert.ok(fnBody("exploreSayMarkup").includes('id="exploreChogSay"'));
 });
 await check("N4 shared centred-card helper: measured only (visualViewport), 16px gap, outside the hash-pinned functions, CSS ~0.2s + reduced motion", () => {
   assert.match(MAIN, /const CENTER_CARD_GAP_PX = 16;/);
