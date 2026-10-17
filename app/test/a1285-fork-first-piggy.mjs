@@ -171,7 +171,14 @@ await check("P3 Gift send / Money read code byte-identical to ea9f22a", () => {
     .replace("a898SignerForPayer(piggy, { fresh: true }); // [A-1298] a Gift Send moves money: Face ID every time", "a898SignerForPayer(piggy);")
     .replace("{ allowDeviceCredential = false, fresh = false }", "{ allowDeviceCredential = false }")
     .replace("if (!fresh && activeAccount", "if (activeAccount");
-  for (const n of ["a898FaceId", "a898SignerForPayer", "a898Holdings", "a898RegistryPiggy", "moneyPiggiesSnapshot", "secondPiggyRegistrySnapshot", "indexedResidents"]) assert.equal(undo1298(cutFn(MAIN, n)), cutFn(BASE, n), `${n} changed`);
+  // [A-1360 · Owner 15:4x "열린 동안 보내기 승인만"] the next allowed delta: the Gift Send uses the open key (no fresh), asks our approval sheet,
+  // and keeps the device Piggy's key at the end — undone here, everything else still byte-identical
+  const undo1360 = (src) => String(src || "")
+    .replace("a898SignerForPayer(piggy); // [A-1360] the open key is used (Face ID only when it is not open) · pre-A-1360: { fresh: true }", "a898SignerForPayer(piggy);")
+    .replace("let cur = state.giftSend;", "const cur = state.giftSend;")
+    .replace(/\n    if \(proved\.ok === true && typeof askSendAllow === "function"\) \{ \/\/ \[A-1360\][\s\S]*?\n    \}(?=\n    const sel = state\.selectedPiggy;)/, "")
+    .replace(/\/\/ \[A-1360\] the device Piggy's key stays open[^\n]*\n    if \(String\(piggy\.address\)\.toLowerCase\(\) !== String\(state\.address \|\| ""\)\.toLowerCase\(\)\) endSignerSession\(\);/, "endSignerSession();");
+  for (const n of ["a898FaceId", "a898SignerForPayer", "a898Holdings", "a898RegistryPiggy", "moneyPiggiesSnapshot", "secondPiggyRegistrySnapshot", "indexedResidents"]) assert.equal(undo1298(undo1360(cutFn(MAIN, n))), cutFn(BASE, n), `${n} changed`);
 });
 
 console.log(`\n${pass}/${pass + fail} PASS`);

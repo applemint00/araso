@@ -235,47 +235,45 @@ await check("A. stamp: set by activateSigningSession (wall clock), cleared by en
   assert.equal(vm.runInContext("signerMono", app.__ctx), -1, "R1 monotonic stamp cleared with it");
 });
 
-await check("B1. live key aged 239 s: still one recover (Face ID) first — a money Send never reuses the key; both legs go out", async () => {
+// [A-1360 RE-PIN · Owner 15:4x "열린 동안 보내기 승인만" · 81_ENTRY_FLOW 끝 [15:4x] newest-wins over A-1298] with the key open (a live signer for
+// this Piggy, any age, app not locked) a money Send asks no Face ID — our approval sheet allows it (askSendAllow; not in this slice) — and the
+// live signer signs. pre-A-1360 (A-1298): one recover (Face ID) every Send and a fresh signer.
+await check("B1. live key aged 239 s: no recover (the key is open) — both legs go out with the live key", async () => {
   const app = appWithSignerAged(FIVE_MIN - 61 * SEC);
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 1, "one recover");
-  assert.equal(app.events[0], "recover", "recover is the very first money-path event");
-  assert.equal(app.calls.sendTx, 2, "deposit + redeem broadcast with the fresh signer");
+  assert.equal(app.authCalls.count, 0, "no recover");
+  assert.notEqual(app.events[0], "recover", "recover is not on the money path");
+  assert.equal(app.calls.sendTx, 2, "deposit + redeem broadcast with the live signer");
 });
 
-await check("B2. a brand-new key (age 0): still one recover — no age makes a money Send skip Face ID", async () => {
+await check("B2. a brand-new key (age 0): no recover either", async () => {
   const app = appWithSignerAged(0);
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 1);
+  assert.equal(app.authCalls.count, 0);
   assert.equal(app.calls.sendTx, 2);
 });
 
-await check("B3. 59 s left (age 241 s): exactly one recover, BEFORE grant / prepare / sign / broadcast; then the send continues with the fresh signer", async () => {
+await check("B3. 59 s left on the old 5-minute count (age 241 s): no recover; the live signer (same stamp) signs", async () => {
   const app = appWithSignerAged(FIVE_MIN - 59 * SEC);
   const stale = app.__stamp();
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 1, "exactly one recover (one Face ID)");
-  const first = app.events.findIndex((e) => e !== "recover");
-  assert.equal(app.events[0], "recover", "recover is the very first money-path event");
-  assert.equal(app.events.filter((e) => e === "recover").length, 1);
-  assert.ok(first > 0, "something happened after recover (the send continued)");
-  assert.equal(app.calls.sendTx, 2, "send continued: deposit + redeem");
-  assert.ok(app.__stamp() > stale, "the fresh signer carries a new stamp");
-  assert.equal(app.wall.now() - app.__stamp(), 0, "fresh signer: full 5 min left");
+  assert.equal(app.authCalls.count, 0, "no recover (no Face ID)");
+  assert.equal(app.events.filter((e) => e === "recover").length, 0);
+  assert.equal(app.calls.sendTx, 2, "send went out: deposit + redeem");
+  assert.equal(app.__stamp(), stale, "the same live signer");
 });
 
-await check("B4. timer throttled: wall clock 6 min old but the 5-min setTimeout never fired -> still alive in memory, treated as expired, one recover", async () => {
+await check("B4. timer throttled: wall clock 6 min old, the signer still alive in memory = the key is open → no recover", async () => {
   const app = appWithSignerAged(0);
   app.wall.advance(6 * 60 * SEC); // page slept; fake timer clock NOT advanced
   assert.equal(app.get().hasSigner, true, "precondition: the timer has not ended the signer");
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 1);
-  assert.equal(app.events[0], "recover");
+  assert.equal(app.authCalls.count, 0);
   assert.equal(app.calls.sendTx, 2);
 });
 
-await check("B5. two-leg send never starts leg 1 with < 60 s: at 59 s left no prepare/sign/broadcast precedes the recover; recover failing -> nothing at all", async () => {
-  const app = appWithSignerAged(FIVE_MIN - 59 * SEC, { recoverThrows: true });
+await check("B5. key NOT open + recover failing -> nothing at all (no grant, no prepare, no broadcast, nothing left pending)", async () => {
+  const app = buildApp({ recoverThrows: true }); // [A-1360 RE-PIN] the open key skips Face ID now, so the failing-recover case runs with no key
   await app.sendPiggy(); await tick(); await tick();
   assert.deepEqual(app.events, ["recover"], "only the recover attempt; no grant, no prepare, no broadcast");
   assert.equal(app.calls.sendTx, 0);
@@ -298,12 +296,11 @@ await check("B6. wall clock moved backwards (negative age) or no stamp at all ->
   assert.equal(live.authCalls.count, 1, "no stamp = no proof of lifetime = recover");
 });
 
-await check("B7. R1 monotonic stamp: wall clock still looks fresh (set back / forged) but performance.now says the signer is 241 s old -> recover", async () => {
+await check("B7. R1 monotonic stamp: wall clock set back but still after the stamp, performance.now 241 s on: the key is open, no recover (A-1360 RE-PIN)", async () => {
   const app = appWithSignerAged(FIVE_MIN - 59 * SEC);
   app.wall.set(app.__stamp() + 30 * SEC); // wall clock pulled back to "30 s old"
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 1, "one recover (every Send asks)");
-  assert.equal(app.events[0], "recover");
+  assert.equal(app.authCalls.count, 0, "[A-1360] both clocks at/after the stamp = the key is open: no recover (pre: one recover every Send)");
   assert.equal(app.calls.sendTx, 2);
 });
 
@@ -314,16 +311,16 @@ await check("B8. R1 clock moved backwards -> recover: monotonic clock behind its
   assert.equal(app.authCalls.count, 1);
 });
 
-await check("B9. both clocks fresh, or performance.now unavailable: one recover in every case", async () => {
+await check("B9. both clocks fresh, or performance.now unavailable: the key is open, no recover (A-1360 RE-PIN)", async () => {
   const fresh = appWithSignerAged(FIVE_MIN - 61 * SEC);
   await fresh.sendPiggy(); await tick(); await tick();
-  assert.equal(fresh.authCalls.count, 1);
+  assert.equal(fresh.authCalls.count, 0, "[A-1360] key open: no recover (pre: one recover every Send)");
   const np61 = appWithSignerAged(FIVE_MIN - 61 * SEC, { noPerf: true });
   await np61.sendPiggy(); await tick(); await tick();
-  assert.equal(np61.authCalls.count, 1, "no performance: still one recover");
+  assert.equal(np61.authCalls.count, 0, "no performance: the wall clock stamp alone keeps the key open");
   const np59 = appWithSignerAged(FIVE_MIN - 59 * SEC, { noPerf: true });
   await np59.sendPiggy(); await tick(); await tick();
-  assert.equal(np59.authCalls.count, 1, "no performance: wall clock only, 59 s -> recover");
+  assert.equal(np59.authCalls.count, 0, "no performance, any age: key open");
 });
 
 await check("C. source shape: sendPiggyOnce has no key-reuse branch; the recover (Face ID) runs before any grant/sign; no 5-minute signer timer", async () => {

@@ -359,7 +359,9 @@ await check("R5 a898FaceId always ends the signer: draft closed during the promp
   assert.equal(ok.ended, 1); assert.equal(ok.state.giftSend.stage, "done");
   const none = await run();
   assert.equal(none.ended, 1); assert.equal(none.state.giftSend.stage, "unavailable");
-  assert.ok(/try\s*\{[\s\S]*\}\s*finally\s*\{\s*endSignerSession\(\);/.test(code));
+  // [A-1360 RE-PIN · Owner 15:4x "열린 동안 보내기 승인만"] the finally still ends a signer made for another payer; the device Piggy's own key
+  // (payer address = state.address) stays open. pre-A-1360: finally { endSignerSession(); } on every exit.
+  assert.ok(/try\s*\{[\s\S]*\}\s*finally\s*\{[^}]*if \(String\(piggy\.address\)\.toLowerCase\(\) !== String\(state\.address \|\| ""\)\.toLowerCase\(\)\) endSignerSession\(\);/.test(code));
 });
 await check("R6 main.js re-reads state after awaits (arrival, crypto proof) and checks the draftId on the close path", () => {
   const MAIN = SRC("main.js");
@@ -482,7 +484,7 @@ await check("X5 address copy is an icon: no on-screen text, aria copy / copied, 
 await check("X6 main.js: Face ID repaints on every exit; requote hook wired", () => {
   const MAIN = SRC("main.js");
   const f = MAIN.slice(MAIN.indexOf("async function a898FaceId() {"), MAIN.indexOf("async function a898Act("));
-  assert.ok(/finally\s*\{\s*endSignerSession\(\);\s*refreshHomePaperMount\(\);/.test(f));
+  assert.ok(/finally\s*\{[^}]*endSignerSession\(\);\s*refreshHomePaperMount\(\);/.test(f)); // [A-1360 RE-PIN] the end is conditional now (device key stays)
   assert.ok(MAIN.includes('act === "gift-requote"'));
 });
 await check("E3 main.js: Send a Piggy is wired from the selected Piggy only, payer/selection re-checked before Face ID", () => {
@@ -490,7 +492,7 @@ await check("E3 main.js: Send a Piggy is wired from the selected Piggy only, pay
   const b = MAIN.slice(MAIN.indexOf("// ── [A-898] Funding Paper"), MAIN.indexOf("// ── [A-898] end ──"));
   assert.ok(b.includes("openGiftSend({ piggy, selected: state.selectedPiggy"));
   assert.ok(b.includes("state.selectedPiggy.id !== d0.payer.id"));
-  assert.ok(/async function a898FaceId[\s\S]*lockQuote\(ev0\)[\s\S]*a898SignerForPayer\(piggy, \{ fresh: true \}\)[\s\S]*faceid_result/.test(b)); // [A-1298] Face ID every Gift Send
+  assert.ok(/async function a898FaceId[\s\S]*lockQuote\(ev0\)[\s\S]*a898SignerForPayer\(piggy\);[\s\S]*askSendAllow\([\s\S]*faceid_result/.test(b)); // [A-1360 RE-PIN] open key + our approval sheet (pre: { fresh: true } Face ID every Gift Send)
   assert.ok(b.includes("GIFT_SEND_CONFIG.executor") && b.includes("reconcileQuote(lock"));
   assert.ok(b.includes("#homeSendPiggy") === false && MAIN.includes('closest("#homeSendPiggy")'));
   assert.equal(/\*\//.test(b), false);

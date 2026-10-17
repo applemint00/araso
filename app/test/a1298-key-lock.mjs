@@ -38,16 +38,21 @@ check("a tap during the warning always counts (the 15 s throttle never swallows 
   assert.match(h, /const waking = [^\n]*#closingSoonLine/);
   assert.match(h, /if \(!waking && now - lastTrustedAppActivityAt < TRUSTED_APP_ACTIVITY_THROTTLE_MS\) return;/);
 });
-check("first Send: no key-reuse branch — Face ID (recover) runs before any grant / sign, every time", () => {
+// [A-1360 RE-PIN · Owner 15:4x "열린 동안 보내기 승인만" (81_ENTRY_FLOW 끝 [15:4x] newest-wins over A-1298 "Face ID every time")]
+// pre-A-1360: the first Send ran Face ID (recover) every time; Job / Gift Send passed fresh: true.
+check("first Send: Face ID (recover) only when the key is not open; our approval sheet before any grant / sign, every time", () => {
   const once = fn("sendPiggyOnce");
   assert.equal(once.includes("signerMarginOk"), false);
-  assert.ok(once.indexOf("recoverPiggy(") > 0 && once.indexOf("recoverPiggy(") < once.indexOf("requestGrant("));
-  assert.doesNotMatch(once, /if \(!activeAccount \|\| !activeSession/);
+  assert.match(once, /const keyOpen = !state\.appLock && [^;]*Boolean\(activeSession\) && Boolean\(activeAccount\)\s*&& String\(activeAccount\.address\)\.toLowerCase\(\) === String\(state\.address \|\| ""\)\.toLowerCase\(\)[^;]*signerSince > 0[^;]*;\s*if \(!keyOpen\) \{/);
+  assert.ok(once.indexOf("recoverPiggy(") > once.indexOf("if (!keyOpen) {") && once.indexOf("askSendAllow(") > once.indexOf("recoverPiggy("));
+  assert.ok(once.indexOf("askSendAllow(") < once.indexOf("requestGrant("), "the sheet comes before the grant / sign");
 });
-check("Job Send and Gift Send ask Face ID even with a live key (fresh); no await before the get", () => {
-  assert.match(MAIN, /a898SignerForPayer\(piggy, \{ allowDeviceCredential: true, fresh: true \}\)/, "Job Send");
-  assert.match(fn("a898FaceId"), /a898SignerForPayer\(piggy, \{ fresh: true \}\)/, "Gift Send");
-  assert.match(fn("a898SignerForPayer"), /if \(!fresh && activeAccount && /, "the reuse shortcut only for non-money callers");
+check("Job Send and Gift Send use the open key (no fresh) and ask our approval sheet before moving money; no await before the get", () => {
+  assert.match(MAIN, /a898SignerForPayer\(piggy, \{ allowDeviceCredential: true \}\);[^\n]*\n\s*if \(!signer\.ok\) \{ a977Fail\("auth"\); return; \}\n\s*if \(typeof askSendAllow === "function" && !\(await askSendAllow\(jobSendAllowContent\(sj, jobKey\)\)\)\) return;/, "Job Send");
+  assert.match(fn("a898FaceId"), /a898SignerForPayer\(piggy\);/, "Gift Send");
+  assert.match(fn("a898FaceId"), /askSendAllow\(\{ title: "Gift a Piggy"/, "Gift Send sheet");
+  assert.match(fn("a898SignerForPayer"), /if \(!fresh && activeAccount && /, "the reuse shortcut (open key) stays");
+  assert.equal(/a898SignerForPayer\([^)]*fresh: true/.test(MAIN), false, "no money caller forces Face ID any more");
 });
 check("a898SignerForPayer(fresh) runs the passkey even when the live key is this Piggy; without fresh it reuses (non-money callers)", async () => {
   const run = (fresh) => {

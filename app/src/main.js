@@ -797,6 +797,7 @@ function toHex(bytes) {
 // 않는다(카드 PHASE 1) — app-idle 타이머(idleTimer)도 여기서 손대지 않는다. "서명자만 끝내는
 // 것"과 "앱을 잠그는 것"은 이제 서로 다른 사건이라서다.
 function endSignerSession() {
+  if (typeof sendAllowClose === "function") sendAllowClose(false); // [A-1360] the key goes = an open approval sheet cannot allow
   activeSession?.end();
   activeSession = null;
   activeAccount = null;
@@ -3563,11 +3564,17 @@ async function sendPiggyOnce(markSettling) {
   }
   const reservation = reserved.reservation;
 
-  // [A-1298] pre-A-1298: a live signer with more than 60 s of its 5-minute life left skipped Face ID here (A-896 M-L-2); now every Send asks.
-  // [A-1298 · Owner 04:0x "샌드는 트잭이라 해야해"] a money Send asks Face ID every time, at the tap (no await before the get); the 10-minute
-  // key never signs money. The new signer from this Face ID becomes the app's key (non-money only) from here.
+  // [A-1360 · Owner 15:4x "열린 동안 보내기 승인만" · 81_ENTRY_FLOW 끝 [15:4x] newest-wins over A-1298 "money Send asks Face ID every time"]
+  // With the key open (a live signer for this Piggy, app not locked) the Send asks no Face ID: our approval sheet asks instead, below.
+  // Key not open = Face ID opens it as before (at the tap, no await before the get), then the same sheet. pre-A-1360: Face ID every time.
   // 생성 폴백 없음 — 저장된 credential 이 없으면 기존 패스키로 복구를 시도한다.
-  {
+  const sendBefore = { message: state.message, detail: state.detail }; // [A-1360] "not now" puts the Home back as it was
+  const keyOpen = !state.appLock && typeof activeSession !== "undefined" && Boolean(activeSession) && Boolean(activeAccount)
+    && String(activeAccount.address).toLowerCase() === String(state.address || "").toLowerCase()
+    // [A-896] a signer with no stamp, or a clock gone back behind its stamp, is not trusted: fail closed to Face ID
+    && typeof signerSince === "number" && signerSince > 0 && Date.now() >= signerSince
+    && (typeof signerMono !== "number" || signerMono < 0 || typeof performance === "undefined" || typeof performance.now !== "function" || performance.now() >= signerMono);
+  if (!keyOpen) {
     // [A-698 M3] Send 복구는 Check/Open 과 같은 시도 칸(authAttempt)·플랫폼 요청 표(platformAuthInflight)를 나눠 쓴다 —
     // 이미 살아 있는 시도나 아직 안 끝난 플랫폼 요청이 있으면 두 번째 WebAuthn get 을 겹쳐 내지 않고 기존 실패 문구로
     // fail-closed(자동 재시도 0 · 새 문구 0). get 을 못 쓰는 기기도 시도 토큰 전에 같은 실패로(A-687).
@@ -3603,6 +3610,12 @@ async function sendPiggyOnce(markSettling) {
       return;
     }
     noteRecoverSuccess();
+  }
+  // [A-1360] every money Send is allowed on our sheet; "not now" = nothing moves, the card stays
+  if (typeof askSendAllow === "function" && !(await askSendAllow(firstSendAllowContent()))) { // (slices of this function run without the module)
+    clearOwnSendPending(reservation);
+    if (state.scene === "sendstay") setScene("sendstay", sendBefore.message, sendBefore.detail);
+    return;
   }
 
   // [A-707 M2-beta] 중재(패스키 뒤 · grant 전): 배타 잠금을 쥐고 이 탭 예약을 공유 슬롯으로 올린다 — 잠금은 broadcast 가 끝날 때까지 쥔다
@@ -10693,7 +10706,8 @@ function teardownHomeResidentModule() {
 //   chog   : a Chog cue .chogCheckLine bubble is added (or un-hidden); #awayRestoreLine and #returnArrivalAlarm (money-truth lines) are silent;
 //            one per element, same line within 12 s = re-render.
 import { playSound, setSoundOn, soundIsOn } from "./sound.js";
-import { chogMoodLine, chogMoodLines, createChogVoice, chogVoiceWaits } from "./chog-mood.js"; // [A-1326] the day's wording and voice
+import { chogMoodLine, chogMoodLines, createChogVoice, chogVoiceWaits } from "./chog-mood.js";
+import { sendAllowMarkup } from "./send-allow.js"; // [A-1360] the money Send approval sheet (판 E) // [A-1326] the day's wording and voice
 const A902_NO_SOUND_IDS = new Set(["awayRestoreLine", "returnArrivalAlarm"]); // money-truth lines: never a babble
 const a902 ={ installed: false, unfoldBusy: false, unfoldAt: 0, chogKey: "", chogAt: 0, seen: new WeakSet() };
 
@@ -11101,6 +11115,39 @@ async function a898ProveDestination(paperPiggy) {
   return checked.ok ? { ok: true } : { ok: false, reason: "funding_target_unproven" };
 }
 
+// ── [A-1360] the money Send approval sheet (send-allow.js · 판 E): one sheet for the first Send, the Journey 2 Job Send and the Gift Send.
+// Resolves true on "allow", false on "not now" or when the key goes (lock · session end) while it is open.
+let sendAllowOpen = null;
+function sendAllowClose(ok = false) { if (sendAllowOpen) sendAllowOpen.done(ok); }
+function askSendAllow(content) {
+  if (typeof document === "undefined" || !document.body) return Promise.resolve(false);
+  sendAllowClose(false);
+  return new Promise((resolve) => {
+    const tpl = document.createElement("template");
+    tpl.innerHTML = sendAllowMarkup(content).trim();
+    const el = tpl.content.firstElementChild;
+    const entry = { done: (ok) => { if (sendAllowOpen !== entry) return; sendAllowOpen = null; el.remove(); resolve(Boolean(ok) && !state.appLock && Boolean(activeAccount)); } };
+    sendAllowOpen = entry;
+    document.body.append(el);
+    el.querySelector("#sendAllowYes")?.addEventListener("click", () => entry.done(true));
+    el.querySelector("#sendAllowNo")?.addEventListener("click", () => entry.done(false));
+  });
+}
+// first Send: the words the Send card already shows (its question · its amount) — the sheet's own title / two lines wait for the Owner
+function firstSendAllowContent() {
+  const card = typeof document !== "undefined" ? document.querySelector("#sendCard") : null;
+  const amount = (card?.querySelector(".sendCard__terms")?.textContent || "").match(/\$\d[\d.,]{0,20}/)?.[0] || "";
+  return { title: card?.querySelector(".sendCard__message")?.textContent.trim() || "", lines: [], amount };
+}
+// Journey 2 Job Send: the job's title and the Owner's two lines for it (JOB_HELP_LINES · the ? set) · the amount typed on the card
+function jobSendAllowContent(sj, jobKey) {
+  const dests = secondLaneMode(sj) ? secondLaneDestinations(sj) : sj.flow?.destinations || [];
+  const id = dests.find((d) => d.id === jobKey)?.errandIds?.[0] || null;
+  const title = typeof document !== "undefined" ? (document.querySelector("#secondJourneyCard .job")?.textContent || "").trim() : "";
+  const amount = typeof sj.amount === "string" && /^\d+(\.\d+)?$/.test(sj.amount.trim()) ? `$${sj.amount.trim()}` : "";
+  return { title, lines: (id && JOB_HELP_LINES[id]) || [], amount };
+}
+
 // Face ID for the payer Piggy only: derive its signer; the reducer then requires signer == payer (bindSigner).
 // [A-1298] fresh = a money Send (Job Send · Gift Send): Face ID even with a live key — the 10-minute key never signs money
 async function a898SignerForPayer(piggy, { allowDeviceCredential = false, fresh = false } = {}) {
@@ -11321,12 +11368,18 @@ async function a898FaceId() {
   // From here a payer signer may be live: it ALWAYS ends (finally), even if the draft is closed or anything throws.
   let result = { ok: false, reason: "executor_unavailable" };
   try {
-    const proving = a898SignerForPayer(piggy, { fresh: true }); // [A-1298] a Gift Send moves money: Face ID every time
+    const proving = a898SignerForPayer(piggy); // [A-1360] the open key is used (Face ID only when it is not open) · pre-A-1360: { fresh: true }
     refreshHomePaperMount();
     const proved = await proving;
     // re-read after the await: the draft may have been closed / replaced while the passkey prompt was open
-    const cur = state.giftSend;
+    let cur = state.giftSend;
     if (!cur || cur.draftId !== d0.draftId || cur.stage !== "faceid") return;
+    if (proved.ok === true && typeof askSendAllow === "function") { // [A-1360] our approval sheet; "not now" = back to the card as it was, nothing moves
+      const allowed = await askSendAllow({ title: "Gift a Piggy", lines: [], amount: d0.preset ? `$${d0.preset}` : "" });
+      cur = state.giftSend;
+      if (!cur || cur.draftId !== d0.draftId || cur.stage !== "faceid") return;
+      if (!allowed) { state.giftSend = d0; return; }
+    }
     const sel = state.selectedPiggy;
     if (!sel || sel.id !== cur.payer.id) { state.giftSend = giftSendReduce(cur, { type: "payer_changed" }); return; }
     const after = giftSendReduce(cur, { type: "faceid_result", ok: proved.ok === true, signerAddress: proved.signerAddress });
@@ -11354,7 +11407,8 @@ async function a898FaceId() {
   } catch {
     result = { ok: false, reason: "executor_unavailable" };
   } finally {
-    endSignerSession();
+    // [A-1360] the device Piggy's key stays open (it is the app's key); a signer made for another payer Piggy still ends here
+    if (String(piggy.address).toLowerCase() !== String(state.address || "").toLowerCase()) endSignerSession();
     refreshHomePaperMount(); // every exit repaints (declined / mismatch / closed show their notice)
   }
   const last = state.giftSend;
@@ -16141,9 +16195,10 @@ if (A977_FORK) {
       const piggy = a898SenderPiggy();
       if (!piggy || !state.address || a977Lower(piggy.address) !== a977Lower(state.address) || state.appLock) { a977Fail("unavailable"); return; }
       // No server await or render before the pinned get: keep the click gesture.
-      { // [A-1298] a Job Send moves money: Face ID every time (no await before the get · the key never signs money)
-        const signer = await a898SignerForPayer(piggy, { allowDeviceCredential: true, fresh: true });
+      { // [A-1360] the open key signs after our approval sheet; Face ID only when the key is not open (no await before the get)
+        const signer = await a898SignerForPayer(piggy, { allowDeviceCredential: true }); // pre-A-1360: { fresh: true } = Face ID every time
         if (!signer.ok) { a977Fail("auth"); return; }
+        if (typeof askSendAllow === "function" && !(await askSendAllow(jobSendAllowContent(sj, jobKey)))) return; // "not now" = nothing moves, the card stays
       }
       const account = activeAccount;
       if (!account || a977Lower(account.address) !== a977Lower(piggy.address)) { a977Fail("signer"); return; }

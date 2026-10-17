@@ -57,11 +57,12 @@ function harness({ live = true, forkProfile = true, allowed = true } = {}) {
 }
 let pass = 0;
 async function check(name, run) { await run(); pass++; console.log('PASS ' + name); }
-// [A-1298 · Owner "샌드는 트잭이라 해야해"] a Job Send moves money: Face ID every time, even with a live key (pre-A-1298: the live signer was reused, get0)
-await check('unlock -> first selection -> Send asks Face ID again (get1) before status1/execute1; old authority discarded', async () => {
+// [A-1360 RE-PIN · Owner 15:4x "열린 동안 보내기 승인만" (81_ENTRY_FLOW 끝 [15:4x] newest-wins over A-1298)] with the key open a Job Send reuses
+// the live signer (get0) and is allowed on our sheet (askSendAllow, not in this slice); pre-A-1360 (A-1298): Face ID every time (get1).
+await check('unlock -> first selection -> Send with the key open: no Face ID (get0) before status1/execute1; old authority discarded', async () => {
   const h = harness();
-  await h.send(); assert.deepEqual(h.events.filter(x => ['get', 'status', 'execute'].includes(x)), ['get', 'status', 'execute']);
-  assert.equal(String(h.c.activeAccount?.address).toLowerCase(), String(payer).toLowerCase(), 'the fresh signer is this Piggy');
+  await h.send(); assert.deepEqual(h.events.filter(x => ['get', 'status', 'execute'].includes(x)), ['status', 'execute']);
+  assert.equal(String(h.c.activeAccount?.address).toLowerCase(), String(payer).toLowerCase(), 'the live signer is this Piggy');
   assert.equal(h.c.state.selectedPiggy.address, payer); assert.equal(h.c.state.moneyIntent, null);
   assert.equal(h.c.state.funding, null); assert.ok(h.c.consumedPermissionNonces.has('old'));
 });
@@ -82,8 +83,8 @@ await check('derived address mismatch fails before status and destroys signer', 
   const h = harness({ live: false }); h.c.activateSigningSession = () => { h.c.activeAccount = { address: other }; return { address: other }; };
   await h.send(); assert.equal(h.c.activeAccount, null); assert.ok(!h.events.includes('status')); assert.ok(!h.events.includes('execute'));
 });
-await check('server refusal remains mandatory with a live signer (after the Send\'s own Face ID)', async () => {
-  const h = harness({ allowed: false }); await h.send(); assert.deepEqual(h.events.filter(x => ['get', 'status', 'execute'].includes(x)), ['get', 'status']);
+await check('server refusal remains mandatory with a live signer (key open: no Face ID · A-1360 RE-PIN, pre: get first)', async () => {
+  const h = harness({ allowed: false }); await h.send(); assert.deepEqual(h.events.filter(x => ['get', 'status', 'execute'].includes(x)), ['status']);
 });
 await check('zero or several Piggies without selection remains unavailable', async () => {
   for (const n of [0, 2]) { const h = harness(); h.c.addMoneyPiggies = () => Array(n).fill(h.piggy); await h.send(); assert.ok(!h.events.includes('status')); assert.ok(!h.events.includes('execute')); }

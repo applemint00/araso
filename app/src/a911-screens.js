@@ -46,8 +46,10 @@ function shell({ kind, title, stage = "", typing = false, back, body, act = "" }
   </div>`;
 }
 
+// [A-1360 · Owner 16:1x "빼고 글자만 Send"] a money Send button = the word only (it is allowed on our sheet, not a Face ID); the receive side's
+// "Face ID" button keeps its face mark. pre-A-1360: every kind "send" button drew FACE_ICON.
 const actButton = ({ label, attrs, disabled = false, kind = "send" }) =>
-  `<button class="a911-act a911-act--${kind}" type="button" ${attrs}${disabled ? " disabled" : ""}>${kind === "send" ? FACE_ICON : ""}<span class="a911-act__label">${esc(label)}</span></button>`;
+  `<button class="a911-act a911-act--${kind}" type="button" ${attrs}${disabled ? " disabled" : ""}>${kind === "send" && label !== A911_COPY.send ? FACE_ICON : ""}<span class="a911-act__label">${esc(label)}</span></button>`;
 
 // ── GIFT ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 // view: { stage: "fan"|"pick"|"done", ci (centred card index in fan), picked: "01"|"02"|"04"|null, flipped, typing: "none"|"letter"|"amount",

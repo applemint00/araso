@@ -166,11 +166,12 @@ for (const [label, opt] of [["authAttempt live (Check/Open)", { preAttempt: true
   await w.f.sendPiggyOnce();
   check("locked with live session: guard stops before requestGrant (after the Send's own Face ID), endActiveSession once", failed(w.calls) && w.calls.recover === 1 && w.calls.grant === 0 && w.calls.endSession === 1);
 }
-// 11 unlocked live session: [A-1298] the Send still asks Face ID (one bounded attempt, finished), then grant
+// 11 unlocked live session: [A-1360 RE-PIN · Owner 15:4x "열린 동안 보내기 승인만" · 81_ENTRY_FLOW 끝 [15:4x]] the key is open → no Face ID
+// (the approval sheet asks instead; not in this slice), then grant. pre-A-1360 (A-1298): one Face ID (recover 1) every time.
 {
   const w = world({ session: true });
   await w.f.sendPiggyOnce();
-  check("unlocked live session: one Face ID (attempt finished), grant reached once", w.calls.recover === 1 && w.calls.grant === 1 && w.calls.endSession === 0 && w.f.getAttempt() === null);
+  check("unlocked live session (key open): no Face ID, grant reached once", w.calls.recover === 0 && w.calls.grant === 1 && w.calls.endSession === 0 && w.f.getAttempt() === null);
 }
 // 12 source order
 {

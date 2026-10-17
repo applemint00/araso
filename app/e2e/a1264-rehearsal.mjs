@@ -53,7 +53,7 @@ const COPY_ALLOW = new Set([...MOOD_COPY,
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
   "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "+ Piggy soon", "soon",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "piggy goes with this.", "not now", "allow", "want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?", /* [A-1360] the approval sheet */ "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -303,6 +303,7 @@ async function walkFirstJourney(person, { send = true } = {}) {
   person.sendGetsBefore = await getsOf(person); // [A-1298] the Send's Face ID count is read at filing (never wait here: fault lanes arm right after the tap)
   await person.page.locator("#sendButton").click();
   person.sentAt = Date.now();
+  await allowSend(person, "first"); // [A-1360]
 }
 async function walkReturnAndFile(person) {
   await until(person, "Return receipt", () => live(person, "#returnTap"), 60_000);
@@ -318,6 +319,18 @@ async function walkReturnAndFile(person) {
   person.findOutCue = await until(person, "tap me to find out", (s) => s.text.includes(C("tap me to find out")), 6_000).then(() => true, () => false);
 }
 async function getsOf(person) { return person.page.evaluate(() => Number(sessionStorage.getItem("__arasoGets") || 0)).catch(() => -1); }
+// [A-1360 · Owner 15:4x "열린 동안 보내기 승인만" · 81_ENTRY_FLOW 끝 [15:4x] · Design canvas 판 E] a money Send with the key open shows our
+// approval sheet; "allow" sends. The sheet's words are kept per Send kind for the checks; no sheet within the wait = recorded as none.
+async function allowSend(person, kind, wait = 12_000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < wait) {
+    const seen = await person.page.evaluate(() => { const s = document.querySelector("#sendAllowSheet"); if (!s) return null; const b = s.getBoundingClientRect(); return b.height > 0 ? s.innerText.replace(/\s+/g, " ").trim() : null; }).catch(() => null);
+    if (seen) { (person.allowSheets ||= {})[kind] = seen; await checkpoint(person, `allow-${kind}`); await person.page.locator("#sendAllowYes").click(); return true; }
+    await sleep(200);
+  }
+  (person.allowSheets ||= {})[kind] = null;
+  return false;
+}
 async function readTimeline(person) {
   for (let i = 0; i < 10; i += 1) {
     try {
@@ -381,6 +394,7 @@ async function walkSecondJob(person, round, { tapHome = true } = {}) {
   await checkpoint(person, `j${round}-job`);
   const jobGetsBefore = await getsOf(person);
   await person.page.locator("#secondSendButton").click();
+  await allowSend(person, `job${round}`); // [A-1360]
   await until(person, "Away", (s) => s.scene === "secondAway", 15_000);
   person.jobGets = person.jobGets || {}; person.jobGets[round] = (await getsOf(person)) - jobGetsBefore; // [A-1298]
   await checkpoint(person, `j${round}-away`);
@@ -562,10 +576,16 @@ async function laneMain() {
     assert.ok(i >= 0 && /^\d{1,2}:\d{2} (AM|PM)$/.test(t[i + 1] || ""), `job receipt rows: ${JSON.stringify(t)}`);
     assert.equal(t[k + 1], "—", `kept: ${t[k + 1]}`);
   });
-  await check("key · money Sends ask Face ID every time: first Send = 1 · Journey 2 Job Send = 1 (the 10-minute key never signs money)", () => {
+  // [A-1360 RE-PIN · Owner 15:4x "열린 동안 보내기 승인만" (81_ENTRY_FLOW 끝 [15:4x] newest-wins over A-1298 "money Send asks Face ID every time")]
+  // pre-A-1360: first Send = 1 Face ID · Job Send = 1 Face ID.
+  // Journey 2 opens on a reloaded page, so the key in memory is gone there: the first Job Send opens it with Face ID (rule ②), then the sheet.
+  await check("key · with the key open, a money Send asks no Face ID: our approval sheet (allow) instead — first Send = 0 · Journey 2 Job Send (key gone with the reload) = 1 then the sheet", () => {
     const sendGets = a.filedGets - a.sendGetsBefore; // Face ID asks from the first Send tap to the filed Home = the Send's own
-    assert.equal(sendGets, 1, `first Send Face ID asks: ${sendGets}`);
+    assert.equal(sendGets, 0, `first Send Face ID asks: ${sendGets}`);
     assert.equal(a.jobGets?.[1], 1, `Job Send Face ID asks: ${a.jobGets?.[1]}`);
+    assert.ok(a.allowSheets?.first && /allow/.test(a.allowSheets.first) && /not now/.test(a.allowSheets.first) && /piggy goes with this\./.test(a.allowSheets.first), `first Send sheet: ${JSON.stringify(a.allowSheets?.first)}`);
+    assert.ok(a.allowSheets?.job1 && /tidy the wallet/.test(a.allowSheets.job1) && /want me to sweep the crumbs into MON\?/.test(a.allowSheets.job1), `Job Send sheet: ${JSON.stringify(a.allowSheets?.job1)}`);
+    assert.equal(/Face ID|authenticat|sign in/i.test(`${a.allowSheets.first} ${a.allowSheets.job1}`), false, "the sheet reads as an allow, not a Face ID");
   });
   await check("a · reopen the app → lock → Chog → Face ID → Home → bell → Explore opens again", async () => {
     await a.page.goto("about:blank"); await a.page.goto(BASE, { waitUntil: "networkidle" });
