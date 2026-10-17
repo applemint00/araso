@@ -325,7 +325,7 @@ async function allowSend(person, kind, wait = 12_000) {
   const t0 = Date.now();
   while (Date.now() - t0 < wait) {
     const seen = await person.page.evaluate(() => { const s = document.querySelector("#sendAllowSheet"); if (!s) return null; const b = s.getBoundingClientRect(); return b.height > 0 ? s.innerText.replace(/\s+/g, " ").trim() : null; }).catch(() => null);
-    if (seen) { (person.allowSheets ||= {})[kind] = seen; await sleep(700); /* the sheet has finished rising */ await checkpoint(person, `allow-${kind}`); await person.page.locator("#sendAllowYes").click(); return true; }
+    if (seen) { (person.allowSheets ||= {})[kind] = seen; await sleep(700); /* the sheet has finished rising */ if (kind === "gift") await person.page.screenshot({ path: path.join(OUT, `${person.id}-allow-gift.png`) }); /* the Gift screen under it keeps its own copy rules */ else await checkpoint(person, `allow-${kind}`); await person.page.locator("#sendAllowYes").click(); return true; }
     await sleep(200);
   }
   (person.allowSheets ||= {})[kind] = null;
@@ -962,6 +962,7 @@ async function laneJobFail() {
       await walkToJobSend(p);
       inject(w);
       await p.page.locator("#secondSendButton").click();
+      await allowSend(p, `jobfail-${word}`); // [A-1360] our approval sheet comes first (some failures stop before it: no sheet is fine)
       await until(p, "try again", (s) => s.text.includes("try again"), 60_000);
       // only the face changes (and a small dip): no second whole-body picture laid over Piggy
       const face = await p.page.evaluate(() => ({ overlay: document.querySelectorAll(".homeChar__seat--sulky").length, sulkyFace: document.querySelectorAll(".sulkyFace").length, seatSulky: /seat_sulky/.test(document.querySelector("#homeSeat")?.getAttribute("src") || "") && getComputedStyle(document.querySelector("#homeSeat")).visibility !== "hidden", canvasSulky: !!document.querySelector('.departStage[data-face="sulky"]'), dip: !!document.querySelector(".is-sulky-dip"),
@@ -1238,10 +1239,13 @@ async function laneGiftRun() {
     assert.match(fee, /Gift gas cost\s+\$\d/, `fee line is not numeric: ${fee}`);
     assert.match(fee, /Araso fee\s+\$0(?:\D|$)/, `Araso fee is not numeric zero: ${fee}`);
   });
-  await check("gift · Send → Face ID once → approve/create/gas tx hashes", async () => {
+  // [A-1360 · Owner 15:4x] the Gift Send = the open key (or one Face ID when it is not open), then our approval sheet → allow
+  await check("gift · Send → (Face ID only if the key is not open) → our approval sheet → allow → approve/create/gas tx hashes", async () => {
     const send = g.page.locator('[data-a898-act="gift-faceid"]');
     assert.ok(!(await send.isDisabled()), "Send waits");
     await send.click();
+    assert.equal(await allowSend(g, "gift", 20_000), true, "the Gift Send asked our approval sheet");
+    assert.match(g.allowSheets?.gift || "", /Gift a Piggy/, `gift sheet: ${g.allowSheets?.gift}`);
     await g.page.locator(".a911-link__url").waitFor({ state: "visible", timeout: 30_000 });
     g.giftLink = await g.page.locator(".a911-link__url").innerText();
     const store = await g.page.evaluate(() => JSON.parse(localStorage.getItem("araso.a915.giftCreate.v1") || "[]"));
@@ -1505,7 +1509,7 @@ async function laneAtlas() {
       expect: ["still out"], retry: (p) => retryHomeLive(p, "확인 올 때까지 Away") }],
     ["job-reverted", { world: W("at16"), trigger: async (p) => { await toSend(p); await walkReturnAndFile(p); await enterSecond(p); p.world.forkChain.faults.revert.add("approve");
         await p.page.locator('input[data-errand-id="clean"]').check(); await click(p, "#exploreSaveButton", "explore save"); await pickJobIfListed(p);
-        await until(p, "Job Send", () => live(p, "#secondSendButton"), 20_000); await p.page.locator("#secondSendButton").click(); await until(p, "Away", (s) => s.scene === "secondAway", 15_000); await until(p, "back home", (s) => s.scene === "sendstay", 90_000); },
+        await until(p, "Job Send", () => live(p, "#secondSendButton"), 20_000); await p.page.locator("#secondSendButton").click(); await allowSend(p, "oldtab-job"); await until(p, "Away", (s) => s.scene === "secondAway", 15_000); await until(p, "back home", (s) => s.scene === "sendstay", 90_000); },
       expect: ["still in home"], retry: (p) => retryHomeLive(p, "2차 Job 실패 = 조용히 홈 · 문구 0") }],
     ["two-tabs-send", { world: W("at17"), trigger: async (p) => { await walkFirstJourney(p, { send: false });
         // the record another tab of the same phone writes when it pressed Send first (same storage key and shape)

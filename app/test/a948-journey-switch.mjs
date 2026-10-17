@@ -124,7 +124,8 @@ await check("session boundary in main.js: CHAIN_PROFILE assigned once (no in-pag
   const code = MAIN.replace(/\/\/[^\n]*/g, "");
   assert.equal([...code.matchAll(/(^|[^A-Za-z0-9_$.])CHAIN_PROFILE\s*=(?!=)/gm)].length, 1);
   assert.match(MAIN, /^registerJourneySessionDisposer\(endActiveSession\);/m);
-  assert.match(MAIN, /function endSignerSession\(\) \{\n  activeSession\?\.end\(\);\n  activeSession = null;\n  activeAccount = null;/);
+  // [A-1360 RE-PIN] endSignerSession first closes an open approval sheet (the key goes = it cannot allow), then ends the signer as before
+  assert.match(MAIN, /function endSignerSession\(\) \{\n  if \(typeof sendAllowClose === "function"\) sendAllowClose\(false\);[^\n]*\n  activeSession\?\.end\(\);\n  activeSession = null;\n  activeAccount = null;/);
   assert.equal(/(localStorage|sessionStorage)\.setItem\([^)]*(activeSession|activeAccount|prfOutput|privateKey)/.test(MAIN), false);
 });
 await check("main.js: the 4 existing gate calls plus A1172 opt-in bell pass the page's level + CHAIN_PROFILE; boot line passes the stored journey", () => {

@@ -234,13 +234,15 @@ await check("1. a successful auth arms exactly two timers — the 9:30 closing-s
 });
 
 // ══ 2. same-Piggy second send within <5m reuses the live signer — no second auth call ══════════
-await check("2. same Piggy, second send 2 minutes later: Face ID again (a money Send never uses the live key)", async () => {
+// [A-1360 RE-PIN · Owner 15:4x "열린 동안 보내기 승인만" · 81_ENTRY_FLOW 끝 [15:4x]] the key is open → the second Send asks no Face ID (our approval
+// sheet allows it; not in this slice). pre-A-1360 (A-1298): Face ID again on every money Send.
+await check("2. same Piggy, second send 2 minutes later: the key is open — no second Face ID", async () => {
   const app = buildApp();
   await app.sendPiggy(); await tick(); await tick();
   assert.equal(app.authCalls.count, 1);
   app.clock.advance(2 * 60 * 1000);
   await app.sendPiggy(); await tick(); await tick();
-  assert.equal(app.authCalls.count, 2, "the second Send asked Face ID again (recoverPiggy) — no reuse branch any more");
+  assert.equal(app.authCalls.count, 1, "the second Send reused the open key");
   assert.equal(app.get().hasSigner, true);
 });
 
@@ -266,8 +268,8 @@ await check("4. no 5-minute cap: the key outlives 5 minutes while the app is in 
   const app = buildApp();
   await app.sendPiggy(); await tick(); await tick(); // Face ID at t=0 — arms closing@9:30, idle@10m
   app.clock.advance(4 * 60 * 1000); // t=4m
-  await app.sendPiggy(); await tick(); await tick(); // 2nd send: Face ID again, the app clock starts over
-  assert.equal(app.authCalls.count, 2);
+  await app.sendPiggy(); await tick(); await tick(); // 2nd send: [A-1360] the open key, no Face ID (pre: Face ID again); the app clock starts over
+  assert.equal(app.authCalls.count, 1);
   app.clock.advance(1 * 60 * 1000 + 1000); // 5m1s after the first Face ID
   assert.equal(app.get().hasSigner, true, "no 5-minute signer cap any more");
   app.clock.advance(TEN_MIN); // well past 10 minutes since the last touch

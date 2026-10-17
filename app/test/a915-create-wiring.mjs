@@ -79,7 +79,8 @@ await check("W2 a898FaceId hooks: typeof-guarded, before faceid_start, executor 
   assert.match(f, /typeof a915PreFaceIdRefusal === "function"/); assert.match(f, /typeof a915GiftCreateExecutor === "function"/); assert.match(f, /typeof a915PlanExtras === "function"/);
   assert.match(f, /const executor = GIFT_SEND_CONFIG\.executor \|\| \(typeof a915GiftCreateExecutor/);
   assert.match(f, /origin: location\.origin, \.\.\.\(typeof a915PlanExtras === "function" \? a915PlanExtras\(\) : \{\}\) \}\)/);
-  assert.ok(/finally\s*\{\s*endSignerSession\(\);\s*refreshHomePaperMount\(\);/.test(f), "signer still always ends");
+  // [A-1360 RE-PIN · Owner 15:4x "열린 동안 보내기 승인만"] the finally still ends a signer made for another payer; the device Piggy's key stays open
+  assert.ok(/finally\s*\{[^}]*if \(String\(piggy\.address\)\.toLowerCase\(\) !== String\(state\.address \|\| ""\)\.toLowerCase\(\)\) endSignerSession\(\);\s*refreshHomePaperMount\(\);/.test(f), "another payer's signer still ends");
 });
 await check("W3 OFF (config null): no executor, no plan extras, no refusal, nothing stored, retry is a no-op", async () => {
   const { api, storage } = load({ cfg: null });
