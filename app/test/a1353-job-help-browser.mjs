@@ -15,6 +15,13 @@ const SET = {
   "pick up what is owed": ["piggy picks up what's yours.", "something's waiting for you."],
   "put some money to work": ["piggy parks money where it earns a little.", "let money sit and grow."],
 };
+// [Cowork 14:1x] tidy the wallet (new meaning · change → MON) and help with trades (★ lines) are in too — checked in main.js word for word
+import { readFileSync } from "node:fs";
+const MAIN = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
+for (const [id, lines] of [["clean", ["want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?"]], ["lp", ["earn a little when people swap", "piggy helps others trade."]]]) {
+  const row = new RegExp(`\\b${id}: \\[${lines.map((l) => JSON.stringify(l).replace(/[.?*+()[\]]/g, "\\$&")).join(", ")}\\]`);
+  if (!row.test(MAIN)) { console.log(`FAIL  ${id} lines in JOB_HELP_LINES`); process.exitCode = 1; } else console.log(`PASS  ${id} lines in JOB_HELP_LINES`);
+}
 const H = await launch({ forkMode: true });
 const { p } = H;
 let fails = 0;
@@ -60,4 +67,4 @@ try {
   await H.close?.();
 }
 console.log(`A-1353 ② job help: ${fails === 0 ? "PASS" : `FAIL ${fails}`} · ${OUT}`);
-process.exit(fails === 0 ? 0 : 1);
+process.exit(fails === 0 && !process.exitCode ? 0 : 1);

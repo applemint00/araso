@@ -13022,11 +13022,13 @@ if (typeof document !== "undefined" && typeof MutationObserver !== "undefined" &
 }
 // [A-1353 ② · Owner 10-16 02:4x "2차 잡 설명 = ? 탭 때 초그" (FIRST_JOURNEY_PACING:166) · 10-17 13:4x "잡 관련 일들 설명을 다 정했는데 안 나와"]
 // The Owner set, word for word: each job's two lines, said in turn on each ? tap while that job's card (Home / Send) is up.
-// Not here: tidy the wallet (the set's lines say "old doors", the Owner's 02:4x meaning is gathering change → MON — asked) · help with
-// trades (the set line carries a ★ mark) — those keep the last line again, as before.
+// tidy the wallet = the set's own "tidy the wallet (새 뜻 = 잔돈 → MON)" lines (the Owner's 02:4x meaning, PACING:164; not the old
+// "doors" lines) · help with trades = the ★ (Owner-confirmed) lines, the ★ mark left out (Cowork 14:1x).
 const JOB_HELP_LINES = Object.freeze({
   market: ["piggy trades one coin for another.", "a quick swap at the market."],
   order: ["piggy leaves a price and waits.", "buy only if the price comes."],
+  clean: ["want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?"],
+  lp: ["earn a little when people swap", "piggy helps others trade."],
   claim: ["piggy picks up what's yours.", "something's waiting for you."],
   grow: ["piggy parks money where it earns a little.", "let money sit and grow."],
   "asset-piece": ["piggy brings back a small piece of something."],
