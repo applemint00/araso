@@ -14357,7 +14357,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         render();
         sceneTimeout(() => {
           sayFirstSendCue("job");
-          sceneTimeout(armSend, chogLinesMs(a1353PhoneLines(chogMoodLines(FIRST_SEND_CUE_PARTS.slice(1)))) - PACE_BREATH_MS + PACE_SEND_ARM_MS); // [A-1353 ①] four lines on a phone
+          sceneTimeout(armSend, chogLinesMs(a1353PhoneLines(chogMoodLines(FIRST_SEND_CUE_PARTS.slice(1)))) - PACE_BREATH_MS + PACE_SEND_ARM_MS);
         }, PACE_BREATH_MS);
       };
       const announceFirstSend = () => {
