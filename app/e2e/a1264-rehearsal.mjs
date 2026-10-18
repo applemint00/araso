@@ -649,22 +649,58 @@ async function laneMain() {
   });
   // d = a fresh device holding the same synced passkey: storage emptied, authenticator kept.
   const d = a; d.id = d.tag.id = "d"; d.steps = 0;
+  const dAddress = await d.page.evaluate(() => localStorage.getItem("araso.address")); // [A-1371] the Piggy the synced passkey belongs to
   await d.page.evaluate(async () => {
     localStorage.clear(); sessionStorage.clear();
     for (const db of (await indexedDB.databases?.()) || []) if (db.name) indexedDB.deleteDatabase(db.name);
   });
   await d.context.clearCookies();
-  await knownCheck("d · fresh device, same passkey, empty storage: envelope Face ID → recovered Home with no hatch/name", async () => {
+  // [A-1371 · 81_ENTRY_FLOW F2 · Cowork 10:5x (a)] public entry makes first ("not the app's fault"), so on a fresh device the envelope
+  // Face ID asks to make a new passkey. The person cancels that OS sheet: make cancel = page stub (harness) — the first
+  // navigator.credentials.create is refused once with NotAllowedError; the failure card's Check Piggy then asks the real authenticator.
+  await d.context.addInitScript(() => {
+    if (!navigator.credentials?.create) return;
+    const create = navigator.credentials.create.bind(navigator.credentials);
+    navigator.credentials.create = (o) => {
+      try {
+        if (!sessionStorage.getItem("__arasoMakeCancelled")) {
+          sessionStorage.setItem("__arasoMakeCancelled", "1");
+          return Promise.reject(new DOMException("The operation either timed out or was not allowed.", "NotAllowedError"));
+        }
+      } catch {}
+      return create(o);
+    };
+  });
+  // every scene d's page shows, kept across reloads: recovered Home can be followed within ms by the Journey 2 switch (a reload),
+  // so a 250 ms look could miss it
+  await d.context.addInitScript(() => {
+    const note = (v) => { try { const a = JSON.parse(sessionStorage.getItem("__arasoScenes") || "[]"); if (a[a.length - 1] !== v) { a.push(v); sessionStorage.setItem("__arasoScenes", JSON.stringify(a)); } } catch {} };
+    note("boot");
+    new MutationObserver(() => { const v = document.querySelector("[data-scene]")?.dataset.scene; if (v) note(v); })
+      .observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-scene"] });
+  });
+  const dScenes = () => d.page.evaluate(() => JSON.parse(sessionStorage.getItem("__arasoScenes") || "[]")).catch(() => []);
+  await check("d · fresh device, same passkey, empty storage: envelope Face ID → make cancelled → failure card Check Piggy → recovered Home with no hatch/name", async () => {
     await d.page.goto("about:blank"); await d.page.goto(BASE, { waitUntil: "networkidle" });
     await until(d, "envelope", (s) => s.scene === "received");
     await checkpoint(d, "envelope");
     await click(d, "#inviteFaceButton", "envelope Face ID");
-    const seen = new Set();
-    await until(d, "recovered Home", async (s) => { seen.add(s.scene); return s.scene === "sendstay"; }, 30_000);
-    await checkpoint(d, "home");
-    assert.ok(!seen.has("hatch") && !seen.has("name"), `went through ${[...seen].join(",")}`);
+    await until(d, "make-cancelled failure card", (s) => s.text.includes("Check Piggy"), 20_000);
+    await checkpoint(d, "make-cancelled");
+    assert.equal(await d.page.evaluate(() => sessionStorage.getItem("__arasoMakeCancelled")), "1", "the make was cancelled once");
+    const from = (await dScenes()).length;
+    await click(d, "#checkButton", "Check Piggy");
+    let after = [];
+    const t0 = Date.now();
+    while (Date.now() - t0 < 30_000 && !(after = (await dScenes()).slice(from)).includes("sendstay")) await sleep(250);
+    const toHome = after.slice(0, after.indexOf("sendstay") + 1);
+    assert.ok(toHome.length, `recovered Home: timeout — scenes after Check Piggy ${after.join(">")}`);
+    assert.ok(!toHome.includes("hatch") && !toHome.includes("name"), `went through ${toHome.join(">")}`);
+    assert.ok(eventsOf(main, "d").includes("piggy_find/ok"), eventsOf(main, "d").join(","));
+    const recovered = await d.page.evaluate(() => localStorage.getItem("araso.address"));
+    assert.ok(dAddress && recovered && recovered.toLowerCase() === dAddress.toLowerCase(), `same Piggy: ${recovered} vs ${dAddress}`);
   });
-  await knownCheck("d · E7: recovered device gets a second-journey signal (tap me! or fork entry) within 20 s", async () => {
+  await check("d · E7: recovered device gets a second-journey signal (tap me! or fork entry) within 20 s", async () => {
     const forkCalls = () => main.requests.filter((r) => r.person === "d" && r.path === "/api/fork-entry" && r.action !== "public_state").length;
     const tapMe = await waitTapMe(d, 20_000);
     assert.ok(tapMe || forkCalls() > 0, `tap me! ${tapMe} · fork-entry calls ${forkCalls()}`);
