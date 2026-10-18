@@ -133,6 +133,11 @@ export function createForkGiftController({ runtime, instanceId, identityCheck, i
         if (!(await runtime.preflight())) return unavailable();
         return runtime.service.register(payload);
       }
+      // [A-1407] Letter read has no signer and no gas; read-only like registration, so the same fork preflight (the escrow it reads is the checked one).
+      if (payload.action === "read_letter") {
+        if (!(await runtime.preflight())) return unavailable();
+        return runtime.service.readLetter(payload); // same shape as api/gift-sponsor.js reading → rt.service.readLetter
+      }
       if (Number(payload.authorization?.chainId) !== FORK_ID || Number(payload.revokeAuthorization?.chainId) !== FORK_ID) return bad();
       return runtime.service.handle(payload); // G1–G11 bind actual signed chain/escrow.
     }).catch(() => unavailable());
