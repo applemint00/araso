@@ -88,7 +88,7 @@ export function moneyTabView({ piggies = [], totals = null, canAct = true, canMo
     allAway: list.length > 0 && list.every((p) => p && p.location === "away"),
     piggies: list.map((p, i) => ({
       id: p.id,
-      name: p.name || p.id,
+      name: p.name || "Piggy",
       amount: p.valuation && typeof p.valuation.usd === "string" ? `$${p.valuation.usd}` : usd[i] !== null ? usdText(usd[i]) : HOME_UNKNOWN_LABEL,
       away: p.location === "away",
     })),
