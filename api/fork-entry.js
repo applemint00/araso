@@ -1,6 +1,7 @@
 // [A-956/A-1027] POST /api/fork-entry — Journey 2 entry (card E). Local mode uses process-memory stores only when explicitly enabled.
 // Production mode uses the existing Upstash invite/challenge/ledger stores and the signed remote fork Admin; any incomplete configuration
-// stays closed with 503. This module never logs env values, invite tokens or HMAC material.
+// stays closed with 503. This module never logs env values, invite tokens or HMAC material. [A-1385] Refusals = one fixed-word line each,
+// written only by _lib/fork-entry-log.js (injected as the service's `log`).
 //
 // Body (JSON, ≤ 8 KiB) — { action, ... }; the invite token rides in the `x-araso-invite` header (never in the body, never logged):
 //   invite_state {}                                                      → { ok, bound } (read-only first-journey hint)
@@ -12,6 +13,7 @@
 // token from env · request fields beyond the action's list = 400. Same-origin browser calls only (plus code-injected local dev origins).
 import { appOriginOk, createInviteTable, createMemoryChallengeStore } from "./_lib/fork-auth.js";
 import { createForkEntryService, jsonRpc, upstashForkEntryParts } from "./_lib/fork-entry.js";
+import { forkEntryRefuseLog } from "./_lib/fork-entry-log.js"; // [A-1385] the one refuse line per refusal (fixed words · no address/token)
 import { forkAdminClientFromEnv, guardOrigin } from "./_lib/fork-grant-client.js";
 import { createMemoryForkLedgerStore } from "./_lib/fork-ledger-store-contract.js";
 import { inviteStoreFromEnv } from "./_lib/invite-redis-store.js";
@@ -144,6 +146,7 @@ export function localForkEntryServiceFromEnv(env = process.env, { fetchImpl = gl
     admin,
     testnetRpc: jsonRpc({ url: testnetUrl, fetchImpl }),
     forkRpc: typeof forkUrl === "string" && forkUrl ? jsonRpc({ url: forkUrl, fetchImpl }) : null,
+    log: forkEntryRefuseLog, // [A-1385]
     ...(now ? { now } : {}),
   });
 }
@@ -181,6 +184,7 @@ export function productionForkEntryServiceFromEnv(env = process.env, { fetchImpl
     admin,
     testnetRpc: jsonRpc({ url: testnetRpcUrl, fetchImpl }),
     forkRpc: jsonRpc({ url: publicRpcUrl, fetchImpl }),
+    log: forkEntryRefuseLog, // [A-1385]
     ...(now ? { now } : {}),
   });
   const productionAuth = async (method, input) => {

@@ -1,10 +1,11 @@
-// [A-956] Journey 2 entry service (card E). Pure orchestration over injected parts — no env, no file I/O, no logging:
+// [A-956] Journey 2 entry service (card E). Pure orchestration over injected parts — no env, no file I/O, no logging of its own (pre-A-1385: "no logging"):
 //   invites     createInviteTable (fork-auth.js)        testerId comes ONLY from here (server-config invite token), never from the body
 //   challenges  createMemoryChallengeStore (fork-auth)   nonce · 2 min · single use
 //   store       fork-ledger-store-contract adapter       entries / topups / evidence / stamps / rewards, putIfAbsent only (atomic SET NX in production)
 //   admin       createForkAdminClient (fork-grant-client) the CURRENT fork instance + idempotent top-up (127.0.0.1 only, token from env)
 //   testnetRpc  (method, params) => result               the server's OWN read of chain 10143 (Journey 1 evidence; nothing trusted from the app)
 //   forkRpc     (method, params) => result               the server's OWN read of the fork (completion evidence placeholder)
+//   log         (fields) => void                         [A-1385] one call per refusal (fork-entry-log.js); default = nothing
 // Order (A-952 "Order card E calls"): entry check → top-up grant → [step evidence → verdict → stamp → reward] (completion = slot + tests only,
 // closed unless config.completionOpen === true and a server-config rewardCampaignVersion exists; no payout anywhere).
 import { appOriginOk, verifyChallenge, issueChallengeAsync, createRedisChallengeStore } from "./fork-auth.js"; // [A-960] async issue (Redis challenge store)
@@ -93,7 +94,7 @@ export async function verifyJourney1({ rpc, piggyAddress, depositTxHash, redeemT
  *   appOrigin = the app origin the challenge names in its `uri:` line (server config; required)
  *   journeys = server registry { [journeyId]: { journeyVersion, steps: [{ stepId, to, selector }] } } (completion slot only)
  */
-export function createForkEntryService({ config, store, challenges, admin, testnetRpc, forkRpc = null, now = () => Date.now() }) {
+export function createForkEntryService({ config, store, challenges, admin, testnetRpc, forkRpc = null, now = () => Date.now(), log = () => {} }) {
   // pre-A-959: const assets = Array.isArray(config?.grantAssets) && config.grantAssets.length ? config.grantAssets.filter((a) => ENTRY_ASSETS.includes(a)) : [...ENTRY_ASSETS];
   // [A-959] entry grant list = every asset that is BOTH a row of the fork profile asset table (fork-grant-client, A-955 table) AND an asset
   // the ledger can key (fork-ledger-contract ENTRY_ASSETS — the top-up row key forkInstanceId|piggy|asset|grantVersion). Each one goes
@@ -110,7 +111,19 @@ export function createForkEntryService({ config, store, challenges, admin, testn
     return bound || publicId(piggy);
   };
   const expired = () => typeof config?.entryNotAfter === "number" && now() > config.entryNotAfter;
-  const refuse = (reason, extra = {}) => ({ ok: true, allowed: false, reason, ...extra });
+  // pre-A-1385: const refuse = (reason, extra = {}) => ({ ok: true, allowed: false, reason, ...extra });
+  // [A-1385] refuseAs(action) = the same refusal + one log call (action · reason · note{asset, adminStatus} · the instance once known via
+  // refuse.at). The answer shape is unchanged; a throwing log never changes it.
+  const refuseAs = (action) => {
+    const at = { forkInstanceId: undefined };
+    const refuse = (reason, extra = {}, note = {}) => {
+      const fields = Object.fromEntries(Object.entries({ action, reason, asset: note.asset, adminStatus: note.adminStatus, forkInstanceId: at.forkInstanceId }).filter(([, v]) => v !== undefined));
+      try { log(fields); } catch { /* answer unchanged */ }
+      return { ok: true, allowed: false, reason, ...extra };
+    };
+    refuse.at = at;
+    return refuse;
+  };
   const ready = () => !!(store && challenges && admin && grantVersion && appOriginOk(config?.appOrigin));
   const inflight = new Map(); // single flight per top-up key inside this process (the Admin is the cross-process guard)
 
@@ -139,8 +152,10 @@ export function createForkEntryService({ config, store, challenges, admin, testn
     if (prior) return { ok: true, asset, amountRaw: prior.amountRaw, noop: true };
     if (inflight.has(rec0.key)) { const r = await inflight.get(rec0.key); return r.ok ? { ...r, noop: true } : r; }
     const run = (async () => {
-      const t = await admin.topup({ piggyAddress, asset, grantVersion });
-      if (!t || !t.ok) return { ok: false, reason: "topup_failed" };
+      // [A-1385] adminStatus (HTTP status · 0 = no answer · "sign" = signing failed) reaches only the refuse log, never the answer
+      let adminStatus;
+      const t = await admin.topup({ piggyAddress, asset, grantVersion, onStatus: (s) => { adminStatus = s; } });
+      if (!t || !t.ok) return { ok: false, reason: "topup_failed", asset, adminStatus }; // pre-A-1385: { ok: false, reason: "topup_failed" }
       if (t.forkInstanceId !== forkInstanceId) return { ok: false, reason: "fork_instance_changed" };
       const rec = topupRecord({ forkInstanceId, piggyAddress, asset, grantVersion, testerId, amountRaw: t.amountRaw });
       if (!rec.ok) return { ok: false, reason: "topup_bad_answer" };
@@ -155,6 +170,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
   return Object.freeze({
     /** 1) challenge for (tester from the invite token, Piggy, the CURRENT fork instance). */
     async challenge({ inviteToken, piggyAddress }) {
+      const refuse = refuseAs("challenge");
       try {
         if (!ready()) return { ok: false, status: 503, reason: "entry_unavailable" };
         const testerId = await tester(inviteToken, piggyAddress); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
@@ -168,6 +184,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
 
     /** 2)+3) proof → Journey 1 read on 10143 → entry row (putIfAbsent) → each grant asset (see `assets`) topped up once → allowed + forkInstanceId. */
     async enter({ inviteToken, nonce, signature, piggyAddress, journey1 }) {
+      const refuse = refuseAs("enter");
       try {
         if (!ready()) return { ok: false, status: 503, reason: "entry_unavailable" };
         const testerId = await tester(inviteToken, piggyAddress); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
@@ -176,6 +193,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
         if (expired()) return refuse("entry_expired");
         const piggy = proof.record.piggyAddress;
         const inst = await currentInstance(); if (!inst) return { ok: false, status: 503, reason: "fork_unavailable" };
+        refuse.at.forkInstanceId = inst.forkInstanceId;
         if (inst.forkInstanceId !== proof.record.forkInstanceId) return refuse("fork_instance_changed", { reenter: true });
         // [A-960] [review fix: after the fork-instance check, so a refused stale-instance request binds nothing] Redis invites (bind present): the invite is bound once to the first Piggy that proves control (보충 7) — here, or earlier
         // at the first grant. Bound to another Piggy / this Piggy bound to another tester / expired-unbound = no entry. Memory table = no bind.
@@ -215,7 +233,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
         const grants = [];
         for (const asset of assets) {
           const g = await topupOnce({ forkInstanceId: inst.forkInstanceId, piggyAddress: piggy, asset, testerId });
-          if (!g.ok) return refuse(g.reason);
+          if (!g.ok) return refuse(g.reason, {}, { asset: g.asset ?? asset, adminStatus: g.adminStatus }); // pre-A-1385: refuse(g.reason)
           grants.push({ asset, amountRaw: g.amountRaw, noop: g.noop });
         }
         return { ok: true, allowed: true, forkScope: FORK_SCOPE, forkInstanceId: inst.forkInstanceId, grants };
@@ -224,11 +242,13 @@ export function createForkEntryService({ config, store, challenges, admin, testn
 
     /** 6) re-check before any fork money action: no cached verdict — current instance + stored entry for this tester + same Piggy. */
     async status({ inviteToken, piggyAddress, forkInstanceId }) {
+      const refuse = refuseAs("status");
       try {
         if (!ready()) return { ok: false, status: 503, reason: "entry_unavailable" };
         const testerId = await tester(inviteToken, piggyAddress); if (!testerId) return { ok: false, status: 401, reason: "not_invited" };
         const piggy = low(piggyAddress); if (!ADDR_RE.test(piggy)) return refuse("bad_piggy");
         const inst = await currentInstance(); if (!inst) return { ok: false, status: 503, reason: "fork_unavailable" };
+        refuse.at.forkInstanceId = inst.forkInstanceId;
         if (low(forkInstanceId) !== inst.forkInstanceId) return refuse("fork_instance_changed", { reenter: true });
         if (expired()) return refuse("entry_expired");
         const e = await enteredRow(inst.forkInstanceId, testerId, piggy);
@@ -243,6 +263,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
      * (putIfAbsent "rewards"), all in this one request. testerId = auth · campaign = config · steps/version = server registry. No payout.
      */
     async complete({ inviteToken, piggyAddress, journeyId, txHashes }) {
+      const refuse = refuseAs("complete");
       try {
         if (config?.completionOpen !== true || typeof config?.rewardCampaignVersion !== "string") return { ok: false, status: 404, reason: "completion_not_open" };
         if (!ready() || typeof forkRpc !== "function") return { ok: false, status: 503, reason: "entry_unavailable" };
@@ -252,6 +273,7 @@ export function createForkEntryService({ config, store, challenges, admin, testn
         const reg = ID_RE.test(jid) && config.journeys && Object.prototype.hasOwnProperty.call(config.journeys, jid) ? config.journeys[jid] : null;
         if (!reg) return refuse("unknown_journey");
         const inst = await currentInstance(); if (!inst) return { ok: false, status: 503, reason: "fork_unavailable" };
+        refuse.at.forkInstanceId = inst.forkInstanceId;
         const e = await enteredRow(inst.forkInstanceId, testerId, piggy);
         if (!e.ok) return refuse("no_entry");
         const hashes = Array.isArray(txHashes) ? [...new Set(txHashes.map(low))] : [];

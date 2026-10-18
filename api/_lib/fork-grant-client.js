@@ -113,6 +113,9 @@ function readTopupAnswer(status, json) {
   return { ok: true, noop: json.noop === true, key: String(json.key || ""), amountRaw, forkInstanceId: String(json.record.forkInstanceId || "").toLowerCase() };
 }
 
+// [A-1385] the status hint for the refuse log; a throwing callback never changes the top-up answer
+const tell = (onStatus, status) => { if (typeof onStatus === "function") { try { onStatus(status); } catch { /* answer unchanged */ } } };
+
 function checkTopupArgs({ piggyAddress, asset, grantVersion }) {
   if (typeof piggyAddress !== "string" || !ADDR_RE.test(piggyAddress)) return { ok: false, reason: "bad_piggy" };
   if (!isForkGrantAsset(asset)) return { ok: false, reason: "bad_asset" };
@@ -152,12 +155,14 @@ export function createForkAdminClient({ url, token, fetchImpl = globalThis.fetch
       if (!ID_RE.test(id) || !Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(chainId)) return { ok: false, reason: "admin_bad_instance" };
       return { ok: true, forkInstanceId: id, chainId, forkStartBlock: start };
     },
-    async topup({ piggyAddress, asset, grantVersion }) {
+    // [A-1385] onStatus(httpStatus) = optional, for the entry refuse log only (0 = no answer); the answer shape is unchanged
+    async topup({ piggyAddress, asset, grantVersion, onStatus }) {
       if (typeof piggyAddress !== "string" || !ADDR_RE.test(piggyAddress)) return { ok: false, reason: "bad_piggy" };
       // pre-A-959: if (asset !== "MON" && asset !== "USDC") return { ok: false, reason: "bad_asset" };
       if (!isForkGrantAsset(asset)) return { ok: false, reason: "bad_asset" }; // [A-959] the fork profile asset table decides
       if (typeof grantVersion !== "string" || !GRANT_VERSION_RE.test(grantVersion)) return { ok: false, reason: "bad_grant_version" };
       const { status, json } = await call("POST", "/admin/topup", { piggyAddress, asset, grantVersion });
+      tell(onStatus, status); // [A-1385]
       return readTopupAnswer(status, json); // [A-987] same parse as before, shared with the signed mode
     },
   });
@@ -205,14 +210,15 @@ export function createSignedForkAdminClient({ guardUrl, secret, fetchImpl = glob
       if (r.guard !== FORK_GUARD_NAME || !ID_RE.test(id) || !Number.isSafeInteger(chainId) || !Number.isSafeInteger(start) || start < 0) return { ok: false, reason: "admin_bad_instance" };
       return { ok: true, forkInstanceId: id, chainId, forkStartBlock: start };
     },
-    async topup({ piggyAddress, asset, grantVersion }) {
+    async topup({ piggyAddress, asset, grantVersion, onStatus }) { // [A-1385] onStatus: HTTP status · "sign" when signing fails
       const bad = checkTopupArgs({ piggyAddress, asset, grantVersion });
       if (bad) return bad;
       const bodyBytes = Buffer.from(JSON.stringify({ piggyAddress, asset, grantVersion }), "utf8");
       const nonce = Buffer.from(randomBytes(16)).toString("hex");
       const s = signTopup({ secret: key, host, method: "POST", path: SIGNED_TOPUP_PATH, ts: Math.floor(nowMs() / 1000), nonce, body: bodyBytes });
-      if (!s) return { ok: false, reason: "topup_failed" };
+      if (!s) { tell(onStatus, "sign"); return { ok: false, reason: "topup_failed" }; }
       const { status, json } = await post(SIGNED_TOPUP_PATH, { [TS_HEADER]: s.ts, [NONCE_HEADER]: s.nonce, [SIG_HEADER]: s.sig }, bodyBytes);
+      tell(onStatus, status); // [A-1385]
       return readTopupAnswer(status, json);
     },
   });

@@ -521,6 +521,96 @@ await check("api/grant.js untouched by this card (behaviour file byte-equal to t
   if (!existsSync(preA960)) { console.log("      (A-960 pre copy absent — skipped)"); return; }
   assert.equal(createHash("sha256").update(readFileSync(preA960, "utf8")).digest("hex"), BASE_GRANT_SHA256); // pre-A-983: assert.equal(readFileSync(preA960, "utf8"), head)
 });
+// ── [A-1385] refuse log: one fixed-word line per refusal (action · reason · asset · adminStatus · forkInstance first 8), nothing else ──
+const LEAK_RE = [/0x[0-9a-fA-F]{40}/, /[0-9a-fA-F]{64}/, /Bearer/, /127\.0\.0\.1/, /local-test-invite/, /admin-token/, /test-vector-secret/];
+const noLeak = (lines) => { for (const l of lines) for (const re of LEAK_RE) assert.doesNotMatch(l, re, l); };
+// admin whose top-up answers `topupAnswer` (status, body); instance stays healthy
+function failingAdmin(topupAnswer) {
+  const A = fakeAdmin();
+  const fetchImpl = async (url, init = {}) => {
+    if (new URL(url).pathname === "/admin/topup") { const [status, body] = topupAnswer(); return { status, json: async () => body }; }
+    return A.fetchImpl(url, init);
+  };
+  return createForkAdminClient({ url: "http://127.0.0.1:47999", token: A.token, fetchImpl });
+}
+async function refusedEnter(admin, base) {
+  const lines = [];
+  const S = setup();
+  const svc = createForkEntryService({ config: { invites: createInviteTable([TOKEN]), appOrigin: APP_ORIGIN, grantVersion: "a956-g1" }, store: S.store, challenges: S.challenges, admin, testnetRpc: S.t.rpc, log: (f) => lines.push(f) });
+  const out = await signedEnter({ ...S, svc }, { journey1: journey1For(S.t, P, base) });
+  return { out, lines };
+}
+await check("A-1385 refuse log · top-up 500 / 200 without record / signing null = one line each: enter · topup_failed · asset · adminStatus · forkInstance (answer unchanged)", async () => {
+  const { createSignedForkAdminClient } = await import("../../api/_lib/fork-grant-client.js");
+  const { FORK_GUARD_NAME } = await import("../src/chain-profile.js");
+  const guardFetch = async (url, init = {}) => {
+    if (new URL(url).pathname === "/") return { status: 200, json: async () => ({ jsonrpc: "2.0", id: 1, result: { guard: FORK_GUARD_NAME, chainId: 31337143, forkInstanceId: FORK_ID, forkStartBlock: 110874000 } }) };
+    return { status: 200, json: async () => ({ record: { forkInstanceId: FORK_ID, amountRaw: "1" } }) };
+  };
+  const signNull = createSignedForkAdminClient({ guardUrl: "https://fork-guard.example.test", secret: "test-vector-secret-not-real-0123456789", fetchImpl: guardFetch, nowMs: () => NaN });
+  const cases = [[failingAdmin(() => [500, { error: "historical state not available" }]), 500], [failingAdmin(() => [200, { ok: true }]), 200], [signNull, "sign"]];
+  let base = 12000;
+  for (const [admin, adminStatus] of cases) {
+    const { out, lines } = await refusedEnter(admin, base); base += 10;
+    assert.deepEqual(out, { ok: true, allowed: false, reason: "topup_failed" }, "client answer shape unchanged");
+    assert.equal(lines.length, 1, JSON.stringify(lines));
+    assert.deepEqual(lines[0], { action: "enter", reason: "topup_failed", asset: "MON", adminStatus, forkInstanceId: FORK_ID });
+  }
+});
+await check("A-1385 refuse log module: console.warn(\"fork_entry refuse\", JSON) · only the allowed fields · forkInstance = first 8 · no address/hash/nonce/signature/token", async () => {
+  const { forkEntryRefuseLine, createForkEntryLog } = await import("../../api/_lib/fork-entry-log.js");
+  const line = forkEntryRefuseLine({ action: "enter", reason: "topup_failed", asset: "MON", adminStatus: 500, forkInstanceId: FORK_ID, piggyAddress: P, nonce: "ab".repeat(16), signature: `0x${"cd".repeat(65)}`, inviteToken: TOKEN, txHash: h(1) });
+  assert.deepEqual(JSON.parse(line), { action: "enter", reason: "topup_failed", asset: "MON", adminStatus: 500, forkInstance: FORK_ID.slice(0, 8) });
+  // values that are not the expected word shape are dropped (an address can never ride in as a reason / asset / status)
+  assert.deepEqual(JSON.parse(forkEntryRefuseLine({ action: "steal", reason: P, asset: P, adminStatus: P, forkInstanceId: P })), { action: "other", reason: "other" });
+  assert.deepEqual(JSON.parse(forkEntryRefuseLine({ action: "status", reason: "no_entry", adminStatus: "sign" })), { action: "status", reason: "no_entry", adminStatus: "sign" });
+  const said = [];
+  createForkEntryLog({ sink: (...a) => said.push(a) })({ action: "enter", reason: "topup_failed", asset: "USDC", adminStatus: 0, forkInstanceId: FORK_ID, piggyAddress: P });
+  assert.equal(said.length, 1); assert.equal(said[0][0], "fork_entry refuse"); assert.equal(said[0].length, 2);
+  noLeak([line, said[0][1]]);
+  const quiet = createForkEntryLog({ sink: () => { throw new Error("sink down"); } });
+  assert.doesNotThrow(() => quiet({ action: "enter", reason: "topup_failed" }), "a broken sink never breaks an answer");
+});
+await check("A-1385 wiring · env-built entry service warns `fork_entry refuse` once on a failed top-up (real console.warn), no address/token in the line", async () => {
+  const S = setup();
+  const j1 = journey1For(S.t, P, 13000);
+  const admin = fakeAdmin();
+  const fetchImpl = async (url, init = {}) => {
+    const u = new URL(url);
+    if (u.hostname === "127.0.0.1") return u.pathname === "/admin/topup" ? { status: 500, json: async () => ({}) } : admin.fetchImpl(url, init);
+    const b = JSON.parse(init.body);
+    return { json: async () => ({ jsonrpc: "2.0", id: b.id, result: await S.t.rpc(b.method, b.params) }) };
+  };
+  const env = { ARASO_FORK_ENTRY_LOCAL: "1", ARASO_FORK_ADMIN_URL: "http://127.0.0.1:47999", ARASO_FORK_ADMIN_TOKEN: admin.token, ARASO_FORK_INVITE_TOKENS: TOKEN, ARASO_FORK_APP_ORIGIN: APP_ORIGIN };
+  const svc = localForkEntryServiceFromEnv(env, { fetchImpl });
+  const warned = []; const orig = console.warn; console.warn = (...a) => warned.push(a.map(String));
+  let out;
+  try { out = await signedEnter({ ...S, svc }, { journey1: j1 }); } finally { console.warn = orig; }
+  assert.deepEqual(out, { ok: true, allowed: false, reason: "topup_failed" });
+  const refuses = warned.filter((a) => a[0] === "fork_entry refuse");
+  assert.equal(refuses.length, 1, JSON.stringify(warned));
+  assert.deepEqual(JSON.parse(refuses[0][1]), { action: "enter", reason: "topup_failed", asset: "MON", adminStatus: 500, forkInstance: FORK_ID.slice(0, 8) });
+  noLeak(refuses.map((a) => a.join(" ")));
+});
+await check("A-1385 every refusal logs (challenge expired · enter bad proof · status no_entry); allowed answers log nothing", async () => {
+  const lines = [];
+  let t = 1_700_000_000_000;
+  const S = setup();
+  const mk = (config = {}) => createForkEntryService({ config: { invites: createInviteTable([TOKEN]), appOrigin: APP_ORIGIN, grantVersion: "a956-g1", ...config }, store: S.store, challenges: S.challenges, admin: S.A.client, testnetRpc: S.t.rpc, now: () => t, log: (f) => lines.push(f) });
+  const svc = mk();
+  assert.equal((await svc.status({ inviteToken: TOKEN, piggyAddress: P, forkInstanceId: FORK_ID })).reason, "no_entry");
+  assert.deepEqual(lines.pop(), { action: "status", reason: "no_entry", forkInstanceId: FORK_ID });
+  const ok = await signedEnter({ ...S, svc }, { journey1: journey1For(S.t, P, 14000) });
+  assert.equal(ok.allowed, true); assert.equal(lines.length, 0, "allowed = no line");
+  assert.equal((await svc.status({ inviteToken: TOKEN, piggyAddress: P, forkInstanceId: FORK_ID })).allowed, true); assert.equal(lines.length, 0);
+  const c = await svc.challenge({ inviteToken: TOKEN, piggyAddress: P });
+  assert.equal((await svc.enter({ inviteToken: TOKEN, nonce: c.nonce, signature: await OTHER.signMessage({ message: c.message }), piggyAddress: P, journey1: {} })).allowed, false);
+  assert.equal(lines.pop().action, "enter");
+  const late = mk({ entryNotAfter: t - 1 });
+  assert.equal((await late.challenge({ inviteToken: TOKEN, piggyAddress: P })).reason, "entry_expired");
+  assert.deepEqual(lines.pop(), { action: "challenge", reason: "entry_expired" });
+  assert.equal(lines.length, 0);
+});
 await check("network 0", () => { assert.equal(netCalls, 0); });
 console.log(`\nA-956 entry server: ${pass} PASS / ${fail} FAIL`);
 process.exit(fail === 0 ? 0 : 1);
