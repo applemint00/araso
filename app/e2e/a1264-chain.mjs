@@ -138,5 +138,6 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
     const one = async (r) => ({ jsonrpc: "2.0", id: r.id, ...(await answer(r)) });
     return Array.isArray(body) ? Promise.all(body.map(one)) : one(body);
   }
-  return { calls, handle, fund, fundToken, tokenBalanceOf: (t, a) => tokenBal.get(`${key(t)}|${key(a)}`) ?? (erc20?.defaultBalance || 0n), faults, log, unknown, nonceOf: (a) => Number(get(nonce, a)), sharesOf: (a) => get(shares, a), balanceOf: (a) => get(balance, a) };
+  // resetAllowances: every allowance read starts again from erc20.defaultAllowance (a later person on the same address meets the chain fresh)
+  return { calls, handle, fund, fundToken, resetAllowances: () => allowance.clear(), tokenBalanceOf: (t, a) => tokenBal.get(`${key(t)}|${key(a)}`) ?? (erc20?.defaultBalance || 0n), faults, log, unknown, nonceOf: (a) => Number(get(nonce, a)), sharesOf: (a) => get(shares, a), balanceOf: (a) => get(balance, a) };
 }

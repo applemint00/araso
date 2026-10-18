@@ -680,6 +680,25 @@ async function laneMain() {
       .observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-scene"] });
   });
   const dScenes = () => d.page.evaluate(() => JSON.parse(sessionStorage.getItem("__arasoScenes") || "[]")).catch(() => []);
+  // [A-1373 · 81 E33 candidate] a timed line of d's scenes, page boots and fork status answers, kept across reloads, so the
+  // Journey 2 boot after recovered Home can be read (which scene it lands on, and how long after Home the status said allowed)
+  await d.context.addInitScript(() => {
+    const put = (k, v) => { try { const a = JSON.parse(sessionStorage.getItem("__arasoTimelineD") || "[]"); a.push({ t: Date.now(), k, v }); sessionStorage.setItem("__arasoTimelineD", JSON.stringify(a)); } catch {} };
+    let last = null;
+    try { put("boot", localStorage.getItem("araso.journey.v1")); } catch {}
+    new MutationObserver(() => { const v = document.querySelector("[data-scene]")?.dataset.scene; if (v && v !== last) { last = v; put("scene", v); } })
+      .observe(document, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-scene"] });
+    const f = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const res = await f(input, init);
+      try {
+        const url = String(input?.url || input);
+        if (url.includes("/api/fork-entry") && /"action":"status"/.test(String(init?.body || ""))) res.clone().json().then((j) => put("status", j?.allowed === true ? "allowed" : `no:${j?.reason || j?.reenter || "?"}`)).catch(() => {});
+      } catch {}
+      return res;
+    };
+  });
+  const dTimeline = () => d.page.evaluate(() => JSON.parse(sessionStorage.getItem("__arasoTimelineD") || "[]")).catch(() => []);
   await check("d · fresh device, same passkey, empty storage: envelope Face ID → make cancelled → failure card Check Piggy → recovered Home with no hatch/name", async () => {
     await d.page.goto("about:blank"); await d.page.goto(BASE, { waitUntil: "networkidle" });
     await until(d, "envelope", (s) => s.scene === "received");
@@ -700,10 +719,71 @@ async function laneMain() {
     const recovered = await d.page.evaluate(() => localStorage.getItem("araso.address"));
     assert.ok(dAddress && recovered && recovered.toLowerCase() === dAddress.toLowerCase(), `same Piggy: ${recovered} vs ${dAddress}`);
   });
+  // [A-1373 · Owner 10-18 11:4x "고" · R7 ① reproduce only] after recovered Home the fork status says allowed → switchJourney(2) reloads;
+  // that Journey 2 boot must land on Home (same Piggy, name = index-recovered or empty), not Name it / hatch (main.js:2338 "no name data ≠ a new Piggy").
+  await check("d · E33: after recovered Home, fork status allowed → Journey 2 boot lands on Home (same Piggy), not name/hatch", async () => {
+    const homeAt = (tl) => tl.findIndex((e) => e.k === "scene" && e.v === "sendstay");
+    let tl = [];
+    const t0 = Date.now();
+    const settled = (x) => { const h = homeAt(x); if (h < 0) return false; const b = x.findIndex((e, i) => i > h && e.k === "boot"); return b >= 0 && x.slice(b + 1).some((e) => e.k === "scene" && e.v !== "birth"); };
+    while (Date.now() - t0 < 20_000 && !settled(tl = await dTimeline())) await sleep(250);
+    const h = homeAt(tl), home = tl[h];
+    const line = tl.map((e) => `${home ? e.t - home.t : e.t}ms:${e.k}=${e.v}`).join(" > ");
+    console.log(`[A-1373] d timeline (ms from recovered Home): ${line}`);
+    assert.ok(home, `no recovered Home in the timeline: ${line}`);
+    const allowed = tl.find((e, i) => i > h && e.k === "status" && e.v === "allowed");
+    const boot = tl.findIndex((e, i) => i > h && e.k === "boot");
+    console.log(`[A-1373] status allowed ${allowed ? `+${allowed.t - home.t} ms` : "never"} after recovered Home · Journey 2 boot ${boot >= 0 ? `+${tl[boot].t - home.t} ms (journey=${tl[boot].v})` : "none"}`);
+    assert.ok(boot >= 0, `no Journey 2 boot within 20 s after recovered Home: ${line}`);
+    const afterBoot = tl.slice(boot + 1).filter((e) => e.k === "scene").map((e) => e.v);
+    const first = afterBoot.find((v) => v !== "birth");
+    console.log(`[A-1373] Journey 2 boot first scene: ${first} · scenes ${afterBoot.join(">")} · localStorage name ${JSON.stringify(await d.page.evaluate(() => localStorage.getItem("araso.piggyName")).catch(() => null))}`);
+    const address = await d.page.evaluate(() => localStorage.getItem("araso.address"));
+    assert.ok(first === "sendstay" && !afterBoot.includes("name") && !afterBoot.includes("hatch"), `Journey 2 boot went ${afterBoot.join(">")} · events ${eventsOf(main, "d").join(",")}`);
+    assert.ok(address && dAddress && address.toLowerCase() === dAddress.toLowerCase(), `same Piggy: ${address} vs ${dAddress}`);
+  });
   await check("d · E7: recovered device gets a second-journey signal (tap me! or fork entry) within 20 s", async () => {
     const forkCalls = () => main.requests.filter((r) => r.person === "d" && r.path === "/api/fork-entry" && r.action !== "public_state").length;
     const tapMe = await waitTapMe(d, 20_000);
     assert.ok(tapMe || forkCalls() > 0, `tap me! ${tapMe} · fork-entry calls ${forkCalls()}`);
+  });
+  // [A-1379 · Sac 12:3x cells 5·7·6·10] the recovered Piggy keeps being the same Piggy in Journey 2: its name place, a Job Send,
+  // the Money row and Gift a Piggy. The name the device knows = the testnet index row's (null after a recovery = an empty place).
+  const dFirstRowName = () => d.page.evaluate(() => {
+    const addr = String(localStorage.getItem("araso.address") || "").toLowerCase();
+    try { return (JSON.parse(localStorage.getItem("araso.myPiggiesIndex.v1.monad-testnet") || "{}").piggies || []).find((p) => !p.sequence && String(p.address).toLowerCase() === addr)?.name || ""; } catch { return ""; }
+  });
+  d.name = (await dFirstRowName().catch(() => "")) || "Piggy"; // the name this device shows for its Piggy is the <NAME> of the copy check from here on
+  await check("d · Journey 2 Home name place = the same Piggy's (testnet index name, or Piggy when empty), never Name it", async () => {
+    // Journey 2 Home moves on to Explore by itself; the name place stays drawn under the Explore paper (renderExplore · homeCharacter)
+    const s = await until(d, "Journey 2 Home, Explore or Name it", (x) => ["sendstay", "explore", "name"].includes(x.scene), 20_000);
+    await checkpoint(d, "j2-home");
+    assert.notEqual(s.scene, "name", "Journey 2 landed on Name it");
+    const shown = await d.page.evaluate(() => document.querySelector("#homeName")?.textContent.trim() ?? null);
+    assert.equal(shown, (await dFirstRowName()) || "Piggy", `#homeName ${JSON.stringify(shown)}`); // an empty name shows as "Piggy" (displayPiggyName main.js:325)
+  });
+  await check("d · Journey 2 on the recovered device: bell → Explore → Job Send → Receipt → Home", async () => {
+    // d is a's address on the same stand-in fork: a's and c's rounds already tidied every allowlisted spender (allowance_already_zero).
+    // This check pins the recovered device's Job path, not the stand-in's spender count: its starting allowances come back so there is something to tidy.
+    main.forkChain.resetAllowances();
+    await until(d, "Explore or bell", async (x) => x.scene === "explore" || (await d.page.evaluate(() => !!document.querySelector("#secondHomeBell"))), 60_000);
+    await walkSecondJob(d, 4); // round 4: d is a's page (rounds 1·2 = a · 3 = c)
+    assert.equal(d.jobGets?.[4], 1, `Job Send Face ID asks ${d.jobGets?.[4]}`);
+  });
+  await check("d · jar → Money: the recovered Piggy has one fork row at home, named as the device knows it (no legacy id)", async () => {
+    await until(d, "jar", () => jarShown(d), 20_000); await sleep(2500);
+    await d.page.locator("#a905Jar").click();
+    await until(d, "Money", async () => d.page.evaluate(() => !!document.querySelector(".a911-screen")), 10_000); await sleep(800);
+    const rows = await d.page.evaluate(() => { const k = Object.keys(localStorage).find((x) => x.startsWith("araso.piggyRegistry.monad-fork.")); try { return k ? JSON.parse(localStorage.getItem(k)).piggies || [] : []; } catch { return []; } });
+    const text = (await look(d)).text;
+    assert.equal(rows.length, 1, `fork registry rows ${JSON.stringify(rows)}`);
+    assert.ok(rows[0].location === "home" && String(rows[0].address).toLowerCase() === String(dAddress).toLowerCase(), JSON.stringify(rows[0]));
+    assert.equal(rows[0].name || "", await dFirstRowName(), `row name ${JSON.stringify(rows[0].name)}`);
+    assert.ok(!text.some((t) => /^legacy-0x/.test(t)), `legacy id shown: ${JSON.stringify(text.slice(-10))}`);
+  });
+  await check("d · Money on the recovered device: Gift a Piggy is on", async () => {
+    assert.ok(await d.page.locator("#a905GiftPiggy").count(), "no Gift a Piggy row");
+    assert.ok(!(await d.page.locator("#a905GiftPiggy").isDisabled()), "Gift a Piggy is off");
   });
   await a.context.close();
 }
