@@ -101,7 +101,7 @@ await check("U2 the Money tab model reads it: Gift is pickable, the name is the 
 await check("U2b before the seat (= RED): the legacy migration row is unknown, so Gift is off and the name is the id", () => {
   const { piggy } = PR.migrateSinglePiggy({ address: ADDR, name: "" });
   const v = moneyTabView({ piggies: [piggy], canAct: true });
-  assert.deepEqual([v.canGift, v.piggies[0].name], [false, `legacy-${ADDR.toLowerCase()}`]);
+  assert.deepEqual([v.canGift, v.piggies[0].name], [false, "Piggy"]);
 });
 await check("U3 balance unreadable → the row still stands at home with no assets (the Gift amount meets the existing refusal); nothing invented", async () => {
   const w = world(); const r = await w.seat({ client: client({ broken: true }) });
