@@ -781,6 +781,12 @@ async function laneMain() {
     assert.equal(rows[0].name || "", await dFirstRowName(), `row name ${JSON.stringify(rows[0].name)}`);
     assert.ok(!text.some((t) => /^legacy-0x/.test(t)), `legacy id shown: ${JSON.stringify(text.slice(-10))}`);
   });
+  // [A-1379 r2 · cell 6 (가) small] the Money row's name place uses the same word as Home: the device's name, else "Piggy" (no id letters)
+  await check("d · Money row name = the Home word (the device's name, or Piggy when empty); no legacy / 0x letters on the row", async () => {
+    const names = await d.page.evaluate(() => [...document.querySelectorAll(".a911-piggy__name, .a905-money__piggyName")].map((e) => e.textContent.trim()));
+    assert.deepEqual(names, [(await dFirstRowName()) || "Piggy"], `Money row names ${JSON.stringify(names)}`);
+    assert.ok(!names.some((t) => /legacy|0x/i.test(t)), `id letters on the row ${JSON.stringify(names)}`);
+  });
   await check("d · Money on the recovered device: Gift a Piggy is on", async () => {
     assert.ok(await d.page.locator("#a905GiftPiggy").count(), "no Gift a Piggy row");
     assert.ok(!(await d.page.locator("#a905GiftPiggy").isDisabled()), "Gift a Piggy is off");
