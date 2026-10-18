@@ -2024,7 +2024,7 @@ let lastGiftClaimSettlement = null;
 async function loadPendingGiftDisplay(claim) {
   if (!claim || claim !== pendingGiftClaim || !claim.token) return false;
   try {
-    const res = await fetch(giftReadLetterUrl(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "read_letter", token: claim.token }) });
+    const res = await fetch(giftReadLetterUrl(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(giftReadLetterBody(claim)) });
     const body = await res.json();
     if (!res.ok || body?.ok !== true || typeof body.giftId !== "string" || !/^0x[0-9a-f]{64}$/.test(body.giftId)) return false;
     const letter = await verifyGiftLetter({ note: body.note, letterHash: body.letterHash });
@@ -15898,6 +15898,13 @@ const A966_FORK_GIFT_EXPIRY_SECONDS = 7 * 24 * 3600; // the fork Gift's deadline
 function giftReadLetterUrl() {
   const env = import.meta.env || {};
   return a1063GiftTransport(CHAIN_PROFILE, { sponsorUrl: env.VITE_ARASO_FORK_GIFT_SPONSOR_URL, escrow: env.VITE_ARASO_FORK_GIFT_ESCROW })?.sponsorUrl || "/api/gift-sponsor";
+}
+// [A-1407] 편지 읽기 몸 — fork 대납 주소로 갈 때만 보내기(post)와 같은 forkInstanceId·escrowAddress 를 붙인다(fork 워커 묶음 검사). 아니면 지금처럼 { action, token }.
+function giftReadLetterBody(claim) {
+  const env = import.meta.env || {};
+  const endpoint = a1063GiftTransport(CHAIN_PROFILE, { sponsorUrl: env.VITE_ARASO_FORK_GIFT_SPONSOR_URL, escrow: env.VITE_ARASO_FORK_GIFT_ESCROW });
+  const body = { action: "read_letter", token: claim.token };
+  return endpoint ? { ...body, forkInstanceId: CHAIN_PROFILE.forkInstanceId, escrowAddress: endpoint.escrow } : body;
 }
 const A966_FORK_GIFT = (() => {
   try {

@@ -17,7 +17,7 @@ const functionBlock = (s, name) => {
   }
   return "";
 };
-const source = [functionBlock(main, "giftReadLetterUrl"), functionBlock(main, "loadPendingGiftDisplay")].join("\n").replaceAll("import.meta.env", "__env");
+const source = [functionBlock(main, "giftReadLetterUrl"), functionBlock(main, "giftReadLetterBody"), functionBlock(main, "loadPendingGiftDisplay")].join("\n").replaceAll("import.meta.env", "__env");
 assert.ok(source.includes("async function loadPendingGiftDisplay("), "loadPendingGiftDisplay found");
 
 const TOKEN = "A".repeat(22);
@@ -47,12 +47,12 @@ async function check(name, fn) {
   try { await fn(); pass += 1; console.log(`PASS ${name}`); } catch (e) { console.log(`FAIL ${name}\n  ${e.message.split("\n").join("\n  ")}`); process.exitCode = 1; }
 }
 
-await check("(가) fork + transport: read_letter POSTs to the fork sponsorUrl, body { action, token } only", async () => {
+await check("(가) fork + transport: read_letter POSTs to the fork sponsorUrl, body { action, token, forkInstanceId, escrowAddress } (the fork worker binding, same values as the Gift send)", async () => {
   const r = await run({ profile: FORK, env: FORK_ENV });
   assert.equal(r.calls.length, 1);
   assert.equal(r.calls[0].url, "https://fork.example/gift-sponsor");
   assert.equal(r.calls[0].init.method, "POST");
-  assert.deepEqual(JSON.parse(r.calls[0].init.body), { action: "read_letter", token: TOKEN });
+  assert.deepEqual(JSON.parse(r.calls[0].init.body), { action: "read_letter", token: TOKEN, forkInstanceId: "fork-143-test", escrowAddress: FORK_ENV.VITE_ARASO_FORK_GIFT_ESCROW });
   assert.equal(r.out, true);
   assert.equal(r.claim.giftId, GIFT_ID);
   assert.deepEqual(r.claim.display, { note: "hi", amountUsd: 20 });
