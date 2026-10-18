@@ -6795,7 +6795,7 @@ html .a911-addrField { width: 100%; resize: none; font: 400 16px / 1.45 ui-monos
 html .a911-state { font-size: var(--a911-body); padding: 8px 0; }
 
 /* [A-911 wiring] the picked card flips on a tap anywhere on it (main.js listener); its amount box takes its own tap, so the invisible card button steps aside */
-html .a911-card.is-picked .a911-cardTap { pointer-events: none; }
+html .a911-card.is-picked:not([data-gift-receive-card]) .a911-cardTap { pointer-events: none; }
 html .a911-card.is-picked { cursor: pointer; }
 html .a911-payBtn { display: inline; padding: 12px 2px; margin: -12px 0; font: inherit; color: inherit; }
 html .a911-faceLine p { margin: 0; }
