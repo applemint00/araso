@@ -15407,6 +15407,25 @@ function a1363Journey1() {
   return journey1Found && journey1Found.address === String(state.address || "").toLowerCase() ? journey1Pointers([journey1Found]) : null;
 }
 let a956EntryBusy = false;
+// [A-1379 · 81 E33] A recovered Piggy (Check Piggy on a new device: testnet index row with no name and no birth provenance) had no fork
+// index row, so its Journey 2 boot went to Name it (computeInitialScene :373) as if it were new — main.js:2338: no name data ≠ a new Piggy.
+// Once, at the allowed entry before the switch: that testnet row is written into the fork scope the way a recovery writes it
+// (registerControlledPiggy: control proof = the live signer of this address, no provenance = no issuance right on the fork, name = the
+// row's, null stays null). Nothing is written for a named Piggy, without the live signer, or when the fork already has this Piggy's row.
+import { FORK_SCOPE as a1379ForkScope } from "./funding-context.js";
+function a1379SeatRecoveredOnFork() {
+  try {
+    const storage = safeLocalStorage();
+    const here = String(state.address || "").toLowerCase();
+    if (!storage || !here || readPiggyName() || secondJourneyScope().chainId !== "monad-testnet") return { seated: false, reason: "not_here" };
+    if (String(state.activeSignerAddress || "").toLowerCase() !== here) return { seated: false, reason: "no_control_proof" };
+    if (loadMyPiggiesIndex(storage, a1379ForkScope).index.piggies.some((p) => String(p.address).toLowerCase() === here)) return { seated: false, reason: "fork_has_row" };
+    const row = loadMyPiggiesIndex(storage, "monad-testnet").index.piggies.find((p) => !p.sequence && String(p.address).toLowerCase() === here) || null;
+    if (!row || row.provenance) return { seated: false, reason: "not_recovered" };
+    const out = registerControlledPiggy(storage, a1379ForkScope, { id: row.id, name: row.name || null, address: row.address, signerAddress: state.activeSignerAddress, locator: row.locator, at: new Date().toISOString() });
+    return out.ok ? { seated: true, reason: null } : { seated: false, reason: out.reason };
+  } catch { return { seated: false, reason: "threw" }; }
+}
 async function a956ForkMoneyAllowed() {
   if (!onForkProfile(CHAIN_PROFILE)) return false;
   try {
@@ -15466,6 +15485,7 @@ async function a956Enter({ reenter = false } = {}) {
     };
     const r = await requestForkEntry({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: piggy, journey1: a1363Journey1(), signMessage });
     if (r.allowed === true && !state.appLock && activeAccount === account && (reentering || state.scene === "sendstay")) {
+      if (!reentering) a1379SeatRecoveredOnFork();
       if (!reentering && !a956SwitchJourney(2)) { console.debug("fork_entry", "switch_busy"); return false; } // [A-1357] a refused switch is not an entry: the Home cue comes back
       return true;
     }
@@ -15501,7 +15521,7 @@ async function a956Enter({ reenter = false } = {}) {
     const piggy = String(state.address).toLowerCase();
     checkForkPermission({ url: forkEntryUrl(import.meta.env), invite: a1263ServerInvite(() => readForkInvite()), publicEntry: a1160PublicEntryOpen(), piggyAddress: state.address, forkInstanceId: import.meta.env.VITE_ARASO_FORK_INSTANCE_ID })
       .then((r) => {
-        if (r?.allowed === true) { if (state.scene === "sendstay" && !state.appLock && !state.secondJourneyCompletedOnce) a956SwitchJourney(2); return; }
+        if (r?.allowed === true) { if (state.scene === "sendstay" && !state.appLock && !state.secondJourneyCompletedOnce) { a1379SeatRecoveredOnFork(); a956SwitchJourney(2); } return; }
         if (r?.reason === "status_failed" || journey1Searched.has(piggy)) return; // the server did not answer: the next Home asks again
         journey1Searched.add(piggy);
         return findJourney1Pointers({ rpc: a1363TestnetRead, address: piggy, target: SHMON_ADDRESS, chainId: MONAD_TESTNET.id }).then((found) => {
