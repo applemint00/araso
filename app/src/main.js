@@ -2021,10 +2021,16 @@ let giftReceiveFlipped = false;
 // 테스트 관찰용(렌더되지 않는다) — settleBoundGiftClaim() 이 마지막으로 낸 결과.
 let lastGiftClaimSettlement = null;
 
+// [A-1399] 편지 읽기 주소 — fork 프로필 + a1063 fork 대납 주소(이미 있는 env 2개)가 맞으면 그 주소, 아니면 지금처럼 /api/gift-sponsor.
+function giftReadLetterUrl() {
+  const env = import.meta.env || {};
+  return a1063GiftTransport(CHAIN_PROFILE, { sponsorUrl: env.VITE_ARASO_FORK_GIFT_SPONSOR_URL, escrow: env.VITE_ARASO_FORK_GIFT_ESCROW })?.sponsorUrl || "/api/gift-sponsor";
+}
+
 async function loadPendingGiftDisplay(claim) {
   if (!claim || claim !== pendingGiftClaim || !claim.token) return false;
   try {
-    const res = await fetch("/api/gift-sponsor", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "read_letter", token: claim.token }) });
+    const res = await fetch(giftReadLetterUrl(), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "read_letter", token: claim.token }) });
     const body = await res.json();
     if (!res.ok || body?.ok !== true || typeof body.giftId !== "string" || !/^0x[0-9a-f]{64}$/.test(body.giftId)) return false;
     const letter = await verifyGiftLetter({ note: body.note, letterHash: body.letterHash });
