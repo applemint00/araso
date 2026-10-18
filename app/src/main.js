@@ -2021,12 +2021,6 @@ let giftReceiveFlipped = false;
 // 테스트 관찰용(렌더되지 않는다) — settleBoundGiftClaim() 이 마지막으로 낸 결과.
 let lastGiftClaimSettlement = null;
 
-// [A-1399] 편지 읽기 주소 — fork 프로필 + a1063 fork 대납 주소(이미 있는 env 2개)가 맞으면 그 주소, 아니면 지금처럼 /api/gift-sponsor.
-function giftReadLetterUrl() {
-  const env = import.meta.env || {};
-  return a1063GiftTransport(CHAIN_PROFILE, { sponsorUrl: env.VITE_ARASO_FORK_GIFT_SPONSOR_URL, escrow: env.VITE_ARASO_FORK_GIFT_ESCROW })?.sponsorUrl || "/api/gift-sponsor";
-}
-
 async function loadPendingGiftDisplay(claim) {
   if (!claim || claim !== pendingGiftClaim || !claim.token) return false;
   try {
@@ -15899,6 +15893,12 @@ import { createGiftSponsorClaimSubmitter as a966SponsorSubmitter, useForkGiftRec
 import { GIFT_SPONSOR_MAX_EXPIRY_SECONDS as a966ExpirySeconds } from "./gift-sponsor-7702.js";
 import { custom as a966Custom, defineChain as a966DefineChain } from "viem";
 const A966_FORK_GIFT_EXPIRY_SECONDS = 7 * 24 * 3600; // the fork Gift's deadline from now (wall clock; the escrow checks it on the fork's slower clock)
+// [A-1399] 편지 읽기 주소 — fork 프로필 + a1063 fork 대납 주소(이미 있는 env 2개)가 맞으면 그 주소, 아니면 지금처럼 /api/gift-sponsor.
+// (here inside the A-966 block: hoisted, read only by loadPendingGiftDisplay; keeps the fork env names inside this block)
+function giftReadLetterUrl() {
+  const env = import.meta.env || {};
+  return a1063GiftTransport(CHAIN_PROFILE, { sponsorUrl: env.VITE_ARASO_FORK_GIFT_SPONSOR_URL, escrow: env.VITE_ARASO_FORK_GIFT_ESCROW })?.sponsorUrl || "/api/gift-sponsor";
+}
 const A966_FORK_GIFT = (() => {
   try {
     const env = import.meta.env || {};
