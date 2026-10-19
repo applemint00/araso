@@ -9,6 +9,18 @@ const KEEP = 2000;
 const RATE = "local c=redis.call('incr',KEYS[1]) if c==1 then redis.call('expire',KEYS[1],ARGV[1]) end return c";
 const RATE_WINDOW_SECONDS = 600;
 const RATE_LIMIT = 60;
+// [A-1431] Masked before the store: a tester may paste a wallet address, a tx hash / key, an email or a link token.
+// Order matters: 64-hex first (so a key is not half an address), then the address, the email, then any long base64url run
+// that mixes digits and letters (a plain long word stays).
+const MASKS = [
+  [/(?:0x)?[0-9a-fA-F]{64,}/g, '[token]'],
+  [/0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/g, '[addr]'],
+  [/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, '[email]'],
+  [/[A-Za-z0-9_-]{13,}/g, (run) => (/[0-9]/.test(run) && /[A-Za-z]/.test(run) ? '[token]' : run)],
+];
+export function maskFeedbackText(text) {
+  return MASKS.reduce((out, [re, to]) => out.replace(re, to), text);
+}
 function reply(res, status) {
   res.statusCode = status;
   res.setHeader('cache-control', 'no-store');
@@ -50,7 +62,7 @@ export function createFeedbackHandler({ cmd = null, env = process.env, now = () 
       if (!store) return reply(res, 503);
       const key = `${ARASO_REDIS_PREFIX}:feedback`;
       if (Number(await store('EVAL', RATE, 1, `${key}:rl`, RATE_WINDOW_SECONDS)) > RATE_LIMIT) return reply(res, 429);
-      await store('LPUSH', key, JSON.stringify({ t: now().toISOString(), screen: value.screen, os: value.os, text: value.text }));
+      await store('LPUSH', key, JSON.stringify({ t: now().toISOString(), screen: value.screen, os: value.os, text: maskFeedbackText(value.text) }));
       await store('LTRIM', key, 0, KEEP - 1);
       await store('EXPIRE', key, TTL_SECONDS);
       return reply(res, 204);

@@ -1,4 +1,5 @@
 import { track } from "./track.js";
+import { giftReceiveCode } from "./event-schema.js";
 import { coarseOsBucket } from "./os-bucket.js";
 import { mountFeedback, postFeedback } from "./feedback-form.js";
 import { handleInAppBrowser } from "./inapp.js";
@@ -6284,6 +6285,21 @@ async function openGiftInvite() {
     await playInviteTimelineAfterAuth(destination);
     return out;
   });
+}
+
+// [A-1431] Gift receive result event: one fixed word per receive tap that ends (ok · auth · unavailable · fail), never a value.
+// Wrapped once so openGiftInvite stays as it was; a tap without a waiting Gift (plain Piggy open) sends nothing here.
+{
+  const a1431BaseOpenGiftInvite = openGiftInvite;
+  openGiftInvite = async () => {
+    const waiting = !!pendingGiftClaim;
+    const before = lastGiftClaimSettlement;
+    const out = await a1431BaseOpenGiftInvite();
+    if (!waiting) return out;
+    const code = giftReceiveCode({ settled: lastGiftClaimSettlement !== before ? lastGiftClaimSettlement : null, out });
+    if (code && typeof track === "function") track("gift_receive", code);
+    return out;
+  };
 }
 
 // 봉투 hero — 두 아트보드가 같은 480×365 안쪽 좌표를 쓴다. 모바일은 그 덩어리를 0.55833 로 줄인다.
