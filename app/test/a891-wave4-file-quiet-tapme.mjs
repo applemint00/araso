@@ -59,7 +59,7 @@ await check("N2 named timing constants keep the post-file 8000 ms separate from 
   assert.equal((MAIN_NO_A904.match(/POST_FILE_QUIET_HOME_MS/g) || []).length, 2, "declared + used once (the post-file arm)");
   assert.match(MAIN, /const HOME_FIRST_JOURNEY_CARD_MS = 1200;/);
   assert.match(MAIN, /const PACE_SEAT_BREATH_MS = 2000;/);
-  assert.match(MAIN, /const PACE_HOME_TO_CARD_MIN_MS = 10000;/);
+  assert.match(MAIN, /const PACE_HOME_TO_CARD_MIN_MS = 20000;/); // [A-1433 A2] pre: 10000
   assert.match(cutFn(MAIN, "a891ArmPostFileQuietHome"), /sceneTimeout\(arm, POST_FILE_QUIET_HOME_MS\);/);
 });
 

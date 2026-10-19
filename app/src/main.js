@@ -7331,9 +7331,9 @@ const HOME_FIRST_JOURNEY_CARD_MS = 1200;
 // First-journey pacing: a first-time person needs time to read each beat before the next one appears.
 const PACE_BREATH_MS = 1000;            // between two beats
 const PACE_SEAT_BREATH_MS = 2000;       // Piggy sits on Home → Chog's first line
-const PACE_HOME_TO_CARD_MIN_MS = 10000; // Piggy sits on Home → First Send card, at least
+const PACE_HOME_TO_CARD_MIN_MS = 20000; // Piggy sits on Home → First Send card, at least [A-1433 A2 · pre-A-1433: 10000]
 const PACE_GRANT_SETTLE_MS = 25000;     // grant confirmed → the node accepts the first deposit (live: refused 16–22 s after the grant)
-const PACE_SEND_ARM_MS = 1000;          // last job line → Send can be pressed
+const PACE_SEND_ARM_MS = 2000;          // First Send card → Send can be pressed [A-1433 A3 · pre-A-1433: last job line + 1000]
 const PACE_OUTSIDE_MIN_MS = 8000;       // Away stays on screen at least this long
 const PACE_RECEIPT_BREATH_MS = 1500;    // First Return → Receipt
 const PACE_SULKY_MS = 3000;             // failed Send: sulky face, then Send comes back
@@ -7344,6 +7344,11 @@ function chogSpeakMs(text) { return Math.round(String(text).length * 60 + 1200);
 const chogLinesStartedAt = new Map();
 function chogLinesMs(lines) { return lines.reduce((ms, t) => ms + chogSpeakMs(t) + PACE_BREATH_MS, 0); } // all read, a breath after each
 function chogLinesRestart(key) { chogLinesStartedAt.delete(key); }
+// [A-1433] when this key's lines are all said (the last line read, or the voice ended if longer); 0 = never started
+function chogLinesEndAt(key, lines) {
+  const clock = chogLinesStartedAt.get(key);
+  return clock ? clock.at + Math.max(chogLinesMs(lines) - PACE_BREATH_MS, clock.voiceMs || 0) : 0;
+}
 function chogLineWaits(key, lines) { // ms each line still waits before it shows (0 = showing)
   const sig = lines.join("\n");
   const was = chogLinesStartedAt.get(key);
@@ -13176,6 +13181,8 @@ function chogHelpMount() {
     if (jobHelpSay()) return; // [A-1353 ②] on the Journey 2 job card, ? = that job's explanation
     const now = chogHelpSaid && chogHelpSaid.scene === state.scene ? chogHelpSaid : null;
     if (!now) return;
+    // [A-1433 A4] first Home: a tap while Chog is still saying the three lines says nothing again (the card waits on a re-say: revealSendCard)
+    if (now.id === "firstSendChogCue" && chogLinesEndAt(now.id, now.lines) > Date.now()) return;
     document.querySelector(`#chogHome #${now.id}`)?.remove(); // said again from the start (the one-line-at-a-time clock restarts)
     chogLinesRestart(now.id);
     insertChogCueLine(now.id, now.lines);
@@ -13268,12 +13275,15 @@ function insertChogCueLine(id, text) {
 
 // CG-01: once on the first arrival after Name save (isFirstArrival; revisits, reloads and added Piggies never reach it).
 // It starts before the card, is restored after the card render, and the first Send tap clears it.
-const FIRST_SEND_CUE_LINE = "work's coming! let's send Piggy to work\nyour money does the job.";
-// The first job line is said in two beats: "work's coming!" when Piggy sits, the job itself once the card is up.
-const FIRST_SEND_CUE_PARTS = FIRST_SEND_CUE_LINE.split(/(?<=!) (?=let's)|\n/);
-function sayFirstSendCue(stage = "job") {
+// [A-1433 · Owner 06:1x · A1] three lines, said before the card in one bubble one at a time (earlier lines stay), word for word —
+// not through the chog-mood table. pre-A-1433: "work's coming! let's send Piggy to work\nyour money does the job." in two beats
+// ("work's coming!" when Piggy sat, the job lines once the card was up), read through chogMoodLines.
+const FIRST_SEND_CUE_LINE = "work's coming!\nlet's send Piggy to work~\nyour money does the job ♪";
+const FIRST_SEND_CUE_PARTS = FIRST_SEND_CUE_LINE.split("\n");
+// Said when Piggy has sat + 2 s; said again after the card render with the same clock (shows as it was, nothing is said twice).
+function sayFirstSendCue() {
   if (state.appLock || state.scene !== "sendstay" || sendBusy()) return false;
-  const inserted = insertChogCueLine("firstSendChogCue", chogMoodLines(FIRST_SEND_CUE_PARTS.slice(stage === "coming" ? 0 : 1, stage === "coming" ? 1 : undefined))); // [A-1326]
+  const inserted = insertChogCueLine("firstSendChogCue", FIRST_SEND_CUE_PARTS);
   if (inserted && state.sendCardVisible) {
     document.querySelector("#sendButton")?.addEventListener("click", () => {
       document.querySelector("#firstSendChogCue")?.remove();
@@ -14503,9 +14513,10 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
           sceneTimeout(revealSendCard, Math.max(50, cueWait));
           return;
         }
-        // The card waits for both: time to understand Home, and the grant to be spendable on the node.
-        // A grant that has not answered by then never holds the card: the Send tap asks again and shows its own failure.
-        const minAt = arrivedAt + PACE_HOME_TO_CARD_MIN_MS;
+        // The card waits for all: time to understand Home, Chog's three lines said (+ a breath; a ? re-say moves this), and the grant
+        // spendable on the node. A grant that has not answered by then never holds the card: the Send tap asks again and shows its own failure.
+        const cueEndAt = chogLinesEndAt("firstSendChogCue", chogSaidLines("firstSendChogCue", FIRST_SEND_CUE_PARTS));
+        const minAt = Math.max(arrivedAt + PACE_HOME_TO_CARD_MIN_MS, cueEndAt ? cueEndAt + PACE_BREATH_MS : 0); // [A-1433 A2]
         const readyAt = firstGrantReadyAt === null ? (Date.now() >= minAt ? minAt : Infinity) : Math.max(minAt, firstGrantReadyAt);
         if (Date.now() < readyAt) {
           sceneTimeout(revealSendCard, readyAt === Infinity ? 500 : Math.max(50, readyAt - Date.now()));
@@ -14515,18 +14526,17 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         homeChog?.closeCard?.();
         state.sendCardVisible = true;
         render();
-        sceneTimeout(() => {
-          sayFirstSendCue("job");
-          sceneTimeout(armSend, chogLinesMs(chogSaidLines("firstSendChogCue", chogMoodLines(FIRST_SEND_CUE_PARTS.slice(1)))) - PACE_BREATH_MS + PACE_SEND_ARM_MS);
-        }, PACE_BREATH_MS);
+        sayFirstSendCue(); // the render dropped the lines: they come back as they were (same clock)
+        sceneTimeout(armSend, PACE_SEND_ARM_MS); // [A-1433 A3] card + 2 s
       };
+      // [A-1433 A1] sit + 2 s: the three lines, then the card when revealSendCard's conditions are all met
       const announceFirstSend = () => {
         if (state.recordsCardVisible) {
           sceneTimeout(announceFirstSend, HOME_FIRST_JOURNEY_CARD_MS);
           return;
         }
-        sayFirstSendCue("coming");
-        sceneTimeout(revealSendCard, chogSpeakMs(chogMoodLine(FIRST_SEND_CUE_PARTS[0])) + PACE_BREATH_MS);
+        sayFirstSendCue();
+        revealSendCard();
       };
       sceneTimeout(announceFirstSend, PACE_SEAT_BREATH_MS);
     }

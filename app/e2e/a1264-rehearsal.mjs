@@ -52,7 +52,7 @@ const COPY_ALLOW = new Set([...MOOD_COPY,
   "still in home", "no records yet", "wanna let Piggy try one?", "send?", "$5", "Piggy's first job?", "0.001 MON test",
   "You sign. Piggy takes your money to work.", "send", "stay home", "—", "<NAME> is coming home", "is coming home", "when there's", "a new job", "for piggy,", "the jar's sparkling.", "wanna tap it?", /* [A-1366] pieces */ "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Face ID may appear once.",
-  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
+  "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", /* [A-1433 A1] the first Home's three lines */ "let's send Piggy to work~", "your money does the job ♪", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Face ID was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
   "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "piggy goes to its first job", "with your $5.", /* [A-1364 · Owner 18:2x the first sheet's two lines · "piggy goes with this." gone] */ "not now", "allow", "want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?", /* [A-1360] the approval sheet */ "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
@@ -510,21 +510,25 @@ async function laneMain() {
     assert.deepEqual(st[2]?.say, [C("get your piggy"), C("make passkey to hatch the piggy")], `after tap 2 ${JSON.stringify(st[2])}`);
     assert.equal(st[2]?.face, true, "Face ID with the second line");
   });
-  await check("pace · Piggy sits → Send card ≈ 10 s (grant asked early enough that the node is ready)", () => { const d = cardAt - sitAt; assert.ok(d >= 9_500 && d <= 12_500, `${(d / 1000).toFixed(1)} s after sitting`); });
+  // [A-1433 A2 · Cowork 07:1x 답] pre-A-1433: card ≈ 10 s after sitting (9.5–12.5 s)
+  await check("pace · Piggy sits → Send card ≥ 20 s (the three lines said first · a late grant can only make it later)", () => { const d = cardAt - sitAt; assert.ok(d >= 20_000 - 150, `${(d / 1000).toFixed(1)} s after sitting`); });
   await check("pace · Chog's lines on the name card stay inside the screen (no cut words)", () => { const out = tl.filter((e) => e.k === "sayOut" && e.v).map((e) => e.v); assert.deepEqual(out, []); });
-  await check("pace · first Chog line on Home = work's coming! before the card; the two job lines come after the card", () => {
+  // [A-1433 A1] pre-A-1433: "work's coming!" before the card, the two job lines after it (jobLine ≥ card + 1 s) · two job lines one at a time
+  await check("pace · first Chog line on Home = work's coming!; all three lines come before the card", () => {
     const first = tl.find((e) => e.k === "chog" && e.v && e.t >= homeAt);
     assert.equal(first?.v, "work's coming!", `first Home line: ${first?.v}`);
-    const jobLine = tl.find((e) => e.k === "chog" && (e.v || "").includes(C("let's send Piggy to work")));
-    assert.ok(jobLine && jobLine.t >= cardAt + 1000 - 50, `job lines at ${jobLine?.t} · card at ${cardAt}`); // 50 ms = the timeline's sampling step (seen 996–999 ms on a 1000 ms breath)
+    const jobLine = tl.find((e) => e.k === "chog" && e.v === "work's coming! let's send Piggy to work~ your money does the job ♪");
+    assert.ok(jobLine && jobLine.t < cardAt, `all three lines at ${jobLine?.t} · card at ${cardAt}`);
   });
-  await check("pace · two job lines come one at a time: the first stays, the second joins after it is read (+1 s)", () => {
-    const one = tl.find((e) => e.k === "chog" && e.v === C("let's send Piggy to work"));
-    const both = tl.find((e) => e.k === "chog" && e.v === `${C("let's send Piggy to work")} ${C("your money does the job.")}`);
-    assert.ok(one && both && both.t - one.t >= chogMs(C("let's send Piggy to work")) + 1000 - 300, `first ${one?.t} · both ${both?.t} · seen ${JSON.stringify(tl.filter((e) => e.k === "chog" && /Piggy to work/.test(e.v || "")).map((e) => e.v).slice(0, 4))}`);
+  await check("pace · three lines come one at a time: earlier lines stay, the next joins after the one before is read (+1 s)", () => {
+    const one = tl.find((e) => e.k === "chog" && e.v === "work's coming!");
+    const two = tl.find((e) => e.k === "chog" && e.v === "work's coming! let's send Piggy to work~");
+    const all = tl.find((e) => e.k === "chog" && e.v === "work's coming! let's send Piggy to work~ your money does the job ♪");
+    assert.ok(one && two && all && two.t - one.t >= chogMs("work's coming!") + 1000 - 300 && all.t - two.t >= chogMs("let's send Piggy to work~") + 1000 - 300, `one ${one?.t} · two ${two?.t} · all ${all?.t} · seen ${JSON.stringify(tl.filter((e) => e.k === "chog" && /coming|Piggy to work/.test(e.v || "")).map((e) => e.v).slice(0, 5))}`);
   });
   await check("pace · no dash in anything Chog says", () => { const d = tl.filter((e) => e.k === "chog" && /—/.test(e.v || "")).map((e) => e.v); assert.deepEqual([...new Set(d)], []); });
-  await check("pace · Send can be pressed only after the job lines end (+1 s), not as the card appears", () => { assert.ok(sendAt - cardAt >= 4_000, `${((sendAt - cardAt) / 1000).toFixed(1)} s`); });
+  // [A-1433 A3 · Cowork 07:1x 답] pre-A-1433: Send ≥ 4 s after the card (the job lines came after it)
+  await check("pace · Send can be pressed 2 s after the card (not as it appears)", () => { const d = sendAt - cardAt; assert.ok(d >= 2_000 - 300 && d <= 2_000 + 300, `${(d / 1000).toFixed(1)} s`); });
   // [A-1299] the grant received at Home arrival is not asked again at Send (no already_funded noise); a failed early grant is still asked at Send (fault lanes)
   await check("grant · received at Home arrival → Send does not ask again: one /api/grant · no grant/already_funded event", () => {
     const asks = main.requests.filter((r) => r.person === "a" && r.path === "/api/grant").length;

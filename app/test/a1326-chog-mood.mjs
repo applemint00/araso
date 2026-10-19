@@ -57,9 +57,11 @@ await check("④ every letter on the Send card: 1 px heavier underneath (ink = i
   assert.match(css, /\.sendCard__explain,\s*\.trialStamp--send\s*\{[^}]*text-shadow:\s*0 1px 0 #8a6a00/);
   assert.equal(/1\.5px 0 #8a6a00/.test(css), false, "1.5 px is too much (Owner 19:0x)");
 });
-await check("① the screens read the table: entry · first Send cue · filed · second intro · tap me to find out · closing soon", () => {
+// [A-1433 A1] the first Send cue's three lines are said word for word, not through the table (pre-A-1433: chogMoodLines(FIRST_SEND_CUE_PARTS…))
+await check("① the screens read the table: entry · filed · second intro · tap me to find out · closing soon · (first Send cue: its own three lines)", () => {
   const main = readFileSync(new URL("../src/main.js", import.meta.url), "utf8");
-  for (const re of [/chogMoodLines\(ENTRY_CHOG_LINES\)/, /chogMoodLines\(FIRST_SEND_CUE_PARTS/, /chogMoodLine\(A891_FILED_LINE\)/, /chogMoodLines\(A891_SECOND_INTRO_LINES\)/, /startTapCue\?\.\(chogMoodLine\("tap me to find out"\)\)/, /chogMoodLines\(APP_CLOSING_SOON_LINES\)/, /playSound\("chog", /])
+  assert.doesNotMatch(main, /chogMoodLines\(FIRST_SEND_CUE_PARTS/);
+  for (const re of [/chogMoodLines\(ENTRY_CHOG_LINES\)/, /chogMoodLine\(A891_FILED_LINE\)/, /chogMoodLines\(A891_SECOND_INTRO_LINES\)/, /startTapCue\?\.\(chogMoodLine\("tap me to find out"\)\)/, /chogMoodLines\(APP_CLOSING_SOON_LINES\)/, /playSound\("chog", /])
     assert.match(main, re);
 });
 console.log(`A1326 chog mood ${pass} PASS / ${fail} FAIL / 0 SKIP`);
