@@ -16,6 +16,7 @@ const MASKS = [
   [/(?:0x)?[0-9a-fA-F]{64,}/g, '[token]'],
   [/0x[0-9a-fA-F]{40}(?![0-9a-fA-F])/g, '[addr]'],
   [/[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g, '[email]'],
+  [/(?:\+?82[-.\s]?|0)1[016789][-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/g, '[phone]'],
   [/[A-Za-z0-9_-]{13,}/g, (run) => (/[0-9]/.test(run) && /[A-Za-z]/.test(run) ? '[token]' : run)],
 ];
 export function maskFeedbackText(text) {

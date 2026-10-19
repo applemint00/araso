@@ -73,6 +73,16 @@ await test('(나) feedback: address · token · email · long base64url are mask
   assert.equal(row.text, 'sent to [addr] tx [token] key [token] mail [email] link #[token] ok');
 });
 
+await test('(나) feedback: a phone number is masked; dates, amounts and widths stay', async () => {
+  const phones = ['010-1234-5678', '01012345678', '+82 10 1234 5678'];
+  const text = `call ${phones[0]} or ${phones[1]} or ${phones[2]} · sent 2026-10-19 · 20 USDC · 390`;
+  const r = await post(createFeedbackHandler, { text, screen: 'home', os: 'ios18_7' });
+  assert.equal(r.status, 204);
+  const all = JSON.stringify(r.calls);
+  for (const p of phones) assert.equal(all.includes(p), false, `no ${p} in the store`);
+  assert.equal(JSON.parse(r.calls.find((c) => c[0] === 'LPUSH')[2]).text, 'call [phone] or [phone] or [phone] · sent 2026-10-19 · 20 USDC · 390');
+});
+
 await test('(나) feedback: ordinary words, numbers and long plain words are kept as written', async () => {
   const text = 'the bell rang twice at 10:42, unbelievably slow · 선물 받기가 안 됨 · international-friendship 0x12';
   const r = await post(createFeedbackHandler, { text, screen: 'home', os: 'ios18_7' });
@@ -80,4 +90,4 @@ await test('(나) feedback: ordinary words, numbers and long plain words are kep
   assert.equal(JSON.parse(r.calls.find((c) => c[0] === 'LPUSH')[2]).text, text);
 });
 
-console.log(`A-1431: ${n}/5 PASS`);
+console.log(`A-1431: ${n}/6 PASS`);
