@@ -93,7 +93,9 @@ export function forkJournalInspector(client, escrow) {
     if (row.state !== "RESERVED" && ![row.installTx, row.commitTx, row.revokeTx, row.claimTx, row.inflight?.txHash, row.revokeInflight?.txHash].some(Boolean)) return "unknown";
     if (row.state === "INSTALLED" || row.state === "REVOKED") {
       const code = (await client.getCode({ address: row.plan.delegation.delegator }) ?? "0x").toLowerCase();
-      const expected = row.state === "REVOKED" ? "0x" : `0xef0100${row.plan.authorization.address.slice(2).toLowerCase()}`;
+      // [A-1426] R3 REVOKE+ARCHIVE archives an INSTALLED row after a done revoke (its revokeTx receipt is checked above): the Piggy is clean.
+      const revoked = row.state === "REVOKED" || row.revokeStatus === "done" && Boolean(row.revokeTx);
+      const expected = revoked ? "0x" : `0xef0100${row.plan.authorization.address.slice(2).toLowerCase()}`;
       if (code !== expected) return "unknown";
     }
     // A receipt remaining after a rollback is not enough: a committed row must
