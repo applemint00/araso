@@ -250,7 +250,11 @@ export function buildGiftSponsorForkRuntime(cfg, deps = {}) {
   const store = deps.store ?? (cfg.ledgerDir ? openGiftSponsorLedger(`${cfg.ledgerDir.replace(/\/+$/, "")}/gift-sponsor-fork-ledger.json`) : null);
   if (!store) throw new Error("MISSING_GIFT_SPONSOR_FORK_STORE");
   const log = deps.log ?? (() => {});
-  const chain = deps.chain ?? createViemGiftSponsorChain({ publicClient, policy });
+  const chain = deps.chain ?? {
+    ...createViemGiftSponsorChain({ publicClient, policy }),
+    // Match the app's next-block window for admission and recovery on an idle fork.
+    getTimestamp: async () => (await publicClient.getBlock({ blockTag: "pending" })).timestamp,
+  };
   const sponsor = deps.sponsor ?? createViemGiftSponsorSender({ publicClient, account, policy });
   const readChainId = deps.readChainId ?? (() => publicClient.getChainId());
   const pins = createPreflightGate({ policy, getCode: chain.getCode, log });

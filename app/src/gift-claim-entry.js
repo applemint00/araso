@@ -1032,11 +1032,9 @@ export function createGiftSponsorClaimSubmitter(cfg = {}) {
         preimage = stringToHex(token);
         commitHash = giftCommitHash({ recipient, preimage, salt });
         authNonce = Number(await chain.getTransactionCount({ address: recipient, blockTag: "latest" }));
-        // [gift-fork] fork only: the delegation window is measured on the fork's own clock = the latest block time, the same base the fork
-        // sponsor server checks against (its runtime reads the latest block). The fork clock runs days behind the wall clock, so a
-        // wall-clock window would be refused there as expired. 143 / 10143 keep the injected `now` (wall clock), unchanged.
+        // An idle fork's next block can jump past the last mined block's delegation window.
         if (forkClock) {
-          const t = Number((await chain.getBlock({ blockTag: "latest" }))?.timestamp);
+          const t = Number((await chain.getBlock({ blockTag: "pending" }))?.timestamp);
           if (!Number.isSafeInteger(t) || t <= 0) return { status: S.COMMIT_FAILED };
           clock = () => t;
         }
