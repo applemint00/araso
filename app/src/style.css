@@ -6603,6 +6603,9 @@ html .a911-face--front { background: #121110; color: var(--a911-cream); }
    the backface rule and shows through, mirrored, on the turned card. The side that faces away is simply not drawn
    (switched halfway through the 450 ms turn below, so the turn looks the same). */
 html .a911-card.is-flipped .a911-face--front, html .a911-card:not(.is-flipped) .a911-face--back { visibility: hidden; }
+/* [A-1428 · E38] after the in-place flip (same nodes, so the turn animates) iOS WebKit culls the turned card's letter face as if it faced
+   away and the card shows nothing; the visibility switch above already removes the side that faces away, so this face needs no culling. */
+html .a911-card.is-flipped .a911-face--back { -webkit-backface-visibility: visible; backface-visibility: visible; }
 html .a911-face--back {
   background: #ebe3d5 var(--a911-tex) center / 290px auto;
   color: var(--a911-ink);
