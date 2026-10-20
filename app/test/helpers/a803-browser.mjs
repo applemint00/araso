@@ -20,6 +20,19 @@ export const harnessPresent = () => existsSync(privatePath("ops/harness/package.
 // [A-950] fork-profile mode (STALE_TESTS.md class (a)): launch({ forkMode: true }) boots the local dev server with the dummy fork config and stores
 // journey "2" before the app loads (helpers/fork-mode.mjs), so the Second UI can open (A-948: level >= 2 AND fork profile). Default off = the
 // unchanged testnet dev server. On the fork profile the storage scope is "monad-fork" and the testnet legacy receipts are not read.
+// [A-1435 · 10-20 고아 vite 40] a test that dies mid-run (exit · SIGINT · SIGTERM) takes the vite launch() spawned with it; the signal is
+// raised again after, so the process still ends the way that signal says. close() and the A803_BASE_URL reuse path (no server) are unchanged.
+const LIVE_SERVERS = new Set();
+let serverGuardOn = false;
+function guardServer(server) {
+  LIVE_SERVERS.add(server);
+  server.once("exit", () => LIVE_SERVERS.delete(server));
+  if (serverGuardOn) return;
+  serverGuardOn = true;
+  const killAll = () => { for (const s of LIVE_SERVERS) { try { s.kill("SIGKILL"); } catch {} } };
+  process.once("exit", killAll);
+  for (const sig of ["SIGINT", "SIGTERM"]) process.once(sig, () => { killAll(); process.kill(process.pid, sig); });
+}
 export async function launch({ forkMode = false, recordVideo } = {}) {
   if (FORK_MODE_OFF) forkMode = false; // A950_FORK_MODE=0: the forkMode-off regression run (helpers/fork-mode.mjs)
   const { chromium } = createRequire(privatePath("ops/harness/package.json"))("playwright");
@@ -29,6 +42,7 @@ export async function launch({ forkMode = false, recordVideo } = {}) {
   if (!BASE) {
     const port = await freePort();
     server = spawn(path.join(REPO, "node_modules/.bin/vite"), ["app", "--mode", "a172-local", "--port", String(port), "--host", "127.0.0.1", "--strictPort"], { cwd: REPO, env: { ...process.env, VITE_ARASO_LOCAL_DEV_ENTRY: "1", VITE_ARASO_LOCAL_DEV_RP_ID: "localhost", VITE_RELAYER_URL: "__HARNESS_NO_GRANT__", ...(forkMode ? FORK_MODE_ENV : {}) }, stdio: ["ignore", "pipe", "pipe"] });
+    guardServer(server);
     await new Promise((resolve, reject) => { const t = setTimeout(() => reject(new Error("vite start timeout")), 30000); server.stdout.on("data", (d) => { if (/ready in/.test(String(d))) { clearTimeout(t); resolve(); } }); server.on("exit", (c) => { clearTimeout(t); reject(new Error(`vite exited ${c}`)); }); });
     BASE = `http://localhost:${port}/`;
   }
