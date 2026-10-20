@@ -127,6 +127,30 @@ try {
     const same = (a, b) => a && b && ["l", "t", "w", "h"].every((k) => near(a[k], b[k], 0.5));
     check(o && z && same(c.more.rect, o.more.rect) && same(o.more.rect, z.more.rect), `(나) the button does not move between the two states (${[c.more?.rect, o?.more?.rect].map((r) => r && `${r.l.toFixed(1)},${r.t.toFixed(1)} ${r.w.toFixed(1)}×${r.h.toFixed(1)}`).join(" → ")})`);
     check(o && z && same(c.card, o.card) && same(o.card, z.card), `(나) the card keeps its place and size open and closed (${[c.card, o?.card].map((r) => r && `${r.w.toFixed(1)}×${r.h.toFixed(1)}`).join(" → ")})`);
+    // [A-1441 · Owner 20:3x "More info의 글 시작점 7.5pt 차이를 기존 디자인대로" · "글자 크기 충돌 = 승인 정본 우선순위"] 시안 v3 (closed card, ink, pt):
+    // card top → "out & back · more info" ink top = 193.0 (± 1) · on-screen sizes = 시안 v2 (Owner 06:4x): out & back 10.5 · dot lines 9.5
+    const px = await W.p.evaluate(() => { const card = document.querySelector("#sendCard"), k = card.getBoundingClientRect().width / card.offsetWidth; const fs = (s) => { const e = document.querySelector(s); return e ? parseFloat(getComputedStyle(e).fontSize) * k : null; }; const r = (s) => { const b = document.querySelector(s).getBoundingClientRect(); return { l: b.left, t: b.top, b: b.bottom }; }; return { more: fs("#sendCard .sendCard__more"), dots: fs("#sendCard .sendCard__dots"), card: r("#sendCard"), msg: r("#sendCard .sendCard__message"), text: r("#sendCard .sendCard__moreText") }; });
+    const col = { x: Math.floor(px.text.l), y: Math.floor(px.card.t), width: 150, height: Math.ceil(px.text.b - px.card.t) + 6 };
+    const cb = await inkBands(W, col);
+    const mi = cb.findIndex(([a, b]) => col.y + a < px.msg.b && col.y + b > px.msg.t), moreInk = mi >= 0 ? cb[mi + 1] : null; // "Piggy's first job?", then the next ink below it
+    const moreTop = moreInk ? col.y + moreInk[0] - px.card.t : null;
+    check(moreTop !== null && near(moreTop, 193.0, 1), `(마 · A-1441) card top → "out & back" ink top = 193.0 ± 1 like 시안 v3 (${moreTop === null ? "—" : moreTop.toFixed(1)})`);
+    check(px.more !== null && near(px.more, 10.5, 0.3), `(마 · A-1441) "out & back · more info" ${px.more?.toFixed(2)} px on screen = 시안 v2 10.5`);
+    check(px.dots !== null && near(px.dots, 9.5, 0.3), `(마 · A-1441) the dot lines ${px.dots?.toFixed(2)} px on screen = 시안 v2 9.5`);
+    // 시안 v3 open card: "out & back · close" ink top → first dot line ink top = 17.0 (± 1)
+    let dotGap = null;
+    if (c.more) {
+      await sleep(400); await W.p.locator("#sendMoreInfo").tap(); await sleep(700);
+      const d0 = await W.p.evaluate(() => document.querySelector("#sendCard .sendCard__dots").getBoundingClientRect().top);
+      const ob = await inkBands(W, { ...col, height: Math.ceil(d0 - px.card.t) + 20 });
+      const oi = ob.findIndex(([a, b]) => col.y + a < px.msg.b && col.y + b > px.msg.t), first = ob.find(([a]) => col.y + a >= d0 - 1);
+      dotGap = oi >= 0 && ob[oi + 1] && first ? first[0] - ob[oi + 1][0] : null;
+      await sleep(400); await W.p.locator("#sendMoreInfo").tap(); await sleep(700);
+    }
+    check(dotGap !== null && near(dotGap, 17.0, 1), `(마 · A-1441) open: "out & back" ink → first dot line ink = 17.0 ± 1 like 시안 v3 (${dotGap === null ? "—" : dotGap.toFixed(1)})`);
+    // [A-1441 · Owner 20:3x "not now로 취소한 경우 기존 대사를 다시 보여주되 … 3박자 애니메이션을 재실행하지 않는다 · 승인 시트가 열려 있을 때는 기존 숨김"]
+    const CUE = () => { const e = document.querySelector("#firstSendChogCue"); if (!e) return null; const s = getComputedStyle(e); const parts = [...e.querySelectorAll(".chogCheckLine__line")]; return { same: e === window.__a1441cue, seen: !e.hidden && s.display !== "none" && s.visibility !== "hidden" && e.getBoundingClientRect().width > 0, parts: parts.map((p) => { const b = p.getBoundingClientRect(); return { t: p.textContent, l: Math.round(b.left), y: Math.round(b.top), v: getComputedStyle(p).visibility }; }), running: e.getAnimations({ subtree: true }).filter((a) => a.playState === "running").length }; };
+    const cue0 = await W.p.evaluate(`(() => { window.__a1441cue = document.querySelector("#firstSendChogCue"); return (${CUE.toString()})(); })()`);
     // (다) the stamp
     const s = c.stamp;
     check(s && s.seen && s.text === "tutorial · free" && s.color === "rgb(224, 177, 0)", `(다) stamp "tutorial · free" · gold (${JSON.stringify(s && { text: s.text, color: s.color, font: s.font })})`);
@@ -153,9 +177,17 @@ try {
       gap = sum && note ? note[0] - sum[1] : null;
     }
     check(gap !== null && near(gap, 5.0, 1), `(라 · A-1438) $5 ink → grey line ink = 5.0 ± 1 like 시안 v4 (${gap === null ? "—" : gap.toFixed(1)})`);
+    const note = sheet ? await W.p.evaluate(() => parseFloat(getComputedStyle(document.querySelector(".sendAllow__note")).fontSize)) : null;
+    check(note !== null && near(note, 16, 0.3), `(마 · A-1441) the sheet's grey line ${note} px = 시안 v2 / 마스터 정리 v3 A8 hand 16`);
+    const cueSheet = sheet ? await W.p.evaluate(`(${CUE.toString()})()`) : null;
+    check(sheet && (!cueSheet || !cueSheet.seen), `(바 · A-1441) while the sheet is up Chog's first lines are hidden (${JSON.stringify(cueSheet && { seen: cueSheet.seen })})`);
     if (sheet) { await W.p.locator("#sendAllowNo").tap().catch(() => {}); await sleep(800); }
     const after = await W.p.evaluate(() => ({ sheet: !!document.querySelector("#sendAllowSheet"), card: !!document.querySelector("#sendCard") }));
     check(sheet && !after.sheet && after.card, `(라) not now → the sheet goes, the card stays (sheet ${after.sheet} · card ${after.card})`);
+    const cue1 = await W.p.evaluate(`(${CUE.toString()})()`);
+    const asBefore = cue0 && cue1 && cue1.parts.length === cue0.parts.length && cue1.parts.every((q, i) => q.t === cue0.parts[i].t && q.l === cue0.parts[i].l && q.y === cue0.parts[i].y && q.v === "visible");
+    check(cue0 && cue0.parts.length === 5 && cue1 && cue1.seen && asBefore, `(바 · A-1441) not now → Chog's five pieces show again where they were (${JSON.stringify({ before: cue0?.parts.length, after: cue1 && { seen: cue1.seen, parts: cue1.parts.map((q) => `${q.t}@${q.l},${q.y}:${q.v}`) } })})`);
+    check(cue1 && cue1.same && cue1.running === 0, `(바 · A-1441) …as they were: the same lines, no beat said again (same node ${cue1?.same} · running animations ${cue1?.running})`);
     await W.context.close();
   }
   // ── short screens (390 × 600 · 320 × 640): the stamp sits on the card's top-right corner ──────────────────────────────────────────────
