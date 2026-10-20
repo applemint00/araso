@@ -7058,7 +7058,7 @@ html .a911-screen[data-a911="feedback"] .fb-thanks { position: static; transform
 .sendAllow__amount { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; }
 .sendAllow__sum { font: 700 24px "Playfair Display", Georgia, serif; }
 /* [A-1434 A8 · 시안 v4] the first sheet's grey line under $5 ("tutorial · actual send 0.001 MON") · Job · Gift sheets have none · height stays 332 */
-.sendAllow__note { font: 20px/1.1 var(--font-cj); color: #8b857b; margin-top: -8px; }
+.sendAllow__note { font: 20px/1.1 var(--font-cj); color: #8b857b; margin-top: -11px; } /* [A-1438] ink 5 under $5's like 시안 v4 (Chromium 4.5 · iOS Safari ≈5.6–6) · pre-A-1438 -8px = 7.5 / 8.6–9 */
 .sendAllow__row { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
 .sendAllow__no { height: 46px; padding: 0 14px; border: none; background: transparent; font: 24px var(--font-cj); color: #6f6b64; cursor: pointer; }
 .sendAllow__yes { height: 46px; padding: 0 30px; border-radius: 23px; border: 2px solid #141210; background: #f7f1e4; font: 26px var(--font-cj); color: #141210; cursor: pointer; }
