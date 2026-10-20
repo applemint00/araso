@@ -27,7 +27,7 @@ try {
   await check("reopen · the automatic Face ID is refused (no tap) → the logo stays · no failure card · no \"Couldn't find\"", () => {
     assert.ok(s.refused >= 1, `the automatic ask did not happen ${JSON.stringify(s)}`);
     assert.equal(s.logo, true, `logo gone ${JSON.stringify(s)}`);
-    assert.equal(/Couldn't (find|open) your Piggy|Couldn't open Piggy|Face ID was cancelled|Try again/.test(s.text), false, `failure shown: ${s.text}`);
+    assert.equal(/Couldn't (find|open) your Piggy|Couldn't open Piggy|Passkey was cancelled|Try again/.test(s.text), false, `failure shown: ${s.text}`);
   });
   await check("reopen · one tap on the logo → Face ID → Home", async () => {
     await d.p.locator("#loginChogButton").click();

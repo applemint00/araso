@@ -25,7 +25,7 @@ export const MONEY_SWITCH = Object.freeze({ IN: "in", OUT: "out" }); // Owner
 // ── existing repo lines, reused ──
 export const MONEY_TAB_TITLE = "MONEY"; // card C: the tab title (Cowork answer 2026-10-08)
 export const AWAY_NOTE = "still out working."; // main.js awayNote (A-893b) wording
-export const FACE_ID_LINE = "Confirm with Face ID"; // main.js moneyIntentMarkup wording
+export const FACE_ID_LINE = "Confirm with passkey"; // main.js moneyIntentMarkup wording
 export const OUT_CONFIRM_NOTE = "Needs your OK — nothing has been sent yet."; // main.js moneyIntentMarkup (A-492 SEND_MONEY) wording
 export const OUT_ASSET = "USDC";
 

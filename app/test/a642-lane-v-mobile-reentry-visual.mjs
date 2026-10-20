@@ -70,14 +70,14 @@ check("V1 renderAppLock: waiting/checking → loginCheckingMarkup(phase); failed
 
 check("V2 loginCheckingMarkup: the tap target is the big Chog face button built from existing parts; existing copy only", () => {
   const body = fnBody("loginCheckingMarkup");
-  assert.ok(body.includes('<button class="loginCheck__face" id="loginChogButton" type="button" aria-label="Face ID">${chogInviteMarkup()}</button>'));
+  assert.ok(body.includes('<button class="loginCheck__face" id="loginChogButton" type="button" aria-label="Passkey">${chogInviteMarkup()}</button>'));
   assert.ok(body.includes("${arasoBrandMarkup()}"), "Araso = the existing brand markup (once)");
   assert.equal((body.match(/arasoBrandMarkup\(\)/g) || []).length, 1);
   assert.ok(body.includes('data-scene="birth" data-app-lock="${phase}"'), "same scene/lock markers the harness and body background use");
   // visible text = exactly the A-633 strings (no new copy)
   const tpl = body.slice(body.indexOf("return `") + 8, body.lastIndexOf("`;"));
   const text = tpl.replace(/\$\{isDevDebugOptIn\(\)[^}]*\}/, " ").replace(/\$\{[^}]*\}/g, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-  assert.equal(text, "Checking… Face ID may appear once.");
+  assert.equal(text, "Checking… Passkey may appear once.");
   // no new asset paths
   assert.equal(/src=|url\(|\.png|\.svg/.test(body), false, "no new asset reference");
 });

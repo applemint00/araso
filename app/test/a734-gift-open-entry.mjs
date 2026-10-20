@@ -169,7 +169,7 @@ await check("S8 new entry code: no storage, no network, no logging, no token/gif
   // copy = canon strings only (A-567 'a Piggy for you' / 'a Piggy came for you.'), Open = canon tap name
   const lines = MAIN.match(/const GIFT_PAPER_LINES = \{\n\s+for: \["a Piggy", "for you"\],\n\s+came: \["a Piggy came", "for you\."\],\n\};/);
   assert.ok(lines, "GIFT_PAPER_LINES literal");
-  assert.match(stripComments(fnBody("inviteFace")), /\$\{gift \? "Open" : "Face ID"\}/);
+  assert.match(stripComments(fnBody("inviteFace")), /\$\{gift \? "Open" : "Passkey"\}/);
 });
 await check("S9 boot order: fragment read+strip unchanged → A-633 lock → A-733 tester decision → offerGiftPaperAtBoot → first render (tester intro never sees an existing-Piggy device's Gift paper)", () => {
   const at = (s) => { const i = MAIN.indexOf(s); assert.ok(i > 0, s); return i; };
@@ -465,7 +465,7 @@ await check("N13 Gift papers: same Invite board, canon copy only ('a Piggy for y
       // the rest of the board is the plain Invite with only the two hand lines + button id/label swapped
       // A-1224 explicitly adds this copy to ordinary invites only; Gift keeps its original board.
       assert.equal(m.includes('invite__explain'), false);
-      const plain = markupWith(MAIN, { kind }).replace('<p class="invite__explain">Your Piggy keeps your money.<br>Tap Face ID. It hatches!</p>', '');
+      const plain = markupWith(MAIN, { kind }).replace('<p class="invite__explain">Your Piggy keeps your money.<br>Tap passkey. It hatches!</p>', '');
       const swap = (s) => s.replace(/data-gift-paper="\w+"/, "").replace(/<span class="invite__line1">[^<]*<\/span>/, "L1").replace(/<span class="invite__line2">[^<]*<\/span>/, "L2").replace(/id="(giftOpenButton|inviteFaceButton)"/, "ID").replace(/<span class="invite__faceLabel">[^<]*<\/span>/, "LBL").replace(/"\s*>/, '">');
       assert.equal(swap(m).replace(/\s+/g, " "), swap(plain).replace(/\s+/g, " "), `${kind}/${want}: no other markup difference`);
     }

@@ -151,7 +151,7 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"
   const mi = stripComments(cutFn("moneyIntentMarkup"));
   check("permission confirm copy is English", !HANGUL.test(mi), mi.match(HANGUL)?.[0] || "");
   check("permission copy keeps the 'nothing sent / one time / nothing changed' truth", mi.includes("nothing has been sent yet") && mi.includes("this one time only") && mi.includes("nothing changed"));
-  check("Face ID button label English", mi.includes("Confirm with Face ID"));
+  check("Face ID button label English", mi.includes("Confirm with passkey"));
 }
 
 // ── 6. Capability preflight: NOT implemented (PREMISE_CONFLICT) ─────────────────────────────

@@ -156,10 +156,10 @@ check("N6 tap-to-unlock wiring is untouched: unlockApp is bound to a real click 
 
 check("N7 loginCheckingMarkup source untouched by this repair (layout fix must be CSS-only, not markup)", () => {
   const body = fnBody("loginCheckingMarkup");
-  assert.equal(body.includes('<button class="loginCheck__face" id="loginChogButton" type="button" aria-label="Face ID">${chogInviteMarkup()}</button>'), true);
+  assert.equal(body.includes('<button class="loginCheck__face" id="loginChogButton" type="button" aria-label="Passkey">${chogInviteMarkup()}</button>'), true);
   assert.equal(body.includes("${arasoBrandMarkup()}"), true);
   assert.equal(body.includes('<h1 class="loginCheck__title">Checking…</h1>'), true);
-  assert.equal(body.includes('<p class="loginCheck__body">Face ID may appear once.</p>'), true);
+  assert.equal(body.includes('<p class="loginCheck__body">Passkey may appear once.</p>'), true);
 });
 
 check("N8 no forbidden auth-weakening tokens were introduced anywhere in main.js by this card (grep guard); getRpId/PRODUCTION_RP_ID still present and untouched", () => {

@@ -187,7 +187,7 @@ await check("S1 waiting: boot draws the waiting LOGIN_CHECKING view and makes NO
   const h = buildHarness();
   assert.equal(h.phase(), "waiting");
   assert.ok(h.app.innerHTML.includes('data-app-lock="waiting"'));
-  assert.ok(h.app.innerHTML.includes("Checking…") && h.app.innerHTML.includes("Face ID may appear once."));
+  assert.ok(h.app.innerHTML.includes("Checking…") && h.app.innerHTML.includes("Passkey may appear once."));
   assert.equal(h.calls.requestPrf.length, 0, "no request on load/render");
   h.clock.advance(10 * WAIT_MS);
   assert.equal(h.calls.requestPrf.length, 0, "no request on time passing either");
@@ -225,7 +225,7 @@ await check("S4 user cancel (NotAllowedError) → failed + cancelled, timer clea
   await flush();
   deq([h.phase(), h.state.appLock.cancelled], ["failed", true]);
   assert.equal(h.clock.pending(), 0);
-  assert.ok(h.app.innerHTML.includes("Face ID was cancelled."));
+  assert.ok(h.app.innerHTML.includes("Passkey was cancelled."));
 });
 
 await check("S5 other error / wrong credential → failed (not cancelled), lock kept", async () => {
@@ -334,7 +334,7 @@ await check("C1 reentry failure card shows exactly ONE action: \"Try again\" (#u
     assert.equal(html.includes("checkButton") || html.includes("Check Piggy"), false, `${kind}: no Check Piggy (button or copy)`);
     assert.equal(html.includes("authTryAgainButton"), false, `${kind}: not the birth-card Try again`);
     assert.ok(html.includes("Couldn't open Piggy"), `${kind}: existing failure-card heading`);
-    assert.ok(html.includes(kind === "cancel" ? "Face ID was cancelled." : "Face ID may appear once."), `${kind}: existing copy`);
+    assert.ok(html.includes(kind === "cancel" ? "Passkey was cancelled." : "Passkey may appear once."), `${kind}: existing copy`);
   }
 });
 
@@ -385,9 +385,9 @@ await check("C4 recovery card with an empty detail does not show copy that names
 await check("C5 markerless device, find-first lookup FAILED or CANCELLED, new-Piggy open failed or CANCELLED → same couldn't-find card format, \"Check Piggy\" + \"Make new\"", () => {
   const cases = [
     { name: "lookup failed", s: { message: "Chog could not find Piggy here.", detail: "Couldn't find your Piggy.", authCancelled: false }, body: "Couldn't find your Piggy." },
-    { name: "lookup cancelled", s: { message: "Chog could not find Piggy here.", detail: "Couldn't find your Piggy.", authCancelled: true }, body: "Face ID was cancelled." },
+    { name: "lookup cancelled", s: { message: "Chog could not find Piggy here.", detail: "Couldn't find your Piggy.", authCancelled: true }, body: "Passkey was cancelled." },
     { name: "open failed", s: { message: "Piggy could not open here.", detail: "", authCancelled: false }, body: "" },
-    { name: "create cancelled", s: { message: "Piggy could not open here.", detail: "", authCancelled: true }, body: "Face ID was cancelled." },
+    { name: "create cancelled", s: { message: "Piggy could not open here.", detail: "", authCancelled: true }, body: "Passkey was cancelled." },
   ];
   for (const c of cases) {
     const h = buildHarness({ markers: {} });

@@ -106,7 +106,7 @@ export function a911GiftReceiveMarkup({ front, fields = {}, amountUsd = null, fl
     <span class="a911-card__inner">${frontFace(front, view)}${letterFace(view, false)}</span></div>`;
   const body = `<div class="a911-giftGroup"><div class="a911-cards" data-a911-cards="pick">${card}</div>${flipped ? `<div class="a911-hint">${A911_COPY.turn}</div>` : ""}</div>`;
   return shell({ kind: "gift-receive", title: A911_COPY.gift, stage: flipped ? "letter" : "front", back: { attr: "data-gift-receive", act: "back" }, body,
-    act: flipped ? actButton({ label: "Face ID", attrs: 'id="giftOpenButton" data-gift-receive="open"' }) : "" });
+    act: flipped ? actButton({ label: "Passkey", attrs: 'id="giftOpenButton" data-gift-receive="open"' }) : "" });
 }
 
 const money$ = (v) => (v == null || v === "" ? "" : String(v).startsWith("$") ? esc(v) : `$${esc(v)}`);

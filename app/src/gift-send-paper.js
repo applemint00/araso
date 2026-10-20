@@ -707,7 +707,7 @@ export function giftSendPaperMarkup(view = {}) {
     ${view.stage === "requote" ? `<button class="sendCard__btn pkbtn a898-try" type="button" aria-label="Try again" data-a898-act="gift-requote"><span class="pkbtn__shell" aria-hidden="true"><img class="pkbtn__cap pkbtn__cap--l" src="/card/btn_l.png" alt="" /><span class="pkbtn__mid"></span><img class="pkbtn__cap pkbtn__cap--r" src="/card/btn_r.png" alt="" /></span><span class="pkbtn__word pkbtn__text" aria-hidden="true">Try again</span></button>` : ""}
     ${a898Fees(view.fees, view)}
     <div class="a898-foot">${a898FaceIdLine(view)}
-    <button class="a898-faceBtn" type="button" data-a898-act="gift-faceid"${view.canFaceId && !busy ? "" : " disabled"}${view.blockedReason ? ` data-blocked="${a898Esc(view.blockedReason)}"` : ""}>${A898_FACE_ICON}<span class="invite__faceLabel">Face ID</span></button></div>
+    <button class="a898-faceBtn" type="button" data-a898-act="gift-faceid"${view.canFaceId && !busy ? "" : " disabled"}${view.blockedReason ? ` data-blocked="${a898Esc(view.blockedReason)}"` : ""}>${A898_FACE_ICON}<span class="invite__faceLabel">Passkey</span></button></div>
     ${done}
   </div>`;
 }

@@ -126,7 +126,7 @@ check("D2 Move out: pick list, amount (chips + ok), address is a textarea (wraps
   const addr = a911MoveMarkup({ dir: "out", step: "address", piggy: { name: "Honeybun" }, amount: "20", address: "0xabc", canSend: false });
   assert.ok(/<textarea class="a911-addrField"[^>]*data-a905-field="address"/.test(addr), "address is a textarea");
   assert.ok(addr.includes('id="a905OutFaceId"') && /<span class="a911-act__label">Send<\/span>/.test(addr) && /id="a905OutFaceId"[^>]*disabled/.test(addr));
-  assert.ok(!addr.includes("Confirm with Face ID"));
+  assert.ok(!addr.includes("Confirm with passkey"));
 });
 
 check("E1 no new copy: every visible word in the builders is an existing/Owner line", () => {

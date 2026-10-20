@@ -57,7 +57,7 @@ function world({ window, navigator, hook = null, rp = "arasoo.vercel.app", local
   return { ctx, calls, f: ctx.__f };
 }
 const bad = (w, calls) => calls.requestPrf === 0 && calls.beginAuthAttempt === 0 && calls.recoverPiggy === 0 && calls.createPiggy === 0;
-const FAIL_DETAIL = "This device can't use Face ID or a passkey here.";
+const FAIL_DETAIL = "This device can't use a passkey here.";
 
 for (const [label, window, navigator, unsupported] of CASES) {
   // helper itself

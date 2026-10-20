@@ -1802,13 +1802,13 @@ async function openPiggy() {
   if (typeof webAuthnUnsupported === "function" && webAuthnUnsupported("create")) {
     state.authPhase = "idle";
     state.authCancelled = false;
-    setScene("birth", "Not from here.", "This device can't use Face ID or a passkey here.");
+    setScene("birth", "Not from here.", "This device can't use a passkey here.");
     return;
   }
   const attempt = beginAuthAttempt("open");
   state.authPhase = "checking";
   state.authCancelled = false;
-  setScene("birth", "The egg is checking this device.", "Face ID may appear once.");
+  setScene("birth", "The egg is checking this device.", "Passkey may appear once.");
 
   // [A-579 Lane G] Gift 은 **시작 시점에** 이 생성 흐름에 묶인다 — 흐름이 도는 동안 다른 경로(checkPiggy 등)가
   // 같은 pending 을 가져가지 못한다. 묶일 수 있는 것은 **이 흐름이 방금 만든** Piggy 뿐이다(시작 전 주소 목록에
@@ -2273,7 +2273,7 @@ async function checkPiggy() {
   if (typeof webAuthnUnsupported === "function" && webAuthnUnsupported("get")) {
     state.authPhase = "idle";
     state.authCancelled = false;
-    setScene("birth", "Not from here.", "This device can't use Face ID or a passkey here.");
+    setScene("birth", "Not from here.", "This device can't use a passkey here.");
     return { ok: false, cancelled: false, reason: "webauthn_unsupported" };
   }
   const attempt = beginAuthAttempt("check");
@@ -2289,7 +2289,7 @@ async function checkPiggy() {
   // 생성 폴백 없음 — 이 버튼은 절대 새 패스키를 만들지 않는다.
   state.authPhase = "checking";
   state.authCancelled = false;
-  setScene("birth", "Chog is checking if this is the same Piggy.", "Face ID may appear once.");
+  setScene("birth", "Chog is checking if this is the same Piggy.", "Passkey may appear once.");
 
   try {
     // [A-667 R5] 대기 상한 + 시도 토큰: 시간이 다 된 뒤의 늦은 결과는 recoverPiggy 안에서 서명자·저장 전에 버려진다.
@@ -3612,7 +3612,7 @@ async function sendPiggyOnce(markSettling) {
       return;
     }
     const attempt = beginAuthAttempt("send");
-    setScene("sendstay", "Piggy is waking up.", "Face ID may appear once.");
+    setScene("sendstay", "Piggy is waking up.", "Passkey may appear once.");
     try {
       // 대기 상한 + 시도 토큰: 앱 세션이 끝난(idle 잠금) 뒤 늦게 온 패스키는 recoverPiggy 안에서 서명자·저장 전에 버려진다.
       await boundAuthAttempt(attempt, trackPlatformAuth(recoverPiggy({ isCurrent: () => attempt.live })));
@@ -6220,7 +6220,7 @@ function setInvitePhase(phase) {
   if (egg) egg.style.animation = INVITE_EGG_ANIM[phase] || "none";
   if (spark && board.dataset.kind === "wide") spark.style.animation = INVITE_SPARK_ANIM[phase] || "none";
   const label = board.querySelector(".invite__faceLabel");
-  if (label) label.textContent = phase === "checking" ? "checking..." : "Face ID";
+  if (label) label.textContent = phase === "checking" ? "checking..." : "Passkey";
 }
 
 // 인증 성공 뒤, Owner가 확정한 기존 봉투 타임라인을 byte-for-byte 같은 phase/시각으로 한 번 돈다.
@@ -6363,7 +6363,7 @@ function inviteFace(gift = false) {
         <circle cx="14.5" cy="9" r="0.9" fill="#E0B100" stroke="none"></circle>
         <path d="M8 14.5 Q11 16.5 14 14.5"></path>
       </svg>
-      <span class="invite__faceLabel">${gift ? "Open" : "Face ID"}</span>
+      <span class="invite__faceLabel">${gift ? "Open" : "Passkey"}</span>
     </button>
   `;
 }
@@ -6375,7 +6375,7 @@ function inviteHoles(count) {
 // A-1224: position only the readable copy beside the existing actor. The actor,
 // envelope and button retain their original transforms and animation clocks.
 function inviteExplanation(gift) {
-  return gift ? "" : '<p class="invite__explain">Your Piggy keeps your money.<br>Tap Face ID. It hatches!</p>';
+  return gift ? "" : '<p class="invite__explain">Your Piggy keeps your money.<br>Tap passkey. It hatches!</p>';
 }
 function fitInviteExplanation(board, scale) {
   const copy = board.querySelector(".invite__explain");
@@ -6548,9 +6548,9 @@ function renderAuthCard(view = state) {
   //    Make new = 기존 #authTryAgainButton → Invite, 사용자가 Open 을 다시 눌러야 만든다. 어느 쪽도 자동 생성·credential 삭제 0.
   const recoveryOnly = !view.unlockRetry && !!(readCredential() || hasReceivedPiggy() || state.address || (typeof lateCreatedCredential !== "undefined" && lateCreatedCredential) || (typeof a1214ReadPendingBirth === "function" && a1214ReadPendingBirth()));
   const body = checking
-    ? view.detail || "Face ID may appear once."
+    ? view.detail || "Passkey may appear once."
     : view.authCancelled
-      ? "Face ID was cancelled."
+      ? "Passkey was cancelled."
       : view.detail || "";
   // [A-391 §2 / A-389-a] Try again 은 실제 auth 호출이 없는 안전한 내비게이션(Invite/Face ID
   // 앞화면 복귀, main.js render() 의 #authTryAgainButton 배선 참고) — !isAllowedPiggyRpId() 로
@@ -6586,7 +6586,7 @@ function renderAuthCard(view = state) {
   // 숨긴다 — 두 표식이 동시에 보이는 중복을 막을 뿐, 자리(absolute, 다른 요소가
   // 그 공간에 의존하지 않음)는 그대로 남아 카드 레이아웃은 손대지 않는다.
   const chog = view.chogTap
-    ? `<button class="authCard__chog authCard__chog--tap" id="loginChogButton" type="button" aria-label="Face ID">${chogInviteMarkup()}</button>`
+    ? `<button class="authCard__chog authCard__chog--tap" id="loginChogButton" type="button" aria-label="Passkey">${chogInviteMarkup()}</button>`
     : `<div class="authCard__chog" aria-hidden="true">${chogInviteMarkup()}</div>`;
   return `
     <section class="stage" data-scene="birth"${view.appLock ? ` data-app-lock="${view.appLock}"` : ""}>
@@ -6622,10 +6622,10 @@ function renderAuthCard(view = state) {
 function loginCheckingMarkup(phase) {
   return `
     <section class="stage stage--loginCheck" data-scene="birth" data-app-lock="${phase}">
-      <button class="loginCheck__face" id="loginChogButton" type="button" aria-label="Face ID">${chogInviteMarkup()}</button>
+      <button class="loginCheck__face" id="loginChogButton" type="button" aria-label="Passkey">${chogInviteMarkup()}</button>
       ${arasoBrandMarkup()}
       <h1 class="loginCheck__title">Checking…</h1>
-      <p class="loginCheck__body">Face ID may appear once.</p>
+      <p class="loginCheck__body">Passkey may appear once.</p>
     </section>
   `;
 }
@@ -6640,7 +6640,7 @@ function appLockLogoMarkup(phase) {
   return `
     <section class="stage stage--lockLogo" data-scene="birth" data-app-lock="${phase}">
       ${arasoBrandMarkup()}
-      <button class="lockLogo__tap" id="loginChogButton" type="button" aria-label="Face ID">
+      <button class="lockLogo__tap" id="loginChogButton" type="button" aria-label="Passkey">
         <span class="entryChog__logo" aria-hidden="true">${ENTRY_LOGO_SVG}<img class="entryChog__word" src="/entry/araso_logo_white.png" alt="" /></span>
       </button>
     </section>
@@ -6667,7 +6667,7 @@ function renderAppLock() {
         authPhase: failed ? "idle" : "checking",
         authCancelled: failed && !!state.appLock.cancelled,
         message: "",
-        detail: "Face ID may appear once.",
+        detail: "Passkey may appear once.",
         appLock: state.appLock.phase,
         chogTap: !failed,
         unlockRetry: true,
@@ -8168,7 +8168,7 @@ function moneyIntentMarkup(piggy) {
   const valid = intent.amount !== null && intent.amount !== undefined && intent.amount !== "custom" && Number(intent.amount) > 0;
   const permissionLine = intent.status === PERMISSION_STATE.AWAITING
     ? `<p class="homePaper__note">Needs your OK — nothing has been sent yet.</p>
-       <button class="homePaper__records" id="homePermissionApprove" type="button">&gt; Confirm with Face ID</button>`
+       <button class="homePaper__records" id="homePermissionApprove" type="button">&gt; Confirm with passkey</button>`
     : intent.status === PERMISSION_STATE.PERMITTED
       ? `<p class="homePaper__note">Confirmed. Good for this one time only.</p>`
       : intent.status === PERMISSION_STATE.CANCELLED
