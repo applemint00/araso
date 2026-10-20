@@ -1141,7 +1141,9 @@ async function laneNames() {
     if (id === "n1") await check("cue · first Home: Chog's job line sits left of Chog (its right end before Chog's head) · clear of Piggy and the Send card · 390 · 810 · 1440", async () => { // [A-1353 ① · Owner 13:4x "글자가 초그 왼쪽으로"]
       await until(p, "job cue, every line showing", async () => p.page.evaluate(() => { const c = document.querySelector("#firstSendChogCue"); const l = c ? [...c.querySelectorAll(".chogCheckLine__line")] : []; return l.length >= 2 && l.every((e) => getComputedStyle(e).visibility !== "hidden"); }), 40_000);
       const phoneLines = await p.page.evaluate(() => [...document.querySelectorAll("#firstSendChogCue .chogCheckLine__line")].map((e) => e.textContent.trim()));
-      assert.deepEqual(phoneLines, ["off to work,", "little piggy~", "your money's", "doing the job ♪"], `phone (390) = four lines at the Owner's breaks (14:0x): ${JSON.stringify(phoneLines)}`);
+      // [A-1435 · A-1433 A1 · 마스터 v3] the first Home cue is Chog's three lines, word for word
+      /* pre-A-1433: ["off to work,", "little piggy~", "your money's", "doing the job ♪"] · "four lines at the Owner's breaks (14:0x)" */
+      assert.deepEqual(phoneLines, ["work's coming!", "let's send Piggy to work~", "your money does the job ♪"], `phone (390) = three lines (A1 · 마스터 v3): ${JSON.stringify(phoneLines)}`);
       const seen = [];
       for (const [width, height] of [[390, 844], [810, 1080], [1440, 900]]) { await p.page.setViewportSize({ width, height }); await sleep(400); seen.push(await guideClearOfPiggy(p, { sel: "#firstSendChogCue", leftOfChog: true, also: ["#sendCard"] })); await p.page.screenshot({ path: path.join(OUT, `first-cue-${width}.png`) }); }
       await p.page.setViewportSize({ width: 390, height: 844 });
