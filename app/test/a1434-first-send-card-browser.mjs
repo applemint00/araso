@@ -83,6 +83,26 @@ const READ = () => {
 };
 const read = (p) => p.evaluate(`(() => { const DOTS_IN = ${JSON.stringify(DOTS)}; return (${READ.toString()})(); })()`);
 const hit = (a, b) => a && b && a.l < b.r && a.r > b.l && a.t < b.b && a.b > b.t;
+// [A-1438] where ink is, the way the eye sees spacing: a screenshot of a column, decoded in a blank page (the app's CSP keeps data: out),
+// rows with ≥ 2 dark unsaturated pixels → bands (CSS px from the column top). The same scan measured 시안 v4 (2 px/pt): $5 ink bottom → grey ink top = 5.0
+const inkBands = async (W, clip) => {
+  const png = (await W.p.screenshot({ clip })).toString("base64");
+  const blank = await W.context.newPage();
+  try {
+    return await blank.evaluate(async ({ png, scale }) => {
+      const bmp = await createImageBitmap(await (await fetch(`data:image/png;base64,${png}`)).blob());
+      const c = new OffscreenCanvas(bmp.width, bmp.height); const g = c.getContext("2d"); g.drawImage(bmp, 0, 0);
+      const d = g.getImageData(0, 0, bmp.width, bmp.height).data; const bands = []; let start = -1;
+      for (let y = 0; y <= bmp.height; y += 1) {
+        let n = 0;
+        if (y < bmp.height) for (let x = 0; x < bmp.width; x += 1) { const i = (y * bmp.width + x) * 4, r = d[i], gg = d[i + 1], b = d[i + 2]; if (0.299 * r + 0.587 * gg + 0.114 * b < 150 && Math.max(r, gg, b) - Math.min(r, gg, b) < 45) n += 1; }
+        if (n >= 2 && start < 0) start = y;
+        if (n < 2 && start >= 0) { bands.push([start / scale, y / scale]); start = -1; }
+      }
+      return bands;
+    }, { png, scale: 2 });
+  } finally { await blank.close(); }
+};
 
 try {
   // ── 390 × 844 · the card · more info · stamp · sheet ─────────────────────────────────────────────────────────────────────────────────
@@ -123,6 +143,16 @@ try {
     check(sheet && sheet.lines.length === 1 && sheet.lines[0] === "piggy goes to its first job" && !/with your/.test(sheet.allText), `(라) the sheet says one line "piggy goes to its first job" (${JSON.stringify(sheet?.lines)})`);
     check(sheet && sheet.sum === "$5" && sheet.grey && sheet.grey.below, `(라) under $5 a grey "tutorial · actual send 0.001 MON" (${JSON.stringify(sheet && { sum: sheet.sum, grey: sheet.grey })})`);
     check(sheet && near(sheet.h, 332, 0.5), `(라) the sheet stays 332 high (${sheet?.h})`);
+    // [A-1438 · Owner 19:3x "시트 = 승인 시안과 다른 간격 원래 값으로 복구"] 시안 v4: the grey line's ink starts 5.0 under $5's ink (± 1)
+    let gap = null;
+    if (sheet) {
+      const at = await W.p.evaluate(() => { const r = (s) => { const b = document.querySelector(s).getBoundingClientRect(); return { l: b.left, t: b.top, b: b.bottom }; }; return { sum: r(".sendAllow__sum"), note: r(".sendAllow__note") }; });
+      const top = Math.floor(at.sum.t) - 2;
+      const bands = await inkBands(W, { x: Math.floor(at.sum.l), y: top, width: 200, height: Math.ceil(at.note.b) + 4 - top });
+      const i = bands.findIndex(([a, b]) => top + a < at.sum.b && top + b > at.sum.t), sum = bands[i], note = i >= 0 ? bands[i + 1] : null; // $5, then the next ink below it
+      gap = sum && note ? note[0] - sum[1] : null;
+    }
+    check(gap !== null && near(gap, 5.0, 1), `(라 · A-1438) $5 ink → grey line ink = 5.0 ± 1 like 시안 v4 (${gap === null ? "—" : gap.toFixed(1)})`);
     if (sheet) { await W.p.locator("#sendAllowNo").tap().catch(() => {}); await sleep(800); }
     const after = await W.p.evaluate(() => ({ sheet: !!document.querySelector("#sendAllowSheet"), card: !!document.querySelector("#sendCard") }));
     check(sheet && !after.sheet && after.card, `(라) not now → the sheet goes, the card stays (sheet ${after.sheet} · card ${after.card})`);
