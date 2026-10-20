@@ -3642,8 +3642,10 @@ async function sendPiggyOnce(markSettling) {
     clearOwnSendPending(reservation);
     // [A-1364] nothing moved (key open) = nothing is drawn again; after a Face ID the Home words go back as they were
     if (state.scene === "sendstay" && (state.message !== sendBefore.message || state.detail !== sendBefore.detail)) setScene("sendstay", sendBefore.message, sendBefore.detail);
+    if (typeof showFirstSendCueAgain === "function") showFirstSendCueAgain(); // [A-1441] Chog's first lines back as they were
     return;
   }
+  if (typeof clearFirstSendCue === "function") clearFirstSendCue(); // [A-1441] allow: Chog's first lines go, as the Send tap did before
 
   // [A-707 M2-beta] 중재(패스키 뒤 · grant 전): 배타 잠금을 쥐고 이 탭 예약을 공유 슬롯으로 올린다 — 잠금은 broadcast 가 끝날 때까지 쥔다
   // (sendPiggy finally 가 놓는다). 못 쥐거나 슬롯이 차 있거나 애매하면 멈춘다. 다른 기록이 보이면 기존 「확인 중」 문구, 아니면 기존 실패 문구.
@@ -13321,12 +13323,24 @@ const FIRST_SEND_CUE_PARTS = FIRST_SEND_CUE_LINE.split("\n");
 function sayFirstSendCue() {
   if (state.appLock || state.scene !== "sendstay" || sendBusy()) return false;
   const inserted = insertChogCueLine("firstSendChogCue", FIRST_SEND_CUE_PARTS);
-  if (inserted && state.sendCardVisible) {
-    document.querySelector("#sendButton")?.addEventListener("click", () => {
-      document.querySelector("#firstSendChogCue")?.remove();
-    }, { once: true });
-  }
+  if (inserted && state.sendCardVisible) armFirstSendCueHide();
   return inserted;
+}
+// [A-1441 · Owner 20:3x "not now로 취소한 경우 기존 대사를 다시 보여주되, 이미 끝난 3박자 애니메이션을 재실행하지 않는다 · 승인 시트가 열려 있을 때는 기존 숨김"]
+// The first Send tap hides the lines while our sheet is up; not now shows the same lines again as they were (no beat, no voice: the
+// voice observer has already seen this node); allow clears them as before. pre-A-1441: the Send tap removed them (not now = gone).
+function armFirstSendCueHide() {
+  document.querySelector("#sendButton")?.addEventListener("click", () => {
+    const cue = document.querySelector("#firstSendChogCue");
+    if (cue) cue.hidden = true;
+  }, { once: true });
+}
+function clearFirstSendCue() { document.querySelector("#firstSendChogCue")?.remove(); }
+function showFirstSendCueAgain() {
+  const cue = document.querySelector("#firstSendChogCue");
+  if (!cue?.hidden) return;
+  cue.hidden = false;
+  armFirstSendCueHide();
 }
 
 

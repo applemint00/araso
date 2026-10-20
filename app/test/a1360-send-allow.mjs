@@ -39,7 +39,7 @@ await check("first Send: Face ID only when the key is not open (stamped live sig
   assert.ok(k > 0 && k < g && g < r && r < s && s < q, `order keyOpen ${k} < guard ${g} < recover ${r} < sheet ${s} < grant ${q}`);
   assert.match(once, /signerSince > 0 && Date\.now\(\) >= signerSince/, "an unstamped / back-in-time signer is not trusted");
   // [A-1364] not now with nothing changed = no redraw (pre-A-1364: always setScene back)
-  assert.match(once, /clearOwnSendPending\(reservation\);[^\n]*\n(\s*\/\/[^\n]*\n)?\s*if \(state\.scene === "sendstay" && \(state\.message !== sendBefore\.message \|\| state\.detail !== sendBefore\.detail\)\) setScene\("sendstay", sendBefore\.message, sendBefore\.detail\);\s*return;/, "not now = nothing moves");
+  assert.match(once, /clearOwnSendPending\(reservation\);[^\n]*\n(\s*\/\/[^\n]*\n)?\s*if \(state\.scene === "sendstay" && \(state\.message !== sendBefore\.message \|\| state\.detail !== sendBefore\.detail\)\) setScene\("sendstay", sendBefore\.message, sendBefore\.detail\);\s*(if \(typeof showFirstSendCueAgain === "function"\) showFirstSendCueAgain\(\);[^\n]*\s*)?return;/, "not now = nothing moves"); // [A-1441] + Chog's first lines shown again
 });
 await check("Job Send and Gift Send: the open key (no fresh) and the sheet before money moves; nothing forces Face ID", () => {
   assert.match(MAIN, /a898SignerForPayer\(piggy, \{ allowDeviceCredential: true \}\);[^\n]*\n\s*if \(!signer\.ok\) \{ a977Fail\("auth"\); return; \}\n\s*if \(typeof askSendAllow === "function" && !\(await askSendAllow\(jobSendAllowContent\(sj, jobKey\)\)\)\) return;/);

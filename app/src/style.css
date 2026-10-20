@@ -6911,13 +6911,15 @@ html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-wid
    "Piggy takes your money to work." (ink). */
 #sendCard.sendCard--first .sendCard__message { top: 262px; font-weight: 700; color: #141210; }
 #sendCard .sendCard__more {
-  position: absolute; left: 34px; top: 269px; width: 178px; height: 68px; box-sizing: border-box; padding: 23px 0 0 12px; margin: 0;
+  position: absolute; left: 34px; top: 269px; width: 178px; height: 68px; box-sizing: border-box; padding: 2px 0 0 12px; margin: 0;
   border: 0; background: transparent; text-align: left; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent;
-  font: italic 400 var(--tsLabel)/1.2 "Playfair Display", Georgia, "Times New Roman", serif; color: rgba(20, 18, 16, 0.78);
+  font: italic 400 calc(10.5px / var(--tsK))/1.2 "Playfair Display", Georgia, "Times New Roman", serif; color: rgba(20, 18, 16, 0.78);
 }
+/* [A-1441 · Owner 20:3x "More info의 글 시작점 7.5pt 차이를 기존 디자인대로" · 시안 v2 (Owner 06:4x) 10.5 on screen] the words start where 시안 v3 has them
+   (card top → ink 193) · the tap box (34,269 178×68) stays (a button centres its words: padding-top moves them half as far) · pre-A-1441: padding-top 23px · font var(--tsLabel) (Label 13 on screen) */
 #sendCard .sendCard__moreWord { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; color: #141210; }
 #sendCard .sendCard__dots {
-  position: absolute; left: 56px; top: 322px; margin: 0; padding: 0; list-style: none; white-space: nowrap;
+  position: absolute; left: 56px; top: 319px; margin: 0; padding: 0; list-style: none; white-space: nowrap; /* [A-1441] 시안 v3: 17 under the out & back ink (pre-A-1441 322px) */
   font: italic 400 calc(var(--ts-detail) * 0.8 / var(--tsK))/1.45 "Playfair Display", Georgia, "Times New Roman", serif; color: rgba(20, 18, 16, 0.6);
 }
 #sendCard .sendCard__dots[hidden] { display: none; }
@@ -7058,7 +7060,7 @@ html .a911-screen[data-a911="feedback"] .fb-thanks { position: static; transform
 .sendAllow__amount { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; }
 .sendAllow__sum { font: 700 24px "Playfair Display", Georgia, serif; }
 /* [A-1434 A8 · 시안 v4] the first sheet's grey line under $5 ("tutorial · actual send 0.001 MON") · Job · Gift sheets have none · height stays 332 */
-.sendAllow__note { font: 20px/1.1 var(--font-cj); color: #8b857b; margin-top: -11px; } /* [A-1438] ink 5 under $5's like 시안 v4 (Chromium 4.5 · iOS Safari ≈5.6–6) · pre-A-1438 -8px = 7.5 / 8.6–9 */
+.sendAllow__note { font: 16px/1.1 var(--font-cj); color: #8b857b; margin-top: -10px; } /* [A-1438] ink 5 under $5's like 시안 v4 (Chromium 4.5 · iOS Safari ≈5.6–6) · pre-A-1438 -8px = 7.5 / 8.6–9 · [A-1441] hand 16 (시안 v2 · 마스터 정리 v3 A8) · pre-A-1441: 20px, -11px */
 .sendAllow__row { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
 .sendAllow__no { height: 46px; padding: 0 14px; border: none; background: transparent; font: 24px var(--font-cj); color: #6f6b64; cursor: pointer; }
 .sendAllow__yes { height: 46px; padding: 0 30px; border-radius: 23px; border: 2px solid #141210; background: #f7f1e4; font: 26px var(--font-cj); color: #141210; cursor: pointer; }

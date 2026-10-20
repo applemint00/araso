@@ -28,19 +28,21 @@ assert.doesNotMatch(cue, /!state\.sendCardVisible/);
 assert.match(settle, /const announceFirstSend = \(\) => \{[\s\S]*sayFirstSendCue\(\);\s*revealSendCard\(\);[\s\S]*sceneTimeout\(announceFirstSend, PACE_SEAT_BREATH_MS\);/); // [A-1433 A1] the three lines, then the card's own wait
 assert.match(settle, /const minAt = Math\.max\(arrivedAt \+ PACE_HOME_TO_CARD_MIN_MS, cueEndAt \? cueEndAt \+ PACE_BREATH_MS : 0\);[^\n]*\n\s*const readyAt = firstGrantReadyAt === null \? \(Date\.now\(\) >= minAt \? minAt : Infinity\) : Math\.max\(minAt, firstGrantReadyAt\);/);
 assert.match(settle, /state\.sendCardVisible = true;\s*render\(\);\s*sayFirstSendCue\(\);[^\n]*\n\s*sceneTimeout\(armSend, PACE_SEND_ARM_MS\);/); // [A-1433 A3] lines kept over the card · Send at card + 2 s
-assert.match(cue, /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*document\.querySelector\("#firstSendChogCue"\)\?\.remove\(\);[\s\S]*\{ once: true \}/);
+// [A-1441] the first Send tap hides CG-01 (not now shows it again, allow clears it) · pre-A-1441: the tap removed it
+assert.match(cue, /document\.querySelector\("#sendButton"\)\?\.addEventListener\("click",[\s\S]*if \(cue\) cue\.hidden = true;[\s\S]*\{ once: true \}/);
 
 let click = null;
 let removed = false;
+const cueEl = { hidden: false, remove: () => { removed = true; } };
 const state = { appLock: null, scene: "sendstay", sendCardVisible: false };
 // [A-1326] the cue reads the day's wording through chogMoodLines (identity here: this pins the Send listener timing)
-const say = new Function("state", "sendBusy", "insertChogCueLine", "document", "chogMoodLines", `${cue}\nreturn sayFirstSendCue;`)(
+const [say, showAgain, clear] = new Function("state", "sendBusy", "insertChogCueLine", "document", "chogMoodLines", `${cue}\nreturn [sayFirstSendCue, showFirstSendCueAgain, clearFirstSendCue];`)(
   state,
   () => false,
   () => true,
   { querySelector: (selector) => selector === "#sendButton"
     ? { addEventListener: (_type, handler) => { click = handler; } }
-    : { remove: () => { removed = true; } } },
+    : cueEl },
   (l) => [...l],
 );
 assert.equal(say(), true);
@@ -49,7 +51,16 @@ state.sendCardVisible = true;
 assert.equal(say(), true);
 assert.equal(typeof click, "function");
 click();
-assert.equal(removed, true, "first Send tap removes CG-01");
+assert.equal(cueEl.hidden, true, "first Send tap hides CG-01 while the sheet is up"); // [A-1441] pre-A-1441: removed
+assert.equal(removed, false, "…and keeps it for not now");
+click = null;
+showAgain();
+assert.equal(cueEl.hidden, false, "not now shows the same lines again");
+assert.equal(typeof click, "function", "…and the next Send tap hides them again");
+clear();
+assert.equal(removed, true, "allow clears CG-01");
+// [A-1441] in the first Send: not now → shown again; allow → cleared (before grant / sign)
+assert.match(MAIN, /if \(typeof showFirstSendCueAgain === "function"\) showFirstSendCueAgain\(\);[^\n]*\n\s*return;\n\s*\}\n\s*if \(typeof clearFirstSendCue === "function"\) clearFirstSendCue\(\);/);
 // [A-1265] the Send card is never gated on the cue line being inserted
 assert.doesNotMatch(settle, /if \(!sayFirstSendCue\(\)\) return;/);
 // [A-1326 RE-PIN · FIRST_JOURNEY_PACING_20261015.md:31–41] the beat reads the day's wording · pre-A-1326: chogSpeakMs(FIRST_SEND_CUE_PARTS[0])
