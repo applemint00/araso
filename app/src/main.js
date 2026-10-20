@@ -245,6 +245,31 @@ const FIRST_SEND_USD_LABEL = FIRST_SEND_USD;
 function firstSendAmountSecondary() {
   return `${formatMoney(SEND_AMOUNT)} test`;
 }
+// [A-1434 A6–A8 · 시안 v3/v4 · Owner 06:5x] what the tutorial actually sends, said on the card's more info and under $5 on the first sheet
+function firstSendActualLine() {
+  return `tutorial · actual send ${formatMoney(SEND_AMOUNT)}`;
+}
+// [A-1434 A6–A7 · 시안 v3] the first Send card's body: "out & back · more info" (one button: opens / closes three dot lines in the same spot,
+// the card keeps its size) · "You sign." with a hand-drawn gold underline · "Piggy takes your money to work." (pre: one gold line
+// "You sign. Piggy takes your money to work." + the "0.001 MON test" detail)
+function firstSendInfoMarkup() {
+  return `<button class="sendCard__more" id="sendMoreInfo" type="button" aria-expanded="false" aria-controls="sendMoreDots"><span class="sendCard__moreText">out &amp; back · <span class="sendCard__moreWord">more info</span></span></button>`
+    + `<ul class="sendCard__dots" id="sendMoreDots" hidden><li>MON → shMON → MON</li><li>network: Monad Testnet</li><li>${escapeHtml(firstSendActualLine())}</li></ul>`
+    + `<p class="sendCard__sign"><span class="sendCard__signWord">You sign.</span><svg class="sendCard__signLine" viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><path d="M2 6 C 20 3, 38 8, 56 5 S 86 3, 98 6" /></svg></p>`
+    + `<p class="sendCard__takes">Piggy takes your money to work.</p>`;
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("click", (event) => {
+    const btn = event.target?.closest?.("#sendMoreInfo");
+    if (!btn) return;
+    const open = btn.getAttribute("aria-expanded") !== "true";
+    btn.setAttribute("aria-expanded", String(open));
+    const word = btn.querySelector(".sendCard__moreWord");
+    if (word) word.textContent = open ? "close" : "more info";
+    const dots = document.querySelector("#sendMoreDots");
+    if (dots) dots.hidden = !open;
+  });
+}
 const SHMON_ADDRESS = "0x282BdDFF5e58793AcAb65438b257Dbd15A8745C9";
 const SHMON_ABI = [
   {
@@ -6366,7 +6391,8 @@ function fitInviteExplanation(board, scale) {
 // A-1230: a readable first-journey stamp; Gift and fork profiles never receive it.
 function trialPhaseStamp(place, gift = null) {
   if (gift || typeof LEGACY_TESTNET_PATH !== "boolean" || !LEGACY_TESTNET_PATH) return "";
-  return `<span class="trialStamp trialStamp--${place}">trial phase · free</span>`;
+  // [A-1434 A6 · 시안 v3] the Send card's stamp reads "tutorial · free" and sits outside the card (style.css); the invite stamp is unchanged
+  return `<span class="trialStamp trialStamp--${place}">${place === "send" ? "tutorial · free" : "trial phase · free"}</span>`;
 }
 function fitTrialStamp(board, scale) {
   const stamp = board.querySelector(".trialStamp--invite");
@@ -11218,7 +11244,8 @@ function askSendAllow(content) {
 function firstSendAllowContent() {
   const card = typeof document !== "undefined" ? document.querySelector("#sendCard") : null;
   const amount = (card?.querySelector(".sendCard__terms")?.textContent || "").match(/\$\d[\d.,]{0,20}/)?.[0] || "";
-  return { title: card?.querySelector(".sendCard__message")?.textContent.trim() || "", lines: ["piggy goes to its first job", amount ? `with your ${amount}.` : ""], amount };
+  // [A-1434 A8 · 시안 v4] one line · under $5 the grey actual-send note (pre: + `with your ${amount}.`)
+  return { title: card?.querySelector(".sendCard__message")?.textContent.trim() || "", lines: ["piggy goes to its first job"], amount, note: firstSendActualLine() };
 }
 // Journey 2 Job Send: the job's title and the Owner's two lines for it (JOB_HELP_LINES · the ? set) · the amount typed on the card
 function jobSendAllowContent(sj, jobKey) {
@@ -14996,9 +15023,10 @@ function renderSendStay() {
             // setScene(..., "Piggy is home.", ...) and state.message stay byte-identical (other scenes/status lines untouched);
             // any other card status ("Piggy can't go out yet." etc.) still shows as before.
             message: blocked ? "Not from here." : !state.message || state.message === "Piggy is home." ? "Piggy's first job?" : state.message,
+            // [A-1434 A5] the "0.001 MON test" line left the card: the actual amount is in more info and on the sheet (pre: [state.detail, firstSendAmountSecondary()])
             detail: blocked
               ? "Piggy can only go out from the real app."
-              : [state.detail, firstSendAmountSecondary()].filter(Boolean).join(" · "),
+              : state.detail || "",
             // [A-454 Owner "자기 주소는 홈 기록 보기에서"] Send 카드(시각·접근성 DOM)에는 주소 0.
             // 주소는 내부 state 에만 — auth/tx 동작 무변경.
             address: "",
@@ -15008,7 +15036,8 @@ function renderSendStay() {
             terms: [FIRST_SEND_USD_LABEL],
             blocked,
             busy: sendBusy(),
-          }).replace('<div class="sendCard__footer">', `${trialPhaseStamp("send")}${explain ? '<p class="sendCard__detail sendCard__explain">You sign. Piggy takes your money to work.</p>' : ""}<div class="sendCard__footer">`)}
+          }).replace('<div class="sendCard" id="sendCard">', explain ? '<div class="sendCard sendCard--first" id="sendCard">' : "$&")
+            .replace('<div class="sendCard__footer">', `${trialPhaseStamp("send")}${explain ? firstSendInfoMarkup() : ""}<div class="sendCard__footer">`)}
         </div>
       </div>`
     : "";

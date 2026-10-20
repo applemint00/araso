@@ -8,7 +8,8 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 
 export const SEND_ALLOW_COPY = Object.freeze({ notNow: "not now", allow: "allow" });
 
-export function sendAllowMarkup({ title = "", lines = [], amount = "" } = {}) {
+// [A-1434 A8 · 시안 v4] note = a small grey line under the amount (the first Send only: the tutorial's actual send); Job · Gift pass none
+export function sendAllowMarkup({ title = "", lines = [], amount = "", note = "" } = {}) {
   const body = (Array.isArray(lines) ? lines : []).filter((l) => typeof l === "string" && l.trim());
   return `<div class="sendAllow" id="sendAllowSheet" role="dialog" aria-modal="true" aria-label="${esc(title || SEND_ALLOW_COPY.allow)}">
   <div class="sendAllow__veil" aria-hidden="true"></div>
@@ -17,6 +18,7 @@ export function sendAllowMarkup({ title = "", lines = [], amount = "" } = {}) {
     <div class="sendAllow__head"><img class="sendAllow__face" src="/icons/icon-192.png" alt="" draggable="false" /><div class="sendAllow__title">${esc(title)}</div></div>
     ${body.length ? `<div class="sendAllow__lines">${body.map((l) => `<span class="sendAllow__line">${esc(l)}</span>`).join("")}</div>` : ""}
     ${amount ? `<div class="sendAllow__amount"><span class="sendAllow__sum">${esc(amount)}</span></div>` : ""}
+    ${note ? `<div class="sendAllow__note">${esc(note)}</div>` : ""}
     <div class="sendAllow__row"><button type="button" class="sendAllow__no" id="sendAllowNo">${SEND_ALLOW_COPY.notNow}</button><button type="button" class="sendAllow__yes" id="sendAllowYes">${SEND_ALLOW_COPY.allow}</button></div>
   </div>
 </div>`;

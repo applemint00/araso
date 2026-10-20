@@ -6880,15 +6880,58 @@ html .a911-amtLine .a911-amtField { border-bottom: 0; padding-bottom: 0; max-wid
   pointer-events: none;
 }
 .invite--wide .trialStamp { --trialFont: 22px; }
+/* [A-1434 A6 · 시안 v3] "tutorial · free" sits outside the card, above it (card units; the card's scale is undone by --trialScale): hand font,
+   gold, a hand-drawn ring, floating up and down. On a screen shorter than 650 it sits on the card's top-right corner instead.
+   pre-A-1434: inside the card at left 130 · top 198, italic Playfair "trial phase · free", still. */
 .trialStamp--send {
   --trialScale: calc(0.65 * var(--cardShrink, 1) * var(--fmtS, 1));
-  left: 130px;
-  top: 198px;
+  --trialFont: 17px;
+  left: 226px;
+  top: -76px;
   color: var(--gold);
+  font-family: var(--font-cj);
+  font-style: normal;
+  border-width: calc(2px / var(--trialScale));
+  border-radius: 58% 42% 55% 45% / 62% 48% 52% 38%;
   -webkit-text-stroke: 0.5px currentColor; /* bold: the hand-drawn font has one weight, so the stroke thickens it */
+  animation: trialStampFloat 2.4s ease-in-out infinite alternate;
+}
+@keyframes trialStampFloat { from { transform: translateY(0) rotate(-4deg); } to { transform: translateY(-6px) rotate(-4deg); } }
+@media (prefers-reduced-motion: reduce) { .trialStamp--send { animation: none; } }
+@media (max-height: 649px) {
+  .trialStamp--send { left: auto; right: 8px; top: -34px; } /* on the corner, its right edge inside the card's: the ? sits just past that edge */
 }
 @media (min-width: 700px) {
   .trialStamp--send { --trialFont: 22px; }
+}
+
+/* [A-1434 A5–A7 · 시안 v3] the first Send card's body (card units · sizes from the A-829 type scale, so 320–1440 read the same):
+   "Piggy's first job?" (ink, bold) · the more info button = the 178×68 tap box at 34,269 (44 px tall on screen) with its words at 46,292 ·
+   three dot lines under it in the same place (opening never moves or resizes anything) · "You sign." + a gold hand-drawn underline ·
+   "Piggy takes your money to work." (ink). */
+#sendCard.sendCard--first .sendCard__message { top: 262px; font-weight: 700; color: #141210; }
+#sendCard .sendCard__more {
+  position: absolute; left: 34px; top: 269px; width: 178px; height: 68px; box-sizing: border-box; padding: 23px 0 0 12px; margin: 0;
+  border: 0; background: transparent; text-align: left; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent;
+  font: italic 400 var(--tsLabel)/1.2 "Playfair Display", Georgia, "Times New Roman", serif; color: rgba(20, 18, 16, 0.78);
+}
+#sendCard .sendCard__moreWord { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; color: #141210; }
+#sendCard .sendCard__dots {
+  position: absolute; left: 56px; top: 322px; margin: 0; padding: 0; list-style: none; white-space: nowrap;
+  font: italic 400 calc(var(--ts-detail) * 0.8 / var(--tsK))/1.45 "Playfair Display", Georgia, "Times New Roman", serif; color: rgba(20, 18, 16, 0.6);
+}
+#sendCard .sendCard__dots[hidden] { display: none; }
+#sendCard .sendCard__dots li::before { content: "• "; }
+#sendCard .sendCard__sign {
+  position: absolute; left: 46px; top: 392px; margin: 0;
+  font: italic 400 var(--tsBody)/1.2 "Playfair Display", Georgia, "Times New Roman", serif; color: #141210;
+}
+#sendCard .sendCard__signWord { position: relative; display: inline-block; }
+#sendCard .sendCard__signLine { position: absolute; left: -4px; top: 100%; width: calc(100% + 18px); height: 10px; overflow: visible; }
+#sendCard .sendCard__signLine path { fill: none; stroke: var(--gold); stroke-width: 3.2; stroke-linecap: round; text-shadow: none; }
+#sendCard .sendCard__takes {
+  position: absolute; left: 46px; top: 430px; margin: 0; white-space: nowrap;
+  font: italic 400 var(--tsLabel)/1.25 "Playfair Display", Georgia, "Times New Roman", serif; color: #141210;
 }
 
 /* First-journey pacing beats */
@@ -7014,6 +7057,8 @@ html .a911-screen[data-a911="feedback"] .fb-thanks { position: static; transform
 .sendAllow__lines { display: flex; flex-direction: column; font: 24px/1.25 var(--font-cj); color: #2a2621; margin-top: 2px; }
 .sendAllow__amount { display: flex; align-items: baseline; gap: 10px; margin-top: 6px; }
 .sendAllow__sum { font: 700 24px "Playfair Display", Georgia, serif; }
+/* [A-1434 A8 · 시안 v4] the first sheet's grey line under $5 ("tutorial · actual send 0.001 MON") · Job · Gift sheets have none · height stays 332 */
+.sendAllow__note { font: 20px/1.1 var(--font-cj); color: #8b857b; margin-top: -8px; }
 .sendAllow__row { display: flex; justify-content: space-between; align-items: center; margin-top: auto; }
 .sendAllow__no { height: 46px; padding: 0 14px; border: none; background: transparent; font: 24px var(--font-cj); color: #6f6b64; cursor: pointer; }
 .sendAllow__yes { height: 46px; padding: 0 30px; border-radius: 23px; border: 2px solid #141210; background: #f7f1e4; font: 26px var(--font-cj); color: #141210; cursor: pointer; }

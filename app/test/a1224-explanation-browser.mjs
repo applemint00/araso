@@ -25,11 +25,14 @@ try{
  for(const [width,height] of sizes){
   await d.p.setViewportSize({width,height});await d.p.waitForTimeout(1200);
   const metrics=await d.p.evaluate(()=>{
-   const e=document.querySelector('.sendCard__explain'),r=e.getBoundingClientRect(),card=document.querySelector('#sendCard').getBoundingClientRect(),range=document.createRange();range.selectNodeContents(e);const ink=range.getBoundingClientRect();
-   const overlaps=s=>{const b=document.querySelector(s).getBoundingClientRect();return r.left<b.right&&r.right>b.left&&r.top<b.bottom&&r.bottom>b.top};
-   return {text:e.textContent,color:getComputedStyle(e).color,sameDetailSize:getComputedStyle(e).fontSize===getComputedStyle(document.querySelector('.sendCard__meta .sendCard__detail')).fontSize,lines:range.getClientRects().length,inside:ink.left>=card.left&&ink.right<=card.right&&ink.bottom<=card.bottom,overlap:['#sendButton','.sendCard__message','.sendCard__meta','.sendCard__rule'].some(overlaps),rect:r.toJSON()};
+   // [A-1434 A5–A7 · 시안 v3] two ink lines ("You sign." with its gold underline · "Piggy takes your money to work.") under the more info button;
+   // pre-A-1434: one gold line .sendCard__explain "You sign. Piggy takes your money to work." the size of the "0.001 MON test" detail
+   const card=document.querySelector('#sendCard').getBoundingClientRect();
+   const line=(sel)=>{const e=document.querySelector(sel),r=e.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(e);const ink=range.getBoundingClientRect();const overlaps=s=>{const b=document.querySelector(s).getBoundingClientRect();return r.left<b.right&&r.right>b.left&&r.top<b.bottom&&r.bottom>b.top};return {text:e.textContent.trim(),color:getComputedStyle(e).color,lines:range.getClientRects().length,inside:ink.left>=card.left&&ink.right<=card.right&&ink.bottom<=card.bottom,overlap:['#sendButton','.sendCard__message','#sendMoreInfo','.sendCard__rule'].some(overlaps),rect:r.toJSON()}};
+   const sign=line('.sendCard__signWord'),takes=line('.sendCard__takes');
+   return {text:sign.text+' '+takes.text,color:sign.color===takes.color?sign.color:'mixed',lines:Math.max(sign.lines,takes.lines),inside:sign.inside&&takes.inside,overlap:sign.overlap||takes.overlap,underline:getComputedStyle(document.querySelector('.sendCard__signLine path')).stroke,rect:sign.rect};
   });
-  assert.equal(metrics.text,'You sign. Piggy takes your money to work.');assert.equal(metrics.color,'rgb(224, 177, 0)');assert.equal(metrics.lines,1);assert.ok(metrics.sameDetailSize&&metrics.inside&&!metrics.overlap);
+  assert.equal(metrics.text,'You sign. Piggy takes your money to work.');assert.equal(metrics.color,'rgb(20, 18, 16)');assert.equal(metrics.underline,'rgb(224, 177, 0)');assert.equal(metrics.lines,1);assert.ok(metrics.inside&&!metrics.overlap);
   rows.push({scene:'send',width,...metrics});if(shots)await d.p.screenshot({path:`${shots}/send-${width}.png`});check(`send ${width}: one line/detail size/containment/overlap`);
  }
  await d.p.evaluate(()=>{localStorage.clear();sessionStorage.clear()});await d.p.goto('about:blank');await d.p.goto(d.BASE,{waitUntil:'networkidle'});

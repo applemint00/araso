@@ -60,15 +60,17 @@ check("secondary pre-send detail = '0.001 MON test' (from SEND_AMOUNT via format
 check("main label is exactly '$5'", T.FIRST_SEND_USD_LABEL === "$5", T.FIRST_SEND_USD_LABEL);
 {
   // reproduce renderSendStay's detail composition exactly (source pin below keeps it honest)
-  const composeSrc = "[state.detail, firstSendAmountSecondary()].filter(Boolean).join(\" · \")";
-  check("renderSendStay composes detail = state.detail + ' · ' + secondary MON (non-blocked only)", fnSrc("renderSendStay").includes(composeSrc));
+  // [A-1434 A5] the "0.001 MON test" line left the card: detail = state.detail only; the actual MON is in more info (firstSendActualLine) and on the
+  // first sheet. pre-A-1434: composeSrc = [state.detail, firstSendAmountSecondary()].filter(Boolean).join(" · ") and det.endsWith("0.001 MON test")
+  const composeSrc = ": state.detail || \"\",";
+  check("renderSendStay composes detail = state.detail only (non-blocked) · the MON amount moved to more info", fnSrc("renderSendStay").includes(composeSrc) && /firstSendActualLine\(\)/.test(fnSrc("firstSendInfoMarkup")) && /formatMoney\(SEND_AMOUNT\)/.test(fnSrc("firstSendActualLine")));
   for (const detail of ["", "Open again when you need it.", "nothing moved."]) {
-    const composed = [detail, T.firstSendAmountSecondary()].filter(Boolean).join(" · ");
+    const composed = detail;
     const html = sendCardMarkup({ message: "Piggy is home.", detail: composed, terms: [T.FIRST_SEND_USD_LABEL] }); // [A-779] = the live terms list
     const terms = [...html.matchAll(/class="sendCard__termLabel">([^<]*)</g)].map((m) => m[1]);
     const det = (html.match(/class="sendCard__detail">([^<]*)</) || [])[1] || "";
     check(`card[detail=${JSON.stringify(detail)}]: terms row 1 shows '$5' (USD-first main amount)`, terms[0] === "$5", JSON.stringify(terms));
-    check(`card[detail=${JSON.stringify(detail)}]: MON only in the faint .sendCard__detail line, never in terms/message`, det.endsWith("0.001 MON test") && !terms.join("|").includes("MON") && !/sendCard__message">[^<]*MON/.test(html), det);
+    check(`card[detail=${JSON.stringify(detail)}]: no MON on the card's terms / message / detail lines (it lives in more info)`, !det.includes("MON") && !terms.join("|").includes("MON") && !/sendCard__message">[^<]*MON/.test(html), det);
     check(`card[detail=${JSON.stringify(detail)}]: visible text has no 'limit' / 'up to'`, !/limit|up to/i.test(visibleText(html)), visibleText(html));
   }
   const blocked = fnSrc("renderSendStay").match(/detail: blocked\s*\?\s*"Piggy can only go out from the real app\."/);
