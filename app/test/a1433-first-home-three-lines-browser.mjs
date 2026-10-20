@@ -15,6 +15,7 @@ if (process.env.ARASO_TEST_BROWSER !== "1") { console.log("SKIP  a1433 first Hom
 
 const L = ["work's coming!", "let's send Piggy to work~", "your money does the job ♪"];
 const SAID = [L[0], `${L[0]} ${L[1]}`, `${L[0]} ${L[1]} ${L[2]}`];
+const PIECES = ["work's coming!", "let's send", "Piggy to work~", "your money", "does the job ♪"]; // [A-1437] the same words on screen
 const speakMs = (t) => Math.round(String(t).length * 60 + 1200); // = main.js chogSpeakMs
 const linesMs = L.reduce((ms, t) => ms + speakMs(t) + 1000, 0); // all three said, a breath after each (= main.js chogLinesMs)
 const SLACK = 150; // the timeline samples every 50 ms; a timer can land a beat late
@@ -104,6 +105,11 @@ try {
     check(card && send && send - card >= 2000 - SLACK && send - card <= 2000 + 600, `(다) Send can be pressed 2 s after the card (${card && send ? send - card : "—"} ms · ${sendSeen})`);
     const after = card && first(tl, "chog", () => true, card + 300);
     check(card && !tl.some((e) => e.k === "chog" && e.t > card && e.t < (send || card) + 500 && e.v !== SAID[2]), `(가) the three lines stay up with the card (${after ? JSON.stringify(after.v) : "unchanged"})`);
+    // [A-1437 · Owner 15:3x "원문 3개·말하기 박자 유지 · 화면만 5개 조각"] the screen shows the three lines in five pieces; a line's pieces share its one beat
+    const shown = await W.p.evaluate(() => [...document.querySelectorAll("#firstSendChogCue .chogCheckLine__line")].map((e) => e.textContent.trim()));
+    check(JSON.stringify(shown) === JSON.stringify(PIECES), `(가 · A-1437) the three lines show in five pieces, word for word (${JSON.stringify(shown)})`);
+    const half = [...new Set(chogSeen(tl, sit).filter((v) => v && !SAID.includes(v)))];
+    check(!half.length, `(나 · A-1437) three beats: a line's pieces show together, never half a line (${half.length ? JSON.stringify(half) : "none"})`);
     await W.p.screenshot({ path: `${process.argv[2] || "."}/a1433-A-390.png` }).catch(() => {});
     await W.context.close();
   }
@@ -134,6 +140,7 @@ try {
     const card = first(tl, "card", (v) => v === true, sit)?.t;
     check(!cardEarly && r0 && r0 - tap2 <= 700 && r2 && r2 > r0, `(라) a tap after the lines ended says the three lines from the start (first line +${r0 ? r0 - tap2 : "—"} ms after the tap · all three again at +${r2 ? r2 - tap2 : "—"} ms)`);
     check(card && r0 && card >= tap2 + linesMs - SLACK - 300, `(라) before the card, the re-say holds the card (card ${card ? card - tap2 : "—"} ms after the tap · lines + breath ${linesMs} ms)`);
+    check(card && card <= tap2 + linesMs + 1000, `(다 · A-1437) the re-say holds the card for the three lines' beats only, not their pieces' (card ${card ? card - tap2 : "—"} ms after the tap · ≤ ${linesMs + 1000})`); // [A-1437]
     // after the card (Send live): the card stays, only the words are said again; nothing is pressed; the scene stays Home
     const send = first(tl, "armed", () => true, sit)?.t;
     check(!!send, `(라) Send was armed after the re-said lines and the card (${send ? "armed" : "never armed"})`);
