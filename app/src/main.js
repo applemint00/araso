@@ -7422,6 +7422,9 @@ const CHOG_LINE_BREAKS = Object.freeze({
   "when there's a new job for piggy,": ["when there's", "a new job", "for piggy,"],
   "off to work, little piggy~": ["off to work,", "little piggy~"], // the A-1353 ① Owner breaks (14:0x), now at every width
   "your money's doing the job ♪": ["your money's", "doing the job ♪"],
+  // [A-1437 · Owner 15:3x "원문 3개·말하기 박자 유지 · 화면만 5개 조각"] the first Home lines (A-1433 A1) ran past the room to Chog's head
+  "let's send Piggy to work~": ["let's send", "Piggy to work~"],
+  "your money does the job ♪": ["your money", "does the job ♪"],
 });
 // [A-1366 · Owner 22:1x "말하는 설명칸은 다 시작점이 같은 거 아니야?"] every speech box over Chog's head starts on one left line
 // (style.css #chogHome .chogCheckLine, local −36 px = 17 screen px at 390 · 8 px clear of the first Send card at 1440). From there a line
@@ -7453,8 +7456,7 @@ function chogLinesMarkup(key, lines) {
   const waits = chogLineWaits(key, lines);
   return lines.map((t, i) => `<span class="chogCheckLine__line${waits[i] ? ` chogCheckLine__line--later" style="animation-delay:${waits[i]}ms` : ""}">${escapeHtml(t)}</span>`).join("");
 }
-function chogLineNodes(key, lines) {
-  const waits = chogLineWaits(key, lines);
+function chogLineNodes(key, lines, waits = chogLineWaits(key, lines)) {
   return lines.map((t, i) => {
     const l = document.createElement("span");
     l.className = waits[i] ? "chogCheckLine__line chogCheckLine__line--later" : "chogCheckLine__line";
@@ -7462,6 +7464,13 @@ function chogLineNodes(key, lines) {
     l.textContent = t;
     return l;
   });
+}
+// [A-1437] each written line keeps its one beat (the wait and the voice clock run on the written lines); a line too long for the room
+// shows as its pieces, all on that line's beat
+function chogBeatNodes(key, lines) {
+  const waits = chogLineWaits(key, lines);
+  const pieces = lines.map((t) => chogSaidLines(key, [t]));
+  return chogLineNodes(key, pieces.flat(), pieces.flatMap((p, i) => p.map(() => waits[i])));
 }
 
 // Grant asked once, as early as the Piggy exists (hatch start; Home arrival if not yet), so the node can spend it by the card.
@@ -13276,11 +13285,12 @@ function exploreChogConfirmLine(sj) {
 // [A-1353 ① · Owner 14:0x] the first Home job line's breaks live in CHOG_LINE_BREAKS (A-1366: said wherever the line is too long for the
 // one start line's room, so at every width now; pre-A-1366: a phone only, left of Chog by its own #firstSendChogCue rule).
 function insertChogCueLine(id, text) {
+  const beats = id === "firstSendChogCue" && Array.isArray(text) ? text : null; // [A-1437] the first Home lines keep one beat each
   if (Array.isArray(text) && typeof chogSaidLines === "function") text = chogSaidLines(id, text); // [A-1366] pieces where a line is too long (A-1353 ① phone breaks included)
   const root = document.querySelector("#chogHome");
   const hit = root?.querySelector(".chogHome__hit");
   if (!root || !hit) return false;
-  if (typeof chogHelpRemember === "function") chogHelpRemember(id, text); // [A-1293]
+  if (typeof chogHelpRemember === "function") chogHelpRemember(id, beats || text); // [A-1293]
   let line = root.querySelector(`#${id}`);
   if (!line) {
     line = document.createElement("span");
@@ -13292,7 +13302,7 @@ function insertChogCueLine(id, text) {
   // Two given lines use the existing two-line speech layout, so a long line is never cut on a narrow phone.
   line.classList.toggle("chogCheckLine--two", Array.isArray(text) && text.length > 1);
   if (Array.isArray(text) && text.length > 1) {
-    line.replaceChildren(...chogLineNodes(id, text));
+    line.replaceChildren(...(beats ? chogBeatNodes(id, beats) : chogLineNodes(id, text)));
   } else {
     line.textContent = Array.isArray(text) ? text.join(" ") : text;
     if (Array.isArray(text)) chogLineWaits(id, text); // a single line starts this key's clock, so a line added under it later keeps it
@@ -14542,7 +14552,7 @@ function mountHome({ cardClaimed = state.sendCardVisible } = {}) {
         }
         // The card waits for all: time to understand Home, Chog's three lines said (+ a breath; a ? re-say moves this), and the grant
         // spendable on the node. A grant that has not answered by then never holds the card: the Send tap asks again and shows its own failure.
-        const cueEndAt = chogLinesEndAt("firstSendChogCue", chogSaidLines("firstSendChogCue", FIRST_SEND_CUE_PARTS));
+        const cueEndAt = chogLinesEndAt("firstSendChogCue", FIRST_SEND_CUE_PARTS); // [A-1437] the three lines' beats · pre-A-1437: chogSaidLines(…) (the pieces)
         const minAt = Math.max(arrivedAt + PACE_HOME_TO_CARD_MIN_MS, cueEndAt ? cueEndAt + PACE_BREATH_MS : 0); // [A-1433 A2]
         const readyAt = firstGrantReadyAt === null ? (Date.now() >= minAt ? minAt : Infinity) : Math.max(minAt, firstGrantReadyAt);
         if (Date.now() < readyAt) {
