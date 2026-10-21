@@ -610,7 +610,7 @@ export function recordSecondJourneyDecisionReceiptDurably(storage, scope, receip
 // 애니메이션 진행/타이머 · 인증 비밀/PRF/키. 복귀 후 권한과 READY 는 **항상 새로 계산한다.**
 const DRAFT_VERSION = 1;
 const DRAFT_PREFIX = "araso.secondJourneyDraft";
-const DRAFT_STEPS = Object.freeze(["interests", "candidates", "jit", "readiness"]);
+const DRAFT_STEPS = Object.freeze(["intro", "interests", "candidates", "jit", "readiness"]); // intro = Home on the first Second card (a later open may ask again)
 
 export function secondJourneyDraftKey(scope = {}) {
   const clean = normalizeScope(scope);

@@ -140,6 +140,24 @@ function exploreNoteMarkup(note) {
 // "back to Home" 버튼을 넣으면 그 버튼의 기존 전역 stayHome() 문구("Piggy stayed home
 // today.")가 이 카드의 "maybe later." 와 다른 말을 해 헷갈린다 — 그래서 버튼 자체를
 // 이 화면에는 두지 않는다.
+// Home lives only here: later papers go back one step at a time, so repeated back always ends on this card.
+// Laid out like the first Send card (Owner "send 보내는 거 줄간격생각해줘 · 위에 제목 · 홈관련은 밑으로"): the title where "send?" is,
+// the Home lines where "You sign." / "Piggy takes your money to work." are; Home / ok on the Explore paper's back / save line, no rule
+// (Owner "라인만 제거 해서 익스플로워 라인이랑 맞는지").
+const SECOND_INTRO_LINES = ["second job journey is on!", "wanna give it a try?", "home = not now.", "come back to the app, and we’ll check again."];
+function introStepMarkup() {
+  const [title, ask, home, later] = SECOND_INTRO_LINES;
+  return `
+    <h2 class="secondJourney__heading secondJourney__heading--interests"><span class="secondJourney__exploreText">${escapeHtml(title)}<br />${escapeHtml(ask)}</span></h2>
+    <p class="secondJourney__introHome">${escapeHtml(home)}</p>
+    <p class="secondJourney__introLater">${later.split(", ").map(escapeHtml).join(",<br />")}</p>
+    <div class="secondJourney__footer">
+      <button class="sendCard__stay" id="stayButton" type="button">Home</button>
+      ${sendCardButtonMarkup({ id: "secondIntroOkButton", label: "ok" })}
+    </div>
+  `;
+}
+
 export function noteStepMarkup(note = {}) {
   return `
     <h2 class="secondJourney__heading">${escapeHtml(note.paperLine || "")}</h2>
@@ -170,7 +188,7 @@ function interestsStepMarkup({ errands = [], selectedIds = [], note = null }) {
     ${exploreNoteMarkup(note)}
     <form id="exploreForm" class="secondJourney__list secondJourney__list--interests">${items}</form>
     <div class="secondJourney__footer">
-      <button class="sendCard__stay" id="stayButton" type="button">back to Home</button>
+      <button class="sendCard__stay" id="exploreBackButton" type="button">back</button>
       ${sendCardButtonMarkup({ id: "exploreSaveButton", label: "save" })}
     </div>
   `;
@@ -205,7 +223,7 @@ function candidatesStepMarkup({ destinations = [], errandLabelById = {}, pickedC
     ${pickedLine}
     ${picks}
     <div class="footer">
-      <button class="back" id="stayButton" type="button">Home</button>
+      <button class="back" id="exploreBackButton" type="button">back</button>
       ${sendCardButtonMarkup({ id: "secondOkButton", label: "ok", disabled: !pickedCandidateId })}
     </div>
   `;
@@ -394,7 +412,6 @@ function readinessStepMarkup(model) {
       <h2 class="secondJourney__heading">Check</h2>
       <p class="secondJourney__hint">Pick a candidate to check first.</p>
       <div class="secondJourney__footer">
-        <button class="sendCard__stay" id="stayButton" type="button">back to Home</button>
         <button class="sendCard__stay" id="exploreBackButton" type="button">back</button>
       </div>
     `;
@@ -412,7 +429,6 @@ function readinessStepMarkup(model) {
       <h2 class="secondJourney__heading">${escapeHtml(jitQuestion.prompt)}</h2>
       <div class="secondJourney__list">${answers}</div>
       <div class="secondJourney__footer">
-        <button class="sendCard__stay" id="stayButton" type="button">back to Home</button>
         <button class="sendCard__stay" id="exploreBackButton" type="button">back</button>
       </div>
     `;
@@ -498,7 +514,7 @@ function readinessStepMarkup(model) {
            112×38 / radius999 / Hand 23-26 은 쓰지 않는다 — 낱말 크기도 기존
            --btnWordSize(20px) 토큰 그대로다. Home/back 은 시안과 같이 글자 버튼(.back).
            id 는 기존 배선(main.js wireExploreCard)을 유지한다. -->
-      <button class="back" id="stayButton" type="button">Home</button>
+      <button class="back" id="exploreBackButton" type="button">back</button>
       ${sendCardButtonMarkup({ id: "secondSendButton", label: "Send", disabled: !canSend })}
     </div>
     <p class="secondJourney__reason" id="secondSendReason"${devPreview ? " hidden" : ""}>${escapeHtml(sendReason || "")}</p>
@@ -511,7 +527,9 @@ function readinessStepMarkup(model) {
 export function secondJourneyCardMarkup(model = {}) {
   const step = model.step || "interests";
   const body =
-    step === "interests"
+    step === "intro"
+      ? introStepMarkup()
+      : step === "interests"
       ? interestsStepMarkup(model)
       : step === "candidates"
         ? candidatesStepMarkup(model)
@@ -519,7 +537,7 @@ export function secondJourneyCardMarkup(model = {}) {
           ? noteStepMarkup(model.note || {})
           : readinessStepMarkup(model);
   return `
-    <div class="sendCard secondJourneyCard${step === "candidates" ? " secondJourneyCard--candidates" : ""}" id="secondJourneyCard">
+    <div class="sendCard secondJourneyCard${step === "candidates" ? " secondJourneyCard--candidates" : step === "intro" ? " secondJourneyCard--intro" : ""}" id="secondJourneyCard">
       <span class="sendCard__dot" aria-hidden="true"></span>
       ${mastheadMarkup(model.journeyNumber)}<div class="secondJourney__body"><svg class="secondJourney__inkDefs" aria-hidden="true"><defs><filter id="a373-askink" x="-15%" y="-15%" width="130%" height="130%">
       <feTurbulence type="fractalNoise" baseFrequency="0.10" numOctaves="3" seed="4" result="t"/>

@@ -4336,7 +4336,7 @@ function openSecondJourneyExplore() {
   const laneMode = secondLaneMode(sj);
   // Lane ids are checked below against the lane rows, not against the fixture rows of an older flow.
   if (laneMode) sj.flow = null;
-  applySecondDraftIfAny(sj, domainState);
+  if (applySecondDraftIfAny(sj, domainState) == null) sj.step = "intro";
   recomputeSecondJourneyFlow();
   if (laneMode) keepSecondLaneDraftIfValid(sj);
   sj.laneReading = laneMode;   // [A-849] the read below is real; "checking…" is true only until it settles
@@ -4422,7 +4422,7 @@ let secondHomeRecheckBusy = false;
 
 function markSecondWaitingForPlace() {
   const sj = state.secondJourney;
-  if (!secondLaneMode(sj) || sj.step !== "candidates") return;
+  if (!secondLaneMode(sj) || (sj.step !== "candidates" && sj.step !== "intro")) return;
   sj.waitingForPlace = true;
   // Whatever is already go-able at this click did not "appear" later: mark it rung so it never rings on Home.
   sj.waitBaseline = secondHomeGoableIds(sj, new Set())
@@ -4528,7 +4528,7 @@ let a1182ConsumedOpen = 0;
 let a1182VisibilityArmed = false;
 function a1182HomeVisible() {
   return state.scene === "sendstay" && !state.appLock && !state.sendCardVisible
-    && document.visibilityState === "visible";
+    && document.visibilityState === "visible" && !document.querySelector(".a911-screen");
 }
 function a1182ObserveOpen() {
   if (a1182VisibilityArmed) return;
@@ -5112,10 +5112,19 @@ async function recordSecondJourneyDecisionForAnswer() {
 // 필요 없는 후보)이면 후보 목록으로 돌아간다(관심 선택은 그대로 — Home 닫기가 아니다).
 function handleReadinessBack() {
   const sj = state.secondJourney;
+  if (sj.step === "interests") { sj.step = "intro"; render(); return; }
+  if (sj.step === "candidates") {
+    sj.step = "interests";
+    sj.pickedCandidateId = null;
+    persistSecondDraft();
+    render();
+    return;
+  }
   const hasJitQuestion = (sj.flow?.jitQuestions?.length || 0) > 0;
   sj.returnRead = null;   // [A-579] 다음 답은 새로 읽는다
   if (hasJitQuestion && sj.jitAnswer) {
     sj.jitAnswer = null;
+    persistSecondDraft();
     recomputeSecondJourneyFlow();
     render();
     return;
@@ -5124,8 +5133,19 @@ function handleReadinessBack() {
   sj.chosenDestinationId = null;
   sj.pickedCandidateId = null;
   sj.jitAnswer = null;
+  sj.amount = "";   // another Job must not inherit this Job's amount
   sj.decisionEventId = null;   // [A-579] check 이벤트가 끝났다
+  // One or no Job keeps its rows hidden after the one-time auto step, so that paper would be empty: go to interests.
+  const pick = typeof explorePickState === "function" ? explorePickState(sj) : null;
+  if (pick && (pick.kind === "one" || pick.kind === "none")) sj.step = "interests";
+  persistSecondDraft();
   recomputeSecondJourneyFlow();
+  render();
+}
+
+function handleSecondIntroOk() {
+  const sj = state.secondJourney;
+  sj.step = state.secondJourneyCompletedOnce === true && sj.selectedIds.length > 0 ? "candidates" : "interests";
   render();
 }
 
@@ -5208,6 +5228,9 @@ function wireExploreCard() {
     render();
   });
   document.querySelector("#exploreBackButton")?.addEventListener("click", handleReadinessBack);
+  document.querySelector("#secondIntroOkButton")?.addEventListener("click", handleSecondIntroOk);
+  // Home on the intro card leaves a draft, so the existing bell may ask again on the next open (the card promises that).
+  if (sj.step === "intro") document.querySelector("#stayButton")?.addEventListener("click", persistSecondDraft);
   // [A-421] 옛 사각 `.secondJourney__checkBtn` 대신 확정 종이 버튼(.pkbtn)을 쓰는
   // second-journey-view.js checkButtonMarkup() 이 내놓는 순수 JS 훅 클래스로 맞춘다.
   document.querySelectorAll(".secondJourney__pick").forEach((btn) => {
@@ -16126,7 +16149,7 @@ function a974OpenForkExplore() {
   sj.seedStage = sj.selectedIds.length ? "done" : inferSeedStage(domainState);
   const laneMode = secondLaneMode(sj);
   if (laneMode) sj.flow = null;
-  applySecondDraftIfAny(sj, domainState);
+  if (applySecondDraftIfAny(sj, domainState) == null) sj.step = "intro";
   recomputeSecondJourneyFlow();
   if (laneMode) keepSecondLaneDraftIfValid(sj);
   sj.laneReading = laneMode;
@@ -16166,7 +16189,7 @@ if (A974_FORK) {
     a974AskEntry().then((ok) => {
       if (state.scene !== scene) return; // the user moved on while the server answered: nothing opens
       if (args[0]?.bellOpenId != null && (args[0].bellOpenId !== a1182OpenId || !a1182HomeVisible())) return;
-      if (ok) a974OpenForkExplore(); else a974PrevOpen(...args);
+      if (ok) a974OpenForkExplore(); else if (state.secondJourney?.devPreview === true) a974PrevOpen(...args);
     }, () => {});
   };
   // post-file quiet Home: the cue arms only after the server said yes
