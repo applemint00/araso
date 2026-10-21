@@ -6,7 +6,7 @@ const source = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 const section = source.slice(source.indexOf('const secondBellRung ='), source.indexOf('// [A-791] A-762 routing consumed as evidence.')).replaceAll('import.meta.env', 'env');
 let pass = 0;
 function test(name, run) { run(); pass++; console.log(`PASS ${name}`); }
-function harness({ enabled = true, fork = true, completed = true, release = true, random = 0 } = {}) {
+function harness({ enabled = true, fork = true, completed = true, release = true, random = 0, moneyOpen = false } = {}) {
   let now = 0, id = 0, button = null, opens = 0;
   const timers = new Map(), cleanups = [], listeners = {}, storage = createMemoryStorage();
   const stage = { querySelector: () => button, appendChild: b => { button = b; } };
@@ -17,7 +17,7 @@ function harness({ enabled = true, fork = true, completed = true, release = true
     secondLaneMode: () => true,
     safeLocalStorage: () => storage, loadSecondJourneyDraft,
     secondJourneyScope: () => ({ accountId: ctx.state.address, chainId: "monad-fork" }),
-    document: { visibilityState: 'visible', addEventListener: (type, f) => { listeners[type] = f; }, querySelector: sel => sel === '#secondHomeBell' ? button : stage,
+    document: { visibilityState: 'visible', addEventListener: (type, f) => { listeners[type] = f; }, querySelector: sel => sel === '#secondHomeBell' ? button : sel === '.a911-screen' ? (moneyOpen ? {} : null) : stage,
       createElement: () => ({ setAttribute() {}, addEventListener: (_, f) => { ctx.click = f; }, remove: () => { button = null; } }) },
     setTimeout: (f, ms) => { timers.set(++id, { f, due: now + ms }); return id; }, clearTimeout: i => timers.delete(i),
     onSceneTeardown: f => cleanups.push(f), sceneListener: (_, type, f) => { listeners[type] = f; },
@@ -33,6 +33,9 @@ test('A1182 completed fork Home: one 1200ms beat then automatic candidates, clic
   const h = harness(); h.ctx.armSecondHomeWait(); h.tick(1199); assert.equal(h.opens(), 0); h.tick(1); assert.ok(h.bell()); assert.equal(h.opens(), 0); h.tick(1499); assert.equal(h.opens(), 0); h.tick(1);
   assert.equal(h.opens(), 1); assert.equal(h.ctx.click, undefined); assert.equal(h.ctx.state.secondJourney.step, 'candidates');
   h.rerender(); h.ctx.state.scene = 'sendstay'; h.rerender(); h.tick(200000); assert.equal(h.opens(), 1);
+});
+test('E42: the Money / Gift screen is open = no bell and no Explore over it', () => {
+  const h = harness({ moneyOpen: true }); h.ctx.armSecondHomeWait(); h.tick(200000); assert.equal(h.bell(), null); assert.equal(h.opens(), 0);
 });
 test('same Home rerender preserves due time; no random scheduler', () => {
   const h = harness(); h.ctx.armSecondHomeWait(); h.tick(500); h.rerender(); h.tick(699); assert.equal(h.opens(), 0); h.tick(1); h.tick(1500); assert.equal(h.opens(), 1);
@@ -88,7 +91,8 @@ test('changed identity invalidates late timer', () => {
   const wend = source.indexOf('  // post-file quiet Home:', wstart);
   vm.runInContext(source.slice(start, end) + source.slice(wstart, wend), h.ctx);
   h.ctx.armSecondHomeWait(); h.tick(1200); h.tick(1500); await Promise.resolve(); await Promise.resolve();
-  assert.equal(h.ctx.state.scene, 'explore'); assert.equal(h.ctx.state.secondJourney.step, 'candidates');
+  // E42: a fresh Second (no draft) opens on the intro card first; its ok goes to candidates. pre-E42: step 'candidates'
+  assert.equal(h.ctx.state.scene, 'explore'); assert.equal(h.ctx.state.secondJourney.step, 'intro');
   assert.deepEqual(Array.from(h.ctx.state.secondJourney.selectedIds), ['grow']);
   const reopened = loadSecondJourneyState(storage, scope).state;
   assert.equal(reopened.preference.novelty, 0.2); assert.equal(reopened.receipts.length, 1);

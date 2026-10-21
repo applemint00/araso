@@ -53,7 +53,7 @@ const COPY_ALLOW = new Set([...MOOD_COPY,
   "You sign. Piggy takes your money to work.", /* [A-1434 A5–A7 · 시안 v3 · Cowork 08:5x 답] the first Send card's words */ "out & back · more info", "out & back · close", "out & back ·", "out & back", "more info", "close", "You sign.", "Piggy takes your money to work.", "• MON → shMON → MON", "• network: Monad Testnet", "• tutorial · actual send 0.001 MON", "MON → shMON → MON", "network: Monad Testnet", "send", "stay home", "—", "<NAME> is coming home", "is coming home", "when there's", "a new job", "for piggy,", "the jar's sparkling.", "wanna tap it?", /* [A-1366] pieces */ "<SHORTDATE>", "went out",
   "came back", "kept", "> done", "File it", "Receipt", "I'll keep it here.", "<RECORDS>", "Checking…", "Passkey may appear once.",
   "tap me!", "Piggy is home.", "work's coming! let's send Piggy to work — your money does the job.", "work's coming! let's send Piggy to work —", "your money does the job.", "work's coming!", "let's send Piggy to work —", "let's send Piggy to work", /* [A-1433 A1] the first Home's three lines */ "let's send Piggy to work~", "your money does the job ♪", /* [A-1437] the same lines in pieces on screen */ "let's send", "Piggy to work~", "your money", "does the job ♪", "let's try more kinds of jobs!", "I'll keep the details at home.", "done!", "let me see which jobs can go.", "two can go. pick one?", "pick one of these.", "only this one can go. go?", "none of these can go now.", "something else?", "closing soon.", "if you want to explore more, tap to wake me up.", "tap me to find out", "these two?", "all of them?", "go to the market · leave an order", "go to the market · leave an order · tidy the wallet", "both can go. sending one for now.", "all of them work. let's try one first.", "only this one can go today.", "none of these can go now. something else?", "wait.", "pick up what is owed · pick up a piece of an asset", "pick up what is owed · put some money to work", "a quick trip", "try again", "tidy the wallet", "Couldn't open Piggy", "Passkey was cancelled.", "Make new", "wallet?", "Piggy!!!!!!", "my first piggy", "virtual money · fork", "get your piggy", "make passkey to hatch the piggy",
-  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "piggy goes to its first job", "with your $5.", /* [A-1364 · Owner 18:2x the first sheet's two lines · "piggy goes with this." gone] */ "not now", "allow", "want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?", /* [A-1360] the approval sheet */ "+ Piggy soon", "soon",
+  "places to explore?", "+ Piggy", "checking…", "go to the market", "leave an order", "tidy the wallet", "back to Home", "back", /* [E42] the first Second intro card */ "second job journey is on!", "wanna give it a try?", "home = not now.", "come back to the app, and we’ll check again.", "Home", "Send", "away", "<STATUS>", "Piggy could not get ready.", "nothing moved.", "nothing moved. · 0.001 MON test", "can't tell yet. · 0.001 MON test", "still out. · 0.001 MON test", "can't tell yet.", "still out.", "couldn't finish this one.", "Piggy went out.", "Can go out once.", "I found a few things.", "wanna see a few more?", "the jar's sparkling. wanna tap it?", "when there's a new job for piggy, the bell will ring.", "when there's a new job for piggy,", "the bell will ring.", "off to work,", "little piggy~", "your money's", "doing the job ♪", "piggy goes to its first job", "with your $5.", /* [A-1364 · Owner 18:2x the first sheet's two lines · "piggy goes with this." gone] */ "not now", "allow", "want me to sweep the crumbs into MON?", "little bits everywhere. make them one MON pile?", /* [A-1360] the approval sheet */ "+ Piggy soon", "soon",
 ]);
 function normaliseLine(line, name) {
   return line
@@ -383,16 +383,26 @@ async function unlockIfLocked(person) {
   if (s.scene === "birth") { await checkpoint(person, "lock"); await tapLockIfStill(person); }
   await until(person, "Home after unlock", (x) => x.scene === "sendstay", 20_000);
 }
+// [E42] a fresh Second opens on the intro card (Home / ok); ok goes on to the Explore paper.
+async function passSecondIntro(person) {
+  if (!(await live(person, "#secondIntroOkButton"))) return false;
+  await checkpoint(person, "second-intro");
+  await click(person, "#secondIntroOkButton", "second intro ok");
+  await until(person, "Explore paper after the intro", async () => !(await live(person, "#secondIntroOkButton")), 10_000);
+  return true;
+}
 async function enterSecond(person) {
   await until(person, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
   person.sawPlainTapMe = (await look(person)).text.includes("tap me!");
   if (person.sawPlainTapMe) { await checkpoint(person, "tapme"); await click(person, "#chogHomeHit", "tap me"); }
   await until(person, "Explore", (s) => s.scene === "explore", 30_000);
+  person.sawSecondIntro = await passSecondIntro(person);
   person.exploreGets = await getsOf(person);
   await checkpoint(person, "explore");
 }
 async function walkSecondJob(person, round, { tapHome = true } = {}) {
   await until(person, "Explore", (s) => s.scene === "explore", 20_000);
+  await passSecondIntro(person);
   if (await person.page.locator('input[data-errand-id="clean"]').count()) {
     await person.page.locator('input[data-errand-id="clean"]').check();
     await click(person, "#exploreSaveButton", "explore save");
@@ -1735,8 +1745,76 @@ async function laneAtlas() {
 }
 function eventsOfAll(id) { for (const w of allWorlds) { const e = eventsOf(w, id); if (e.length) return e; } return []; }
 
+
+// [E42] intro card Home = quiet Home (no bell, no Explore in this open); the next foreground may ask again
+// through the existing bell (the Home left a draft); the card shows again and back steps back to it.
+async function laneE42Home() {
+  const w = createWorld("e42home");
+  const p = await openPerson(browser, w, "e42home"); people.push(p);
+  const quiet = async () => p.page.evaluate(() => ({ bell: !!document.querySelector("#secondHomeBell"), intro: !!document.querySelector("#secondIntroOkButton") }));
+  const foreground = async () => {
+    await p.page.evaluate(() => { Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" }); document.dispatchEvent(new Event("visibilitychange")); });
+    await sleep(1500);
+    await p.page.evaluate(() => { Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "visible" }); document.dispatchEvent(new Event("visibilitychange")); });
+  };
+  await check("e42 · a fresh Second opens on the intro card (four lines · Home / ok)", async () => {
+    await walkFirstJourney(p);
+    await walkReturnAndFile(p);
+    await until(p, "tap me! or Explore", (s) => s.scene === "explore" || s.text.includes("tap me!"), 40_000);
+    if ((await look(p)).text.includes("tap me!")) await click(p, "#chogHomeHit", "tap me");
+    await until(p, "intro card", async (s) => s.scene === "explore" && (await live(p, "#secondIntroOkButton")), 30_000);
+    // the heading and hint hold a <br>, so look() (leaf elements only) skips them: read the card's own text
+    const t = (await p.page.evaluate(() => document.querySelector("#secondJourneyCard")?.innerText || "")).replace(/\s+/g, " ");
+    for (const line of ["second job journey is on!", "wanna give it a try?", "home = not now.", "come back to the app, and we’ll check again."]) assert.ok(t.includes(line), `missing: ${line}`);
+    await checkpoint(p, "e42-intro");
+  });
+  await check("e42 · the intro paper keeps the first Send card's Home-line places (card units: 38 apart like You sign. / Piggy takes…, ending where Piggy takes… ends at 455.2, inside the paper)", async () => {
+    const g = await p.page.evaluate(() => {
+      const c = document.querySelector("#secondJourneyCard").getBoundingClientRect(); const k = c.width / 438.461538;
+      const at = (s) => { const r = document.querySelector(`#secondJourneyCard ${s}`).getBoundingClientRect(); return { l: (r.left - c.left) / k, t: (r.top - c.top) / k, r: (c.right - r.right) / k, b: (c.bottom - r.bottom) / k }; };
+      const ink = (s) => { const el = document.querySelector(`#secondJourneyCard ${s}`); const rg = document.createRange(); rg.selectNodeContents(el); const r = rg.getBoundingClientRect(); return { r: (c.right - r.right) / k }; };
+      return { home: at(".secondJourney__introHome"), later: at(".secondJourney__introLater"), laterInk: ink(".secondJourney__introLater"), row: at(".secondJourney__footer"), rule: document.querySelectorAll("#secondJourneyCard .sendCard__rule").length };
+    });
+    const near = (a, b, what) => assert.ok(Math.abs(a - b) <= 1, `${what} ${a.toFixed(2)} vs ${b} · ${JSON.stringify(g)}`);
+    near(g.home.l, 46, "home left"); near(g.later.l, 46, "later left"); near(g.later.t - g.home.t, 38, "home → later gap"); near(560 - g.later.b, 455.2, "Home block bottom");
+    assert.equal(g.rule, 0, "no rule line");
+    assert.ok(560 - g.later.b < g.row.t - 8, `the Home lines stay above the Home / ok row · ${JSON.stringify(g)}`);
+    assert.ok(g.laterInk.r >= 36, `the second Home line ends inside the paper margin (right gap ${g.laterInk.r.toFixed(2)} ≥ 36)`);
+  });
+  await check("e42 · intro Home → quiet Home; no bell and no Explore again in the same open (12 s)", async () => {
+    await click(p, "#stayButton", "intro Home");
+    await until(p, "Home", (s) => s.scene === "sendstay", 10_000);
+    for (let i = 0; i < 6; i += 1) { await sleep(2000); const s = await look(p); const q = await quiet(); assert.equal(s.scene, "sendstay", `scene ${s.scene}`); assert.equal(q.bell, false, "bell in the same open"); }
+    await checkpoint(p, "e42-home-quiet");
+  });
+  await check("e42 · back to the app (foreground) → the existing bell → the intro card again (Home / ok on the Explore back / save line) → ok → interests → back → intro", async () => {
+    await foreground();
+    await until(p, "Explore after the bell", (s) => s.scene === "explore", 15_000);
+    await until(p, "intro card again", async () => live(p, "#secondIntroOkButton"), 10_000);
+    const place = (left, right) => p.page.evaluate(([a, b]) => {
+      const c = document.querySelector("#secondJourneyCard").getBoundingClientRect(); const k = c.width / 438.461538;
+      const at = (s) => { const r = document.querySelector(s).getBoundingClientRect(); return { l: (r.left - c.left) / k, r: (c.right - r.right) / k, b: (c.bottom - r.bottom) / k }; };
+      return { left: at(a), right: at(b) };
+    }, [left, right]);
+    const intro = await place("#stayButton", "#secondIntroOkButton");
+    await click(p, "#secondIntroOkButton", "intro ok");
+    await until(p, "interests paper", async () => (await p.page.locator("input[data-errand-id]").count()) > 0, 10_000);
+    const explore = await place("#exploreBackButton", "#exploreSaveButton");
+    const same = (a, b, what) => assert.ok(Math.abs(a - b) <= 1, `${what} intro ${a.toFixed(2)} vs Explore ${b.toFixed(2)} · ${JSON.stringify({ intro, explore })}`);
+    same(intro.left.l, explore.left.l, "Home / back left"); same(intro.left.b, explore.left.b, "Home / back bottom");
+    same(intro.right.r, explore.right.r, "ok / save right"); same(intro.right.b, explore.right.b, "ok / save bottom");
+    assert.ok(await live(p, "#exploreBackButton"), "interests has back");
+    assert.equal(await live(p, "#stayButton"), false, "interests has no Home");
+    await click(p, "#exploreBackButton", "interests back");
+    await until(p, "intro card after back", async () => live(p, "#secondIntroOkButton"), 10_000);
+    await checkpoint(p, "e42-back-to-intro");
+  });
+  await p.context.close();
+}
+
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy,giftrun").split(",");
+  if (only.includes("e42home")) await laneE42Home();
   await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti(), only.includes("keyclock") && laneKeyClock(), only.includes("firstend") && laneFirstEnd(), only.includes("oldtab") && laneOldTab()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });

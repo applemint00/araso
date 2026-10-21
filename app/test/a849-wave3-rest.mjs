@@ -58,7 +58,7 @@ await check("N1 candidates markup: heading follows the read state; wait. only wi
   assert.ok(wait.indexOf("secondCandidatesHeading") < wait.indexOf("secondPickedLine"), "0 rows: picked line under the title");
   assert.equal(/nah\./.test(wait), false, "no-match is wait., never nah.");
   assert.match(wait, /secondJourneyCard--candidates/);
-  assert.match(wait, /id="stayButton"[^>]*>Home</);
+  assert.match(wait, /id="exploreBackButton"[^>]*>back</); // [E42] Home lives only on the intro card. pre-E42: id="stayButton" Home
   assert.match(wait, /id="secondOkButton"[^>]*disabled/);
   const noPicks = secondJourneyCardMarkup({ step: "candidates", destinations: [], selectedIds: [], errandLabelById: LABELS });
   assert.equal(/wait\./.test(noPicks), false, "empty picks (resume) is not a wait. state");

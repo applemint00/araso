@@ -128,11 +128,12 @@ await check("fork level 2, entry allowed: boot on Home arms the existing cue · 
   const U = harness({ chog: false }); await tick();
   assert.equal(U.calls.arm, 0); assert.equal(U.state.homeQuietForExplore, true, "Home not mounted yet → the flag mountHome() settle() consumes");
 });
-await check("fork level 2, no entry (refused / server down / no address / Second done / not on Home): quiet Home stays, Explore = the previous (closed) path, no cue", async () => {
+await check("fork level 2, no entry (refused / server down / no address / Second done / not on Home): quiet Home stays, Explore opens nothing (dev preview = the previous path), no cue", async () => {
   for (const allowed of [false, new Error("offline")]) {
     const T = harness({ allowed }); await tick();
     assert.equal(T.calls.arm, 0); assert.equal(T.state.homeQuietForExplore, false);
-    T.B.get("openSecondJourneyExplore")(); await tick(); assert.equal(T.calls.base, 1); assert.deepEqual(T.calls.scene, []); // [A-974 r2] await the ask
+    T.B.get("openSecondJourneyExplore")(); await tick(); assert.equal(T.calls.base, 0); assert.deepEqual(T.calls.scene, []); // [A-974 r2] await the ask. [E42] a refusal opens nothing (the legacy opener could open Explore off a First receipt); pre-E42: base 1
+    const P = harness({ allowed }); P.state.secondJourney.devPreview = true; await tick(); P.B.get("openSecondJourneyExplore")(); await tick(); assert.equal(P.calls.base, 1, "dev preview keeps the previous path")
     T.B.get("a891ArmPostFileQuietHome")(); await tick(); assert.equal(T.calls.arm, 0);
   }
   const N = harness({ address: "" }); await tick(); assert.equal(N.calls.ask, 0); assert.equal(N.calls.arm, 0);
@@ -153,19 +154,19 @@ await check("MY MONEY on the fork: native balance read through the fork RPC (eth
   assert.equal(E.state.homeMoneyStatus, "error"); assert.equal(E.state.homeMoneyErrorText, "no saved account to read from yet.");
 });
 // ── [A-974 r2] coordinator opus spot CONCERNs: no cached entry verdict for the Explore open · chain id checked before the balance ──
-await check("r2: each Explore open asks the fork entry server again (no kept verdict): boot yes → later no = the previous (closed) path; later yes = the fork body; a scene change while asking opens nothing", async () => {
+await check("r2: each Explore open asks the fork entry server again (no kept verdict): boot yes → later no = nothing opens; later yes = the fork body; a scene change while asking opens nothing", async () => {
   let answer = true;
   const T = harness({ allowed: () => answer }); await tick();
   assert.equal(T.calls.ask, 1);
   answer = false;
   T.B.get("openSecondJourneyExplore")(); await tick();
-  assert.equal(T.calls.ask, 2); assert.equal(T.calls.base, 1); assert.deepEqual(T.calls.scene, []);
+  assert.equal(T.calls.ask, 2); assert.equal(T.calls.base, 0); assert.deepEqual(T.calls.scene, []); // [E42] later no opens nothing. pre-E42: base 1
   answer = true;
   T.B.get("openSecondJourneyExplore")(); await tick();
   assert.equal(T.calls.ask, 3); assert.deepEqual(T.calls.scene, ["explore"]);
   T.state.scene = "sendstay"; answer = true;
   T.B.get("openSecondJourneyExplore")(); T.state.scene = "away"; await tick();
-  assert.equal(T.calls.ask, 4); assert.deepEqual(T.calls.scene, ["explore"]); assert.equal(T.calls.base, 1);
+  assert.equal(T.calls.ask, 4); assert.deepEqual(T.calls.scene, ["explore"]); assert.equal(T.calls.base, 0); // [E42] pre-E42: base 1
   assert.ok(!/\ba974Entered\b/.test(block), "no module-level entry verdict");
 });
 await check("r2: MY MONEY reader asks eth_chainId before the balance; a chain id other than 31337143 (0x1de2ab7) = unreadable (existing error state), eth_getBalance never sent, no balance kept; checked once per client", async () => {

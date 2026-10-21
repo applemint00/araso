@@ -82,8 +82,8 @@ const draft = { step: "readiness", seedStage: "a", selectedIds: ["grow"], picked
     ok("  draft 가 beforeunload 에 기대지 않는다",
       !/beforeunload[^\n]*persistSecondDraft/.test(code) && !/persistSecondDraft[^\n]*beforeunload/.test(code));
   }
-  ok("복귀는 Explore 진입에서 한 번", /applySecondDraftIfAny\(sj, domainState\);/.test(SRC));
-  ok("  복귀 직후 반드시 재계산한다", /applySecondDraftIfAny\(sj, domainState\);\s*\n\s*recomputeSecondJourneyFlow\(\);/.test(SRC));
+  ok("복귀는 Explore 진입에서 한 번", /applySecondDraftIfAny\(sj, domainState\)(?: == null\) sj\.step = "intro";|;)/.test(SRC)); // [E42] 초안 없으면 intro 카드. pre-E42: applySecondDraftIfAny(sj, domainState);
+  ok("  복귀 직후 반드시 재계산한다", /applySecondDraftIfAny\(sj, domainState\)(?: == null\) sj\.step = "intro";|;)\s*\n\s*recomputeSecondJourneyFlow\(\);/.test(SRC));
   const fnStart = SRC.indexOf("function applySecondDraftIfAny");
   const fn = SRC.slice(fnStart, SRC.indexOf("\n}", fnStart) + 2);
   ok("복귀 함수가 permission 을 복원하지 않는다", !/permission/.test(fn));
