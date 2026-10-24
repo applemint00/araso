@@ -3517,13 +3517,16 @@ async function verifiedDepositForRedeem(pending, receipt) {
 async function resumeConfirmedDeposit(pending, depositReceipt) {
   if (!activeSession || !activeAccount || state.appLock || !sendLocksCapable()
     || String(activeAccount.address).toLowerCase() !== String(pending.address).toLowerCase()) return;
-  if (!depositReceipt) {
-    // [A-1487-c] a refused-redeem record arrives without the deposit receipt: one read-only receipt read; anything but a receipt = nothing happens.
-    try { depositReceipt = await publicClient.getTransactionReceipt({ hash: pending.depositTxHash }); } catch { return; }
-  }
-  const verified = await verifiedDepositForRedeem(pending, depositReceipt);
-  if (!verified) return;
+  // [A-1493] the resume/retry path reports itself in fixed words (event-schema send): retry = the redeem went out · retry_ok = its trip
+  // finished · retry_held = resume was entered and nothing went out (verification said no, lock busy, record changed, read or sign failed).
+  let sent = false;
   try {
+    if (!depositReceipt) {
+      // [A-1487-c] a refused-redeem record arrives without the deposit receipt: one read-only receipt read; anything but a receipt = nothing happens.
+      depositReceipt = await publicClient.getTransactionReceipt({ hash: pending.depositTxHash });
+    }
+    const verified = await verifiedDepositForRedeem(pending, depositReceipt);
+    if (!verified) return;
     await navigator.locks.request(SEND_LOCK_NAME, { mode: "exclusive", ifAvailable: true }, async (lock) => {
       if (!lock || !sameDepositPending(pending, readSendPending()) || !activeSession || state.appLock
         || String(activeAccount?.address).toLowerCase() !== String(pending.address).toLowerCase()) return;
@@ -3542,17 +3545,21 @@ async function resumeConfirmedDeposit(pending, depositReceipt) {
       // [A-1487-c] a retried redeem keeps every earlier hash of this record in priorRedeemTxHashes (nothing dropped or overwritten).
       const redeemTxHash = await broadcastRedeemTail({ reservation, account, depositTxHash: pending.depositTxHash,
         depositNonce: pendingDepositNonce(pending), redeemSigned, priorRedeemTxHashes: pending.stage === "redeem-broadcast" ? pendingRedeemHashes(pending) : undefined });
+      sent = true;
+      if (typeof track === "function") track("send", "retry"); // [A-1493] the node returned the redeem hash
       settleSend({ before, address: account.address, piggyId: indexedPiggyId(account.address),
         depositTxHash: pending.depositTxHash, depositReceipt, redeemTxHash, shmonReceived: fresh.shares,
         pendingOnTimeout: true, wentOutAt: pending.at })
         .then((trip) => {
-          if (trip.outcome === "done") commitSendSuccess(redeemTxHash);
+          if (trip.outcome === "done") { commitSendSuccess(redeemTxHash); if (typeof track === "function") track("send", "retry_ok"); } // [A-1493]
           finishRedeemTail(trip);
         })
         .catch(() => { if (typeof showAwayRestore === "function") showAwayRestore("unknown"); });
     });
   } catch {
     // The deposit record remains the only authority for a later explicit check.
+  } finally {
+    if (!sent && typeof track === "function") track("send", "retry_held"); // [A-1493] every "entered, nothing went out" exit
   }
 }
 

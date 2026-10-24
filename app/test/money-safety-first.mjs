@@ -428,8 +428,9 @@ function resumeHarness({ event = true, chainNonce = 8, locked = false, signer = 
   const pendingRecord = record || { stage: "deposit-broadcast", phase: "sent", address: ADDR, depositTxHash: D, nonce: 7, reservationId: "r1" };
   const t = build({ pendingRecord });
   const { ctx, state } = t;
-  const calls = { sign: 0, send: 0, lock: 0, deposit: 0 };
+  const calls = { sign: 0, send: 0, lock: 0, deposit: 0, beacons: [] };
   const amount = 10n ** 15n;
+  ctx.track = (step, code) => { calls.beacons.push([step, code]); }; // [A-1493] the retry path reports itself (fixed words only)
   const topic = "0x" + "1".repeat(64);
   const owner = "0x" + "0".repeat(24) + ADDR.slice(2).toLowerCase();
   const depositReceipt = { transactionHash: D, status: "success", from: ADDR, to: SHMON_ADDRESS,
@@ -456,7 +457,8 @@ function resumeHarness({ event = true, chainNonce = 8, locked = false, signer = 
   ctx.publicClient.getTransactionCount = async () => chainNonce;
   ctx.publicClient.estimateGas = async () => 100000n;
   ctx.publicClient.getBalance = async () => 0n;
-  ctx.publicClient.sendRawTransaction = async () => { calls.send += 1; return E; };
+  // [A-1493] the node echoes the hash of what was sent (a real node does); the fixed E hid a send_hash_mismatch throw behind the F retry
+  ctx.publicClient.sendRawTransaction = async () => { calls.send += 1; return retryHash; };
   ctx.signSendStep = async () => { calls.sign += 1; return { nonce: 8, hash: retryHash, raw: "0x01" }; };
   ctx.__testAccount = { address: ADDR };
   if (signer) vm.runInContext("activeSession = {}; activeAccount = __testAccount;", ctx);
@@ -498,6 +500,7 @@ await check("C-retry refused redeem: old hash unknown to the node + no receipt +
   await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
   assert.equal(t.calls.sign, 1);
   assert.equal(t.calls.send, 1);
+  assert.deepEqual(t.calls.beacons, [["send", "retry"]], "[A-1493] one retry beacon, fixed words"); // the settle outcome beacon needs settleSend to resolve (below)
   const rec = JSON.parse(t.storage.raw(SEND_PENDING_KEY));
   assert.deepEqual([rec.stage, rec.redeemTxHash, rec.nonce, rec.depositTxHash, rec.priorRedeemTxHashes], ["redeem-broadcast", F, 8, D, [E]]);
   t.knownTxs.push(F); // the node now knows the retry
@@ -517,8 +520,18 @@ for (const [label, options] of [
     await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
     assert.equal(t.calls.sign + t.calls.send, 0);
     assert.equal(t.storage.raw(SEND_PENDING_KEY), JSON.stringify(t.pendingRecord));
+    // [A-1493] a verification that holds the retry is reported once (app locked = resume never entered → no beacon by design)
+    assert.deepEqual(t.calls.beacons, options.locked ? [] : [["send", "retry_held"]], `retry_held beacon · ${label}`);
   });
 }
+await check("C-retry-ok beacon: the retry's settle outcome done → one retry_ok beacon after the retry beacon", async () => {
+  const t = resumeHarness({ record: REFUSED, knownTxs: [D], retryHash: F });
+  t.ctx.settleSend = async () => ({ outcome: "done", reason: "ok", receipt: null });
+  t.ctx.commitSendSuccess = () => {}; t.ctx.finishRedeemTail = () => {};
+  await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+  await flush(); await flush();
+  assert.deepEqual(t.calls.beacons, [["send", "retry"], ["send", "retry_ok"]]);
+});
 await check("C-retry-same-hash: pinned fees sign the same bytes → the retry IS the old hash; one send, slot keeps it, no prior entry", async () => {
   const t = resumeHarness({ record: REFUSED, knownTxs: [D], retryHash: E });
   await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });

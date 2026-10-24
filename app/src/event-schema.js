@@ -12,7 +12,7 @@ export const EVENT_CODES = Object.freeze(Object.fromEntries(Object.entries({
   grant: ['ok', 'already_funded', 'not_allowlisted', 'cap_reached', 'unavailable', 'unconfirmed', 'reverted', 'fail'],
   home_reached: ['ok'],
   send_tap: ['ok'],
-  send: ['ok', 'auth', 'grant', 'simulate', 'unconfirmed', 'fail'],
+  send: ['ok', 'auth', 'grant', 'simulate', 'unconfirmed', 'fail', 'retry', 'retry_ok', 'retry_held'], // [A-1493] the resume/retry path reports itself: retry sent · retry trip done · verification held it (nothing sent)
   send_why: ['auth', 'sign', 'refused', 'broadcast', 'mismatch', 'unconfirmed', 'redeem', 'locked', 'insufficient', 'nonce', 'fee', 'other'],
   job_why: ['unavailable', 'auth', 'signer', 'server_refused', 'changed', 'read_failed', 'refused', 'failed'],
   unlock_why: ['cancelled', 'timeout', 'identity', 'unsupported', 'other'],
