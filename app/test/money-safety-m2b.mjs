@@ -63,6 +63,7 @@ const CONSTS = [
 for (const c of CONSTS) assert.ok(MAIN.includes(c), `const line still in main.js: ${c}`);
 const SHMON_ADDRESS = MAIN.match(/const SHMON_ADDRESS = "(0x[0-9a-fA-F]{40})";/)[1];
 const RECEIPT_FNS_SRC = cut("function readReceipts() {", "\nfunction writeCredential(credential) {");
+const RPC_CATEGORY_SRC = cut("function safeRpcMessagePrefix(error) {", "// Where a First send broke");
 const PENDING_SRC = cut("let sendInFlight = false;", "\nasync function sendPiggyOnce(");
 const RECONCILE_SRC = cut("// [A-633 C] First Send 미확정 기록", "async function requestGrant(");
 const FINISH_SRC = fnBody("finishTrip");
@@ -225,7 +226,7 @@ function makeTab(shared, opts = {}) {
   const names = Object.keys(env);
   const body = `let signerSince = __startSigned ? Date.now() : 0; /* [A-896 harness wiring] */ let activeAccount = __startSigned ? __account : null; let activeSession = __startSigned ? __session : null;\n` +
     `async function recoverPiggy() { await __recover(); signerSince = Date.now(); activeAccount = __account; activeSession = __session; }\n` +
-    `${CONSTS.join("\n")}\n${RECEIPT_FNS_SRC}\n${PENDING_SRC}\n${FINISH_SRC}\n${RECONCILE_SRC}\n${ONCE_SRC}\n` +
+    `${CONSTS.join("\n")}\n${RECEIPT_FNS_SRC}\n${RPC_CATEGORY_SRC}\n${PENDING_SRC}\n${FINISH_SRC}\n${RECONCILE_SRC}\n${ONCE_SRC}\n` +
     `return { sendPiggy, sendPiggyOnce, readSendPending, writeSendPending, sendBusy, holdSendTabLock, sweepStaleSendReservation, reserveSend, clearOwnSendPending, classifySendPending, reconcileSendPending, sendTabId, reservation: () => sendReservation, tabLockHeld: () => sendTabLockHeld, isInFlight: () => sendInFlight };`;
   const factory = new Function(...names, body);
   const api = factory(...names.map((n) => env[n]));
@@ -664,7 +665,7 @@ await check("B2 happy path end to end: reserved -> signed -> sent -> signed -> s
   const t = makeTab(sh);
   await t.sendPiggy(); await settle();
   const phases = sh.storage.log.filter((x) => x[0] === "set" && x[1] === "araso.sendPending").map((x) => { const r = JSON.parse(x[2]); return `${r.stage}/${r.phase || "-"}/${r.nonce ?? "-"}`; });
-  assert.deepEqual(phases, ["reserved/-/-", "deposit-broadcast/signed/0", "deposit-broadcast/sent/0", "redeem-broadcast/signed/1", "redeem-broadcast/sent/1"]);
+  assert.deepEqual(phases, ["reserved/-/-", "deposit-broadcast/signed/0", "deposit-broadcast/signed/0", "deposit-broadcast/sent/0", "redeem-broadcast/signed/1", "redeem-broadcast/sent/1"]);
   assert.equal(sh.storage.has("araso.sendPending"), false, "cleared only after the verified receipt (finishTrip compare-and-clear)");
   assert.equal(JSON.parse(sh.storage.raw("araso.receipts")).length, 1);
   assert.equal(t.calls.sendRaw, 2);
@@ -986,7 +987,7 @@ await check("H1 broadcast sites: deposit uses the A-1260 bounded same-raw helper
   const code = strip(MAIN);
   assert.equal((code.match(/\.sendRawTransaction\s*\(/g) || []).length, 2);
   assert.equal((code.match(/\.sendTransaction\s*\(/g) || []).length, 0);
-  assert.equal((strip(fnBody("sendPiggyOnce")).match(/publicClient\.sendRawTransaction\(/g) || []).length, 1);
+  assert.equal((strip(fnBody("broadcastRedeemTail")).match(/publicClient\.sendRawTransaction\(/g) || []).length, 1);
   assert.equal((strip(fnBody("broadcastDepositRaw")).match(/publicClient\.sendRawTransaction\(/g) || []).length, 1);
 });
 await check("H2 source order inside sendPiggyOnce: persist signed identity before bounded deposit broadcast; redeem order unchanged", async () => {
@@ -997,8 +998,10 @@ await check("H2 source order inside sendPiggyOnce: persist signed identity befor
   assert.ok(dep.every((x) => x > 0) && dep[0] < dep[1] && dep[1] < dep[2] && dep[2] < dep[3], `deposit order ${dep}`);
   // [A-768 M-L-1 re-pin, named reason] the redeem signature moved into prepareRedeemAfterDeposit (deposit-block-pinned reads + bounded
   // retry); its call site in sendPiggyOnce keeps the same order: sign (inside the helper) < persist(signed) < broadcast.
-  const red = [at("prepareRedeemAfterDeposit({"), at('writeOwnedSendPending(reservation, { stage: "redeem-broadcast", phase: "signed"'), at("publicClient.sendRawTransaction({ serializedTransaction: redeemSigned.raw })")];
-  assert.ok(red.every((x) => x > 0) && red[0] < red[1] && red[1] < red[2], `redeem order ${red}`);
+  const red = [at("prepareRedeemAfterDeposit({"), at("broadcastRedeemTail({")];
+  assert.ok(red.every((x) => x > 0) && red[0] < red[1], `redeem order ${red}`);
+  const tail = fnBody("broadcastRedeemTail");
+  assert.ok(tail.indexOf('writeOwnedSendPending(reservation, { stage: "redeem-broadcast", phase: "signed"') < tail.indexOf("publicClient.sendRawTransaction({ serializedTransaction: redeemSigned.raw })"));
   assert.ok(fnBody("prepareRedeemAfterDeposit").includes("signSendStep(walletClient, account, { ...redeemTx, gas })"), "the helper signs the redeem through signSendStep");
   assert.ok(at("clearOwnSendPending(reservation, { unsentHash: unsentDepositHash })") > at("catch (error)"));
   assert.equal(/deposit-sending|redeem-sending/.test(strip(s)), false, "no hash-less stage is written any more");
@@ -1014,7 +1017,8 @@ await check("H3 no new user-visible words; A-1260 retry is bounded to four same-
 await check("H4 the raw signed transaction is never persisted or logged: no storage write contains `raw`, serializedTransaction only flows to sendRawTransaction", async () => {
   const s = strip(fnBody("sendPiggyOnce"));
   assert.equal(/writeOwnedSendPending\([^)]*raw/.test(s), false);
-  assert.equal((s.match(/serializedTransaction/g) || []).length, 1);
+  assert.equal((s.match(/serializedTransaction/g) || []).length, 0);
+  assert.equal((strip(fnBody("broadcastRedeemTail")).match(/serializedTransaction/g) || []).length, 1);
   assert.equal((strip(fnBody("broadcastDepositRaw")).match(/serializedTransaction/g) || []).length, 1);
   assert.equal(/recordSafeError\([^)]*raw/.test(s), false);
 });

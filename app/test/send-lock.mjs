@@ -13,6 +13,7 @@ function cut(startMarker, endMarker) {
   return SRC.slice(start, end);
 }
 const constsSrc = cut('const SEND_PENDING_KEY = "araso.sendPending";', "\n\n");
+const rpcCategorySrc = cut("function safeRpcMessagePrefix(error) {", "// Where a First send broke");
 const lockSrc = cut("let sendInFlight = false;", "\nasync function sendPiggyOnce(");
 const onceSrc = cut("async function sendPiggyOnce(markSettling)", "\n// --- Second Journey");
 
@@ -89,6 +90,7 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
       estimateGas: async () => 1n,
       getTransactionCount: async (opts = {}) => opts.blockTag === "pending" && proofNonce !== null ? proofNonce : calls.prepared,
       getTransactionReceipt: async () => { const error = new Error("not found"); error.name = "TransactionReceiptNotFoundError"; throw error; },
+      getTransaction: async () => { const error = new Error("not found"); error.name = "TransactionNotFoundError"; throw error; },
       sendRawTransaction: async ({ serializedTransaction }) => {
         calls.sendTx += 1;
         if (depositThrows && calls.sendTx === 1) throw new Error("rpc");
@@ -108,7 +110,7 @@ function makeSend({ storage, settleOutcome = "done", gate = null, depositThrows 
     endActiveSession: () => { calls.endSession += 1; },
   };
   const names = Object.keys(env);
-  const factory = new Function(...names, `${constsSrc}\n${lockSrc}\n${onceSrc}\nreturn { sendPiggy, computeTripClosed, readSendPending, sendBusy, holdSendTabLock, isInFlight: () => sendInFlight };`);
+  const factory = new Function(...names, `${constsSrc}\n${rpcCategorySrc}\n${lockSrc}\n${onceSrc}\nreturn { sendPiggy, computeTripClosed, readSendPending, sendBusy, holdSendTabLock, isInFlight: () => sendInFlight };`);
   const made = factory(...names.map((n) => env[n]));
   made.holdSendTabLock(); // boot step: the tab lifetime lock (fake locks grant it synchronously)
   return { ...made, calls, btn, env };

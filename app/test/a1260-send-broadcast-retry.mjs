@@ -10,6 +10,7 @@ function cut(startMarker, endMarker) {
   return SRC.slice(start, end);
 }
 const pendingConsts = cut('const SEND_PENDING_KEY = "araso.sendPending";', "\n\n");
+const rpcCategorySrc = cut("function safeRpcMessagePrefix(error) {", "// Where a First send broke");
 const lockSrc = cut("let sendInFlight = false;", "\nasync function sendPiggyOnce(");
 
 let pass = 0;
@@ -26,23 +27,30 @@ function storageWith(pending) {
     removeItem: (key) => rows.delete(key),
   };
 }
-function rpcError(message = "insufficient funds for gas * secret") {
+function rpcError(message = "insufficient funds for gas * price + value") {
   const error = new Error(message);
   error.name = "InvalidInputRpcError";
   error.code = -32000;
   return error;
 }
-function makeHarness({ failures = 0, receipt = "missing", chainNonce = 7 } = {}) {
-  const calls = { send: 0, receipt: 0, nonce: 0, waits: 0 };
+function makeHarness({ failures = 0, errors = null, receipt = "missing", transaction = "missing", chainNonce = 7, attempted = false } = {}) {
+  const calls = { send: 0, receipt: 0, transaction: 0, nonce: 0, waits: 0 };
   const hash = keccak256("0xa0");
-  const pending = { stage: "deposit-broadcast", phase: "signed", address: "0x1111111111111111111111111111111111111111", depositTxHash: hash, nonce: 7, reservationId: "r1" };
+  const pending = { stage: "deposit-broadcast", phase: "signed", ...(attempted ? { attempted: true } : {}), address: "0x1111111111111111111111111111111111111111", depositTxHash: hash, nonce: 7, reservationId: "r1" };
   const localStorage = storageWith(pending);
   const held = new Set();
   const env = {
     localStorage,
     isTxHash: (value) => /^0x[0-9a-fA-F]{64}$/.test(String(value)),
     publicClient: {
-      sendRawTransaction: async () => { calls.send += 1; if (calls.send <= failures) throw rpcError(); return hash; },
+      sendRawTransaction: async () => { calls.send += 1; if (errors?.[calls.send - 1]) throw errors[calls.send - 1]; if (calls.send <= failures) throw rpcError(); return hash; },
+      getTransaction: async () => {
+        calls.transaction += 1;
+        if (transaction === "found") return { hash };
+        const error = new Error(transaction === "error" ? "rpc down" : "not found");
+        error.name = transaction === "error" ? "HttpRequestError" : "TransactionNotFoundError";
+        throw error;
+      },
       getTransactionReceipt: async () => {
         calls.receipt += 1;
         if (receipt === "found") return { status: "success" };
@@ -61,7 +69,7 @@ function makeHarness({ failures = 0, receipt = "missing", chainNonce = 7 } = {})
     crypto: { getRandomValues: (array) => globalThis.crypto.getRandomValues(array) },
   };
   const names = Object.keys(env);
-  const made = new Function(...names, `${pendingConsts}\n${lockSrc}\nreturn { broadcastDepositRaw, clearProvenNeverSentDeposit, retryableDepositBroadcastError };`)(...names.map((name) => env[name]));
+  const made = new Function(...names, `${pendingConsts}\n${rpcCategorySrc}\n${lockSrc}\nreturn { broadcastDepositRaw, clearProvenNeverSentDeposit, retryableDepositBroadcastError };`)(...names.map((name) => env[name]));
   return { ...made, calls, localStorage, pending, hash };
 }
 
@@ -82,6 +90,54 @@ function makeHarness({ failures = 0, receipt = "missing", chainNonce = 7 } = {})
   check("cleared record makes Send available", h.localStorage.getItem("araso.sendPending"), null);
 }
 {
+  const h = makeHarness({ attempted: true, failures: 4 });
+  let refused = null;
+  try { await h.broadcastDepositRaw("0xa0"); } catch (error) { refused = error; }
+  check("attempted broadcast gets four explicit -32000 refusals", h.calls.send, 4);
+  check("attempted signed + explicit -32000 refusal clears", await h.clearProvenNeverSentDeposit(h.pending, { broadcastError: refused }), true);
+  check("explicit refusal removes attempted record", h.localStorage.getItem("araso.sendPending"), null);
+  check("attempted cleanup checked transaction absence", h.calls.transaction, 1);
+}
+for (const [label, options, refusal] of [
+  ["other rejection", {}, rpcError("transaction rejected")],
+  ["already known", {}, rpcError("already known")],
+  ["transaction found", { transaction: "found" }, rpcError()],
+  ["transaction lookup error", { transaction: "error" }, rpcError()],
+  ["receipt found", { receipt: "found" }, rpcError()],
+  ["nonce advanced", { chainNonce: 8 }, rpcError()],
+]) {
+  const h = makeHarness({ attempted: true, ...options });
+  check(`${label} preserves attempted signed record`, await h.clearProvenNeverSentDeposit(h.pending, { broadcastError: refusal }), false);
+  check(`${label} keeps pending bytes`, h.localStorage.getItem("araso.sendPending") !== null, true);
+}
+for (const [label, second] of [
+  ["already known", rpcError("already known")],
+  ["known transaction", rpcError("known transaction")],
+  ["nonce too low", rpcError("nonce too low")],
+  ["replacement underpriced", rpcError("replacement transaction underpriced")],
+  ["no response", Object.assign(new Error("request failed"), { name: "HttpRequestError" })],
+]) {
+  const h = makeHarness({ attempted: true, errors: [rpcError(), second] });
+  let caught = null;
+  try { await h.broadcastDepositRaw("0xa0"); } catch (error) { caught = error; }
+  check(`second ${label} stops at two sends`, h.calls.send, 2);
+  check(`second ${label} propagates its error`, caught, second);
+  check(`second ${label} keeps attempted record`, await h.clearProvenNeverSentDeposit(h.pending, { broadcastError: caught }), false);
+  check(`second ${label} pending survives`, h.localStorage.getItem("araso.sendPending") !== null, true);
+}
+{
+  const h = makeHarness({ attempted: true });
+  const noResponse = new Error("request failed");
+  noResponse.name = "HttpRequestError";
+  check("attempted signed + no node response stays pending", await h.clearProvenNeverSentDeposit(h.pending, { broadcastError: noResponse }), false);
+  check("no response preserves attempted record", h.localStorage.getItem("araso.sendPending") !== null, true);
+}
+{
+  const h = makeHarness({ attempted: true });
+  check("attempted signed + boot without error stays pending", await h.clearProvenNeverSentDeposit(h.pending), false);
+  check("boot preserves attempted record", h.localStorage.getItem("araso.sendPending") !== null, true);
+}
+{
   const h = makeHarness({ receipt: "missing", chainNonce: 8 });
   check("advanced nonce keeps signed record", await h.clearProvenNeverSentDeposit(h.pending), false);
   check("record remains when nonce advanced", h.localStorage.getItem("araso.sendPending") !== null, true);
@@ -93,6 +149,7 @@ function makeHarness({ failures = 0, receipt = "missing", chainNonce = 7 } = {})
 }
 
 check("source wires deposit through bounded retry", /const depositSentHash = await broadcastDepositRaw\(depositSigned\.raw\)/.test(SRC), true);
+check("send catch passes the broadcast error to pending cleanup", /clearProvenNeverSentDeposit\(signedPending, \{ reservation, broadcastError: error \}\)/.test(SRC), true);
 check("source boot reconcile can clear only proved signed deposit", /clearProvenNeverSentDeposit\(pending\)/.test(SRC), true);
 const reverted = SRC.replace("const depositSentHash = await broadcastDepositRaw(depositSigned.raw);", "const depositSentHash = await publicClient.sendRawTransaction({ serializedTransaction: depositSigned.raw });");
 check("revert mutation fails the retry source pin", /const depositSentHash = await broadcastDepositRaw\(depositSigned\.raw\)/.test(reverted), false);

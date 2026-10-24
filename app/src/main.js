@@ -13,7 +13,7 @@ import {
   isMeraError,
 } from "@category-labs/mera";
 import { toViemAccount } from "@category-labs/mera/viem";
-import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, keccak256, parseEther, recoverMessageAddress } from "viem";
+import { createPublicClient, createWalletClient, decodeAbiParameters, decodeFunctionData, encodeFunctionData, formatEther, http, keccak256, parseEther, recoverMessageAddress } from "viem";
 import { chogHomeMarkup, mountChogHome, CHOG_HOME_GEOMETRY, pairConvergenceEase } from "./chog-home.js";
 import { chogInviteMarkup, mountChogInvite, CHOG_INVITE_GEOMETRY } from "./chog-invite.js";
 import { WORK_CUE, createDepartPlayback, createDepartRenderer, loadDepartAssets } from "./piggy-depart.js";
@@ -75,6 +75,7 @@ import {
   bindGiftToNewPiggy,
   createGiftClaimSubmitter,
   GIFT_ENTRY_STATUS,
+  SHMON_DEPOSIT_TOPIC0,
   isGiftBinding,
   readClaimFragment,
   settleGiftClaim,
@@ -2478,6 +2479,8 @@ function settleUnlock(result, error, pinned, attempt = null) {
     state.appLock = null;
     touchAppSession();
     render();
+    const pending = typeof readSendPending === "function" ? readSendPending() : null;
+    if (pending && typeof reconcileSendPending === "function") reconcileSendPending(pending, { watch: false }).catch(() => {});
   } finally {
     if (result && result.prfOutput instanceof Uint8Array) result.prfOutput.fill(0);
   }
@@ -2516,7 +2519,7 @@ async function readSendTxReceipt(hash, address) {
   const fromOk = String(receipt?.from || "").toLowerCase() === String(address).toLowerCase();
   const toOk = String(receipt?.to || "").toLowerCase() === SHMON_ADDRESS.toLowerCase();
   if (!fromOk || !toOk) return { kind: "unknown" };
-  return { kind: receipt.status === "success" ? "success" : "reverted", receipt };
+  return { kind: receipt.status === "success" ? "success" : receipt.status === "reverted" ? "reverted" : "unknown", receipt };
 }
 
 // 단계별 판정(카드 §C 1–7). 반환 kind: unknown | pending | deposit-confirmed | failed | success.
@@ -2525,15 +2528,25 @@ async function classifySendPending(pending) {
   if (!pending || typeof address !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(address)) return { kind: "unknown" };
   if (pending.stage === "deposit-broadcast" && isTxHash(pending.depositTxHash)) {
     const dep = await readSendTxReceipt(pending.depositTxHash, address);
-    // deposit 만 성공 = Job 은 아직 안 끝났다(redeem hash 없음). 자동 redeem 금지 — still out. 으로 남긴다.
-    if (dep.kind === "success") return { kind: "deposit-confirmed", depositBlockNumber: dep.receipt.blockNumber };
+    // deposit 만 성공 = Job 은 아직 안 끝났다. 검증·서명자 확인 전에는 still out. 으로 남긴다.
+    if (dep.kind === "success") return { kind: "deposit-confirmed", depositBlockNumber: dep.receipt.blockNumber, depositReceipt: dep.receipt };
     return { kind: dep.kind === "reverted" ? "failed" : dep.kind };
   }
   if (pending.stage === "redeem-broadcast" && isTxHash(pending.redeemTxHash) && isTxHash(pending.depositTxHash)) {
     const red = await readSendTxReceipt(pending.redeemTxHash, address);
-    if (red.kind !== "success") return { kind: red.kind === "reverted" ? "failed" : red.kind };
+    if (red.kind !== "success") {
+      // [A-1487-c] a redeem retried with the same nonce keeps every earlier hash in priorRedeemTxHashes; a receipt on any of them is this trip's success.
+      const prior = Array.isArray(pending.priorRedeemTxHashes) ? pending.priorRedeemTxHashes.filter(isTxHash) : [];
+      for (const hash of prior) {
+        const old = await readSendTxReceipt(hash, address);
+        if (old.kind !== "success") continue;
+        const dep = await readSendTxReceipt(pending.depositTxHash, address);
+        return { kind: "success", redeemTxHash: hash, redeemReceipt: old.receipt, depositReceipt: dep.kind === "success" ? dep.receipt : null };
+      }
+      return { kind: red.kind === "reverted" ? "failed" : red.kind };
+    }
     const dep = await readSendTxReceipt(pending.depositTxHash, address);
-    return { kind: "success", redeemReceipt: red.receipt, depositReceipt: dep.kind === "success" ? dep.receipt : null };
+    return { kind: "success", redeemTxHash: pending.redeemTxHash, redeemReceipt: red.receipt, depositReceipt: dep.kind === "success" ? dep.receipt : null };
   }
   // deposit-sending · redeem-sending · unknown · hash 없음 — 믿을 수 있는 broadcast hash 가 없다.
   return { kind: "unknown" };
@@ -2615,7 +2628,9 @@ async function reconcileSendPending(pending, { watch = true } = {}) {
     result = { kind: "unknown" };
   }
   let receipt = null;
-  if (result.kind === "success") receipt = await reconciledSendReceipt(pending, result.depositReceipt, result.redeemReceipt);
+  // [A-1487-c] the receipt may sit on an EARLIER redeem hash of the same record (same nonce retry): the trip's hash is the one the receipt carries.
+  const landed = result.kind === "success" && isTxHash(result.redeemTxHash) ? result.redeemTxHash : pending.redeemTxHash;
+  if (result.kind === "success") receipt = await reconciledSendReceipt(landed === pending.redeemTxHash ? pending : { ...pending, redeemTxHash: landed }, result.depositReceipt, result.redeemReceipt);
   // 조회하는 동안 기록이 바뀌었거나(다른 결말이 이미 정리함) 사라졌으면 이 결과로 아무것도 하지 않는다.
   const now = readSendPending();
   if (!now || now.stage !== pending.stage || now.depositTxHash !== pending.depositTxHash || now.redeemTxHash !== pending.redeemTxHash) {
@@ -2624,8 +2639,11 @@ async function reconcileSendPending(pending, { watch = true } = {}) {
   if (result.kind === "success") {
     // 실시간 settle 과 **같은** 성공 계약: redeem receipt 성공 확인 → 확정값 저장·미확정 기록 제거 → finishTrip.
     // Receipt 가 있으면 finishTrip 이 기존 귀환 알람·포털·Piggy 귀환·Receipt 로 들어간다(새 화면·타이머 0).
+    // [A-1487-c] receipt on an earlier hash: adoptLandedRedeemHash (outside this read-only block) moves that hash into the record's redeem slot, keeping
+    // every other hash in priorRedeemTxHashes, so finishTrip's compare-and-clear meets the hash the receipt carries. Not possible → record left as it was.
+    if (landed !== pending.redeemTxHash && !(typeof adoptLandedRedeemHash === "function" && (await adoptLandedRedeemHash(pending, landed)))) return result;
     state.awayRestore = null;
-    commitSendSuccess(pending.redeemTxHash);
+    commitSendSuccess(landed);
     finishTrip(receipt ? { outcome: "done", reason: "ok", receipt } : { outcome: "done", reason: "balance-unavailable", receipt: null });
     return result;
   }
@@ -2635,12 +2653,20 @@ async function reconcileSendPending(pending, { watch = true } = {}) {
     finishTrip({ outcome: "failed", reason: "reverted", receipt: null });
     return result;
   }
+  // [A-1487-c] a refused redeem (redeem-broadcast · still pending · deposit confirmed) goes through the same verified resume; it sends only when every
+  // earlier redeem hash is unknown to the node, has no receipt, and the nonce slot is still free (verifiedDepositForRedeem) — otherwise Away stays.
+  if ((result.kind === "deposit-confirmed" || (result.kind === "pending" && pending.stage === "redeem-broadcast")) && typeof resumeConfirmedDeposit === "function") {
+    await resumeConfirmedDeposit(pending, result.depositReceipt || null);
+  }
   // pending / deposit-confirmed → still out. · unknown(해시 없음·읽기 실패·주소 불일치) → can't tell yet.
   showAwayRestore(result.kind === "unknown" ? "unknown" : "pending");
-  if (watch && result.kind === "pending" && pending.stage === "redeem-broadcast") {
-    // redeem 이 아직 채굴 전이면 같은 hash 를 읽기로만 **한 번** 기다렸다가 처음부터 다시 판정한다(재제출 0).
-    // 다시 판정한 결과가 또 pending 이어도 다시 기다리지 않는다(RPC 가 엇갈려도 읽기 반복 루프 0 — 다음 열기에서 다시 본다).
-    publicClient.waitForTransactionReceipt({ hash: pending.redeemTxHash }).then(() => reconcileSendPending(pending, { watch: false }), () => {});
+  if (watch && result.kind === "pending" && (pending.stage === "redeem-broadcast" || pending.stage === "deposit-broadcast")) {
+    // 같은 hash 의 영수증을 한 번 기다린 뒤 재판정한다. 반복 감시는 하지 않는다.
+    const hash = pending.stage === "deposit-broadcast" ? pending.depositTxHash : pending.redeemTxHash;
+    publicClient.waitForTransactionReceipt({ hash }).then(
+      () => reconcileSendPending(pending, { watch: false }),
+      () => reconcileSendPending(pending, { watch: false }),
+    );
   }
   return result;
 }
@@ -2894,21 +2920,24 @@ if (FIRST_EVIDENCE_SIDECAR) a887Swallow(Promise.resolve().then(() => a887Observe
 async function waitForSuccess(hash) {
   if (typeof a887ObserveFirstEvidence === "function") a887ObserveFirstEvidence("broadcast"); // [A-887] observation only; default none
   let receipt;
+  const detailed = arguments[1]?.detailed === true;
   try {
     receipt = await publicClient.waitForTransactionReceipt({ hash });
   } catch {
     // 확정을 못 봤다. 보낸 것과 끝난 것은 다르므로 여기서 성공이라고 말하지 않는다.
-    return null;
+    return detailed ? { kind: "pending" } : null;
   }
   // 채굴됐다 ≠ 성공했다. status 는 지금까지 버려지던 값이다.
-  return receipt.status === "success" ? receipt : null;
+  if (!detailed) return receipt?.status === "success" ? receipt : null;
+  return receipt?.status === "success" ? { kind: "success", receipt }
+    : { kind: receipt?.status === "reverted" ? "reverted" : "pending" };
 }
 
-async function settleSend({ before, address, piggyId = "", grantTxHash = "", depositTxHash, depositReceipt, redeemTxHash, shmonReceived, wentOutAt }) {
-  const redeemReceipt = await waitForSuccess(redeemTxHash);
-  if (!redeemReceipt) {
-    return { outcome: "failed", reason: "redeem-unconfirmed-or-reverted", receipt: null };
-  }
+async function settleSend({ before, address, piggyId = "", grantTxHash = "", depositTxHash, depositReceipt, redeemTxHash, shmonReceived, pendingOnTimeout = false, wentOutAt }) {
+  const observed = await waitForSuccess(redeemTxHash, { detailed: pendingOnTimeout });
+  if (pendingOnTimeout && observed?.kind === "pending") return { outcome: "pending", reason: "redeem-unconfirmed-or-reverted", receipt: null };
+  const redeemReceipt = pendingOnTimeout ? observed?.receipt : observed;
+  if (!redeemReceipt) return { outcome: "failed", reason: "redeem-unconfirmed-or-reverted", receipt: null };
   const gas =
     depositReceipt.gasUsed * depositReceipt.effectiveGasPrice +
     redeemReceipt.gasUsed * redeemReceipt.effectiveGasPrice;
@@ -3302,6 +3331,7 @@ function clearOwnSendPending(reservation, { unsentHash = null } = {}) {
       !!unsentHash &&
       current.stage === "deposit-broadcast" &&
       current.phase === "signed" &&
+      current.attempted !== true &&
       !current.redeemTxHash &&
       String(current.depositTxHash).toLowerCase() === String(unsentHash).toLowerCase();
     if (current.stage !== "reserved" && !unsentSigned) return false;
@@ -3316,6 +3346,7 @@ const DEPOSIT_BROADCAST_ATTEMPTS = 4;
 const DEPOSIT_BROADCAST_RETRY_MS = 1500;
 
 function retryableDepositBroadcastError(error) {
+  if (safeRpcMessagePrefix(error) === "nonce") return false;
   for (let current = error, depth = 0; current && depth < 4; current = current.cause, depth += 1) {
     if (current?.name === "InvalidInputRpcError" || Number(current?.code) === -32000) return true;
   }
@@ -3345,13 +3376,22 @@ function sameSignedDeposit(left, right) {
     Number(right.nonce) === Number(left.nonce) && right.reservationId === left.reservationId;
 }
 
-async function proveSignedDepositNeverSent(pending) {
+async function proveSignedDepositNeverSent(pending, { broadcastError = null } = {}) {
   if (!pending || !/^0x[0-9a-fA-F]{40}$/.test(String(pending.address)) || !/^0x[0-9a-fA-F]{64}$/.test(String(pending.depositTxHash)) || !Number.isSafeInteger(pending.nonce)) return false;
+  if (pending.attempted === true) {
+    if (!retryableDepositBroadcastError(broadcastError) || safeRpcMessagePrefix(broadcastError) !== "insufficient") return false;
+    try {
+      await publicClient.getTransaction({ hash: pending.depositTxHash });
+      return false;
+    } catch (transactionError) {
+      if (transactionError?.name !== "TransactionNotFoundError") return false;
+    }
+  }
   try {
     await publicClient.getTransactionReceipt({ hash: pending.depositTxHash });
     return false;
-  } catch (error) {
-    if (error?.name !== "TransactionReceiptNotFoundError") return false;
+  } catch (receiptError) {
+    if (receiptError?.name !== "TransactionReceiptNotFoundError") return false;
   }
   try {
     const nonce = await publicClient.getTransactionCount({ address: pending.address, blockTag: "pending" });
@@ -3361,10 +3401,10 @@ async function proveSignedDepositNeverSent(pending) {
   }
 }
 
-async function clearProvenNeverSentDeposit(pending, { reservation = null } = {}) {
+async function clearProvenNeverSentDeposit(pending, { reservation = null, broadcastError = null } = {}) {
   const clearUnderLock = async () => {
     const before = readSendPending();
-    if (!sameSignedDeposit(pending, before) || !(await proveSignedDepositNeverSent(before))) return false;
+    if (!sameSignedDeposit(pending, before) || !(await proveSignedDepositNeverSent(before, { broadcastError }))) return false;
     const after = readSendPending();
     if (!sameSignedDeposit(before, after)) return false;
     localStorage.removeItem(SEND_PENDING_KEY);
@@ -3397,6 +3437,153 @@ function markSendPhaseSent(reservation, entry) {
   } catch {
     /* the signed record already carries the identity; classification is by hash */
   }
+}
+
+function sameDepositPending(left, right) {
+  return !!left && !!right && right.stage === left.stage
+    && typeof left.reservationId === "string" && left.reservationId.length > 0 && left.reservationId === right.reservationId
+    && String(left.address).toLowerCase() === String(right.address).toLowerCase()
+    && String(left.depositTxHash).toLowerCase() === String(right.depositTxHash).toLowerCase()
+    && left.nonce === right.nonce
+    && ((left.stage === "deposit-broadcast" && ((left.phase === "signed" && left.attempted === true) || left.phase === "sent") && !left.redeemTxHash && !right.redeemTxHash)
+      // [A-1487-c] or a refused redeem: its record was written and sendRaw never returned the hash (phase stays "signed" in broadcastRedeemTail) — same hash on both reads.
+      || (left.stage === "redeem-broadcast" && left.phase === "signed" && right.phase === "signed" && /^0x[0-9a-fA-F]{64}$/.test(String(left.redeemTxHash))
+        && String(left.redeemTxHash).toLowerCase() === String(right.redeemTxHash).toLowerCase()));
+}
+
+// [A-1487-c] the deposit nonce of a record: a redeem record carries the redeem nonce (deposit nonce + 1 · broadcastRedeemTail).
+function pendingDepositNonce(pending) {
+  return pending.stage === "redeem-broadcast" ? pending.nonce - 1 : pending.nonce;
+}
+// [A-1487-c] every redeem hash a record has ever written: the current slot first, then the earlier ones (never dropped).
+function pendingRedeemHashes(pending) {
+  return [pending.redeemTxHash, ...(Array.isArray(pending.priorRedeemTxHashes) ? pending.priorRedeemTxHashes : [])].filter((h) => /^0x[0-9a-fA-F]{64}$/.test(String(h)));
+}
+// [A-1487-c] a receipt landed on an EARLIER redeem hash of the record: that hash takes the redeem slot and every other hash stays in priorRedeemTxHashes
+// (nothing dropped), so finishTrip's compare-and-clear meets the hash the receipt carries. Written under the exclusive send lock (ifAvailable), like
+// clearProvenNeverSentDeposit; no locks API = no write. false = lock busy, the record is not that record any more, or the write failed.
+async function adoptLandedRedeemHash(pending, landed) {
+  if (!sendLocksCapable()) return false;
+  try {
+    return await navigator.locks.request(SEND_LOCK_NAME, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+      if (!lock) return false;
+      const now = readSendPending();
+      if (!now || now.stage !== pending.stage || now.redeemTxHash !== pending.redeemTxHash || !pendingRedeemHashes(now).includes(landed)) return false;
+      writeSendPending({ ...now, redeemTxHash: landed, priorRedeemTxHashes: pendingRedeemHashes(now).filter((h) => h !== landed) });
+      return true;
+    });
+  } catch {
+    return false;
+  }
+}
+
+async function verifiedDepositForRedeem(pending, receipt) {
+  if (!sameDepositPending(pending, readSendPending()) || receipt?.status !== "success"
+    || String(receipt.from).toLowerCase() !== String(pending.address).toLowerCase()
+    || String(receipt.to).toLowerCase() !== SHMON_ADDRESS.toLowerCase()
+    || String(receipt.transactionHash).toLowerCase() !== String(pending.depositTxHash).toLowerCase()) return null;
+  try {
+    const tx = await publicClient.getTransaction({ hash: pending.depositTxHash });
+    const decoded = decodeFunctionData({ abi: SHMON_ABI, data: tx.input });
+    if (String(tx.hash).toLowerCase() !== String(pending.depositTxHash).toLowerCase()
+      || String(tx.from).toLowerCase() !== String(pending.address).toLowerCase()
+      || String(tx.to).toLowerCase() !== SHMON_ADDRESS.toLowerCase()
+      || tx.value !== SEND_AMOUNT || decoded.functionName !== "deposit"
+      || decoded.args[0] !== SEND_AMOUNT || String(decoded.args[1]).toLowerCase() !== String(pending.address).toLowerCase()
+      || !Number.isSafeInteger(tx.nonce) || tx.nonce !== pendingDepositNonce(pending)) return null;
+    const ownerTopic = `0x${"0".repeat(24)}${pending.address.slice(2).toLowerCase()}`;
+    const logs = receipt.logs?.filter((log) => String(log.address).toLowerCase() === SHMON_ADDRESS.toLowerCase()
+      && String(log.topics?.[0]).toLowerCase() === SHMON_DEPOSIT_TOPIC0.toLowerCase()
+      && String(log.topics?.[2]).toLowerCase() === ownerTopic);
+    if (logs?.length !== 1 || logs[0].removed === true) return null;
+    const [assets, shares] = decodeAbiParameters([{ type: "uint256" }, { type: "uint256" }], logs[0].data);
+    if (assets !== SEND_AMOUNT || shares <= 0n) return null;
+    if (pending.stage === "redeem-broadcast") {
+      // [A-1487-c] a refused redeem is retried only when every redeem hash this record ever wrote is unknown to the node AND has no receipt;
+      // any other answer (known · receipt · read error) = nothing is sent. The nonce read below then proves the redeem slot is still free.
+      for (const hash of pendingRedeemHashes(pending)) {
+        try { await publicClient.getTransaction({ hash }); return null; } catch (error) { if (error?.name !== "TransactionNotFoundError") return null; }
+        try { await publicClient.getTransactionReceipt({ hash }); return null; } catch (error) { if (error?.name !== "TransactionReceiptNotFoundError") return null; }
+      }
+    }
+    const nonce = await publicClient.getTransactionCount({ address: pending.address, blockTag: "pending" });
+    if (!Number.isSafeInteger(nonce) || nonce !== tx.nonce + 1) return null;
+    return { shares, nonce };
+  } catch {
+    return null;
+  }
+}
+
+async function resumeConfirmedDeposit(pending, depositReceipt) {
+  if (!activeSession || !activeAccount || state.appLock || !sendLocksCapable()
+    || String(activeAccount.address).toLowerCase() !== String(pending.address).toLowerCase()) return;
+  if (!depositReceipt) {
+    // [A-1487-c] a refused-redeem record arrives without the deposit receipt: one read-only receipt read; anything but a receipt = nothing happens.
+    try { depositReceipt = await publicClient.getTransactionReceipt({ hash: pending.depositTxHash }); } catch { return; }
+  }
+  const verified = await verifiedDepositForRedeem(pending, depositReceipt);
+  if (!verified) return;
+  try {
+    await navigator.locks.request(SEND_LOCK_NAME, { mode: "exclusive", ifAvailable: true }, async (lock) => {
+      if (!lock || !sameDepositPending(pending, readSendPending()) || !activeSession || state.appLock
+        || String(activeAccount?.address).toLowerCase() !== String(pending.address).toLowerCase()) return;
+      const fresh = await verifiedDepositForRedeem(pending, depositReceipt);
+      if (!fresh || fresh.nonce !== verified.nonce || fresh.shares !== verified.shares
+        || !sameDepositPending(pending, readSendPending())) return;
+      const reservation = { id: pending.reservationId, lockHeld: true, releaseLock: () => {} };
+      const account = activeAccount;
+      const walletClient = createWalletClient({ account, chain: MONAD_TESTNET, transport: http(MONAD_TESTNET_RPC) });
+      const redeemTx = makeRedeemTx(fresh.shares, account.address, account.address);
+      const gas = await publicClient.estimateGas({ account: account.address, ...redeemTx });
+      const redeemSigned = await signSendStep(walletClient, account, { ...redeemTx, gas });
+      if (redeemSigned.nonce !== fresh.nonce || !sameDepositPending(pending, readSendPending())) return;
+      let before = null;
+      try { before = await publicClient.getBalance({ address: account.address, blockNumber: depositReceipt.blockNumber - 1n }); } catch {}
+      // [A-1487-c] a retried redeem keeps every earlier hash of this record in priorRedeemTxHashes (nothing dropped or overwritten).
+      const redeemTxHash = await broadcastRedeemTail({ reservation, account, depositTxHash: pending.depositTxHash,
+        depositNonce: pendingDepositNonce(pending), redeemSigned, priorRedeemTxHashes: pending.stage === "redeem-broadcast" ? pendingRedeemHashes(pending) : undefined });
+      settleSend({ before, address: account.address, piggyId: indexedPiggyId(account.address),
+        depositTxHash: pending.depositTxHash, depositReceipt, redeemTxHash, shmonReceived: fresh.shares,
+        pendingOnTimeout: true, wentOutAt: pending.at })
+        .then((trip) => {
+          if (trip.outcome === "done") commitSendSuccess(redeemTxHash);
+          finishRedeemTail(trip);
+        })
+        .catch(() => { if (typeof showAwayRestore === "function") showAwayRestore("unknown"); });
+    });
+  } catch {
+    // The deposit record remains the only authority for a later explicit check.
+  }
+}
+
+async function broadcastRedeemTail({ reservation, account, depositTxHash, depositNonce, redeemSigned, mark = null, priorRedeemTxHashes = undefined }) {
+  if (redeemSigned.nonce !== depositNonce + 1) throw new Error("send_redeem_nonce_unexpected");
+  // [A-1487-c] earlier hashes of a retried redeem. Pinned fees sign the same bytes again → the same hash: that one is the slot itself, not a prior.
+  const earlier = Array.isArray(priorRedeemTxHashes) ? priorRedeemTxHashes.filter((h) => String(h).toLowerCase() !== redeemSigned.hash.toLowerCase()) : [];
+  const prior = earlier.length ? { priorRedeemTxHashes: earlier } : {};
+  writeOwnedSendPending(reservation, { stage: "redeem-broadcast", phase: "signed", address: account.address,
+    depositTxHash, redeemTxHash: redeemSigned.hash, nonce: redeemSigned.nonce, ...prior });
+  assertSendLockHeld(reservation);
+  const redeemSentHash = await publicClient.sendRawTransaction({ serializedTransaction: redeemSigned.raw });
+  if (String(redeemSentHash).toLowerCase() !== redeemSigned.hash.toLowerCase()) throw new Error("send_hash_mismatch");
+  const redeemTxHash = redeemSigned.hash;
+  markSendPhaseSent(reservation, { stage: "redeem-broadcast", address: account.address, depositTxHash,
+    redeemTxHash, nonce: redeemSigned.nonce, ...prior });
+  if (mark !== null) {
+    try { localStorage.setItem("araso.mark", mark); } catch {}
+    state.mark = mark;
+  }
+  return redeemTxHash;
+}
+
+function finishRedeemTail(trip) {
+  if (trip.outcome === "pending") {
+    if (typeof showAwayRestore === "function") showAwayRestore("pending");
+    else state.awayRestore = "pending";
+    setScene("away", "Piggy went out.", "Can go out once.");
+    return;
+  }
+  finishTrip(trip);
 }
 
 // sign-before-send: 준비(nonce·fee·gas) → 서명 → hash 계산. 보내지 않는다. viem sendTransaction 의 local-account 경로와 같은 순서
@@ -3727,6 +3914,7 @@ async function sendPiggyOnce(markSettling) {
 
   // [A-707 M2-beta] 서명했지만 아직 broadcast 호출이 없는 deposit hash — 프로세스 안에서 "보내지 않음"이 증명된 동안만 값이 있다.
   let unsentDepositHash = null;
+  let depositReverted = false;
   try {
     // [A-707] 돈 실행 경계 재확인: simulate 까지 오는 동안 앱이 잠겼으면 서명하지 않는다(A-698 최소 가드의 잔여 구간 — 새 문구 0).
     if (state.appLock) throw new Error("app_locked_before_sign");
@@ -3750,14 +3938,28 @@ async function sendPiggyOnce(markSettling) {
     unsentDepositHash = depositSigned.hash;
     writeOwnedSendPending(reservation, { stage: "deposit-broadcast", phase: "signed", address: account.address, depositTxHash: depositSigned.hash, nonce: depositSigned.nonce });
     assertSendLockHeld(reservation); // broadcast 직전 재확인 — 잃었으면 보내지 않은 서명 기록만 풀린다(catch, 잠금이 있을 때만)
+    writeOwnedSendPending(reservation, { stage: "deposit-broadcast", phase: "signed", attempted: true, address: account.address, depositTxHash: depositSigned.hash, nonce: depositSigned.nonce });
     unsentDepositHash = null; // 이 줄 아래부터는 broadcast 가 일어났을 수 있다 — 기록을 지우지 않는다.
     const depositSentHash = await broadcastDepositRaw(depositSigned.raw);
     if (String(depositSentHash).toLowerCase() !== depositSigned.hash.toLowerCase()) throw new Error("send_hash_mismatch");
     const depositTxHash = depositSigned.hash;
     markSendPhaseSent(reservation, { stage: "deposit-broadcast", address: account.address, depositTxHash, nonce: depositSigned.nonce });
     const wentOutAt = Date.now(); // the moment Piggy actually left — the Receipt's "went out"
-    const depositReceipt = await waitForSuccess(depositTxHash);
-    if (!depositReceipt) throw new Error("deposit unconfirmed or reverted");
+    const observedDeposit = await waitForSuccess(depositTxHash, { detailed: true });
+    const depositResult = observedDeposit?.kind ? observedDeposit
+      : observedDeposit?.status === "success" ? { kind: "success", receipt: observedDeposit }
+      : { kind: "pending" };
+    if (depositResult.kind === "pending") {
+      if (typeof showAwayRestore === "function") showAwayRestore("pending");
+      else state.awayRestore = "pending";
+      setScene("away", "Piggy went out.", "Can go out once.");
+      return;
+    }
+    if (depositResult.kind === "reverted") {
+      depositReverted = true;
+      throw new Error("deposit reverted");
+    }
+    const depositReceipt = depositResult.receipt;
     // [A-768 M-L-1] redeem 을 정하는 읽기는 deposit receipt 블록에 고정 + 상한 재시도(prepareRedeemAfterDeposit).
     const redeemReady = await prepareRedeemAfterDeposit({ walletClient, account, depositReceipt, beforeShares: plan.beforeShares, depositNonce: depositSigned.nonce });
     if (redeemReady.kind !== "ready") {
@@ -3769,18 +3971,8 @@ async function sendPiggyOnce(markSettling) {
       return;
     }
     const { redeemSigned, shmonReceived } = redeemReady;
-    // redeem 은 deposit 바로 다음 nonce 여야 한다 — 어긋나면(다른 곳에서 같은 주소로 보냄 등) 서명 기록 없이 멈춘다(deposit 기록이 남아 잠금 유지).
-    if (redeemSigned.nonce !== depositSigned.nonce + 1) throw new Error("send_redeem_nonce_unexpected");
-    writeOwnedSendPending(reservation, { stage: "redeem-broadcast", phase: "signed", address: account.address, depositTxHash, redeemTxHash: redeemSigned.hash, nonce: redeemSigned.nonce });
-    assertSendLockHeld(reservation); // redeem broadcast 직전 재확인
-    const redeemSentHash = await publicClient.sendRawTransaction({ serializedTransaction: redeemSigned.raw });
-    if (String(redeemSentHash).toLowerCase() !== redeemSigned.hash.toLowerCase()) throw new Error("send_hash_mismatch");
-    const redeemTxHash = redeemSigned.hash;
-    markSendPhaseSent(reservation, { stage: "redeem-broadcast", address: account.address, depositTxHash, redeemTxHash, nonce: redeemSigned.nonce });
-    localStorage.setItem("araso.mark", mark);
-    state.mark = mark;
-    // [A-441] araso.txHash·state.txHash 는 여기서 쓰지 않는다 — redeem receipt 성공 확인 뒤에만(commitSendSuccess).
-
+    const redeemTxHash = await broadcastRedeemTail({ reservation, account, depositTxHash,
+      depositNonce: depositSigned.nonce, redeemSigned, mark });
     markSettling();
     settleSend({
       before: plan.before,
@@ -3791,25 +3983,30 @@ async function sendPiggyOnce(markSettling) {
       depositReceipt,
       redeemTxHash,
       shmonReceived,
+      pendingOnTimeout: true,
       wentOutAt,
     })
       .then((trip) => {
-        // 성공(redeem receipt status success)일 때만 확정값 저장·미확정 기록 제거. 실패·미확정은 기록 유지.
         if (trip.outcome === "done") commitSendSuccess(redeemTxHash);
-        finishTrip(trip);
+        finishRedeemTail(trip);
       })
-      // settleSend 는 결말을 반환한다 — 여기로 오는 건 그 밖의 예외뿐이라 미확인으로 접는다.
-      .catch(() => finishTrip({ outcome: "failed", reason: "unconfirmed", receipt: null }))
-      .finally(() => {
-        sendInFlight = false;
-        syncSendButton(); // 성공 뒤 pending 없음 → 풀림 · 미확정 pending → 잠긴 채
-      });
+      .catch(() => { if (typeof showAwayRestore === "function") showAwayRestore("unknown"); })
+      .finally(() => { sendInFlight = false; syncSendButton(); });
   } catch (error) {
     // [A-707] 보내지 않았음이 증명된 기록(예약 · 보내지 않은 서명 기록)만 푼다 — 문구는 풀린 뒤 상태(nothing moved.)를 읽는다. 보냈을 수 있으면 남는다.
     const signedPending = readSendPending();
-    if (sameSignedDeposit(signedPending, signedPending)) await clearProvenNeverSentDeposit(signedPending, { reservation });
+    if (sameSignedDeposit(signedPending, signedPending)) await clearProvenNeverSentDeposit(signedPending, { reservation, broadcastError: error });
     clearOwnSendPending(reservation, { unsentHash: unsentDepositHash });
     recordSafeError("send", error);
+    const stillPending = readSendPending();
+    if (!depositReverted && error?.name !== "InvalidParamsRpcError" && stillPending?.reservationId === reservation.id
+      && ((stillPending.stage === "deposit-broadcast" && stillPending.attempted === true)
+        || stillPending.stage === "redeem-broadcast")) {
+      if (typeof showAwayRestore === "function") showAwayRestore("pending");
+      else state.awayRestore = "pending";
+      setScene("away", "Piggy went out.", "Can go out once.");
+      return;
+    }
     setScene("sendstay", "Piggy could not get ready.", "");
   }
 }

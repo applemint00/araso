@@ -18,6 +18,7 @@ const ERC20 = parseAbi([
   "function approve(address spender, uint256 amount) returns (bool)",
 ]);
 const APPROVAL = keccak256(new TextEncoder().encode("Approval(address,address,uint256)"));
+const DEPOSIT = keccak256(new TextEncoder().encode("Deposit(address,address,uint256,uint256)"));
 const GWEI = 1_000_000_000n;
 const PRIORITY = 2n * GWEI;
 // Measured on testnet 2026-10-15: shMON deposit estimate 97,736 · redeem is the same class of call.
@@ -40,10 +41,20 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
   const receipts = new Map();
   const txs = new Map();
   // refuse / revert: Sets of function names (deposit · redeem · approve) · hideReceipts · balanceError: plain switches.
-  const faults = { sendErrors: [], estimateOkLeft: Infinity, refuse: new Set(), revert: new Set(), hideReceipts: false, balanceError: false, blockError: false }; // sendErrors: -32000 refusals queue · estimateOkLeft: eth_estimateGas calls that pass before "insufficient funds"
+  const faults = { sendErrors: [], estimateOkLeft: Infinity, refuse: new Set(), refuseOther: new Set(), revert: new Set(), hideReceipts: false, omitDepositEvent: false, nonceOffset: 0, balanceError: false, blockError: false }; // sendErrors: -32000 refusals queue · estimateOkLeft: eth_estimateGas calls that pass before "insufficient funds"
   const log = [];
   const unknown = [];
   let block = 1000n;
+  let receiptsHidden = false;
+  Object.defineProperty(faults, "hideReceipts", {
+    enumerable: true,
+    get: () => receiptsHidden,
+    set: (value) => {
+      const hidden = !!value;
+      if (receiptsHidden && !hidden) block += 1n;
+      receiptsHidden = hidden;
+    },
+  });
   const key = (a) => String(a || "").toLowerCase();
   const get = (m, a) => m.get(key(a)) || 0n;
 
@@ -68,11 +79,12 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
     unknown.push(`eth_call shMON ${functionName}`); return word(0);
   }
   async function sendRaw(raw) {
-    if (faults.sendErrors.length) { faults.sendErrors.shift(); log.push("sendRaw refused -32000"); return { error: { code: -32000, message: "a1264 injected refusal" } }; }
+    if (faults.sendErrors.length) { faults.sendErrors.shift(); log.push("sendRaw refused -32000"); return { error: { code: -32000, message: "insufficient funds for gas * price + value" } }; }
     const tx = parseTransaction(raw);
     let fname = "other";
     try { fname = decodeFunctionData({ abi: key(tx.to) === SHMON ? ABI : ERC20, data: tx.data || "0x" }).functionName; } catch {}
-    if (faults.refuse.has(fname)) { log.push(`sendRaw refused ${fname}`); return { error: { code: -32000, message: "transaction rejected" } }; }
+    if (faults.refuse.has(fname)) { log.push(`sendRaw refused ${fname}`); return { error: { code: -32000, message: "insufficient funds for gas * price + value" } }; }
+    if (faults.refuseOther.has(fname)) { log.push(`sendRaw refused-other ${fname}`); return { error: { code: -32000, message: "transaction rejected" } }; }
     const reverted = faults.revert.has(fname);
     const from = key(await recoverTransactionAddress({ serializedTransaction: raw }));
     const hash = keccak256(raw);
@@ -97,7 +109,10 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
       log.push(`sendRaw approve ${approved.args[0]}=${approved.args[1]} nonce=${tx.nonce}`);
     } else if (key(tx.to) === SHMON && tx.data) {
       const { functionName, args } = decodeFunctionData({ abi: ABI, data: tx.data });
-      if (functionName === "deposit") shares.set(key(args[1]), get(shares, args[1]) + value);
+      if (functionName === "deposit") {
+        shares.set(key(args[1]), get(shares, args[1]) + value);
+        if (!faults.omitDepositEvent) logs.push({ address: SHMON, topics: [DEPOSIT, pad(from), pad(key(args[1]))], data: `${word(value)}${word(value).slice(2)}` });
+      }
       if (functionName === "redeem") { shares.set(from, get(shares, from) - args[0]); balance.set(key(args[1]), get(balance, args[1]) + args[0]); }
       log.push(`sendRaw ${functionName} nonce=${tx.nonce}`);
     } else log.push(`sendRaw other nonce=${tx.nonce}`);
@@ -116,7 +131,7 @@ export function createChain({ chainId = 10143, guard = null, erc20 = null, gasPr
       case "net_version": return { result: String(chainId) };
       case "eth_blockNumber": return faults.blockError ? { error: { code: -32603, message: "internal error" } } : { result: hex(block) };
       case "eth_getBalance": return faults.balanceError ? { error: { code: -32603, message: "internal error" } } : { result: hex(get(balance, p[0])) };
-      case "eth_getTransactionCount": return { result: hex(get(nonce, p[0])) };
+      case "eth_getTransactionCount": return { result: hex(get(nonce, p[0]) + BigInt(faults.nonceOffset)) };
       case "eth_gasPrice": return { result: hex(GAS_PRICE) };
       case "eth_maxPriorityFeePerGas": return { result: hex(PRIORITY) };
       case "eth_estimateGas":

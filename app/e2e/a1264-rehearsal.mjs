@@ -1609,8 +1609,9 @@ async function atlasShot(person, name) {
   await person.page.screenshot({ path: path.join(ATLAS_DIR, `${name}.png`) });
   return seen;
 }
-async function atlasLane(id, { world, setup, trigger, expect, retry, shot }) {
+async function atlasLane(id, { world, setup, trigger, expect, retry, recoveryExpectation }) {
   const row = { id, shot: `${id}.png`, text: [], retry: "—", ok: false, why: "" };
+  if (recoveryExpectation) row.recoveryExpectation = recoveryExpectation;
   let person = null;
   try {
     person = await openPerson(browser, world, id, setup || {}); people.push(person);
@@ -1618,8 +1619,8 @@ async function atlasLane(id, { world, setup, trigger, expect, retry, shot }) {
     const seen = await until(person, `${id} failure screen`, (x) => expect.every((e) => x.text.some((t) => t.includes(e))), 60_000);
     row.text = seen.text.filter((t) => expect.some((e) => t.includes(e)) || /could|can't|couldn|not |nothing|still|Not from/i.test(t));
     await atlasShot(person, id);
-    row.ok = true;
     if (retry) row.retry = await retry(person);
+    row.ok = true;
   } catch (error) { row.why = String(error?.message || error).split("\n")[0].slice(0, 200); }
   atlasRows.push(row);
   record(`atlas ${id} shows ${expect.join(" · ")}`, row.ok, row.why);
@@ -1658,6 +1659,48 @@ async function retryHomeLive(p, label) { return (await live(p, "#sendButton")) ?
 async function laneAtlas() {
   const W = (label, o) => createWorld(label, o);
   const toSend = (p) => walkFirstJourney(p);
+  const refusedRedeem = async (p, kind) => {
+    const pending = () => p.page.evaluate(() => JSON.parse(localStorage.getItem("araso.sendPending") || "null"));
+    const sent = () => p.world.chain.log.filter((line) => line.startsWith("sendRaw "));
+    const before = sent();
+    const rec = await pending();
+    const bucket = kind === "refused-other" ? "refuseOther" : "refuse"; // nonce-taken triggers through "refuse" as well
+    assert.equal((await look(p)).scene, "away", "refused redeem lands on Away");
+    assert.equal(before.filter((line) => /^sendRaw deposit nonce=/.test(line)).length, 1, "one deposit");
+    assert.equal(before.filter((line) => line === `sendRaw ${bucket === "refuse" ? "refused" : "refused-other"} redeem`).length, 1, "one refused redeem");
+    assert.equal(before.filter((line) => /^sendRaw redeem nonce=/.test(line)).length, 0, "no redeem accepted yet");
+    assert.equal(rec?.stage, "redeem-broadcast", "record stage");
+    assert.match(rec?.redeemTxHash || "", /^0x[0-9a-fA-F]{64}$/);
+    assert.equal(Number(rec.nonce), 1, "record nonce");
+    p.world.chain.faults[bucket].delete("redeem");
+    // [A-1487-c] nonce-taken: another node already holds a tx in the redeem slot (pending count ≠ deposit nonce + 1) → the retry must not go out.
+    if (kind === "nonce-taken") p.world.chain.faults.nonceOffset = 1;
+    await p.page.goto("about:blank");
+    await p.page.goto(BASE, { waitUntil: "networkidle" });
+    await tapLockIfStill(p);
+    if (kind === "nonce-taken") {
+      await until(p, "uncertain refusal stays Away", (s) => s.scene === "away" && s.text.includes("still out working."), 20_000);
+      await sleep(5000);
+      const after = await pending();
+      assert.equal(after?.stage, "redeem-broadcast", "nonce-taken: record stage kept");
+      assert.equal(after?.redeemTxHash, rec.redeemTxHash, "nonce-taken: old hash kept in the slot");
+      assert.equal(Number(after?.nonce), Number(rec.nonce), "nonce-taken: nonce kept");
+      assert.deepEqual(sent(), before, "no redeem retry while the nonce slot is taken");
+      return "Away 유지 · 전송 0 (nonce 자리 찼음 → 불확실 = 기록 보존)";
+    }
+    // [A-1487-c] after the unlock the verified resume sends ONE new redeem with the same nonce and the trip reaches Return/Receipt; the transient record
+    // (new hash in the slot · old hash in priorRedeemTxHashes) is pinned at unit level (money-safety-first C-retry) — here the lane reads the final facts.
+    await until(p, "verified retry reaches the Receipt", () => live(p, "#returnTap"), 90_000);
+    const after = sent();
+    assert.equal(after.filter((line) => /^sendRaw redeem nonce=1$/.test(line)).length, 1, "exactly one redeem retry, same nonce");
+    assert.equal(after.filter((line) => /^sendRaw deposit nonce=/.test(line)).length, 1, "deposit never resent");
+    assert.equal(await pending(), null, "pending cleared by finishTrip after the verified receipt");
+    const receipts = await p.page.evaluate(() => JSON.parse(localStorage.getItem("araso.receipts") || "[]"));
+    assert.equal(receipts.length, 1, "one receipt");
+    // pinned fees sign the same bytes again → the retry's hash equals the refused one (m2b P3): the receipt simply carries a valid redeem hash
+    assert.match(String(receipts[0].redeemTxHash || receipts[0].txHash), /^0x[0-9a-fA-F]{64}$/, "the receipt carries a redeem hash");
+    return "잠금 해제 뒤 같은 nonce redeem 1회 → Receipt · deposit 재전송 0 · 예전 해시 보존 = C-retry 핀(같은 바이트면 같은 해시)";
+  };
   const lanes = [
     ["open-unsupported", { world: W("at1"), setup: { initScript: () => { try { delete window.PublicKeyCredential; Object.defineProperty(navigator, "credentials", { value: undefined, configurable: true }); } catch {} } },
       trigger: async (p) => { await until(p, "envelope", (s) => s.scene === "received"); await entryToFace(p); await p.page.locator("#inviteFaceButton").click(); }, expect: ["Couldn't open Piggy", "This device can't use Face ID or a passkey here."], retry: retryOpen }],
@@ -1683,7 +1726,10 @@ async function laneAtlas() {
     // The early grant + card wait (grant settle) means this refusal no longer reaches a person: the first trip finishes.
     ["grant-lag-insufficient", { world: W("at10", { fundLagMs: 20_000 }), trigger: async (p) => { await toSend(p); }, expect: ["came back"], retry: async () => "고쳐짐 — 실패 화면 안 뜸(grant 미리 받기 + 25 s 뒤 카드)" }],
     ["deposit-reverted", { world: W("at11"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("deposit"); }, expect: ["Piggy could not get ready.", "can't tell yet."], retry: (p) => sendAgain(p, "바로 풀림") }],
-    ["redeem-refused", { world: W("at12"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("redeem"); }, expect: ["Piggy could not get ready.", "still out."], retry: (p) => sendAgain(p, "바로 풀림") }],
+    // [A-1487-c] a refused redeem: Away stays; the next unlock verifies (old hash unknown to the node · no receipt · nonce slot free) and sends ONE redeem with the same nonce.
+    ["redeem-refused", { world: W("at12"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("redeem"); }, expect: ["still out working."], retry: (p) => refusedRedeem(p, "refused"), recoveryExpectation: "A-1487-c: after unlock, one same-nonce redeem retry (old hash unknown · no receipt · nonce slot free) → Return/Receipt; old hash kept in priorRedeemTxHashes" }],
+    ["redeem-refused-other", { world: W("at12b"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuseOther.add("redeem"); }, expect: ["still out working."], retry: (p) => refusedRedeem(p, "refused-other"), recoveryExpectation: "A-1487-c: the refusal wording is not consulted — the same three node facts decide; same-nonce retry once → Return/Receipt" }],
+    ["redeem-refused-nonce", { world: W("at12c"), trigger: async (p) => { await toSend(p); p.world.chain.faults.refuse.add("redeem"); }, expect: ["still out working."], retry: (p) => refusedRedeem(p, "nonce-taken"), recoveryExpectation: "A-1487-c: nonce slot already taken (pending count ≠ deposit+1) → no retry, Away stays, record kept" }],
     ["redeem-reverted", { world: W("at13"), trigger: async (p) => { await toSend(p); p.world.chain.faults.revert.add("redeem"); }, expect: ["couldn't finish this one."], retry: (p) => sendAgain(p, "바로 풀림") }],
     ["receipt-missing-reopen", { world: W("at14"), trigger: async (p) => { await toSend(p); p.world.chain.faults.hideReceipts = true; await until(p, "away", (s) => s.scene === "away", 20_000); await sleep(3000); await p.page.goto("about:blank"); await p.page.goto(BASE, { waitUntil: "networkidle" }); if ((await look(p)).scene === "birth") await tapLockIfStill(p); },
       expect: ["still out"], retry: (p) => retryHomeLive(p, "확인 올 때까지 Away") }],
@@ -1812,9 +1858,167 @@ async function laneE42Home() {
   await p.context.close();
 }
 
+async function laneLateReceipt() {
+  const raw = (w) => w.chain.log.filter((line) => line.startsWith("sendRaw "));
+  const count = (w, kind) => raw(w).filter((line) => line.includes(` ${kind} nonce=`)).length;
+  // the R-x cell plants a malformed record on purpose, so reading it must never throw (the lane would die before its own assertions)
+  const pending = (p) => p.page.evaluate(() => { try { return JSON.parse(localStorage.getItem("araso.sendPending") || "null"); } catch { return { malformed: localStorage.getItem("araso.sendPending") }; } });
+  const evidence = (cell, w, p) => console.log(`A1487 ${cell} CHAIN ${JSON.stringify(raw(w))} PENDING ${JSON.stringify(p)} RPC ${JSON.stringify(w.chain.calls.filter((m) => /eth_getTransaction(Receipt|ByHash|Count)/.test(m)))}`);
+  const startHidden = async (id, { clock = false, omitDepositEvent = false } = {}) => {
+    const w = createWorld(`latereceipt-${id}`);
+    w.chain.faults.omitDepositEvent = omitDepositEvent;
+    const p = await openPerson(browser, w, id, { clock }); people.push(p);
+    await walkFirstJourney(p, { send: false });
+    await click(p, "#sendButton", "first Send");
+    await until(p, "approval", () => live(p, "#sendAllowYes"), 12_000);
+    await p.page.locator("#sendAllowYes").click();
+    w.chain.faults.hideReceipts = true;
+    await until(p, "deposit broadcast", () => count(w, "deposit") === 1, 30_000);
+    assert.equal(count(w, "redeem"), 0, `redeem before deposit receipt: ${JSON.stringify(raw(w))}`);
+    return { w, p };
+  };
+
+  const normal = createWorld("latereceipt-normal");
+  const n = await openPerson(browser, normal, "lr0"); people.push(n);
+  await check("A-1487 R-0 · normal Send reaches Return and Receipt once", async () => {
+    await walkFirstJourney(n);
+    await until(n, "Return", () => live(n, "#returnTap"), 60_000);
+    assert.equal(count(normal, "deposit"), 1, `chain ${JSON.stringify(raw(normal))}`);
+    assert.equal(count(normal, "redeem"), 1, `chain ${JSON.stringify(raw(normal))}`);
+    await walkReturnAndFile(n);
+  });
+  evidence("R-0", normal, await pending(n));
+  await n.context.close();
+
+  const blocked = createWorld("latereceipt-blocked");
+  const x = await openPerson(browser, blocked, "lrx"); people.push(x);
+  await walkFirstJourney(x, { send: false });
+  await check("A-1487 R-x · unreadable balance blocks departure without a deposit or retry", async () => {
+    blocked.chain.faults.balanceError = true;
+    await click(x, "#sendButton", "blocked Send");
+    await sleep(5000);
+    assert.equal(count(blocked, "deposit"), 0, `chain ${JSON.stringify(raw(blocked))}`);
+    assert.equal(count(blocked, "redeem"), 0, `chain ${JSON.stringify(raw(blocked))}`);
+    assert.equal(await pending(x), null, "deposit signing left a pending record");
+    assert.ok(["sendstay", "away"].includes((await look(x)).scene), `scene ${(await look(x)).scene}`);
+  });
+  await check("A-1487 R-x · malformed pending record remains blocked without deposit signing or retry", async () => {
+    blocked.chain.faults.balanceError = false;
+    await x.page.evaluate(() => localStorage.setItem("araso.sendPending", "{unknown"));
+    if (await live(x, "#sendButton")) await click(x, "#sendButton", "unknown pending recheck");
+    await sleep(2000);
+    assert.equal(count(blocked, "deposit"), 0, `chain ${JSON.stringify(raw(blocked))}`);
+    assert.equal(count(blocked, "redeem"), 0, `chain ${JSON.stringify(raw(blocked))}`);
+  });
+  evidence("R-x", blocked, await pending(x));
+  await x.context.close();
+
+  const guard = await startHidden("lr34");
+  await check("A-1487 L3 · hidden receipt recheck never resends deposit", async () => {
+    await guard.p.page.goto("about:blank"); await guard.p.page.goto(BASE, { waitUntil: "networkidle" });
+    await tapLockIfStill(guard.p);
+    if (await live(guard.p, "#sendButton")) await click(guard.p, "#sendButton", "hidden receipt recheck");
+    await sleep(2000);
+    assert.equal(count(guard.w, "deposit"), 1, `chain ${JSON.stringify(raw(guard.w))}`);
+    assert.equal(count(guard.w, "redeem"), 0, `chain ${JSON.stringify(raw(guard.w))}`);
+  });
+  await check("A-1487 L4 · recorded redeem hash prevents a second redeem", async () => {
+    const saved = await pending(guard.p);
+    assert.ok(saved?.depositTxHash, "deposit pending hash missing");
+    await guard.p.page.evaluate(() => { const q = JSON.parse(localStorage.getItem("araso.sendPending")); localStorage.setItem("araso.sendPending", JSON.stringify({ ...q, stage: "redeem-broadcast", redeemTxHash: `0x${"ab".repeat(32)}`, nonce: Number(q.nonce) + 1 })); });
+    await guard.p.page.goto("about:blank"); await guard.p.page.goto(BASE, { waitUntil: "networkidle" });
+    await tapLockIfStill(guard.p);
+    if (await live(guard.p, "#sendButton")) await click(guard.p, "#sendButton", "recorded redeem recheck");
+    await sleep(2000);
+    assert.equal(count(guard.w, "redeem"), 0, `chain ${JSON.stringify(raw(guard.w))}`);
+  });
+  evidence("L3/L4", guard.w, await pending(guard.p));
+  await guard.p.context.close();
+
+  const { w, p } = await startHidden("lra");
+  const saved = await pending(p);
+  await check("A-1487 R-a · receipt hidden beyond 180 s stays Away with pending hash and no resend", async () => {
+    await sleep(225_000);
+    const q = await pending(p);
+    const s = await look(p);
+    assert.equal(s.scene, "away", `scene=${s.scene} text=${JSON.stringify(s.text.slice(-6))}`);
+    assert.ok(s.text.includes("still out working."), `Away text ${JSON.stringify(s.text.slice(-6))}`);
+    assert.equal(q?.depositTxHash, saved?.depositTxHash, `pending ${JSON.stringify(q)}`);
+    assert.equal(q?.stage, "deposit-broadcast");
+    assert.equal(count(w, "deposit"), 1, `chain ${JSON.stringify(raw(w))}`);
+    assert.equal(count(w, "redeem"), 0, `chain ${JSON.stringify(raw(w))}`);
+  });
+  evidence("R-a", w, await pending(p));
+  await check("A-1487 R-b · reopen checks Away then late receipt redeems once and reaches Return/Receipt", async () => {
+    await p.context.addInitScript(() => {
+      // the same assertion, watched more closely: "checking…" can be in the very first paint (no mutation to observe) and the local
+      // stand-in chain answers instantly, so poll as well — the lane must not miss a state the app really showed.
+      const seen = () => { if (/checking/i.test(document.querySelector("#awayRestoreLine")?.textContent || "")) window.__a1487SawChecking = true; };
+      new MutationObserver(seen).observe(document, { subtree: true, childList: true, characterData: true });
+      document.addEventListener("DOMContentLoaded", seen);
+      const poll = setInterval(seen, 20); setTimeout(() => clearInterval(poll), 15_000); seen();
+    });
+    await p.page.goto("about:blank");
+    await p.page.goto(BASE, { waitUntil: "networkidle" });
+    // The contract is: a reopen lands on Away (the restore read runs) and the late receipt then finishes the trip. The word
+    // "checking…" is set at boot (main.js:17825 / 17845) but was never observed in this harness even with a 20 ms poll, so it is recorded as evidence
+    // rather than waited on — waiting on it hid R-b's real assertions (one redeem, Return/Receipt) behind a paint race.
+    await until(p, "Away after reopen", (s) => s.scene === "away", 12_000);
+    const sawChecking = await p.page.evaluate(() => window.__a1487SawChecking === true).catch(() => false);
+    const restoreLine = await p.page.evaluate(() => document.querySelector("#awayRestoreLine")?.textContent?.trim() || null).catch(() => null);
+    console.log(`A1487 R-b REOPEN sawChecking=${sawChecking} restoreLine=${JSON.stringify(restoreLine)}`);
+    assert.ok(restoreLine, "the Away restore line is shown after a reopen");
+    await tapLockIfStill(p);
+    w.chain.faults.hideReceipts = false;
+    await until(p, "late redeem", () => count(w, "redeem") === 1, 60_000);
+    await until(p, "Return Receipt", () => live(p, "#returnTap"), 60_000);
+    assert.equal(count(w, "deposit"), 1);
+    assert.equal(count(w, "redeem"), 1);
+  });
+  evidence("R-b", w, await pending(p));
+  await p.context.close();
+
+  const locked = await startHidden("lrc", { clock: true });
+  await check("A-1487 R-c · 10-minute lock, existing Face ID, pending reread, one redeem and Receipt", async () => {
+    await locked.p.page.clock.fastForward("10:05");
+    await until(locked.p, "app lock", (s) => s.scene === "birth", 15_000);
+    locked.w.chain.faults.hideReceipts = false;
+    await tapLockIfStill(locked.p, 1000);
+    await until(locked.p, "late redeem after unlock", () => count(locked.w, "redeem") === 1, 60_000);
+    await until(locked.p, "Return Receipt", () => live(locked.p, "#returnTap"), 60_000);
+    assert.equal(count(locked.w, "deposit"), 1);
+    assert.equal(count(locked.w, "redeem"), 1);
+  });
+  evidence("R-c", locked.w, await pending(locked.p));
+  await locked.p.context.close();
+
+  for (const variant of ["valid", "event-missing", "nonce-mismatch", "redeem-recorded"]) {
+    const d = await startHidden(`lrd-${variant}`, { omitDepositEvent: variant === "event-missing" });
+    await check(`A-1487 R-d · deposit-only ${variant} transmits only when verified`, async () => {
+      if (variant === "nonce-mismatch") d.w.chain.faults.nonceOffset = 1;
+      if (variant === "redeem-recorded") await d.p.page.evaluate(() => { const q = JSON.parse(localStorage.getItem("araso.sendPending")); localStorage.setItem("araso.sendPending", JSON.stringify({ ...q, redeemTxHash: `0x${"ab".repeat(32)}` })); });
+      d.w.chain.faults.hideReceipts = false;
+      await d.p.page.goto("about:blank"); await d.p.page.goto(BASE, { waitUntil: "networkidle" });
+      await tapLockIfStill(d.p);
+      if (variant === "valid") {
+        await until(d.p, "verified redeem", () => count(d.w, "redeem") === 1, 60_000);
+        await until(d.p, "Return Receipt", () => live(d.p, "#returnTap"), 60_000);
+        assert.equal(count(d.w, "redeem"), 1);
+      } else {
+        await sleep(5000);
+        assert.equal(count(d.w, "redeem"), 0, `chain ${JSON.stringify(raw(d.w))}`);
+      }
+      assert.equal(count(d.w, "deposit"), 1, `chain ${JSON.stringify(raw(d.w))}`);
+    });
+    evidence(`R-d/${variant}`, d.w, await pending(d.p));
+    await d.p.context.close();
+  }
+}
+
 try {
   const only = (process.env.ARASO_REHEARSAL_ONLY || "main,side,faults,desk,stuck,jobfail,unlockwhy,names,jarpiggy,giftrun").split(",");
   if (only.includes("e42home")) await laneE42Home();
+  if (only.includes("latereceipt")) await laneLateReceipt();
   await Promise.all([only.includes("main") && laneMain(), only.includes("side") && laneSide(), only.includes("faults") && laneFaults(), only.includes("desk") && laneDesktop(), only.includes("atlas") && laneAtlas(), only.includes("stuck") && laneStuck(), only.includes("jobfail") && laneJobFail(), only.includes("unlockwhy") && laneUnlockWhy(), only.includes("names") && laneNames(), only.includes("explorewhy") && laneExploreWhy(), only.includes("jarpiggy") && laneJarPiggy(), only.includes("jarpiggy") && laneJarTap(), only.includes("giftrun") && laneGiftRun(), only.includes("entryshots") && laneEntryShots(), only.includes("lockmulti") && laneLockMulti(), only.includes("keyclock") && laneKeyClock(), only.includes("firstend") && laneFirstEnd(), only.includes("oldtab") && laneOldTab()].filter(Boolean));
   await check("public ON: no invite on any request (all people)", () => { for (const w of [main, side, fault1, fault4, faultEst, lag, desk]) publicInviteZero(w, people.map((p) => p.id)); });
   await check("visible copy stays inside the allowlist", () => { for (const p of people) copyClean(p); });

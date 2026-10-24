@@ -27,7 +27,7 @@
 import assert from "node:assert/strict";
 import vm from "node:vm";
 import { readFileSync } from "node:fs";
-import { TransactionReceiptNotFoundError, keccak256 } from "viem";
+import { TransactionNotFoundError, TransactionReceiptNotFoundError, keccak256 } from "viem";
 import { preparedSignProblem } from "../src/money-executor.js";
 import { decodeReceiptRow, encodeReceiptRow, receiptIdentityKey as codecReceiptIdentityKey, RECEIPT_KIND } from "../src/receipt-codec.js";
 
@@ -148,10 +148,12 @@ function build({ storage = makeStorage(), memoryReceipts = [], pendingRecord, re
     homePadMarkup: () => "", chogHomeMarkup: () => "",
     requestGrant: forbid("requestGrant"), createWalletClient: forbid("createWalletClient"), activateSigningSession: forbid("activateSigningSession"),
     requestPrf: forbid("requestPrf"), recoverPiggy: forbid("recoverPiggy"), signDigest: forbid("signDigest"), sendRawTransaction: forbid("sendRawTransaction"),
+    // [A-1487-c] the exclusive send lock the lock-held storage helpers ask for (adoptLandedRedeemHash); granted at once, no cross-tab holder here
+    navigator: { locks: { query: async () => ({}), request: async (_name, _options, fn) => fn({}) } },
   };
   vm.createContext(ctx);
   vm.runInContext(
-    `${CONSTS.join("\n")}\n${RECEIPT_FNS_SRC}\n${PENDING_SRC}\n${FINISH_SRC}\n${RECONCILE_SRC}\n` +
+    `let activeSession = null; let activeAccount = null;\n${CONSTS.join("\n")}\n${RECEIPT_FNS_SRC}\n${PENDING_SRC}\n${FINISH_SRC}\n${RECONCILE_SRC}\n` +
     `this.__api = { readReceipts, rememberReceipt, readSendPending, writeSendPending, commitSendSuccess, finishTrip, reconcileSendPending, sendBusy, computeTripClosed };`,
     ctx,
   );
@@ -197,19 +199,22 @@ await check("S2 finishTrip order: rememberReceipt (verified) precedes the pendin
   assert.ok(/stored\.stage === "redeem-broadcast"/.test(guard) && /stored\.redeemTxHash === doneHash/.test(guard), "compare-and-clear guard");
   assert.ok(/if \(receiptSaved\) \{/.test(b.slice(0, iClear)), "clear only when the receipt is verified");
 });
-await check("S3 commitSendSuccess no longer clears and cannot throw; sendPiggyOnce has no receipt/pending-clear work (alpha does not edit it)", () => {
+await check("S3 commitSendSuccess does not clear; sendPiggyOnce delegates its two outcomes to finishRedeemTail", () => {
   const b = fnBody("commitSendSuccess");
   assert.equal(b.includes("SEND_PENDING_KEY"), false);
   assert.ok(/try \{\s*localStorage\.setItem\("araso\.txHash", redeemTxHash\);\s*\} catch/.test(b));
   const once = fnBody("sendPiggyOnce");
   assert.equal(/rememberReceipt|removeItem\(SEND_PENDING_KEY\)|decodeReceiptRow/.test(once), false);
-  assert.ok(once.includes('if (trip.outcome === "done") commitSendSuccess(redeemTxHash);\n        finishTrip(trip);'), "live caller shape unchanged");
+  assert.ok(once.includes('if (trip.outcome === "done") commitSendSuccess(redeemTxHash);\n        finishRedeemTail(trip);'), "live caller delegates pending and settled outcomes");
+  const tail = fnBody("finishRedeemTail");
+  assert.ok(/trip\.outcome === "pending"/.test(tail) && tail.includes('showAwayRestore("pending")') && tail.includes('setScene("away"'), "pending remains Away");
+  assert.ok(tail.includes("finishTrip(trip);"), "all other outcomes use the existing finishTrip");
 });
 await check("S4 no new user-visible words: every setScene in the touched functions uses an existing string", () => {
-  const all = [FINISH_SRC, RECONCILE_SRC, fnBody("commitSendSuccess"), fnBody("rememberReceipt"), fnBody("readSendPending"), fnBody("writeSendPending")].join("\n");
+  const all = [FINISH_SRC, RECONCILE_SRC, fnBody("finishRedeemTail"), fnBody("commitSendSuccess"), fnBody("rememberReceipt"), fnBody("readSendPending"), fnBody("writeSendPending")].join("\n");
   const strings = [...all.matchAll(/setScene\(([^)]*)\)/g)].map((m) => m[1]);
   assert.ok(strings.length >= 4);
-  for (const s of strings) assert.ok(/"sendstay", "couldn't finish this one\."|"sendstay", "Piggy can't go out yet\.", ""|"return", "Piggy is home\.", "One tag\."|"away", "Piggy is home\.", "Confirmation is still catching up\."|"filebox"/.test(s), `setScene args: ${s}`);
+  for (const s of strings) assert.ok(/^(?:"sendstay", "couldn't finish this one\."|"sendstay", "Piggy can't go out yet\.", ""|"sendstay", "Piggy is home\.", ""|"return", "Piggy is home\.", "One tag\."|"away", "Piggy is home\.", "Confirmation is still catching up\."|"away", "Piggy went out\.", "Can go out once\."|"filebox")$/.test(s), `setScene args: ${s}`);
 });
 
 // ═══ A. storage failure ═════════════════════════════════════════════════════════════════════
@@ -417,6 +422,117 @@ await check("C-legacy every existing stage reconciles read-only with zero grant/
     assert.ok(t.storage.has(SEND_PENDING_KEY), "never cleared");
     NO_SIGNER(t);
   }
+});
+// [A-1487-c] record / knownTxs / retryHash: the same harness drives the refused-redeem retry (a redeem-broadcast · signed record).
+function resumeHarness({ event = true, chainNonce = 8, locked = false, signer = true, record = null, knownTxs = [D], retryHash = E } = {}) {
+  const pendingRecord = record || { stage: "deposit-broadcast", phase: "sent", address: ADDR, depositTxHash: D, nonce: 7, reservationId: "r1" };
+  const t = build({ pendingRecord });
+  const { ctx, state } = t;
+  const calls = { sign: 0, send: 0, lock: 0, deposit: 0 };
+  const amount = 10n ** 15n;
+  const topic = "0x" + "1".repeat(64);
+  const owner = "0x" + "0".repeat(24) + ADDR.slice(2).toLowerCase();
+  const depositReceipt = { transactionHash: D, status: "success", from: ADDR, to: SHMON_ADDRESS,
+    blockNumber: 100n, logs: event ? [{ address: SHMON_ADDRESS, topics: [topic, owner, owner], data: "0x01", removed: false }] : [] };
+  ctx.SHMON_DEPOSIT_TOPIC0 = topic;
+  ctx.SEND_AMOUNT = amount;
+  ctx.MONAD_TESTNET = {};
+  ctx.MONAD_TESTNET_RPC = "local-test";
+  ctx.http = () => ({});
+  ctx.decodeFunctionData = () => ({ functionName: "deposit", args: [amount, ADDR] });
+  ctx.decodeAbiParameters = () => [amount, amount];
+  ctx.makeRedeemTx = () => ({ to: SHMON_ADDRESS });
+  ctx.createWalletClient = () => ({});
+  ctx.settleSend = () => new Promise(() => {});
+  ctx.navigator = { locks: { query: async () => ({}), request: async (_name, _options, fn) => { calls.lock += 1; return fn({}); } } };
+  ctx.publicClient.getTransactionReceipt = async ({ hash }) => {
+    if (hash === D) { calls.deposit += 1; return depositReceipt; }
+    throw new TransactionReceiptNotFoundError({ hash });
+  };
+  ctx.publicClient.getTransaction = async ({ hash }) => {
+    if (!knownTxs.includes(hash)) throw new TransactionNotFoundError({ hash });
+    return { hash: D, from: ADDR, to: SHMON_ADDRESS, value: amount, input: "0x01", nonce: 7 };
+  };
+  ctx.publicClient.getTransactionCount = async () => chainNonce;
+  ctx.publicClient.estimateGas = async () => 100000n;
+  ctx.publicClient.getBalance = async () => 0n;
+  ctx.publicClient.sendRawTransaction = async () => { calls.send += 1; return E; };
+  ctx.signSendStep = async () => { calls.sign += 1; return { nonce: 8, hash: retryHash, raw: "0x01" }; };
+  ctx.__testAccount = { address: ADDR };
+  if (signer) vm.runInContext("activeSession = {}; activeAccount = __testAccount;", ctx);
+  state.appLock = locked ? {} : null;
+  return { ...t, calls, pendingRecord, knownTxs };
+}
+await check("C-resume verified deposit sends one redeem, keeps its hash until receipt, and never resends on a second reconcile", async () => {
+  const t = resumeHarness();
+  await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+  assert.equal(t.calls.sign, 1);
+  assert.equal(t.calls.send, 1);
+  assert.equal(t.calls.lock, 1);
+  assert.equal(t.calls.deposit > 0, true);
+  assert.equal(JSON.parse(t.storage.raw(SEND_PENDING_KEY)).stage, "redeem-broadcast");
+  assert.equal(JSON.parse(t.storage.raw(SEND_PENDING_KEY)).redeemTxHash, E);
+  await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+  assert.equal(t.calls.send, 1);
+  assert.ok(t.storage.has(SEND_PENDING_KEY));
+});
+for (const [label, options] of [
+  ["Deposit event missing", { event: false }],
+  ["pending nonce mismatch", { chainNonce: 9 }],
+  ["app locked", { locked: true }],
+]) {
+  await check(`C-resume-insufficient ${label}: no signature, no send, pending kept`, async () => {
+    const t = resumeHarness(options);
+    await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+    assert.equal(t.calls.sign, 0);
+    assert.equal(t.calls.send, 0);
+    assert.equal(t.storage.raw(SEND_PENDING_KEY), JSON.stringify(t.pendingRecord));
+  });
+}
+// ═══ [A-1487-c] refused redeem (redeem-broadcast · phase signed = sendRaw never returned a hash) → the SAME resume path retries once with the
+// same nonce after the strict deposit verification + three node facts (old hash unknown · no receipt · pending nonce == deposit nonce + 1).
+// The old hash is never dropped: it moves to priorRedeemTxHashes, and a receipt that lands later on it still counts as the trip's success.
+const REFUSED = { stage: "redeem-broadcast", phase: "signed", address: ADDR, depositTxHash: D, redeemTxHash: E, nonce: 8, reservationId: "r1" };
+await check("C-retry refused redeem: old hash unknown to the node + no receipt + pending nonce == deposit+1 → one new redeem (same nonce), old hash kept in priorRedeemTxHashes, never twice", async () => {
+  const t = resumeHarness({ record: REFUSED, knownTxs: [D], retryHash: F });
+  await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+  assert.equal(t.calls.sign, 1);
+  assert.equal(t.calls.send, 1);
+  const rec = JSON.parse(t.storage.raw(SEND_PENDING_KEY));
+  assert.deepEqual([rec.stage, rec.redeemTxHash, rec.nonce, rec.depositTxHash, rec.priorRedeemTxHashes], ["redeem-broadcast", F, 8, D, [E]]);
+  t.knownTxs.push(F); // the node now knows the retry
+  await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+  assert.equal(t.calls.send, 1, "never twice");
+  assert.deepEqual(JSON.parse(t.storage.raw(SEND_PENDING_KEY)).priorRedeemTxHashes, [E], "old hash never dropped");
+});
+for (const [label, options] of [
+  ["old redeem known to the node", { knownTxs: [D, E] }],
+  ["pending nonce already taken", { chainNonce: 9 }],
+  ["phase sent (sendRaw returned a hash)", { record: { ...REFUSED, phase: "sent" } }],
+  ["app locked", { locked: true }],
+  ["Deposit event missing", { event: false }],
+]) {
+  await check(`C-retry-uncertain ${label}: no signature, no send, record byte-identical`, async () => {
+    const t = resumeHarness({ record: REFUSED, retryHash: F, ...options });
+    await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+    assert.equal(t.calls.sign + t.calls.send, 0);
+    assert.equal(t.storage.raw(SEND_PENDING_KEY), JSON.stringify(t.pendingRecord));
+  });
+}
+await check("C-retry-same-hash: pinned fees sign the same bytes → the retry IS the old hash; one send, slot keeps it, no prior entry", async () => {
+  const t = resumeHarness({ record: REFUSED, knownTxs: [D], retryHash: E });
+  await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+  assert.equal(t.calls.send, 1);
+  const rec = JSON.parse(t.storage.raw(SEND_PENDING_KEY));
+  assert.deepEqual([rec.redeemTxHash, rec.nonce, rec.priorRedeemTxHashes], [E, 8, undefined]);
+});
+await check("C-prior-landed: a receipt arriving later for the OLD redeem hash counts as success (txHash = that hash · record cleared by finishTrip · zero signer)", async () => {
+  const t = build({ pendingRecord: { ...REFUSED, phase: "sent", redeemTxHash: F, priorRedeemTxHashes: [E] }, sc: { dep: "success", red: "success" } });
+  await t.api.reconcileSendPending(t.api.readSendPending(), { watch: false });
+  await flush();
+  assert.equal(t.state.txHash, E);
+  assert.equal(t.storage.has(SEND_PENDING_KEY), false, "cleared by finishTrip after the verified receipt");
+  NO_SIGNER(t);
 });
 await check("C9 desktop (no app-lock surface) with a pending record: the boot R4 block moves to Away(checking) and reconciles read-only; on the lock surface it does nothing (the existing lock block owns that)", () => {
   const block = cut("// [A-699 M2-alpha R4]", "// [A-633 A/C]");
